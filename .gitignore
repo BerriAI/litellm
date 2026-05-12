@@ -72,8 +72,7 @@ tests/local_testing/log.txt
 .codegpt
 litellm/proxy/_new_new_secret_config.yaml
 litellm/proxy/custom_guardrail.py
-.mypy_cache/*
-.mypy_cache/*
+**/.mypy_cache/
 litellm/proxy/application.log
 tests/llm_translation/vertex_test_account.json
 tests/llm_translation/test_vertex_key.json
@@ -91,7 +90,6 @@ test.py
 litellm_config.yaml
 !.github/observatory/litellm_config.yaml
 .cursor
-.vscode/launch.json
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
 tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
@@ -102,3 +100,5 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+test-config
+.vscode

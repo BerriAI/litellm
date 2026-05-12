@@ -139,7 +139,12 @@ def test_jwks_public_key_can_verify_signed_jwt():
     """A JWT signed by MCPJWTSigner can be verified using the JWKS public key."""
     signer = _make_signer(issuer="https://litellm.example.com", audience="mcp")
     now = int(time.time())
-    claims = {"iss": "https://litellm.example.com", "aud": "mcp", "iat": now, "exp": now + 300}
+    claims = {
+        "iss": "https://litellm.example.com",
+        "aud": "mcp",
+        "iat": now,
+        "exp": now + 300,
+    }
 
     token = jwt.encode(claims, signer._private_key, algorithm="RS256")
 
@@ -149,6 +154,7 @@ def test_jwks_public_key_can_verify_signed_jwt():
     n = int.from_bytes(base64.urlsafe_b64decode(key_data["n"] + "=="), byteorder="big")
     e = int.from_bytes(base64.urlsafe_b64decode(key_data["e"] + "=="), byteorder="big")
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+
     pub_key = RSAPublicNumbers(e=e, n=n).public_key()
 
     decoded = jwt.decode(
@@ -168,7 +174,9 @@ def test_jwks_public_key_can_verify_signed_jwt():
 
 def test_build_claims_standard_fields():
     """_build_claims() populates iss, aud, iat, exp, nbf."""
-    signer = _make_signer(issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300)
+    signer = _make_signer(
+        issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
+    )
     user_dict = _make_user_api_key_dict()
     data = {"mcp_tool_name": "get_weather"}
 
@@ -338,13 +346,17 @@ async def test_hook_skips_non_mcp_call_types():
             data=original_data,
             call_type=call_type,  # type: ignore[arg-type]
         )
-        assert "extra_headers" not in (result or {}), f"extra_headers should not be set for {call_type}"
+        assert "extra_headers" not in (
+            result or {}
+        ), f"extra_headers should not be set for {call_type}"
 
 
 @pytest.mark.asyncio
 async def test_signed_token_is_verifiable():
     """The JWT injected by the hook can be verified against the JWKS public key."""
-    signer = _make_signer(issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300)
+    signer = _make_signer(
+        issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
+    )
     user_dict = _make_user_api_key_dict(user_id="alice", team_id="backend")
     data = {"mcp_tool_name": "search"}
 
@@ -560,7 +572,9 @@ async def test_channel_token_injected_when_configured():
 
     assert isinstance(result, dict)
     assert "x-mcp-channel-token" in result["extra_headers"]
-    channel_token = result["extra_headers"]["x-mcp-channel-token"].removeprefix("Bearer ")
+    channel_token = result["extra_headers"]["x-mcp-channel-token"].removeprefix(
+        "Bearer "
+    )
     channel_payload = _decode_unverified(channel_token)
     assert channel_payload["aud"] == "bedrock-gateway"
 
@@ -776,7 +790,9 @@ def test_initialize_guardrail_passes_all_params():
     litellm_params.issuer = "https://litellm.example.com"
     litellm_params.audience = "mcp-test"
     litellm_params.ttl_seconds = 120
-    litellm_params.access_token_discovery_uri = "https://idp.example.com/.well-known/openid-configuration"
+    litellm_params.access_token_discovery_uri = (
+        "https://idp.example.com/.well-known/openid-configuration"
+    )
     litellm_params.token_introspection_endpoint = "https://idp.example.com/introspect"
     litellm_params.verify_issuer = "https://idp.example.com"
     litellm_params.verify_audience = "api://test"
@@ -799,7 +815,10 @@ def test_initialize_guardrail_passes_all_params():
     assert signer.issuer == "https://litellm.example.com"
     assert signer.audience == "mcp-test"
     assert signer.ttl_seconds == 120
-    assert signer.access_token_discovery_uri == "https://idp.example.com/.well-known/openid-configuration"
+    assert (
+        signer.access_token_discovery_uri
+        == "https://idp.example.com/.well-known/openid-configuration"
+    )
     assert signer.token_introspection_endpoint == "https://idp.example.com/introspect"
     assert signer.verify_issuer == "https://idp.example.com"
     assert signer.verify_audience == "api://test"
@@ -959,7 +978,12 @@ async def test_verify_incoming_jwt_returns_payload_on_valid_token():
         "iat": now,
         "exp": now + 300,
     }
-    incoming_token = jwt.encode(incoming_claims, signer._private_key, algorithm="RS256", headers={"kid": signer._kid})
+    incoming_token = jwt.encode(
+        incoming_claims,
+        signer._private_key,
+        algorithm="RS256",
+        headers={"kid": signer._kid},
+    )
 
     # Build a JWKS from the same public key so verification passes
     jwks = signer.get_jwks()
@@ -1096,7 +1120,10 @@ async def test_hook_raises_401_when_jwt_verification_fails():
                 await signer.async_pre_call_hook(
                     user_api_key_dict=_make_user_api_key_dict(),
                     cache=MagicMock(),
-                    data={"mcp_tool_name": "tool", "incoming_bearer_token": "hdr.pld.sig"},
+                    data={
+                        "mcp_tool_name": "tool",
+                        "incoming_bearer_token": "hdr.pld.sig",
+                    },
                     call_type="call_mcp_tool",
                 )
 

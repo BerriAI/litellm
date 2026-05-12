@@ -1,0 +1,125 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, 1.84.0-dev.2, 1.84.0.post1; legacy v1.83.10-stable still accepted)"
+        required: true
+        type: string
+      commit_hash:
+        description: "Full 40-char commit SHA to target"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Validate inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          COMMIT_HASH: ${{ inputs.commit_hash }}
+        run: |
+          if ! echo "${COMMIT_HASH}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::commit_hash must be a full 40-character commit SHA"
+            exit 1
+          fi
+          if ! echo "${TAG}" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::tag must start with X.Y.Z (optional leading v), e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, or v1.83.10-stable"
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          TAG: ${{ inputs.tag }}
+          COMMIT_HASH: ${{ inputs.commit_hash }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const commitHash = process.env.COMMIT_HASH;
+
+            // Mark RC / dev / nightly / alpha / beta tags as GitHub pre-releases.
+            // Accept both PEP 440 (`.dev`) and SemVer (`-dev`) separators so tags
+            // like `1.84.0.dev2` and `1.84.0-dev.2` are both detected.
+            // PEP 440 post-releases (e.g. `1.84.0.post1`) and legacy `-stable[.patch.N]`
+            // are stable maintenance releases, not pre-releases.
+            const isPrerelease = /(?:rc|nightly|alpha|beta|[-.]dev)/i.test(tag);
+
+            const cosignSection = [
+              `## Verify Docker Image Signature`,
+              ``,
+              `All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit \`0112e53\`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).`,
+              ``,
+              `**Verify using the pinned commit hash (recommended):**`,
+              ``,
+              `A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the original signing key:`,
+              ``,
+              '```bash',
+              `cosign verify \\`,
+              `  --key https://raw.githubusercontent.com/BerriAI/litellm/0112e53046018d726492c814b3644b7d376029d0/cosign.pub \\`,
+              `  ghcr.io/berriai/litellm:${tag}`,
+              '```',
+              ``,
+              `**Verify using the release tag (convenience):**`,
+              ``,
+              `Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:`,
+              ``,
+              '```bash',
+              `cosign verify \\`,
+              `  --key https://raw.githubusercontent.com/BerriAI/litellm/${tag}/cosign.pub \\`,
+              `  ghcr.io/berriai/litellm:${tag}`,
+              '```',
+              ``,
+              `Expected output:`,
+              ``,
+              '```',
+              `The following checks were performed on each of these signatures:`,
+              `  - The cosign claims were validated`,
+              `  - The signatures were verified against the specified public key`,
+              '```',
+              ``,
+              `---`,
+              ``,
+            ].join('\n');
+
+            try {
+              const response = await github.rest.repos.createRelease({
+                draft: true,
+                generate_release_notes: true,
+                target_commitish: commitHash,
+                name: tag,
+                owner: context.repo.owner,
+                prerelease: isPrerelease,
+                repo: context.repo.repo,
+                tag_name: tag,
+              });
+
+              const updatedBody = cosignSection + (response.data.body ?? '');
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: response.data.id,
+                body: updatedBody,
+                draft: false,
+              });
+
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+
+  create-branch:
+    name: Create Release Branch
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/create-release-branch.yml
+    with:
+      tag: ${{ inputs.tag }}
+      commit_hash: ${{ inputs.commit_hash }}

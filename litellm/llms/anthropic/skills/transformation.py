@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.skills.transformation import (
     BaseSkillsAPIConfig,
     LiteLLMLoggingObj,
@@ -35,17 +36,18 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         """Add Anthropic-specific headers"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        # Get API key
+        # Get API key from litellm_params if available
         api_key = None
-        if litellm_params:
+        if litellm_params is not None:
             api_key = litellm_params.api_key
-        api_key = AnthropicModelInfo.get_api_key(api_key)
 
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required for Skills API")
+        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        if auth_header is None:
+            raise ValueError(
+                "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API"
+            )
 
-        # Add required headers
-        headers["x-api-key"] = api_key
+        headers.update(auth_header)
         headers["anthropic-version"] = "2023-06-01"
 
         # Add beta header for skills API
@@ -80,7 +82,8 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_base = AnthropicModelInfo.get_api_base()
 
         if skill_id:
-            return f"{api_base}/v1/skills/{skill_id}"
+            encoded_skill_id = encode_url_path_segment(skill_id, field_name="skill_id")
+            return f"{api_base}/v1/skills/{encoded_skill_id}"
         return f"{api_base}/v1/{endpoint}"
 
     def transform_create_skill_request(

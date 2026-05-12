@@ -13,7 +13,6 @@ const sidebarButtons = {
     "Usage",
     "Teams",
     "Internal Users",
-    "API Reference",
     "AI Hub",
   ],
 };

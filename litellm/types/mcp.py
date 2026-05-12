@@ -37,6 +37,7 @@ class MCPAuth(str, enum.Enum):
     oauth2 = "oauth2"
     aws_sigv4 = "aws_sigv4"
     token = "token"
+    oauth2_token_exchange = "oauth2_token_exchange"
 
 
 # MCP Literals
@@ -54,6 +55,7 @@ MCPAuthType = Optional[
         MCPAuth.oauth2,
         MCPAuth.aws_sigv4,
         MCPAuth.token,
+        MCPAuth.oauth2_token_exchange,
     ]
 ]
 
@@ -110,6 +112,28 @@ class MCPCredentials(TypedDict, total=False):
 
     aws_service_name: Optional[str]
     """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
+
+    aws_role_name: Optional[str]
+    """IAM role ARN for STS AssumeRole (e.g., 'arn:aws:iam::123456789012:role/MyRole'). Not a secret — stored unencrypted."""
+
+    aws_session_name: Optional[str]
+    """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
+
+    audience: Optional[str]
+    """
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    token_exchange_endpoint: Optional[str]
+    """
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    subject_token_type: Optional[str]
+    """
+    Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
+    Default: urn:ietf:params:oauth:token-type:access_token
+    """
 
 
 class MCPServerCostInfo(TypedDict, total=False):

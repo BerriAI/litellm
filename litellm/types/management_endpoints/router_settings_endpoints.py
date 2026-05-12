@@ -75,9 +75,9 @@ class RouterSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[
-        List[str]
-    ] = None  # For fields with predefined options/enum values
+    options: Optional[List[str]] = (
+        None  # For fields with predefined options/enum values
+    )
     ui_field_name: str  # User-friendly display name
     link: Optional[str] = None  # Documentation link for the field
 
@@ -111,6 +111,14 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_description="Arguments to pass to the routing strategy (e.g., ttl, lowest_latency_buffer for latency-based-routing)",
         field_default={},
         ui_field_name="Routing Strategy Args",
+    ),
+    RouterSettingsField(
+        field_name="routing_groups",
+        field_type="List",
+        field_value=None,
+        field_description="Named subsets of model_names that share a routing strategy. Models not claimed by an explicit group fall through to the top-level routing_strategy.",
+        field_default=[],
+        ui_field_name="Routing Groups",
     ),
     RouterSettingsField(
         field_name="num_retries",

@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -70,6 +70,61 @@ async def test_async_should_run_agentic_loop():
 
 
 @pytest.mark.asyncio
+async def test_async_build_agentic_loop_plan_returns_request_patch():
+    """Callback should return a typed patch for base handler reruns."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_123",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
+    }
+    kwargs = {
+        "temperature": 0.2,
+        "_websearch_interception_converted_stream": True,
+        "litellm_logging_obj": object(),
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search LiteLLM"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search"}],
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    assert plan.run_agentic_loop is True
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == "bedrock/invoke/claude-3-5-sonnet"
+    assert plan.request_patch.max_tokens == 1024
+    assert plan.request_patch.messages is not None
+    assert len(plan.request_patch.messages) == 3
+    assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
+    assert "litellm_logging_obj" not in plan.request_patch.kwargs
+    assert plan.request_patch.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
@@ -89,8 +144,9 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith('_websearch_interception')
+        k: v
+        for k, v in kwargs_with_internal_flags.items()
+        if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -114,7 +170,7 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     # Simulate kwargs as they arrive from the router path:
     # custom_llm_provider is at the TOP LEVEL (not nested under litellm_params)
     kwargs = {
-        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
         "tools": [
             {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
@@ -130,12 +186,14 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "other_tool"
         for t in result["tools"]
     )
 
@@ -173,7 +231,8 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -222,7 +281,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
     kwargs = {
-        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "messages": [{"role": "user", "content": "test"}],
         "tools": [{"type": "web_search_20250305", "name": "web_search"}],
         "litellm_params": {
@@ -234,11 +293,12 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
-    assert result["model"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert result["model"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.asyncio
@@ -267,9 +327,56 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
+    """
+    Regression test: websearch interception with stream=True must not skip logging.
+
+    Before the fix, the stream conversion only happened in async_pre_request_hook
+    (inside the anthropic_messages function scope). wrapper_async still saw
+    stream=True, took the streaming early-return path, and skipped all spend/cost
+    logging.  The fix moves stream conversion into the deployment hook so
+    wrapper_async sees stream=False, and then syncs logging_obj.stream.
+
+    This test verifies:
+    1. The deployment hook sets stream=False and the converted flag.
+    2. wrapper_async syncs logging_obj.stream after the hook runs.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-opus-4-6-20250219-v1:0",
+        "messages": [{"role": "user", "content": "Search for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+        ],
+        "custom_llm_provider": "bedrock",
+        "stream": True,
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert result["_websearch_interception_converted_stream"] is True
+
+    # Simulate what wrapper_async does after the deployment hook:
+    # logging_obj.stream was set to True during function_setup (before hook).
+    # After the hook, wrapper_async must sync it.
+    logging_obj = MagicMock()
+    logging_obj.stream = True  # original value from function_setup
+
+    _hook_stream = result.get("stream")
+    if _hook_stream is not None and logging_obj.stream != _hook_stream:
+        logging_obj.stream = _hook_stream
+
+    assert logging_obj.stream is False

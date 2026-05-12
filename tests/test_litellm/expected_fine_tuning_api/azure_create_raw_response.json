@@ -1,0 +1,18 @@
+{
+  "id": "ftjob-azure-create-123",
+  "object": "fine_tuning.job",
+  "created_at": 1735689600,
+  "model": "davinci-002",
+  "status": "running",
+  "fine_tuned_model": null,
+  "training_file": "file-5e4b20ecbd724182b9964f3cd2ab7212",
+  "hyperparameters": {
+    "n_epochs": 3
+  },
+  "organization_id": null,
+  "result_files": null,
+  "validation_file": null,
+  "trained_tokens": null,
+  "estimated_finish": null,
+  "error": null
+}

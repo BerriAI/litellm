@@ -58,6 +58,7 @@ from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -132,12 +133,16 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
+    supports_native_structured_output: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
+    supports_minimal_reasoning_effort: Optional[bool]
+    supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
+    supports_max_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -167,7 +172,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
-    input_cost_per_token: Required[float]
+    input_cost_per_token: Required[Optional[float]]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[
         float
@@ -204,7 +209,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
     input_cost_per_token_batches: Optional[float]
     output_cost_per_token_batches: Optional[float]
-    output_cost_per_token: Required[float]
+    output_cost_per_token: Required[Optional[float]]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     output_cost_per_token_priority: Optional[
         float
@@ -230,6 +235,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    output_cost_per_second_1080p: Optional[
+        float
+    ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
@@ -817,6 +825,7 @@ API_ROUTE_TO_CALL_TYPES = {
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
+    "/openai/v1/realtime": [CallTypes.arealtime],
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -1132,6 +1141,7 @@ class Message(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
@@ -1150,6 +1160,7 @@ class Message(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1181,6 +1192,9 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_items is not None:
+            init_values["reasoning_items"] = reasoning_items
 
         if annotations is not None:
             init_values["annotations"] = annotations
@@ -1219,6 +1233,11 @@ class Message(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
 
+        if reasoning_items is None:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
+
         add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
@@ -1246,6 +1265,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -1262,6 +1282,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1294,6 +1315,13 @@ class Delta(SafeAttributeModel, OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        if reasoning_items is not None:
+            self.reasoning_items = reasoning_items
+        else:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
 
         # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
         if annotations is not None:
@@ -2486,8 +2514,10 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
+    user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2621,6 +2651,8 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    x_ratelimit_reset_requests: str
+    x_ratelimit_reset_tokens: str
 
 
 class StandardLoggingHiddenParams(TypedDict):
@@ -2629,7 +2661,7 @@ class StandardLoggingHiddenParams(TypedDict):
     ]  # id of the model in the router, separates multiple models with the same name but different credentials
     cache_key: Optional[str]
     api_base: Optional[str]
-    response_cost: Optional[str]
+    response_cost: Optional[Union[str, float]]
     litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
     batch_models: Optional[List[str]]
@@ -2730,6 +2762,29 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
 
+class EvalVerdict(TypedDict, total=False):
+    criterion_name: str
+    score: float  # 0-100
+    reasoning: str
+    passed: bool
+    weight: int  # criterion weight (0-100) as configured in the guardrail
+
+
+class StandardLoggingEvalInformation(TypedDict, total=False):
+    eval_id: Optional[str]
+    eval_name: str
+    overall_score: float
+    passed: bool
+    judge_model: str
+    iteration: int
+    eval_error: Optional[str]
+    start_time: str
+    end_time: str
+    duration: float
+    verdicts: List[Any]
+    threshold: Optional[float]
+
+
 class GuardrailTracingDetail(TypedDict, total=False):
     """
     Typed fields for guardrail tracing metadata.
@@ -2772,7 +2827,9 @@ class CostBreakdown(TypedDict, total=False):
     Detailed cost breakdown for a request
     """
 
-    input_cost: float  # Cost of input/prompt tokens
+    input_cost: float  # Cost of raw (non-cached) input tokens only
+    cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
+    cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )
@@ -2804,9 +2861,24 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
 
 
+class StandardAuditLogPayload(TypedDict):
+    """Payload for audit log events dispatched to external callbacks."""
+
+    id: str
+    updated_at: str  # ISO-8601
+    changed_by: str
+    changed_by_api_key: str
+    action: str  # "created" | "updated" | "deleted" | "blocked" | "rotated"
+    table_name: str
+    object_id: str
+    before_value: Optional[str]
+    updated_values: Optional[str]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    litellm_call_id: Optional[str]  # UUID returned in x-litellm-call-id response header
     call_type: str
     stream: Optional[bool]
     response_cost: float
@@ -2926,6 +2998,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
+    output_cost_per_second_1080p: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
 
@@ -3175,6 +3248,7 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
@@ -3245,6 +3319,7 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"

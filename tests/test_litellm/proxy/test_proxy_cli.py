@@ -2,7 +2,6 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import fastapi
 import pytest
 
 sys.path.insert(
@@ -12,7 +11,6 @@ sys.path.insert(
 import builtins
 import types
 
-from litellm.proxy.health_endpoints.health_app_factory import build_health_app
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
@@ -123,6 +121,97 @@ class TestProxyInitializationHelpers:
         assert args["log_config"] == "log_config.json"
         assert args["timeout_keep_alive"] == 120
 
+        class _FakeUvicornConfig:
+            def __init__(self, timeout_worker_healthcheck=None):
+                pass
+
+        with patch("uvicorn.Config", _FakeUvicornConfig):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, timeout_worker_healthcheck=15
+            )
+            assert args["timeout_worker_healthcheck"] == 15
+
+    def test_get_reload_options_no_config(self):
+        opts = ProxyInitializationHelpers._get_reload_options(None)
+        assert opts == {"reload": True}
+
+    def test_get_reload_options_with_config_in_cwd(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(tmp_path)
+
+        opts = ProxyInitializationHelpers._get_reload_options("config.yaml")
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(tmp_path)]
+        assert opts["reload_includes"] == ["*.py", "config.yaml"]
+
+    def test_get_reload_options_with_config_outside_cwd(self, tmp_path, monkeypatch):
+        cwd_dir = tmp_path / "work"
+        cwd_dir.mkdir()
+        elsewhere = tmp_path / "configs"
+        elsewhere.mkdir()
+        config_file = elsewhere / "proxy.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(cwd_dir)
+
+        opts = ProxyInitializationHelpers._get_reload_options(str(config_file))
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
+        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
+
+    def test_patch_statreload_for_config_yields_yaml(self, tmp_path):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        py_file = tmp_path / "module.py"
+        py_file.write_text("x = 1\n")
+
+        applied = ProxyInitializationHelpers._patch_statreload_for_config(
+            str(config_file)
+        )
+        assert applied is True
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
+
+        assert config_file.resolve() in yielded_paths
+        assert py_file.resolve() in yielded_paths
+
+    def test_patch_statreload_for_config_is_idempotent(self, tmp_path):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        py_file = tmp_path / "only.py"
+        py_file.write_text("x = 1\n")
+
+        for _ in range(3):
+            ProxyInitializationHelpers._patch_statreload_for_config(str(config_file))
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded = list(StatReload.iter_py_files(fake_self))
+        assert len(yielded) == len(set(map(str, yielded)))
+        yielded_paths = {Path(p).resolve() for p in yielded}
+        assert config_file.resolve() in yielded_paths
+        assert py_file.resolve() in yielded_paths
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):
@@ -228,8 +317,12 @@ class TestProxyInitializationHelpers:
     @patch("uvicorn.run")
     @patch("atexit.register")  # critical
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
-    def test_skip_server_startup(self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run):
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_skip_server_startup(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
@@ -244,21 +337,31 @@ class TestProxyInitializationHelpers:
         )
         # Remove DATABASE_URL/DIRECT_URL so the CLI doesn't attempt
         # real prisma operations when these are set in CI.
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
-        with patch.dict(
-            os.environ, clean_env, clear=True,
-        ), patch.dict(
-            "sys.modules",
-            {
-                "proxy_server": mock_proxy_module,
-                # Prevent real import of proxy_server inside Click's
-                # isolation context (heavy side effects cause stream
-                # lifecycle issues with Click 8.2+)
-                "litellm.proxy.proxy_server": mock_proxy_module,
-            },
-        ), patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args:
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(
+                os.environ,
+                clean_env,
+                clear=True,
+            ),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    # Prevent real import of proxy_server inside Click's
+                    # isolation context (heavy side effects cause stream
+                    # lifecycle issues with Click 8.2+)
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
@@ -268,7 +371,9 @@ class TestProxyInitializationHelpers:
             # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
-            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
@@ -277,8 +382,63 @@ class TestProxyInitializationHelpers:
 
             result = runner.invoke(run_server, ["--local"])
 
-            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_proxy_default_api_version_uses_azure_default(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        """Proxy default api_version should match litellm.AZURE_DEFAULT_API_VERSION for consistency."""
+        from click.testing import CliRunner
+
+        import litellm
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_proxy_module.save_worker_config.assert_called_once()
+            call_kwargs = mock_proxy_module.save_worker_config.call_args[1]
+            assert call_kwargs["api_version"] == litellm.AZURE_DEFAULT_API_VERSION
 
     @patch("uvicorn.run")
     @patch("builtins.print")
@@ -295,19 +455,26 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
-            },
-        ), patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args:
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=mock_app,
+                        ProxyConfig=mock_proxy_config,
+                        KeyManagementSettings=mock_key_mgmt,
+                        save_worker_config=mock_save_worker_config,
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
+                return_value=False,
+            ),
+        ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
@@ -323,6 +490,7 @@ class TestProxyInitializationHelpers:
                 port=4000,
                 log_config=None,
                 keepalive_timeout=30,
+                timeout_worker_healthcheck=None,
             )
             mock_uvicorn_run.assert_called_once()
 
@@ -332,8 +500,64 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
+    def test_timeout_worker_healthcheck_flag(self, mock_print, mock_uvicorn_run):
+        """Test that the --timeout_worker_healthcheck flag is threaded through to the uvicorn init helper."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=mock_app,
+                        ProxyConfig=mock_proxy_config,
+                        KeyManagementSettings=mock_key_mgmt,
+                        save_worker_config=mock_save_worker_config,
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
+                return_value=False,
+            ),
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--timeout_worker_healthcheck", "15"]
+            )
+
+            assert result.exit_code == 0
+            mock_get_args.assert_called_once_with(
+                host="0.0.0.0",
+                port=4000,
+                log_config=None,
+                keepalive_timeout=None,
+                timeout_worker_healthcheck=15,
+            )
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
+    def test_max_requests_before_restart_flag(
+        self, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
         """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
         from click.testing import CliRunner
 
@@ -346,22 +570,32 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
-        with patch.dict(
-            os.environ, clean_env, clear=True,
-        ), patch.dict(
-            "sys.modules",
-            {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
-            },
-        ), patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args:
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(
+                os.environ,
+                clean_env,
+                clear=True,
+            ),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=mock_app,
+                        ProxyConfig=mock_proxy_config,
+                        KeyManagementSettings=mock_key_mgmt,
+                        save_worker_config=mock_save_worker_config,
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
@@ -372,7 +606,9 @@ class TestProxyInitializationHelpers:
                 run_server, ["--local", "--max_requests_before_restart", "123"]
             )
 
-            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
             # Check that uvicorn.run was called with limit_max_requests parameter
@@ -481,23 +717,26 @@ class TestProxyInitializationHelpers:
             os.environ.pop("DATABASE_URL", None)
             os.environ.pop("DIRECT_URL", None)
 
-            with patch.dict(
-                "sys.modules",
-                {
-                    "proxy_server": MagicMock(
-                        app=mock_app,
-                        ProxyConfig=mock_proxy_config,
-                        KeyManagementSettings=mock_key_mgmt,
-                        save_worker_config=mock_save_worker_config,
-                    ),
-                    # Also mock litellm.proxy.proxy_server to prevent the real
-                    # import at line 820 of proxy_cli.py which has heavy side
-                    # effects (FastAPI app init, logging setup, etc.)
-                    "litellm.proxy.proxy_server": mock_proxy_server_module,
-                },
-            ), patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-            ) as mock_get_args:
+            with (
+                patch.dict(
+                    "sys.modules",
+                    {
+                        "proxy_server": MagicMock(
+                            app=mock_app,
+                            ProxyConfig=mock_proxy_config,
+                            KeyManagementSettings=mock_key_mgmt,
+                            save_worker_config=mock_save_worker_config,
+                        ),
+                        # Also mock litellm.proxy.proxy_server to prevent the real
+                        # import at line 820 of proxy_cli.py which has heavy side
+                        # effects (FastAPI app init, logging setup, etc.)
+                        "litellm.proxy.proxy_server": mock_proxy_server_module,
+                    },
+                ),
+                patch(
+                    "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                ) as mock_get_args,
+            ):
                 mock_get_args.return_value = {
                     "app": "litellm.proxy.proxy_server:app",
                     "host": "localhost",
@@ -530,62 +769,8 @@ class TestProxyInitializationHelpers:
                 mock_uvicorn_run.assert_called_once()
 
 
-class TestHealthAppFactory:
-    """Test cases for the health app factory module"""
-
-    def test_build_health_app(self):
-        """Test that build_health_app creates a FastAPI app with the correct title and includes the health router"""
-        # Execute
-        health_app = build_health_app()
-
-        # Assert
-        assert health_app.title == "LiteLLM Health Endpoints"
-        assert isinstance(health_app, fastapi.FastAPI)
-
-        # Verify that the app has the expected health endpoints by checking route paths
-        # When a router is included, its routes are flattened into the main app's routes
-        route_paths = []
-        for route in health_app.routes:
-            if hasattr(route, "path"):
-                route_paths.append(route.path)
-
-        # Check for some expected health endpoints
-        expected_paths = [
-            "/test",
-            "/health/services",
-            "/health",
-            "/health/history",
-            "/health/latest",
-            "/settings",
-            "/active/callbacks",
-            "/health/readiness",
-            "/health/liveliness",
-            "/health/liveness",
-            "/health/test_connection",
-        ]
-
-        # At least some of the expected health endpoints should be present
-        found_paths = [path for path in expected_paths if path in route_paths]
-        assert (
-            len(found_paths) > 0
-        ), f"Expected to find health endpoints, but found: {route_paths}"
-
-        # Verify that the app has routes (indicating the router was included)
-        assert (
-            len(health_app.routes) > 0
-        ), "Health app should have routes from the included router"
-
-    def test_build_health_app_returns_different_instances(self):
-        """Test that build_health_app returns different FastAPI instances on each call"""
-        # Execute
-        health_app_1 = build_health_app()
-        health_app_2 = build_health_app()
-
-        # Assert
-        assert health_app_1 is not health_app_2
-        assert health_app_1.title == health_app_2.title
-        assert isinstance(health_app_1, fastapi.FastAPI)
-        assert isinstance(health_app_2, fastapi.FastAPI)
+class TestRunServerDbSetup:
+    """Tests for run_server's prisma setup_database behavior."""
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -623,17 +808,19 @@ class TestHealthAppFactory:
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
 
-        with patch.dict(
-            os.environ, clean_env, clear=True
-        ), patch.dict(
-            "sys.modules",
-            {
-                "proxy_server": mock_proxy_module,
-                "litellm.proxy.proxy_server": mock_proxy_module,
-            },
-        ), patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args:
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
@@ -646,10 +833,10 @@ class TestHealthAppFactory:
 
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
-            run_server.main(
-                ["--local", "--skip_server_startup"], standalone_mode=False
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            mock_setup_database.assert_called_with(
+                use_migrate=True, use_v2_resolver=False
             )
-            mock_setup_database.assert_called_with(use_migrate=True)
 
             # Reset mocks
             mock_setup_database.reset_mock()
@@ -662,7 +849,9 @@ class TestHealthAppFactory:
                 ["--local", "--skip_server_startup", "--use_prisma_db_push"],
                 standalone_mode=False,
             )
-            mock_setup_database.assert_called_with(use_migrate=False)
+            mock_setup_database.assert_called_with(
+                use_migrate=False, use_v2_resolver=False
+            )
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -698,17 +887,19 @@ class TestHealthAppFactory:
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
 
-        with patch.dict(
-            os.environ, clean_env, clear=True
-        ), patch.dict(
-            "sys.modules",
-            {
-                "proxy_server": mock_proxy_module,
-                "litellm.proxy.proxy_server": mock_proxy_module,
-            },
-        ), patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args:
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
@@ -717,10 +908,17 @@ class TestHealthAppFactory:
 
             with pytest.raises(SystemExit) as exc_info:
                 run_server.main(
-                    ["--local", "--skip_server_startup", "--enforce_prisma_migration_check"], standalone_mode=False
+                    [
+                        "--local",
+                        "--skip_server_startup",
+                        "--enforce_prisma_migration_check",
+                    ],
+                    standalone_mode=False,
                 )
             assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(use_migrate=True)
+            mock_setup_database.assert_called_once_with(
+                use_migrate=True, use_v2_resolver=False
+            )
 
 
 # --- Module-level helpers for worker startup hook tests ---
@@ -764,7 +962,9 @@ class TestWorkerStartupHooks:
         }
         # Remove DATABASE_URL to avoid real DB setup
         clean_env = {
-            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
         }
         clean_env.update(env_overrides)
 
@@ -789,7 +989,9 @@ class TestWorkerStartupHooks:
             "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook",
         }
         clean_env = {
-            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
         }
         clean_env.update(env_overrides)
 
@@ -811,7 +1013,9 @@ class TestWorkerStartupHooks:
             "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_failing_hook",
         }
         clean_env = {
-            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
         }
         clean_env.update(env_overrides)
 
@@ -849,7 +1053,9 @@ class TestWorkerStartupHooks:
             "LITELLM_WORKER_STARTUP_HOOKS": hooks,
         }
         clean_env = {
-            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
         }
         clean_env.update(env_overrides)
 

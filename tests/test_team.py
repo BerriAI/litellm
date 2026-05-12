@@ -61,15 +61,21 @@ async def wait_for_team_member_spend_update(
                                 print(f"Initial team member spend: {spend}")
 
                             if spend >= expected_min_spend:
-                                print(f"[OK] Team member spend updated: {spend} >= {expected_min_spend}")
+                                print(
+                                    f"[OK] Team member spend updated: {spend} >= {expected_min_spend}"
+                                )
                                 return True
 
-                            print(f"[WAITING] Team member spend: {spend}, expected >= {expected_min_spend}, elapsed: {time.time() - start_time:.1f}s")
+                            print(
+                                f"[WAITING] Team member spend: {spend}, expected >= {expected_min_spend}, elapsed: {time.time() - start_time:.1f}s"
+                            )
             await asyncio.sleep(0.5)
         except Exception as e:
             print(f"Error checking team member spend: {e}")
             await asyncio.sleep(0.5)
-    print(f"[TIMEOUT] Timeout waiting for team member spend update (expected >= {expected_min_spend})")
+    print(
+        f"[TIMEOUT] Timeout waiting for team member spend update (expected >= {expected_min_spend})"
+    )
     return False
 
 
@@ -740,7 +746,7 @@ async def test_users_in_team_budget():
         team = await new_team(session, 0, user_id=None)
         print(f"[DEBUG] Created team: {team['team_id']}")
         print(f"[DEBUG] Full team data: {team}")
-        
+
         # Create user with team_id so the key is associated with the team from the start
         key_gen = await new_user(
             session,
@@ -782,10 +788,10 @@ async def test_users_in_team_budget():
             for team_info in user_info_after["teams"]:
                 if team_info.get("team_id") == team["team_id"]:
                     print(f"  - Team: {team_info.get('team_id')}")
-                    for membership in team_info.get('team_memberships', []):
+                    for membership in team_info.get("team_memberships", []):
                         print(f"    - Membership: {membership}")
-                        if 'litellm_budget_table' in membership:
-                            budget_table = membership['litellm_budget_table']
+                        if "litellm_budget_table" in membership:
+                            budget_table = membership["litellm_budget_table"]
                             print(f"    - Max budget: {budget_table.get('max_budget')}")
                             print(f"    - Current spend: {membership.get('spend', 0)}")
 
@@ -796,7 +802,7 @@ async def test_users_in_team_budget():
         print(f"[DEBUG] Call 1 result: {result}")
         # Extract cost from result if available
         if isinstance(result, dict):
-            usage = result.get('usage', {})
+            usage = result.get("usage", {})
             print(f"[DEBUG] Call 1 usage: {usage}")
 
         # Wait for spend to be committed to database before checking budget
@@ -804,7 +810,9 @@ async def test_users_in_team_budget():
         # so we need to wait for the spend from Call 1 to be persisted
         print("\n[DEBUG] ===== Waiting for spend to be committed =====")
         print("Waiting for team member spend to be committed to database...")
-        print("Note: Spend updates are flushed periodically, this may take up to 90 seconds...")
+        print(
+            "Note: Spend updates are flushed periodically, this may take up to 90 seconds..."
+        )
         spend_updated = await wait_for_team_member_spend_update(
             session, get_user, team["team_id"], 0.0000001, max_wait=90
         )
@@ -815,7 +823,9 @@ async def test_users_in_team_budget():
             )
 
         # Check user info BEFORE Call 2
-        user_info_before_call2 = await get_user_info(session, get_user, call_user="sk-1234")
+        user_info_before_call2 = await get_user_info(
+            session, get_user, call_user="sk-1234"
+        )
         print(f"\n[DEBUG] User info BEFORE Call 2:")
         print(f"  - User budget: {user_info_before_call2.get('max_budget')}")
         print(f"  - User spend: {user_info_before_call2.get('spend')}")
@@ -823,14 +833,16 @@ async def test_users_in_team_budget():
             for team_info in user_info_before_call2["teams"]:
                 if team_info.get("team_id") == team["team_id"]:
                     print(f"  - Team: {team_info.get('team_id')}")
-                    for membership in team_info.get('team_memberships', []):
-                        if 'litellm_budget_table' in membership:
-                            budget_table = membership['litellm_budget_table']
-                            current_spend = membership.get('spend', 0)
-                            max_budget = budget_table.get('max_budget')
+                    for membership in team_info.get("team_memberships", []):
+                        if "litellm_budget_table" in membership:
+                            budget_table = membership["litellm_budget_table"]
+                            current_spend = membership.get("spend", 0)
+                            max_budget = budget_table.get("max_budget")
                             print(f"    - Max budget in team: {max_budget}")
                             print(f"    - Current spend in team: {current_spend}")
-                            print(f"    - Budget remaining: {max_budget - current_spend}")
+                            print(
+                                f"    - Budget remaining: {max_budget - current_spend}"
+                            )
                             print(f"    - Should fail?: {current_spend >= max_budget}")
 
         # Call 2
@@ -857,7 +869,7 @@ async def test_users_in_team_budget():
                 response_text = await response.text()
                 print(f"[DEBUG] Call 2 status code: {call2_status}")
                 print(f"[DEBUG] Call 2 response: {response_text}")
-                
+
                 if call2_status != 200:
                     call2_failed = True
                     call2_error = f"Status {call2_status}: {response_text}"
@@ -866,7 +878,7 @@ async def test_users_in_team_budget():
                     # Call succeeded when it should have failed
                     print(f"[ERROR] Call 2 PASSED when it should have FAILED!")
                     print(f"[ERROR] Response was 200 OK")
-                    
+
         except Exception as e:
             if call2_failed:
                 print(f"[DEBUG] Call 2 FAILED (expected): {e}")
@@ -876,7 +888,9 @@ async def test_users_in_team_budget():
                 print(f"[DEBUG] Call 2 raised exception: {e}")
 
         # Check user info AFTER Call 2
-        user_info_after_call2 = await get_user_info(session, get_user, call_user="sk-1234")
+        user_info_after_call2 = await get_user_info(
+            session, get_user, call_user="sk-1234"
+        )
         print(f"\n[DEBUG] User info AFTER Call 2:")
         print(f"  - User budget: {user_info_after_call2.get('max_budget')}")
         print(f"  - User spend: {user_info_after_call2.get('spend')}")
@@ -884,9 +898,9 @@ async def test_users_in_team_budget():
             for team_info in user_info_after_call2["teams"]:
                 if team_info.get("team_id") == team["team_id"]:
                     print(f"  - Team: {team_info.get('team_id')}")
-                    for membership in team_info.get('team_memberships', []):
-                        if 'litellm_budget_table' in membership:
-                            budget_table = membership['litellm_budget_table']
+                    for membership in team_info.get("team_memberships", []):
+                        if "litellm_budget_table" in membership:
+                            budget_table = membership["litellm_budget_table"]
                             print(f"    - Max budget: {budget_table.get('max_budget')}")
                             print(f"    - Current spend: {membership.get('spend', 0)}")
 
@@ -904,12 +918,12 @@ async def test_users_in_team_budget():
             if user_info_before_call2.get("teams"):
                 for team_info in user_info_before_call2["teams"]:
                     if team_info.get("team_id") == team["team_id"]:
-                        for membership in team_info.get('team_memberships', []):
-                            if 'litellm_budget_table' in membership:
+                        for membership in team_info.get("team_memberships", []):
+                            if "litellm_budget_table" in membership:
                                 error_msg += f"Team member spend before call: {membership.get('spend', 0)}\n"
                                 error_msg += f"Team member max budget: {membership['litellm_budget_table'].get('max_budget')}\n"
             pytest.fail(error_msg)
-        
+
         # Check the error message contains budget exceeded
         if call2_error and "Budget has been exceeded" not in call2_error:
             pytest.fail(
@@ -917,7 +931,7 @@ async def test_users_in_team_budget():
                 f"Expected error to contain: 'Budget has been exceeded'\n"
                 f"Actual error: {call2_error}"
             )
-        
+
         print("[DEBUG] Call 2 failed as expected with budget exceeded error")
 
         ## Check user info

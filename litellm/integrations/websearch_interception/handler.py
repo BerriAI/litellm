@@ -8,6 +8,7 @@ server-side using litellm router's search tools.
 
 import asyncio
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -27,7 +28,13 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
+from litellm.types.integrations.custom_logger import (
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -66,6 +73,111 @@ class WebSearchInterceptionLogger(CustomLogger):
             ]
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
+
+    async def try_short_circuit_search(
+        self,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        custom_llm_provider: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Short-circuit web-search-only requests by executing the search directly.
+
+        Claude Code sends web search as a separate, standalone /v1/messages
+        request with a simple prompt and only web_search tool(s). For providers
+        that don't natively support web search (e.g. github_copilot), there is
+        no need to route this through the backend LLM — we can detect the
+        pattern, execute the search via Tavily/Perplexity, and return a
+        synthetic Anthropic response immediately.
+
+        Args:
+            model: Model name from the request
+            messages: Messages list from the request
+            tools: Tools list from the request
+            custom_llm_provider: Provider name
+
+        Returns:
+            An AnthropicMessagesResponse dict if short-circuited, or None to
+            continue normal processing.
+        """
+        if not tools:
+            return None
+
+        # Check if provider is in enabled list
+        provider_str = custom_llm_provider or ""
+        if (
+            self.enabled_providers is not None
+            and provider_str not in self.enabled_providers
+        ):
+            return None
+
+        # Only short-circuit for providers without native Anthropic Messages
+        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
+        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
+        # includes a follow-up LLM call to synthesize the answer from search
+        # results.  Short-circuiting those would skip that synthesis step and
+        # return raw search text — a regression for existing users.
+        try:
+            provider_enum = LlmProviders(provider_str)
+            anthropic_config = (
+                ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model, provider=provider_enum
+                )
+            )
+            if anthropic_config is not None:
+                verbose_logger.debug(
+                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
+                    "(provider has native Anthropic Messages support, using agentic loop)"
+                )
+                return None
+        except (ValueError, Exception):
+            pass  # unknown provider enum → safe to short-circuit
+
+        # All tools must be web search tools
+        if not all(is_web_search_tool(t) for t in tools):
+            return None
+
+        # Extract search query from the last user message
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        query = get_last_user_message(cast(List[AllMessageValues], messages))
+        if not query:
+            return None
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search detected "
+            f"(provider={provider_str}, query='{query}')"
+        )
+
+        # Execute search
+        try:
+            search_result_text = await self._execute_search(query)
+        except Exception as e:
+            verbose_logger.error(
+                f"WebSearchInterception: Short-circuit search failed: {e}"
+            )
+            search_result_text = f"Search failed: {e}"
+
+        # Build synthetic Anthropic response
+        response: Dict[str, Any] = {
+            "id": f"msg_{str(uuid.uuid4())}",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": search_result_text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search completed, "
+            f"returning synthetic response ({len(search_result_text)} chars)"
+        )
+        return response
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[Any]
@@ -122,8 +234,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # Keep other tools as-is
                 converted_tools.append(tool)
 
-        # Update tools in-place and return full kwargs
         kwargs["tools"] = converted_tools
+
+        if kwargs.get("stream"):
+            verbose_logger.debug(
+                "WebSearchInterception: deployment hook converting stream=True to stream=False"
+            )
+            kwargs["stream"] = False
+            kwargs["_websearch_interception_converted_stream"] = True
+
         return kwargs
 
     @classmethod
@@ -236,13 +355,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             else:
                 converted_tools.append(tool)
 
-        # Update kwargs with converted tools
         kwargs["tools"] = converted_tools
         verbose_logger.debug(
             f"WebSearchInterception: Tools after conversion: {[t.get('name') for t in converted_tools]}"
         )
 
-        # Convert stream=True to stream=False for WebSearch interception
+        # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
             verbose_logger.debug(
                 "WebSearchInterception: Converting stream=True to stream=False"
@@ -459,6 +577,35 @@ class WebSearchInterceptionLogger(CustomLogger):
             kwargs=kwargs,
         )
 
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: Any,
+        stream: bool,
+        kwargs: Dict,
+    ) -> AgenticLoopPlan:
+        tool_calls = tools["tool_calls"]
+        thinking_blocks = tools.get("thinking_blocks", [])
+        request_patch = await self._build_anthropic_request_patch(
+            model=model,
+            messages=messages,
+            tool_calls=tool_calls,
+            thinking_blocks=thinking_blocks,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            kwargs=kwargs,
+        )
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=request_patch,
+            metadata={"tool_type": "websearch", "response_format": "anthropic"},
+        )
+
     async def async_run_chat_completion_agentic_loop(
         self,
         tools: Dict,
@@ -492,6 +639,33 @@ class WebSearchInterceptionLogger(CustomLogger):
             stream=stream,
             kwargs=kwargs,
             response_format=response_format,
+        )
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        optional_params: Dict,
+        logging_obj: Any,
+        stream: bool,
+        kwargs: Dict,
+    ) -> AgenticLoopPlan:
+        tool_calls = tools["tool_calls"]
+        response_format = tools.get("response_format", "openai")
+        request_patch = await self._build_chat_completion_request_patch(
+            model=model,
+            messages=messages,
+            tool_calls=tool_calls,
+            optional_params=optional_params,
+            kwargs=kwargs,
+            response_format=response_format,
+        )
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=request_patch,
+            metadata={"tool_type": "websearch", "response_format": response_format},
         )
 
     @staticmethod
@@ -558,7 +732,48 @@ class WebSearchInterceptionLogger(CustomLogger):
         stream: bool,
         kwargs: Dict,
     ) -> Any:
-        """Execute litellm.search() and make follow-up request"""
+        """Legacy path: execute search + build patch + run follow-up call."""
+        request_patch = await self._build_anthropic_request_patch(
+            model=model,
+            messages=messages,
+            tool_calls=tool_calls,
+            thinking_blocks=thinking_blocks,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            kwargs=kwargs,
+        )
+        if request_patch.messages is None:
+            raise ValueError("WebSearchInterception: missing follow-up messages")
+
+        optional_params = dict(anthropic_messages_optional_request_params)
+        optional_params.update(request_patch.optional_params)
+        max_tokens = request_patch.max_tokens
+        if max_tokens is None:
+            max_tokens = cast(Optional[int], optional_params.pop("max_tokens", None))
+        else:
+            optional_params.pop("max_tokens", None)
+        if max_tokens is None:
+            max_tokens = cast(int, kwargs.get("max_tokens", 1024))
+
+        return await anthropic_messages.acreate(
+            max_tokens=max_tokens,
+            messages=request_patch.messages,
+            model=request_patch.model or model,
+            **optional_params,
+            **request_patch.kwargs,
+        )
+
+    async def _build_anthropic_request_patch(
+        self,
+        model: str,
+        messages: List[Dict],
+        tool_calls: List[Dict],
+        thinking_blocks: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: Any,
+        kwargs: Dict,
+    ) -> AgenticLoopRequestPatch:
+        """Execute litellm.search() and build follow-up request patch."""
 
         # Extract search queries from tool_use blocks
         search_tasks = []
@@ -607,19 +822,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             thinking_blocks=thinking_blocks,
         )
 
-        # Make follow-up request with search results
-        # Type cast: user_message is a Dict for Anthropic format (default response_format)
         follow_up_messages = messages + [assistant_message, cast(Dict, user_message)]
-
-        verbose_logger.debug(
-            "WebSearchInterception: Making follow-up request with search results"
-        )
-        verbose_logger.debug(
-            f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}"
-        )
-        verbose_logger.debug(
-            f"WebSearchInterception: Last message (tool_result): {user_message}"
-        )
 
         # Correlation context for structured logging
         _call_id = getattr(logging_obj, "litellm_call_id", None) or kwargs.get(
@@ -628,61 +831,41 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         full_model_name = model  # safe default before try block
 
-        # Use anthropic_messages.acreate for follow-up request
-        try:
-            max_tokens = self._resolve_max_tokens(
-                anthropic_messages_optional_request_params, kwargs
-            )
+        max_tokens = self._resolve_max_tokens(
+            anthropic_messages_optional_request_params, kwargs
+        )
 
-            verbose_logger.debug(
-                f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
-            )
+        verbose_logger.debug(
+            f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
+        )
 
-            # Create a copy of optional params without max_tokens (since we pass it explicitly)
-            optional_params_without_max_tokens = {
-                k: v
-                for k, v in anthropic_messages_optional_request_params.items()
-                if k != "max_tokens"
-            }
+        optional_params_without_max_tokens = {
+            k: v
+            for k, v in anthropic_messages_optional_request_params.items()
+            if k != "max_tokens"
+        }
+        kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
-            kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
-
-            # Get model from logging_obj.model_call_details["agentic_loop_params"]
-            # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
-            if logging_obj is not None:
-                agentic_params = logging_obj.model_call_details.get(
-                    "agentic_loop_params", {}
-                )
-                full_model_name = agentic_params.get("model", model)
-            verbose_logger.debug(
-                f"WebSearchInterception: Using model name: {full_model_name}"
+        if logging_obj is not None:
+            agentic_params = logging_obj.model_call_details.get(
+                "agentic_loop_params", {}
             )
-
-            final_response = await anthropic_messages.acreate(
-                max_tokens=max_tokens,
-                messages=follow_up_messages,
-                model=full_model_name,
-                **optional_params_without_max_tokens,
-                **kwargs_for_followup,
-            )
-            verbose_logger.debug(
-                f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"
-            )
-            verbose_logger.debug(
-                f"WebSearchInterception: Final response: {final_response}"
-            )
-            return final_response
-        except Exception as e:
-            verbose_logger.exception(
-                "WebSearchInterception: Follow-up request failed "
-                "[call_id=%s model=%s messages=%d searches=%d]: %s",
-                _call_id,
-                full_model_name,
-                len(follow_up_messages),
-                len(final_search_results),
-                str(e),
-            )
-            raise
+            full_model_name = agentic_params.get("model", model)
+        verbose_logger.debug(
+            "WebSearchInterception: Built anthropic request patch "
+            "[call_id=%s model=%s messages=%d searches=%d]",
+            _call_id,
+            full_model_name,
+            len(follow_up_messages),
+            len(final_search_results),
+        )
+        return AgenticLoopRequestPatch(
+            model=full_model_name,
+            messages=follow_up_messages,
+            max_tokens=max_tokens,
+            optional_params=optional_params_without_max_tokens,
+            kwargs=kwargs_for_followup,
+        )
 
     async def _execute_search(self, query: str) -> str:
         """Execute a single web search using router's search tools"""
@@ -769,7 +952,36 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs: Dict,
         response_format: str = "openai",
     ) -> Any:
-        """Execute litellm.search() and make follow-up chat completion request"""
+        """Legacy path: execute search + build patch + run follow-up call."""
+        request_patch = await self._build_chat_completion_request_patch(
+            model=model,
+            messages=messages,
+            tool_calls=tool_calls,
+            optional_params=optional_params,
+            kwargs=kwargs,
+            response_format=response_format,
+        )
+        if request_patch.messages is None:
+            raise ValueError("WebSearchInterception: missing follow-up messages")
+        params = dict(optional_params)
+        params.update(request_patch.optional_params)
+        return await litellm.acompletion(
+            model=request_patch.model or model,
+            messages=request_patch.messages,
+            **params,
+            **request_patch.kwargs,
+        )
+
+    async def _build_chat_completion_request_patch(  # noqa: PLR0915
+        self,
+        model: str,
+        messages: List[Dict],
+        tool_calls: List[Dict],
+        optional_params: Dict,
+        kwargs: Dict,
+        response_format: str = "openai",
+    ) -> AgenticLoopRequestPatch:
+        """Execute litellm.search() and build chat-completion rerun patch."""
 
         # Extract search queries from tool_calls
         search_tasks = []
@@ -849,74 +1061,56 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}"
         )
 
-        # Use litellm.acompletion for follow-up request
-        try:
-            # Remove internal parameters that shouldn't be passed to follow-up request
-            internal_params = {
-                "_websearch_interception",
-                "acompletion",
-                "litellm_logging_obj",
-                "custom_llm_provider",
+        # Remove internal parameters that shouldn't be passed to follow-up request
+        internal_params = {
+            "_websearch_interception",
+            "acompletion",
+            "litellm_logging_obj",
+            "custom_llm_provider",
+            "model_alias_map",
+            "stream_response",
+            "custom_prompt_dict",
+        }
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs.items()
+            if not k.startswith("_websearch_interception") and k not in internal_params
+        }
+
+        full_model_name = model
+        if "custom_llm_provider" in kwargs:
+            custom_llm_provider = kwargs["custom_llm_provider"]
+            if not model.startswith(custom_llm_provider) and "/" not in model:
+                full_model_name = f"{custom_llm_provider}/{model}"
+
+        verbose_logger.debug(
+            "WebSearchInterception: Built chat completion request patch model=%s messages=%d",
+            full_model_name,
+            len(follow_up_messages),
+        )
+
+        tools_param = optional_params.get("tools")
+        optional_params_clean = {
+            k: v
+            for k, v in optional_params.items()
+            if k
+            not in {
+                "tools",
+                "extra_body",
                 "model_alias_map",
                 "stream_response",
                 "custom_prompt_dict",
             }
-            kwargs_for_followup = {
-                k: v
-                for k, v in kwargs.items()
-                if not k.startswith("_websearch_interception")
-                and k not in internal_params
-            }
+        }
+        if tools_param is not None:
+            optional_params_clean["tools"] = tools_param
 
-            # Get full model name from kwargs
-            full_model_name = model
-            if "custom_llm_provider" in kwargs:
-                custom_llm_provider = kwargs["custom_llm_provider"]
-                # Reconstruct full model name with provider prefix if needed
-                if not model.startswith(custom_llm_provider):
-                    # Check if model already has a provider prefix
-                    if "/" not in model:
-                        full_model_name = f"{custom_llm_provider}/{model}"
-
-            verbose_logger.debug(
-                f"WebSearchInterception: Using model name: {full_model_name}"
-            )
-
-            # Prepare tools for follow-up request (same as original)
-            tools_param = optional_params.get("tools")
-
-            # Remove tools and extra_body from optional_params to avoid issues
-            # extra_body often contains internal LiteLLM params that shouldn't be forwarded
-            optional_params_clean = {
-                k: v
-                for k, v in optional_params.items()
-                if k
-                not in {
-                    "tools",
-                    "extra_body",
-                    "model_alias_map",
-                    "stream_response",
-                    "custom_prompt_dict",
-                }
-            }
-
-            final_response = await litellm.acompletion(
-                model=full_model_name,
-                messages=follow_up_messages,
-                tools=tools_param,
-                **optional_params_clean,
-                **kwargs_for_followup,
-            )
-
-            verbose_logger.debug(
-                f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"
-            )
-            return final_response
-        except Exception as e:
-            verbose_logger.exception(
-                f"WebSearchInterception: Follow-up request failed: {str(e)}"
-            )
-            raise
+        return AgenticLoopRequestPatch(
+            model=full_model_name,
+            messages=follow_up_messages,
+            optional_params=optional_params_clean,
+            kwargs=kwargs_for_followup,
+        )
 
     async def _create_empty_search_result(self) -> str:
         """Create an empty search result for tool calls without queries"""

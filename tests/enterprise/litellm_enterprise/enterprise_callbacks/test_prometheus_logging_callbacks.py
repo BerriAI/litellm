@@ -223,6 +223,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -237,6 +239,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -253,6 +257,8 @@ def test_increment_token_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -283,11 +289,10 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     future_reset_time_team = datetime.now() + timedelta(hours=10)
     future_reset_time_key = datetime.now() + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
-    with patch(
-        "litellm.proxy.auth.auth_checks.get_team_object"
-    ) as mock_get_team, patch(
-        "litellm.proxy.auth.auth_checks.get_key_object"
-    ) as mock_get_key:
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team,
+        patch("litellm.proxy.auth.auth_checks.get_key_object") as mock_get_key,
+    ):
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
         mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
 
@@ -414,6 +419,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -430,6 +437,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -446,6 +455,8 @@ def test_set_latency_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
         model_id="model-123",
@@ -589,8 +600,11 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )
@@ -605,8 +619,11 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )
@@ -642,16 +659,16 @@ async def test_async_log_failure_event(prometheus_logger):
     )
 
     # litellm_llm_api_failed_requests_metric incremented
-    # Labels: end_user, api_key_hash, api_key_alias, model, team, team_alias, user, model_id
+    # Labels: end_user, hashed_api_key, api_key_alias, model, team, team_alias, user, model_id
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
-        None,  # end_user_id
-        "test_hash",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
-        "model-123",  # model_id from standard_logging_payload
+        end_user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        model_id="model-123",
     )
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -715,6 +732,51 @@ async def test_async_log_failure_event(prometheus_logger):
 
 
 @pytest.mark.asyncio
+async def test_async_log_failure_event_litellm_side_rate_limit(prometheus_logger):
+    """LiteLLM-side reject (no deployment picked) routes the requested model
+    into `requested_model` and skips the partial-outage flag."""
+    standard_logging_object = create_standard_logging_payload()
+    standard_logging_object["model_id"] = ""
+    standard_logging_object["model_group"] = ""
+    standard_logging_object["api_base"] = ""
+
+    rate_limit_exc = Exception("LiteLLM rate limit exceeded")
+    rate_limit_exc.status_code = 429
+    kwargs = {
+        "model": "us/azure/openai/gpt-5-mini",
+        "litellm_params": {},
+        "start_time": datetime.now(),
+        "completion_start_time": datetime.now(),
+        "api_call_start_time": datetime.now(),
+        "end_time": datetime.now() + timedelta(seconds=1),
+        "standard_logging_object": standard_logging_object,
+        "exception": rate_limit_exc,
+    }
+
+    prometheus_logger.litellm_llm_api_failed_requests_metric = MagicMock()
+    prometheus_logger.litellm_deployment_failure_responses = MagicMock()
+    prometheus_logger.litellm_deployment_total_requests = MagicMock()
+    prometheus_logger.set_deployment_partial_outage = MagicMock()
+
+    await prometheus_logger.async_log_failure_event(
+        kwargs, MagicMock(), kwargs["start_time"], kwargs["end_time"]
+    )
+
+    prometheus_logger.set_deployment_partial_outage.assert_not_called()
+
+    prometheus_logger.litellm_deployment_failure_responses.labels.assert_called_once()
+    actual_failure_labels = (
+        prometheus_logger.litellm_deployment_failure_responses.labels.call_args.kwargs
+    )
+    assert actual_failure_labels["requested_model"] == "us/azure/openai/gpt-5-mini"
+    assert actual_failure_labels["litellm_model_name"] == ""
+    assert actual_failure_labels["model_id"] == ""
+    assert actual_failure_labels["api_base"] == ""
+    assert actual_failure_labels["api_provider"] == ""
+    assert actual_failure_labels["exception_status"] == "429"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook(prometheus_logger):
     """
     Test for the async_post_call_failure_hook method
@@ -758,6 +820,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         requested_model="gpt-3.5-turbo",
         exception_status="429",
         exception_class="Openai.RateLimitError",
@@ -776,6 +840,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
+        org_id=None,
+        org_alias=None,
         user="test_user",
         status_code="429",
         user_email=None,
@@ -955,6 +1021,8 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        org_id=None,
+        org_alias=None,
     )
     prometheus_logger.litellm_overhead_latency_metric.labels.assert_called_once_with(
         api_base="https://api.openai.com",
@@ -1126,10 +1194,10 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
 
     enum_values = UserAPIKeyLabelValues(
         end_user="test_end_user",
-        api_key_hash="test_hash",
+        hashed_api_key="test_hash",
         api_key_alias="test_alias",
     )
-    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    supported_labels = ["end_user", "hashed_api_key", "api_key_alias"]
     returned_dict = prometheus_label_factory(
         supported_enum_labels=supported_labels, enum_values=enum_values
     )
@@ -1138,6 +1206,8 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
         assert returned_dict["end_user"] == "test_end_user"
     else:
         assert returned_dict["end_user"] == None
+    assert returned_dict["hashed_api_key"] == "test_hash"
+    assert returned_dict["api_key_alias"] == "test_alias"
 
 
 def test_get_custom_labels_from_metadata(monkeypatch):
@@ -1492,9 +1562,12 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+    ):
         # Create mock team data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
@@ -1587,11 +1660,15 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
         mock_list_keys.side_effect = Exception("Key listing error")
@@ -1608,15 +1685,22 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_teamtable = MagicMock()
         mock_teamtable.count = MagicMock(side_effect=Exception("Team count error"))
 
+        # Mock litellm_organizationtable to raise an exception for org budget metrics
+        mock_orgtable = MagicMock()
+        mock_orgtable.find_many = MagicMock(side_effect=Exception("Org database error"))
+        mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
+
         mock_db = MagicMock()
         mock_db.litellm_usertable = mock_usertable
         mock_db.litellm_teamtable = mock_teamtable
+        mock_db.litellm_organizationtable = mock_orgtable
         mock_prisma.db = mock_db
 
         # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+        prometheus_logger.litellm_remaining_org_budget_metric = MagicMock()
         prometheus_logger.litellm_total_users_metric = MagicMock()
         prometheus_logger.litellm_teams_count_metric = MagicMock()
 
@@ -1625,8 +1709,8 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify all four errors were logged (teams, keys, users, and user/team count)
-            assert mock_logger.call_count == 4
+            # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
+            assert mock_logger.call_count == 5
             assert (
                 "Error initializing teams budget metrics"
                 in mock_logger.call_args_list[0][0][0]
@@ -1640,14 +1724,19 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
                 in mock_logger.call_args_list[2][0][0]
             )
             assert (
-                "Error initializing user/team count metrics"
+                "Error initializing orgs budget metrics"
                 in mock_logger.call_args_list[3][0][0]
+            )
+            assert (
+                "Error initializing user/team count metrics"
+                in mock_logger.call_args_list[4][0][0]
             )
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_user_budget_metric.assert_not_called()
+        prometheus_logger.litellm_remaining_org_budget_metric.assert_not_called()
         prometheus_logger.litellm_total_users_metric.assert_not_called()
         prometheus_logger.litellm_teams_count_metric.assert_not_called()
 
@@ -1659,9 +1748,12 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Create mock key data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(

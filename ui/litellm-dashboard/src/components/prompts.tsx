@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from "react";
 
 import { Button } from "@tremor/react";
-import { Modal } from "antd";
+import { Modal, Select } from "antd";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking";
 import PromptTable from "./prompts/prompt_table";
 import PromptInfoView from "./prompts/prompt_info";
 import AddPromptForm from "./prompts/add_prompt_form";
 import PromptEditorView from "./prompts/prompt_editor_view";
 import NotificationsManager from "./molecules/notifications_manager";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 
 interface PromptsProps {
   accessToken: string | null;
@@ -18,6 +18,7 @@ interface PromptsProps {
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [showEditorView, setShowEditorView] = useState(false);
@@ -26,6 +27,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
+  // Admin Viewer follows the read-parity rule: see prompts, no writes.
+  const canModify = userRole ? isProxyAdminRole(userRole) : false;
 
   const fetchPrompts = async () => {
     if (!accessToken) {
@@ -34,7 +37,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
     setIsLoading(true);
     try {
-      const response: ListPromptsResponse = await getPromptsList(accessToken);
+      const response: ListPromptsResponse = await getPromptsList(accessToken, selectedEnvironment);
       console.log(`prompts: ${JSON.stringify(response)}`);
       setPromptsList(response.prompts);
     } catch (error) {
@@ -46,7 +49,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   useEffect(() => {
     fetchPrompts();
-  }, [accessToken]);
+  }, [accessToken, selectedEnvironment]);
 
   const handlePromptClick = (promptId: string) => {
     setSelectedPromptId(promptId);
@@ -127,7 +130,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           promptId={selectedPromptId}
           onClose={() => setSelectedPromptId(null)}
           accessToken={accessToken}
-          isAdmin={isAdmin}
+          isAdmin={canModify}
           onDelete={fetchPrompts}
           onEdit={handleEditPrompt}
         />
@@ -135,13 +138,29 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         <>
           <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
-            <Button onClick={handleAddPrompt} disabled={!accessToken}>
-              + Add New Prompt
-            </Button>
-              <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
-                Upload .prompt File
-              </Button>
+              {canModify && (
+                <>
+                  <Button onClick={handleAddPrompt} disabled={!accessToken}>
+                    + Add New Prompt
+                  </Button>
+                  <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+                    Upload .prompt File
+                  </Button>
+                </>
+              )}
             </div>
+            <Select
+              placeholder="All Environments"
+              allowClear
+              value={selectedEnvironment}
+              onChange={(value) => setSelectedEnvironment(value)}
+              style={{ width: 180 }}
+              options={[
+                { label: "Development", value: "development" },
+                { label: "Staging", value: "staging" },
+                { label: "Production", value: "production" },
+              ]}
+            />
           </div>
 
           <PromptTable
@@ -150,7 +169,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             onPromptClick={handlePromptClick}
             onDeleteClick={handleDeleteClick}
             accessToken={accessToken}
-            isAdmin={isAdmin}
+            isAdmin={canModify}
           />
         </>
       )}

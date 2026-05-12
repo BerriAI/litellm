@@ -6,22 +6,36 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   unit-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
       - name: Set up Helm 3.11.1
-        uses: azure/setup-helm@v1
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
-          version: '3.11.1'
+          version: "3.11.1"
 
       - name: Install Helm Unit Test Plugin
         run: |
           helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4
+      - name: Verify Helm Unit Test Plugin integrity
+        run: |
+          EXPECTED_SHA="e251ba198448629678ff2168e1a469249d998155"
+          PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
+          ACTUAL_SHA="$(git -C "$PLUGIN_DIR" rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::Helm unittest plugin checksum mismatch! Expected $EXPECTED_SHA but got $ACTUAL_SHA"
+            exit 1
+          fi
+          echo "Helm unittest plugin integrity verified: $ACTUAL_SHA"
 
       - name: Run unit tests
-        run:
-          helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
+        run: helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm

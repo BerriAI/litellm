@@ -11,6 +11,10 @@ from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.cloud_storage_security import (
+    encode_gcs_object_name_for_url,
+    split_configured_cloud_bucket_name,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -70,7 +74,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -106,7 +112,9 @@ class GCSBucketBase(CustomBatchLogger):
             custom_llm_provider="vertex_ai",
             api_base=None,
         )
-        verbose_logger.debug("constructed auth_header %s", auth_header)
+        verbose_logger.debug(
+            "constructed auth_header [set=%s]", auth_header is not None
+        )
         headers = {
             "Authorization": f"Bearer {auth_header}",  # auth_header
             "Content-Type": "application/json",
@@ -129,8 +137,8 @@ class GCSBucketBase(CustomBatchLogger):
             - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
 
         """
-        if "/" in bucket_name:
-            bucket_name, prefix = bucket_name.split("/", 1)
+        bucket_name, prefix = split_configured_cloud_bucket_name(bucket_name)
+        if prefix:
             object_name = f"{prefix}/{object_name}"
             return bucket_name, object_name
         return bucket_name, object_name
@@ -146,9 +154,9 @@ class GCSBucketBase(CustomBatchLogger):
         if kwargs is None:
             kwargs = {}
 
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
 
         bucket_name: str
         path_service_account: Optional[str]
@@ -244,6 +252,7 @@ class GCSBucketBase(CustomBatchLogger):
                 bucket_name=bucket_name,
                 object_name=object_name,
             )
+            object_name = encode_gcs_object_name_for_url(object_name)
 
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
 
@@ -284,6 +293,7 @@ class GCSBucketBase(CustomBatchLogger):
                 bucket_name=bucket_name,
                 object_name=object_name,
             )
+            object_name = encode_gcs_object_name_for_url(object_name)
 
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
 
@@ -330,10 +340,11 @@ class GCSBucketBase(CustomBatchLogger):
             bucket_name=bucket_name,
             object_name=object_name,
         )
+        encoded_object_name = encode_gcs_object_name_for_url(object_name)
 
         response = await self.async_httpx_client.post(
             headers=headers,
-            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
+            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}",
             data=json_logged_payload,
         )
 

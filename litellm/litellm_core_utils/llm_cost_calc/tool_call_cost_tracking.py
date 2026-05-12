@@ -322,9 +322,8 @@ class StandardBuiltInToolCostTracking:
             )
             if has_url_citations:
                 return True
-            # Fallback: Check usage object for providers that use usage instead of annotations
-            # (e.g., Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests)
             if usage is not None:
+                # Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests
                 if (
                     hasattr(usage, "prompt_tokens_details")
                     and usage.prompt_tokens_details is not None
@@ -333,6 +332,15 @@ class StandardBuiltInToolCostTracking:
                     )
                     and hasattr(usage.prompt_tokens_details, "web_search_requests")
                     and usage.prompt_tokens_details.web_search_requests is not None
+                ):
+                    return True
+                # Anthropic Claude (direct API and Vertex AI) uses server_tool_use.web_search_requests.
+                # Without this check, Claude ModelResponse always falls through to return False
+                # and _handle_web_search_cost() is never called.
+                if (
+                    hasattr(usage, "server_tool_use")
+                    and usage.server_tool_use is not None
+                    and usage.server_tool_use.web_search_requests is not None
                 ):
                     return True
             return False

@@ -6,13 +6,19 @@ from httpx import AsyncClient
 from typing import Any, Optional, List, Literal
 
 
+# The proxy strips client-supplied `mock_response` unless the calling key or
+# team has this admin-metadata flag set. See `_UNTRUSTED_ROOT_CONTROL_FIELDS`
+# in litellm/proxy/litellm_pre_call_utils.py.
+_ALLOW_CLIENT_MOCK_METADATA = {"allow_client_mock_response": True}
+
+
 async def generate_key(
     session, models: Optional[List[str]] = None, team_id: Optional[str] = None
 ):
     """Helper function to generate a key with specific model access controls"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {}
+    data: dict = {"metadata": dict(_ALLOW_CLIENT_MOCK_METADATA)}
     if models is not None:
         data["models"] = models
     if team_id is not None:
@@ -25,7 +31,7 @@ async def generate_team(session, models: Optional[List[str]] = None):
     """Helper function to generate a team with specific model access"""
     url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {}
+    data: dict = {"metadata": dict(_ALLOW_CLIENT_MOCK_METADATA)}
     if models is not None:
         data["models"] = models
     async with session.post(url, headers=headers, json=data) as response:
@@ -93,7 +99,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
             # Assert error structure and values
             assert _error_body["type"] == "key_model_access_denied"
             assert _error_body["param"] == "model"
-            assert _error_body["code"] == "401"
+            assert _error_body["code"] == "403"
             assert "key not allowed to access model" in _error_body["message"]
 
 
@@ -111,7 +117,12 @@ async def test_model_access_update():
 
     # Create initial key with restricted access
     response = await client.post(
-        "/key/generate", json={"models": ["openai/gpt-4"]}, headers=headers
+        "/key/generate",
+        json={
+            "models": ["openai/gpt-4"],
+            "metadata": dict(_ALLOW_CLIENT_MOCK_METADATA),
+        },
+        headers=headers,
     )
     assert response.status_code == 200
     key_data = response.json()
@@ -214,7 +225,11 @@ async def test_team_model_access_update():
     # Create initial team with restricted access
     response = await client.post(
         "/team/new",
-        json={"models": ["openai/gpt-4"], "name": "test-team"},
+        json={
+            "models": ["openai/gpt-4"],
+            "name": "test-team",
+            "metadata": dict(_ALLOW_CLIENT_MOCK_METADATA),
+        },
         headers=headers,
     )
     assert response.status_code == 200
@@ -223,7 +238,12 @@ async def test_team_model_access_update():
 
     # Generate a key for this team
     response = await client.post(
-        "/key/generate", json={"team_id": team_id}, headers=headers
+        "/key/generate",
+        json={
+            "team_id": team_id,
+            "metadata": dict(_ALLOW_CLIENT_MOCK_METADATA),
+        },
+        headers=headers,
     )
     assert response.status_code == 200
     key = response.json()["key"]
@@ -277,7 +297,7 @@ def _validate_model_access_exception(
     # Assert error structure and values
     assert _error_body["type"] == expected_type
     assert _error_body["param"] == "model"
-    assert _error_body["code"] == "401"
+    assert _error_body["code"] == "403"
     if expected_type == "key_model_access_denied":
         assert "key not allowed to access model" in _error_body["message"]
     elif expected_type == "team_model_access_denied":

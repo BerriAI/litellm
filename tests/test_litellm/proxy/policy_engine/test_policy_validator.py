@@ -51,9 +51,13 @@ class TestPolicyValidator:
 
         validator = PolicyValidator(prisma_client=None)
         with patch.object(
-            validator, "get_available_guardrails", return_value={"pii_blocker", "toxicity_filter"}
+            validator,
+            "get_available_guardrails",
+            return_value={"pii_blocker", "toxicity_filter"},
         ):
-            result = await validator.validate_policies(policies=policies, validate_db=False)
+            result = await validator.validate_policies(
+                policies=policies, validate_db=False
+            )
 
         assert result.valid is False
         assert any(
@@ -77,9 +81,13 @@ class TestPolicyValidator:
 
         validator = PolicyValidator(prisma_client=None)
         with patch.object(
-            validator, "get_available_guardrails", return_value={"pii_blocker", "toxicity_filter"}
+            validator,
+            "get_available_guardrails",
+            return_value={"pii_blocker", "toxicity_filter"},
         ):
-            result = await validator.validate_policies(policies=policies, validate_db=False)
+            result = await validator.validate_policies(
+                policies=policies, validate_db=False
+            )
 
         assert result.valid is True
         assert len(result.errors) == 0

@@ -49,10 +49,12 @@ async def test_async_sqs_logger_flush():
 
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
+    assert (
+        called_url == expected_queue_url
+    ), f"Expected URL {expected_queue_url}, got {called_url}"
 
     # Verify the payload contains StandardLoggingPayload data
-    called_data = call_args.kwargs['data']
+    called_data = call_args.kwargs["data"]
 
     # Extract the MessageBody from the URL-encoded data
     # Format: "Action=SendMessage&Version=2012-11-05&MessageBody=<url_encoded_json>"
@@ -99,7 +101,7 @@ async def test_async_sqs_logger_error_flush():
     await litellm.acompletion(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hello"}],
-        mock_response="Error occurred"
+        mock_response="Error occurred",
     )
 
     await asyncio.sleep(2)
@@ -112,10 +114,12 @@ async def test_async_sqs_logger_error_flush():
 
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
+    assert (
+        called_url == expected_queue_url
+    ), f"Expected URL {expected_queue_url}, got {called_url}"
 
     # Verify the payload contains StandardLoggingPayload data
-    called_data = call_args.kwargs['data']
+    called_data = call_args.kwargs["data"]
 
     # Extract the MessageBody from the URL-encoded data
     # Format: "Action=SendMessage&Version=2012-11-05&MessageBody=<url_encoded_json>"
@@ -141,10 +145,10 @@ async def test_async_sqs_logger_error_flush():
     assert payload_data["messages"][0]["content"] == "hello"
 
 
-
 # =============================================================================
 # 📥 Logging Queue Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_adds_to_queue(monkeypatch):
@@ -170,10 +174,10 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
     assert fake_payload in logger.log_queue
 
 
-
 # =============================================================================
 # 🧾 async_send_batch Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_send_batch_triggers_tasks(monkeypatch):
@@ -187,10 +191,10 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
     assert logger.async_send_message.await_count == 0  # uses create_task internally
 
 
-
 # =============================================================================
 # 🔐 AppCrypto Tests
 # =============================================================================
+
 
 def test_appcrypto_encrypt_decrypt_roundtrip():
     key = os.urandom(32)
@@ -210,6 +214,7 @@ def test_appcrypto_invalid_key_length():
 # =============================================================================
 # 🪣 SQSLogger Initialization Tests
 # =============================================================================
+
 
 def test_sqs_logger_init_without_encryption(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
@@ -251,6 +256,7 @@ def test_sqs_logger_init_with_encryption_missing_key(monkeypatch):
 # 📥 Logging Queue Tests
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_async_log_success_event_adds_to_queue(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
@@ -281,6 +287,7 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
 # 🧾 async_send_batch Tests
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_async_send_batch_triggers_tasks(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
@@ -295,7 +302,6 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
     asyncio.create_task.assert_called()
 
 
-
 @pytest.mark.asyncio
 async def test_strip_base64_removes_file_and_nontext_entries():
     logger = SQSLogger(sqs_strip_base64_files=True)
@@ -306,15 +312,24 @@ async def test_strip_base64_removes_file_and_nontext_entries():
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Hello world"},
-                    {"type": "image", "file": {"file_data": "data:image/png;base64,AAAA"}},
-                    {"type": "file", "file": {"file_data": "data:application/pdf;base64,BBBB"}},
+                    {
+                        "type": "image",
+                        "file": {"file_data": "data:image/png;base64,AAAA"},
+                    },
+                    {
+                        "type": "file",
+                        "file": {"file_data": "data:application/pdf;base64,BBBB"},
+                    },
                 ],
             },
             {
                 "role": "assistant",
                 "content": [
                     {"type": "text", "text": "Response"},
-                    {"type": "audio", "file": {"file_data": "data:audio/wav;base64,CCCC"}},
+                    {
+                        "type": "audio",
+                        "file": {"file_data": "data:audio/wav;base64,CCCC"},
+                    },
                 ],
             },
         ]
@@ -412,8 +427,14 @@ async def test_strip_base64_recursive_redaction():
             {
                 "content": [
                     {"type": "text", "text": "normal text"},
-                    {"type": "text", "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg"},
-                    {"type": "text", "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}"},
+                    {
+                        "type": "text",
+                        "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg",
+                    },
+                    {
+                        "type": "text",
+                        "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}",
+                    },
                     {"file": {"file_data": "data:application/pdf;base64,AAAA"}},
                     {"metadata": {"preview": "data:audio/mp3;base64,AAAAA=="}},
                 ]

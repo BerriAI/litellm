@@ -28,7 +28,10 @@ from typing import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.constants import (
+    DB_SPEND_UPDATE_JOB_NAME,
+    DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -57,6 +60,7 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -189,17 +193,16 @@ class DBSpendUpdateWriter:
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
                 "may not have completed for this request. "
-                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s - %s",
+                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s",
                 response_cost,
                 token,
                 user_id,
                 team_id,
                 org_id,
                 end_user_id,
-                traceback.format_exc(),
             )
 
     def _enqueue_tool_registry_upsert(
@@ -488,9 +491,7 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Update Key DB Call failed to execute - {str(e)}"
-            )
+            spend_log_error("Update Key DB Call failed to execute - %s", str(e), exc=e)
             raise e
 
     async def _update_user_db(
@@ -537,14 +538,14 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue user spend update. "
-                "user_id=%s, end_user_id=%s, response_cost=%s - %s\n%s",
+                "user_id=%s, end_user_id=%s, response_cost=%s - %s",
                 user_id,
                 end_user_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
 
     async def _update_team_db(
@@ -582,23 +583,23 @@ class DBSpendUpdateWriter:
                         )
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to enqueue team member spend update. "
-                    "team_id=%s, user_id=%s, response_cost=%s - %s\n%s",
+                    "team_id=%s, user_id=%s, response_cost=%s - %s",
                     team_id,
                     user_id,
                     response_cost,
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue team spend update. "
-                "team_id=%s, response_cost=%s - %s\n%s",
+                "team_id=%s, response_cost=%s - %s",
                 team_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -623,13 +624,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue org spend update. "
-                "org_id=%s, response_cost=%s - %s\n%s",
+                "org_id=%s, response_cost=%s - %s",
                 org_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -651,13 +652,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue agent spend update. "
-                "agent_id=%s, response_cost=%s - %s\n%s",
+                "agent_id=%s, response_cost=%s - %s",
                 agent_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -704,13 +705,13 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue tag spend update. "
-                "request_tags=%s, response_cost=%s - %s\n%s",
+                "request_tags=%s, response_cost=%s - %s",
                 request_tags,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -797,7 +798,6 @@ class DBSpendUpdateWriter:
             daily_org_spend_update_queue=self.daily_org_spend_update_queue,
             daily_end_user_spend_update_queue=self.daily_end_user_spend_update_queue,
             daily_agent_spend_update_queue=self.daily_agent_spend_update_queue,
-            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
         )
 
         # Only commit from redis to db if this pod is the leader
@@ -814,7 +814,6 @@ class DBSpendUpdateWriter:
                     daily_org_spend_update_transactions,
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
-                    daily_tag_spend_update_transactions,
                 ) = (
                     await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
                 )
@@ -890,13 +889,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_org_spend_update_transactions,
                     )
 
-                if daily_tag_spend_update_transactions is not None:
-                    await DBSpendUpdateWriter.update_daily_tag_spend(
-                        n_retry_times=n_retry_times,
-                        prisma_client=prisma_client,
-                        proxy_logging_obj=proxy_logging_obj,
-                        daily_spend_transactions=daily_tag_spend_update_transactions,
-                    )
                 if daily_end_user_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_end_user_spend(
                         n_retry_times=n_retry_times,
@@ -912,11 +904,11 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    "Data already popped from Redis may be lost. Error: %s",
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
             finally:
                 await self.pod_lock_manager.release_lock(
@@ -991,19 +983,7 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_org_spend_update_transactions,
         )
 
-        ################## Daily Tag Spend Update Transactions ##################
-        # Aggregate all in memory daily tag spend transactions and commit to db
-        daily_tag_spend_update_transactions = cast(
-            Dict[str, DailyTagSpendTransaction],
-            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_tag_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_tag_spend_update_transactions,
-        )
+        # NOTE: Daily tag spend is committed by a separate scheduler job.
 
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db
@@ -1035,6 +1015,73 @@ class DBSpendUpdateWriter:
 
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+
+    async def _commit_daily_tag_spend_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit only tag spend updates to database.
+        This is called by a separate scheduler job at a longer interval.
+        """
+        daily_tag_spend_update_transactions = cast(
+            Dict[str, DailyTagSpendTransaction],
+            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        if daily_tag_spend_update_transactions:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
+
+    async def _commit_daily_tag_spend_to_db_with_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit daily tag spend updates using Redis buffering.
+
+        This lets the dedicated daily tag scheduler drain both in-memory and
+        Redis-backed tag transactions.
+        """
+        await self.redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(
+            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
+        )
+
+        if await self.pod_lock_manager.acquire_lock(
+            cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+        ):
+            verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
+            try:
+                daily_tag_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
+
+                if daily_tag_spend_update_transactions:
+                    await DBSpendUpdateWriter.update_daily_tag_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_tag_spend_update_transactions,
+                    )
+            except Exception as e:
+                spend_log_error(
+                    "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
+                    "Data already popped from Redis may be lost. Error: %s",
+                    str(e),
+                    exc=e,
+                )
+            finally:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+                )
 
     async def _flush_tool_discovery_queue(
         self,
@@ -1251,7 +1298,10 @@ class DBSpendUpdateWriter:
 
                                 batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id, "user_id": user_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
@@ -1615,14 +1665,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_read_input_tokens"
-                                    ] = transaction.get("cache_read_input_tokens", 0)
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
+                                    )
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_creation_input_tokens"
-                                    ] = transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:
@@ -1684,11 +1734,15 @@ class DBSpendUpdateWriter:
                     except Exception as batch_error:
                         # Log detailed error information for debugging batch upsert failures
                         # This helps diagnose issues like unique constraint violations
-                        verbose_proxy_logger.exception(
-                            f"Daily {entity_type} spend batch upsert failed. "
-                            f"Table: {table_name}, Constraint: {unique_constraint_name}, "
-                            f"Batch size: {len(transactions_to_process)}, "
-                            f"Error: {str(batch_error)}"
+                        spend_log_error(
+                            "Daily %s spend batch upsert failed. "
+                            "Table: %s, Constraint: %s, Batch size: %d, Error: %s",
+                            entity_type,
+                            table_name,
+                            unique_constraint_name,
+                            len(transactions_to_process),
+                            str(batch_error),
+                            exc=batch_error,
                         )
                         raise
 

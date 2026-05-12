@@ -27,20 +27,21 @@ class MCPServer(BaseModel):
     spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
+    instructions: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
-    extra_headers: Optional[
-        List[str]
-    ] = None  # allow admin to specify which headers to forward from client to the MCP server
+    extra_headers: Optional[List[str]] = (
+        None  # allow admin to specify which headers to forward from client to the MCP server
+    )
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
-    allowed_params: Optional[
-        Dict[str, List[str]]
-    ] = None  # map of tool names to allowed parameter lists
-    static_headers: Optional[
-        Dict[str, str]
-    ] = None  # static headers to forward to the MCP server
+    allowed_params: Optional[Dict[str, List[str]]] = (
+        None  # map of tool names to allowed parameter lists
+    )
+    static_headers: Optional[Dict[str, str]] = (
+        None  # static headers to forward to the MCP server
+    )
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -54,6 +55,12 @@ class MCPServer(BaseModel):
     aws_session_token: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
+    aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
+    aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
+    # Token Exchange (OBO) fields — RFC 8693
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -69,6 +76,21 @@ class MCPServer(BaseModel):
     # OAuth2 flow type.  Defaults to None (interactive / authorization_code).
     # Set to "client_credentials" to enable M2M token fetching.
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Per-user OAuth server-side storage config.
+    # token_validation: key-value pairs that must match fields in the OAuth token
+    # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
+    # Tokens that fail validation are rejected before storage.
+    token_validation: Optional[Dict[str, Any]] = None
+    # Optional TTL override (seconds) for the Redis per-user token cache.
+    # Defaults to the token's expires_in minus the expiry buffer, or
+    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
+    token_storage_ttl_seconds: Optional[int] = None
+    # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
+    # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
+    # registration time so that natural-hash collisions between two
+    # different ``server_id`` values are bumped deterministically.  Left
+    # ``None`` in default-prefix mode.
+    short_prefix: Optional[str] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
@@ -109,3 +131,12 @@ class MCPServer(BaseModel):
             return any(h.lower() in auth_header_names for h in self.extra_headers)
 
         return False
+
+    @property
+    def has_token_exchange_config(self) -> bool:
+        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
+        return (
+            self.auth_type == MCPAuth.oauth2_token_exchange
+            and bool(self.client_id and self.client_secret)
+            and bool(self.token_exchange_endpoint or self.token_url)
+        )

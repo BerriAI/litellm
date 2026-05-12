@@ -1,3 +1,8 @@
+codecov:
+  require_ci_to_pass: false # post coverage status even if CI has unrelated failures
+  notify:
+    wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
+
 component_management:
   individual_components:
     - component_id: "Router"
@@ -17,6 +22,9 @@ component_management:
     - component_id: "Proxy_Authentication"
       paths:
         - "*/proxy/auth/**"
+    - component_id: "Enterprise"
+      paths:
+        - "enterprise/**"
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
 
@@ -25,7 +33,7 @@ coverage:
     project:
       default:
         target: auto
-        threshold: 1% # at maximum allow project coverage to drop by 1%
+        threshold: 0% # do not allow project coverage to drop
     patch:
       default:
         target: auto

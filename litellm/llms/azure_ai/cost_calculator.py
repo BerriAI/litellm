@@ -54,7 +54,7 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
     model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
     router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
 
-    if router_flat_cost_per_token > 0:
+    if router_flat_cost_per_token and router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token
 
     return 0.0
@@ -65,6 +65,7 @@ def cost_per_token(
     usage: Usage,
     response_time_ms: Optional[float] = 0.0,
     request_model: Optional[str] = None,
+    service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
@@ -102,6 +103,7 @@ def cost_per_token(
             model=model,
             usage=usage,
             custom_llm_provider="azure_ai",
+            service_tier=service_tier,
         )
     except Exception as e:
         # For Model Router, the model name (e.g., "azure-model-router") may not be in the cost map

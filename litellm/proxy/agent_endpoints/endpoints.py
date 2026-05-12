@@ -28,12 +28,36 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 
 router = APIRouter()
+
+
+def _redact_sensitive_agent_fields(
+    agents: List[AgentResponse],
+) -> List[AgentResponse]:
+    """
+    Return copies of the given agents with sensitive configuration fields
+    redacted.  The original objects are not modified.
+    """
+    redacted: List[AgentResponse] = []
+    for agent in agents:
+        copy = agent.model_copy(deep=True)
+        copy.static_headers = None
+        copy.extra_headers = None
+        if copy.litellm_params:
+            copy.litellm_params = _get_masked_values(
+                copy.litellm_params,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+        redacted.append(copy)
+    return redacted
 
 
 def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -177,11 +201,18 @@ async def get_agents(
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params[
-                "is_public"
-            ] = litellm.public_agent_groups is not None and (
-                agent.agent_id in litellm.public_agent_groups
+            agent.litellm_params["is_public"] = (
+                litellm.public_agent_groups is not None
+                and (agent.agent_id in litellm.public_agent_groups)
             )
+
+        # Redact sensitive fields for non-admin users
+        is_admin = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not is_admin:
+            returned_agents = _redact_sensitive_agent_fields(returned_agents)
 
         if health_check:
             agents_with_url = [
@@ -362,6 +393,24 @@ async def get_agent_by_id(
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
+    is_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    if not is_admin:
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent_id, user_api_key_auth=user_api_key_dict
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -378,13 +427,13 @@ async def get_agent_by_id(
                 agent_dict = agent_row.model_dump()
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.model_dump()
+                        )
                     except Exception:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.dict()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.dict()
+                        )
                 agent = AgentResponse(**agent_dict)  # type: ignore
         else:
             # Agent found in memory — refresh spend from DB
@@ -398,6 +447,14 @@ async def get_agent_by_id(
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
             )
+
+        # Redact sensitive fields for non-admin users
+        is_admin = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not is_admin:
+            agent = _redact_sensitive_agent_fields([agent])[0]
 
         return agent
     except HTTPException:
@@ -917,7 +974,64 @@ async def get_agent_daily_activity(
             exclude_agent_ids.split(",") if exclude_agent_ids else None
         )
 
-    where_condition = {}
+    # Without scoping, an empty `agent_ids` query returned every agent's
+    # spend/token rows on the proxy. Restrict non-admin callers to the
+    # agents they're permitted to invoke (or that they created), and
+    # intersect their explicit `agent_ids` filter with the same allowlist.
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    where_condition: Dict[str, Any] = {}
+    if not _user_has_admin_view(user_api_key_dict):
+        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(
+            user_api_key_auth=user_api_key_dict
+        )
+        # `get_allowed_agents` returns an empty list when the caller's key
+        # and team carry no agent restrictions. For activity scoping that's
+        # not "see everything" — fall back to the agents the caller
+        # created so they cannot enumerate other tenants' agents.
+        # Guard against `user_id is None`: a literal None in Prisma
+        # `where={"created_by": None}` resolves to ``created_by IS NULL``
+        # and would expose every ownerless agent's rows.
+        if not permitted_agent_ids:
+            if user_api_key_dict.user_id is None:
+                permitted_agent_ids = []
+            else:
+                owned_records = await prisma_client.db.litellm_agentstable.find_many(
+                    where={"created_by": user_api_key_dict.user_id}
+                )
+                permitted_agent_ids = [a.agent_id for a in owned_records]
+
+        if agent_ids_list:
+            permitted_agent_id_set = set(permitted_agent_ids)
+            agent_ids_list = [
+                aid for aid in agent_ids_list if aid in permitted_agent_id_set
+            ]
+        else:
+            agent_ids_list = list(permitted_agent_ids)
+
+        # No accessible agents → return an empty page without querying.
+        if not agent_ids_list:
+            return SpendAnalyticsPaginatedResponse(
+                results=[],
+                metadata=DailySpendMetadata(
+                    total_spend=0.0,
+                    total_prompt_tokens=0,
+                    total_completion_tokens=0,
+                    total_tokens=0,
+                    total_api_requests=0,
+                    total_successful_requests=0,
+                    total_failed_requests=0,
+                    total_cache_read_input_tokens=0,
+                    total_cache_creation_input_tokens=0,
+                    page=page,
+                    total_pages=0,
+                    has_more=False,
+                ),
+            )
+
     if agent_ids_list:
         where_condition["agent_id"] = {"in": list(agent_ids_list)}
 

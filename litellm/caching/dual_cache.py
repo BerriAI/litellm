@@ -92,6 +92,25 @@ class DualCache(BaseCache):
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
 
+    def attach_redis_cache(
+        self,
+        redis_cache: Optional[RedisCache] = None,
+        *,
+        default_redis_ttl: Optional[float] = None,
+    ) -> None:
+        """
+        Attach a Redis backend if this DualCache does not already have one.
+
+        No-op when ``redis_cache`` is None or when Redis was already set (constructor
+        or a prior attach). Use this for lazy wiring after a shared Redis client exists.
+        Does not backfill in-memory-only keys to Redis.
+        """
+        if redis_cache is None or self.redis_cache is not None:
+            return
+        self.redis_cache = redis_cache
+        if default_redis_ttl is not None:
+            self.default_redis_ttl = default_redis_ttl
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
@@ -392,17 +411,22 @@ class DualCache(BaseCache):
         value: float,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        refresh_ttl: bool = False,
         **kwargs,
-    ) -> float:
+    ) -> Optional[float]:
         """
         Key - the key in cache
 
         Value - float - the value you want to increment by
 
-        Returns - float - the incremented value
+        Refresh_ttl - bool - if True, resets the Redis TTL on every write.
+        Default False preserves window-style semantics.
+
+        Returns - the incremented value, or None if no cache backend is
+        available (in_memory_cache is None and Redis failed/is absent).
         """
+        result: Optional[float] = None
         try:
-            result: float = value
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment(
                     key, value, **kwargs
@@ -414,11 +438,16 @@ class DualCache(BaseCache):
                     value,
                     parent_otel_span=parent_otel_span,
                     ttl=kwargs.get("ttl", None),
+                    refresh_ttl=refresh_ttl,
                 )
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_increment_cache_pipeline(
         self,
@@ -427,8 +456,8 @@ class DualCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         **kwargs,
     ) -> Optional[List[float]]:
+        result: Optional[List[float]] = None
         try:
-            result: Optional[List[float]] = None
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment_pipeline(
                     increment_list=increment_list,
@@ -443,7 +472,11 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_set_cache_sadd(
         self, key, value: List, local_only: bool = False, **kwargs

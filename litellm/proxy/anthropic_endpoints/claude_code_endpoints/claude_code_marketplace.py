@@ -130,6 +130,63 @@ async def get_marketplace():
         )
 
 
+# Allowlist for git-subdir paths: one or more segments separated by '/'.
+# Each segment must start with an alphanumeric character and contain only
+# alphanumeric characters, dots, hyphens, and underscores.
+# This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$"
+)
+
+
+def _validate_plugin_source(source: Dict[str, Any]) -> None:
+    """Validate plugin source format, raising HTTPException on invalid input."""
+    source_type = source.get("source")
+    if source_type == "github":
+        if "repo" not in source:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "GitHub source must include 'repo' field (e.g., 'org/repo')"
+                },
+            )
+    elif source_type == "url":
+        if "url" not in source:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
+                },
+            )
+    elif source_type == "git-subdir":
+        if not source.get("url"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "git-subdir source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
+                },
+            )
+        if not source.get("path"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"
+                },
+            )
+        if not _VALID_GIT_SUBDIR_PATH_RE.match(source["path"]):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
+                },
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "source.source must be 'github', 'url', or 'git-subdir'"},
+        )
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
@@ -148,7 +205,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github or url format)
+        - source: Git source reference (github, url, or git-subdir format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
@@ -186,29 +243,7 @@ async def register_plugin(
 
         # Validate source format
         source = request.source
-        source_type = source.get("source")
-
-        if source_type == "github":
-            if "repo" not in source:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "GitHub source must include 'repo' field (e.g., 'org/repo')"
-                    },
-                )
-        elif source_type == "url":
-            if "url" not in source:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
-                    },
-                )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "source.source must be 'github' or 'url'"},
-            )
+        _validate_plugin_source(source)
 
         # Build manifest for storage
         manifest: Dict[str, Any] = {
@@ -227,6 +262,10 @@ async def register_plugin(
             manifest["keywords"] = request.keywords
         if request.category:
             manifest["category"] = request.category
+        if request.domain:
+            manifest["domain"] = request.domain
+        if request.namespace:
+            manifest["namespace"] = request.namespace
 
         # Check if plugin exists
         existing = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
@@ -329,6 +368,8 @@ async def list_plugins(
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
                     category=manifest.get("category"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,

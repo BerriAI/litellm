@@ -1,0 +1,43 @@
+name: "Unit Tests: LLM Provider Transformations"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vertex-ai:
+    name: Vertex AI
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/llms/vertex_ai"
+      workers: 1
+      reruns: 2
+      artifact-name: llm-vertex-ai
+
+  other-providers:
+    name: All Other Providers
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+      workers: 2
+      reruns: 2
+      artifact-name: llm-other-providers

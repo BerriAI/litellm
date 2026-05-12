@@ -35,9 +35,9 @@ class TagActiveUsersResponse(BaseModel):
     tag: str
     active_users: int
     date: str  # The specific date or period identifier
-    period_start: Optional[
-        str
-    ] = None  # For WAU/MAU, this will be the start of the period
+    period_start: Optional[str] = (
+        None  # For WAU/MAU, this will be the start of the period
+    )
     period_end: Optional[str] = None  # For WAU/MAU, this will be the end of the period
 
 

@@ -6,15 +6,40 @@ import asyncio
 import contextvars
 import json
 import os
+import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
+
+# Tool names emitted from OpenAPI specs must work across all major LLM providers.
+# OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
+# ^[a-zA-Z0-9_-]+$ on tool names. Many specs (notably GitHub's REST API) use
+# tag-namespaced operationIds like "actions/download-job-logs-for-workflow-run"
+# which include '/'. Sanitize here so the same regex passes everywhere downstream.
+_OPENAPI_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+_OPENAPI_TOOL_NAME_MAX_LEN = 128
+
+
+def sanitize_openapi_tool_name(raw_name: str) -> str:
+    """Map an OpenAPI operationId / fallback to a provider-safe tool name.
+
+    Replaces any character outside ``[a-zA-Z0-9_-]`` with ``_`` and caps the
+    result at 128 chars (the most restrictive of the major providers).
+    Lowercased to match the existing convention in
+    ``register_tools_from_openapi``.
+    """
+    if not raw_name:
+        return raw_name
+    sanitized = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
+    return sanitized[:_OPENAPI_TOOL_NAME_MAX_LEN]
+
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -28,6 +53,13 @@ HEADERS: Dict[str, str] = {}
 # stored credential into the HTTP request made by the tool function closure.
 _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_request_auth_header", default=None
+)
+
+# Per-request extra headers forwarded from the client request.
+# Populated from MCPServer.extra_headers names matched against raw request
+# headers in server.py before dispatching to a local/OpenAPI tool handler.
+_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
+    contextvars.ContextVar("_request_extra_headers", default=None)
 )
 
 
@@ -75,9 +107,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
-        # If it returns a new client each time, consider wrapping it in an async context manager.
-        r = await client.get(filepath)
+        r = await async_safe_get(client, filepath)
         r.raise_for_status()
         return r.json()
 
@@ -274,6 +304,46 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _merge_openapi_tool_request_headers(
+    static_headers: Dict[str, str]
+) -> Dict[str, str]:
+    """Merge static closure headers with per-request ContextVar overrides.
+
+    Precedence (highest to lowest):
+        1. ``_request_auth_header`` — BYOK override of ``Authorization``
+        2. ``static_headers`` — operator-configured headers baked into the
+           tool closure at registration time
+        3. ``_request_extra_headers`` — per-request headers forwarded from
+           the MCP caller (allowlisted by ``MCPServer.extra_headers``)
+
+    This matches the existing MCP invariant in
+    :func:`litellm.proxy._experimental.mcp_server.utils.merge_mcp_headers`
+    and the managed MCP path, where ``static_headers`` always wins over
+    caller-forwarded headers. Keeping the same precedence here prevents an
+    authenticated caller from overriding an operator-configured value
+    (e.g. a tenant id or upstream API key) by sending the same header name.
+
+    Header names are compared case-insensitively so different casing cannot
+    bypass the precedence rules.
+    """
+    request_extra = _request_extra_headers.get() or {}
+    static = static_headers or {}
+
+    static_lower_names = {k.lower() for k in static}
+    effective_headers: Dict[str, str] = {
+        k: v for k, v in request_extra.items() if k.lower() not in static_lower_names
+    }
+    effective_headers.update(static)
+
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        for existing in [k for k in effective_headers if k.lower() == "authorization"]:
+            del effective_headers[existing]
+        effective_headers["Authorization"] = override_auth
+
+    return effective_headers
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -311,14 +381,7 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
-        # The ContextVar holds the full Authorization header value, including the
-        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
-        # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        effective_headers = _merge_openapi_tool_request_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path
@@ -400,17 +463,36 @@ def create_tool_function(
 def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
     """Register MCP tools from OpenAPI specification."""
     paths = spec.get("paths", {})
+    used_names: set = set()
 
     for path, path_item in paths.items():
         for method in ["get", "post", "put", "delete", "patch"]:
             if method in path_item:
                 operation = path_item[method]
 
-                # Generate tool name
-                operation_id = operation.get(
-                    "operationId", f"{method}_{path.replace('/', '_')}"
-                )
-                tool_name = operation_id.replace(" ", "_").lower()
+                # Generate tool name. Sanitize to ^[a-zA-Z0-9_-]+$ (lowercase)
+                # so the resulting name is valid across OpenAI/Anthropic/Bedrock.
+                # Many specs (e.g. GitHub REST) use tag-namespaced operationIds
+                # like "actions/download-job-logs-for-workflow-run" which
+                # contain '/' and would 400 at the LLM provider boundary.
+                operation_id = operation.get("operationId", f"{method}_{path}")
+                tool_name = sanitize_openapi_tool_name(operation_id)
+
+                # Disambiguate collisions: two operationIds that differ only
+                # by sanitized characters (e.g. "foo/list" and "foo.list")
+                # would both become "foo_list". Append _2, _3, … to keep
+                # every tool reachable, mirroring the Anthropic-side logic
+                # in _build_anthropic_tool_name_maps.
+                unique = tool_name
+                n = 1
+                while unique in used_names:
+                    n += 1
+                    suffix = f"_{n}"
+                    unique = (
+                        tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                    )
+                tool_name = unique
+                used_names.add(tool_name)
 
                 # Get description
                 description = operation.get(

@@ -2,12 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Documentation
+
+Documentation lives in a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). It is served at [docs.litellm.ai](https://docs.litellm.ai). Do not create or edit documentation files in this repository — open doc PRs against `BerriAI/litellm-docs` instead.
+
 ## Development Commands
 
 ### Installation
 - `make install-dev` - Install core development dependencies
 - `make install-proxy-dev` - Install proxy development dependencies with full feature set
-- `make install-test-deps` - Install all test dependencies
+- `make install-test-deps` - Install the full local test environment and generate the Prisma client
 
 ### Testing
 - `make test` - Run all tests
@@ -20,13 +24,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make format` - Apply Black code formatting
 - `make lint-ruff` - Run Ruff linting only
 - `make lint-mypy` - Run MyPy type checking only
+- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
 
 ### Single Test Files
-- `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
-- `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
+- `uv run pytest tests/path/to/test_file.py -v` - Run specific test file
+- `uv run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
 ### Running Scripts
-- `poetry run python script.py` - Run Python scripts (use for non-test files)
+- `uv run python script.py` - Run Python scripts (use for non-test files)
 
 ### GitHub Issue & PR Templates
 When contributing to the project, use the appropriate templates:
@@ -108,6 +113,9 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 ### UI / Backend Consistency
 - When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
 
+### UI Component Library
+- **Always use `antd` for new UI components** — we are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file. Use `antd` equivalents: `Tag` for labels, `Typography.Text` / `Typography.Title` / `Typography.Paragraph` for textual content (avoid plain text-only `<span>`, `<p>`, `<h*>` when Typography fits), and `Card` from `antd`. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
+
 ### MCP OAuth / OpenAPI Transport Mapping
 - `TRANSPORT.OPENAPI` is a UI-only concept. The backend only accepts `"http"`, `"sse"`, or `"stdio"`. Always map it to `"http"` before any API call (including pre-OAuth temp-session calls).
 - FastAPI validation errors return `detail` as an array of `{loc, msg, type}` objects. Error extractors must handle: array (map `.msg`), string, nested `{error: string}`, and fallback.
@@ -138,7 +146,7 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - **Bound large result sets.** Prisma materializes full results in memory. For results over ~10 MB, paginate with `take`/`skip` or `cursor`/`take`, always with an explicit `order`. Prefer cursor-based pagination (`skip` is O(n)). Don't paginate naturally small result sets.
 - **Limit fetched columns on wide tables.** Use `select` to fetch only needed fields — returns a partial object, so downstream code must not access unselected fields.
 - **Check index coverage.** For new or modified queries, check `schema.prisma` for a supporting index. Prefer extending an existing index (e.g. `@@index([a])` → `@@index([a, b])`) over adding a new one, unless it's a `@@unique`. Only add indexes for large/frequent queries.
-- **Keep schema files in sync.** Apply schema changes to all `schema.prisma` copies (`schema.prisma`, `litellm/proxy/`, `litellm-proxy-extras/`, `litellm-js/spend-logs/` for SpendLogs) with a migration under `litellm-proxy-extras/litellm_proxy_extras/migrations/`.
+- **Keep schema files in sync.** Apply schema changes to all `schema.prisma` copies (`schema.prisma`, `litellm/proxy/`, `litellm-proxy-extras/`) with a migration under `litellm-proxy-extras/litellm_proxy_extras/migrations/`.
 
 ### Setup Wizard (`litellm/setup_wizard.py`)
 - The wizard is implemented as a single `SetupWizard` class with `@staticmethod` methods — keep it that way. No module-level functions except `run_setup_wizard()` (the public entrypoint) and pure helpers (color, ANSI).
@@ -149,6 +157,14 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Enterprise-specific code in `enterprise/` directory
 - Optional features enabled via environment variables
 - Separate licensing and authentication for enterprise features
+
+### CI Supply-Chain Safety
+- **Never pipe a remote script into a shell** (`curl ... | bash`, `wget ... | sh`). Download the artifact to a file, verify its SHA-256 checksum, then install.
+- **Pin every external tool to a specific version** with a full URL (not `latest` or `stable`). Unversioned downloads silently change under you.
+- **Verify checksums for all downloaded binaries.** Use the provider's official `.sha256` / `.sha256sum` sidecar file when available; otherwise compute and hardcode the digest.
+- **Prefer reusable CircleCI commands** (`commands:` section) so a tool is installed and verified in exactly one place, then referenced everywhere with `- install_<tool>` or `- wait_for_service`.
+- **Don't add tools just because they were there before.** Audit whether an external dependency is still needed. If it can be replaced with a shell one-liner or a tool already in the image, remove it.
+- These rules apply to every download in CI: binaries, install scripts, language version managers, package repos. No exceptions.
 
 ### HTTP Client Cache Safety
 - **Never close HTTP/SDK clients on cache eviction.** `LLMClientCache._remove_key()` must not call `close()`/`aclose()` on evicted clients — they may still be used by in-flight requests. Doing so causes `RuntimeError: Cannot send a request, as the client has been closed.` after the 1-hour TTL expires. Cleanup happens at shutdown via `close_litellm_async_clients()`.

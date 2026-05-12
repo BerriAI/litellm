@@ -15,6 +15,9 @@ import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -23,6 +26,16 @@ from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     pass
+
+
+# Anthropic-only fields that the translator above already maps into the
+# OpenAI-format completion_kwargs (output_config → reasoning_effort /
+# response_format, etc.). They must be filtered out of the raw
+# extra_kwargs re-merge below or non-Anthropic backends reject the call
+# with 400 "Extra inputs are not permitted". Add new entries here when
+# extending AnthropicMessagesRequestOptionalParams with another Anthropic-
+# specific key.
+ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset({"output_config"})
 
 ########################################################
 # init adapter
@@ -44,8 +57,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         For OpenAI models, Chat Completions typically does not return reasoning text
         (only token accounting). To return a thinking-like content block in the
-        Anthropic response format, we route the request through OpenAI's Responses API
-        and request a reasoning summary.
+        Anthropic response format, we route the request through OpenAI's Responses API.
+        If the user provides a `summary` field in the thinking dict, it is passed
+        through to the OpenAI reasoning params (opt-in per OpenAI spec).
         """
         custom_llm_provider = completion_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None:
@@ -78,20 +92,67 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
 
+        auto_summary = is_reasoning_auto_summary_enabled()
+
         reasoning_effort = completion_kwargs.get("reasoning_effort")
+        summary = thinking.get("summary")
         if isinstance(reasoning_effort, str) and reasoning_effort:
-            completion_kwargs["reasoning_effort"] = {
-                "effort": reasoning_effort,
-                "summary": "detailed",
-            }
+            reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
+            if summary:
+                reasoning_dict["summary"] = summary
+            elif auto_summary:
+                reasoning_dict["summary"] = "detailed"
+            completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
             if (
                 "summary" not in reasoning_effort
                 and "generate_summary" not in reasoning_effort
             ):
-                updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = "detailed"
-                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+                effective_summary = (
+                    summary if summary else ("detailed" if auto_summary else None)
+                )
+                if effective_summary:
+                    updated_reasoning_effort = dict(reasoning_effort)
+                    updated_reasoning_effort["summary"] = effective_summary
+                    completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+
+    @staticmethod
+    def _normalize_reasoning_effort(
+        completion_kwargs: Dict[str, Any],
+    ) -> None:
+        """
+        Normalize reasoning_effort values based on target model capabilities.
+
+        Handles both string ("max") and dict ({"effort": "max", "summary": ...})
+        formats. Uses model registry to check supports_xhigh/supports_minimal.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            normalize_reasoning_effort_value,
+        )
+
+        reasoning_effort = completion_kwargs.get("reasoning_effort")
+        if reasoning_effort is None:
+            return
+
+        model = cast(str, completion_kwargs.get("model", ""))
+        custom_llm_provider = completion_kwargs.get("custom_llm_provider")
+
+        if isinstance(reasoning_effort, str):
+            normalized = normalize_reasoning_effort_value(
+                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+            )
+            if normalized != reasoning_effort:
+                completion_kwargs["reasoning_effort"] = normalized
+        elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
+            effort = reasoning_effort["effort"]
+            normalized = normalize_reasoning_effort_value(
+                effort, model=model, custom_llm_provider=custom_llm_provider
+            )
+            if normalized != effort:
+                completion_kwargs["reasoning_effort"] = {
+                    **reasoning_effort,
+                    "effort": normalized,
+                }
 
     @staticmethod
     def _prepare_completion_kwargs(
@@ -150,6 +211,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if output_format:
             request_data["output_format"] = output_format
 
+        # Extract output_config from extra_kwargs so the translator can use it
+        # (e.g. output_config.effort for adaptive thinking → reasoning_effort,
+        # output_config.format → response_format for structured outputs).
+        # Use explicit None check rather than `or {}` so an explicit empty dict
+        # caller-passed argument is preserved (matters for tests that drive
+        # the fallback inference path).
+        extra_kwargs = extra_kwargs if extra_kwargs is not None else {}
+        if "output_config" in extra_kwargs:
+            request_data["output_config"] = extra_kwargs["output_config"]
+
         (
             openai_request,
             tool_name_mapping,
@@ -168,8 +239,23 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
-        excluded_keys = {"anthropic_messages"}
-        extra_kwargs = extra_kwargs or {}
+        # Keys that must NOT be forwarded as raw extras into the OpenAI-format
+        # ``completion_kwargs`` after translation. The translator above has
+        # already consumed the meaningful parts of these inputs (e.g.
+        # ``output_config.format`` → ``response_format``, ``output_config.effort``
+        # → ``reasoning_effort`` for non-Claude targets). Re-adding the raw
+        # Anthropic-shaped key here causes 400 "Extra inputs are not permitted"
+        # on non-Anthropic backends (Azure OpenAI, Fireworks, Bedrock Nova,
+        # etc.) and is silently lossy on Anthropic-family targets, which would
+        # see the translated key ``response_format`` AND a duplicate, conflicting
+        # ``output_config``.
+        #
+        # Maintainability: when adding a new Anthropic-only request param to
+        # ``AnthropicMessagesRequestOptionalParams``, also extend
+        # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
+        excluded_keys = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
+        # NOTE: extra_kwargs was already coerced from None to {} at the top of
+        # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():
             if (
                 key == "litellm_logging_obj"
@@ -178,7 +264,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ):
                 from litellm.types.utils import CallTypes
 
-                setattr(value, "call_type", CallTypes.completion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
                 setattr(
                     value, "stream_options", completion_kwargs.get("stream_options")
                 )
@@ -188,6 +274,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 and value is not None
             ):
                 completion_kwargs[key] = value
+
+        # Normalize reasoning_effort based on model capabilities
+        # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
+        # Must run BEFORE _route_openai_thinking, which prepends "responses/"
+        # to the model name and would break get_model_info() lookups.
+        LiteLLMMessagesToCompletionTransformationHandler._normalize_reasoning_effort(
+            completion_kwargs
+        )
 
         LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
             completion_kwargs,
