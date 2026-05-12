@@ -3148,14 +3148,18 @@ class ModelResponseIterator:
         if not isinstance(error_data, dict):
             raise VertexAIError(
                 status_code=500,
-                message=f"VertexAIError: unexpected error format: {error_data}",
+                message=f"unexpected error format: {error_data}",
             )
-        error_code = int(error_data.get("code", 500))
+        raw_code = error_data.get("code")
+        try:
+            error_code = int(raw_code) if raw_code is not None else 500
+        except (TypeError, ValueError):
+            error_code = 500
         error_message = error_data.get("message", "Unknown error")
         error_status = error_data.get("status", "UNKNOWN")
         raise VertexAIError(
             status_code=error_code,
-            message=f"VertexAIError: {error_status} - {error_message}",
+            message=f"{error_status} - {error_message}",
         )
 
     def _apply_stream_candidates(
