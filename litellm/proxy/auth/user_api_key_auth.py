@@ -549,6 +549,18 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""
     if pass_through_endpoints is not None:
+        # If the forwarder didn't register (path collided with a built-in),
+        # the request is dispatching to that built-in and the config dict's
+        # ``auth`` flag must not apply to it.
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            route=route
+        ):
+            return api_key
+
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                 ## IF AUTH DISABLED
@@ -1782,13 +1794,21 @@ async def _run_centralized_common_checks(
     # contract; honor it.
     pass_through_endpoints = general_settings.get("pass_through_endpoints", None)
     if pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if (
-                isinstance(endpoint, dict)
-                and endpoint.get("path", "") == route
-                and endpoint.get("auth") is not True
-            ):
-                return
+        # Same registration gate as ``check_api_key_for_custom_headers_or_pass_through_endpoints``:
+        # an entry that didn't register (collision with a built-in) must
+        # not skip common_checks against the shadowed built-in.
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+            for endpoint in pass_through_endpoints:
+                if (
+                    isinstance(endpoint, dict)
+                    and endpoint.get("path", "") == route
+                    and endpoint.get("auth") is not True
+                ):
+                    return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
     # configured. The builder returns an INTERNAL_USER token for any

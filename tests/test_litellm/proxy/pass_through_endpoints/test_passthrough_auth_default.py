@@ -117,6 +117,9 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
     # Operators who explicitly set ``auth: False`` get the legacy
     # behaviour — an empty UserAPIKeyAuth, no key required.
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+    )
 
     request = MagicMock()
     request.headers = {}
@@ -126,11 +129,27 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
         "auth": False,
     }
 
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/public-webhook",
-        pass_through_endpoints=[raw_endpoint_auth_false],
-        api_key="",
-    )
+    # Mirror what ``_register_pass_through_endpoint`` does for a
+    # non-colliding path. The auth helper now consults this registry
+    # so a colliding config entry (registry-absent) does not silently
+    # bypass auth on a built-in handler it would shadow.
+    _registered_pass_through_routes.clear()
+    _registered_pass_through_routes["test-webhook:exact:/public-webhook:POST"] = {
+        "endpoint_id": "test-webhook",
+        "path": "/public-webhook",
+        "type": "exact",
+        "methods": ["POST"],
+        "passthrough_params": {},
+    }
 
-    assert isinstance(result, UserAPIKeyAuth)
+    try:
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route="/public-webhook",
+            pass_through_endpoints=[raw_endpoint_auth_false],
+            api_key="",
+        )
+
+        assert isinstance(result, UserAPIKeyAuth)
+    finally:
+        _registered_pass_through_routes.clear()

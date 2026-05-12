@@ -2930,6 +2930,26 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
         ]
     }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+
+    # Mirror what production startup does for this config — register the
+    # path in the runtime registry. The common_checks bypass now consults
+    # the registry so a colliding config entry (registry-absent) does
+    # not skip authz on a shadowed built-in handler.
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+    )
+
+    _registered_pass_through_routes.clear()
+    _registered_pass_through_routes[
+        "langfuse-ingest:exact:/api/public/ingestion:POST"
+    ] = {
+        "endpoint_id": "langfuse-ingest",
+        "path": "/api/public/ingestion",
+        "type": "exact",
+        "methods": ["POST"],
+        "passthrough_params": {},
+    }
+
     try:
         for k, v in attrs.items():
             setattr(_proxy_server_mod, k, v)
@@ -2947,6 +2967,7 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+        _registered_pass_through_routes.clear()
 
 
 @pytest.mark.asyncio

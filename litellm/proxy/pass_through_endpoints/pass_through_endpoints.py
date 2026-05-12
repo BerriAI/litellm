@@ -2045,7 +2045,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        route_added = SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -2063,7 +2063,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Always register/update the route metadata (headers, target) even if FastAPI route exists
+        if not route_added:
+            # Path collides with an existing route (typically a built-in
+            # management endpoint). Skip metadata add so downstream auth
+            # checks don't honor this entry's ``auth`` flag against the
+            # built-in that will service the request.
+            verbose_proxy_logger.warning(
+                "Pass-through path %r (methods %s) collides with a route "
+                "already registered on the app. The pass-through entry is "
+                "ignored. Rename the pass-through path to avoid shadowing "
+                "an existing route.",
+                path,
+                methods,
+            )
+            return
+
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
@@ -2121,7 +2135,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        route_added = SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=wildcard_path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -2140,7 +2154,17 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates only if it was added
+        if not route_added:
+            # Wildcard variant of the collision skip in ``add_exact_path_route``.
+            verbose_proxy_logger.warning(
+                "Pass-through wildcard path %r (methods %s) collides with a "
+                "route already registered on the app. The pass-through entry "
+                "is ignored.",
+                wildcard_path,
+                methods,
+            )
+            return
+
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
@@ -2322,6 +2346,29 @@ async def _register_pass_through_endpoint(
     default_query_params = endpoint_data.get("default_query_params")
     auth = endpoint_data.get("auth")
     dependencies = None
+
+    # Bail before any mutation if the path collides with an existing route.
+    # ``LiteLLMRoutes.openai_routes`` is mutated below — adding a colliding
+    # path would mark the existing built-in as an llm_api_route and
+    # short-circuit its RBAC.
+    methods_for_collision_check = endpoint_data.get("methods") or [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH",
+    ]
+    if SafeRouteAdder._is_path_registered(
+        app=app, path=path, methods=methods_for_collision_check
+    ):
+        verbose_proxy_logger.warning(
+            "Pass-through path %r (methods %s) collides with a route already "
+            "registered on the app. The pass-through entry is ignored. "
+            "Rename the pass-through path to avoid shadowing an existing route.",
+            path,
+            methods_for_collision_check,
+        )
+        return
 
     if auth is not None and str(auth).lower() == "true":
         # Authentication on a pass-through endpoint used to be enterprise-only.
