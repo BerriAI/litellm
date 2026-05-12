@@ -409,8 +409,14 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools = litellm_completion_request.get("tools") or []
+        # 获取 model 和 api_base 用于判断是否是国内模型
+        model_name = litellm_completion_request.get("model")
+        api_base = litellm_completion_request.get("api_base")
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages,
+            tools=tools,
+            model_name=model_name,
+            api_base=api_base,
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -956,6 +962,8 @@ class LiteLLMCompletionResponsesConfig:
             ]
         ],
         tools: Optional[List[Any]] = None,
+        model_name: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -971,15 +979,23 @@ class LiteLLMCompletionResponsesConfig:
         This is critical for Anthropic API which requires that each tool_result block has a
         corresponding tool_use block in the previous assistant message.
 
+        For domestic models (Volcengine, Aliyun, etc.), they reject requests with orphan tool outputs.
+        When we can't reconstruct the tool_call, we remove the orphan tool message entirely.
+
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            model_name: Model name, used to determine if domestic model filtering should apply
+            api_base: API endpoint URL, fallback check when model_name is just a group name
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
         """
         if not messages:
             return list(messages)
+
+        # 判断是否是国内模型，需要更严格的 orphan 过滤
+        is_domestic_model = is_domestic_model_or_endpoint(model_name, api_base)
 
         # Create a deep copy to avoid modifying the original (use list() so we can mutate and return List)
         import copy
@@ -1053,7 +1069,15 @@ class LiteLLMCompletionResponsesConfig:
             # Check if the previous assistant message has the corresponding tool_call
             # This needs to run for ALL tool messages with a valid tool_call_id,
             # not just those that had an empty tool_call_id initially
-            if prev_assistant_idx is not None and tool_call_id:
+            if prev_assistant_idx is None and tool_call_id:
+                # 没有找到前一个 assistant message
+                # 对于国内模型，这是 orphan tool output，应该删除
+                # 国内模型拒绝 "No tool calls but found tool output"
+                if is_domestic_model:
+                    if non_tool_messages_count > 0:
+                        messages_to_remove.append(i)
+                    continue
+            elif prev_assistant_idx is not None and tool_call_id:
                 prev_assistant = fixed_messages[prev_assistant_idx]
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
                     prev_assistant
@@ -1086,6 +1110,14 @@ class LiteLLMCompletionResponsesConfig:
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                             prev_assistant, tool_call_chunk
                         )
+                    else:
+                        # 无法重建 tool_call
+                        # 对于国内模型，直接删除这个 orphan tool message
+                        # 国内模型（火山引擎、阿里云）拒绝 "No tool calls but found tool output"
+                        if is_domestic_model:
+                            if non_tool_messages_count > 0:
+                                messages_to_remove.append(i)
+                            continue
 
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):
