@@ -351,3 +351,43 @@ def test_explicit_override_false_suppresses_injection_inside_allowlist():
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "max_tokens" not in updated
+
+
+def test_update_litellm_params_health_check_reasoning_effort():
+    """model_info.health_check_reasoning_effort sets reasoning_effort for chat-style health checks."""
+    model_info = {"health_check_reasoning_effort": "low"}
+    litellm_params = {"model": "openai/gpt-5", "api_key": "x"}
+    out = _update_litellm_params_for_health_check(model_info, dict(litellm_params))
+    assert out.get("reasoning_effort") == "low"
+
+    model_info = {"mode": "chat", "health_check_reasoning_effort": "none"}
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "openai/gpt-5", "api_key": "x"}
+    )
+    assert out.get("reasoning_effort") == "none"
+
+    model_info = {"mode": "completion", "health_check_reasoning_effort": "low"}
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "openai/gpt-5", "api_key": "x"}
+    )
+    assert out.get("reasoning_effort") == "low"
+
+    model_info = {
+        "health_check_reasoning_effort": {"effort": "none", "summary": "auto"},
+    }
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "openai/gpt-5.1", "api_key": "x"}
+    )
+    assert out.get("reasoning_effort") == {"effort": "none", "summary": "auto"}
+
+    model_info = {"mode": "embedding", "health_check_reasoning_effort": "low"}
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "text-embedding-3-small", "api_key": "x"}
+    )
+    assert "reasoning_effort" not in out
+
+    model_info = {}
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "openai/gpt-4o", "api_key": "x"}
+    )
+    assert "reasoning_effort" not in out

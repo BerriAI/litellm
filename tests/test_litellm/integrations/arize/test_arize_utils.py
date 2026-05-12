@@ -273,6 +273,91 @@ def test_arize_set_attributes_responses_api():
     )
 
 
+def test_set_usage_outputs_pydantic_completion_usage():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/13672
+
+    `_set_usage_outputs` previously called `usage.get(...)` which crashes when
+    `usage` is a plain Pydantic model (e.g. openai.types.completion_usage.CompletionUsage)
+    that does not implement dict-style `.get()`. Same crash for nested
+    `output_tokens_details` / `completion_tokens_details`.
+
+    The function must:
+    1. Read total/prompt/completion tokens from a Pydantic usage without `.get`.
+    2. Read reasoning_tokens from `completion_tokens_details` (chat completions API)
+       OR `output_tokens_details` (responses API), even when those nested objects
+       are Pydantic models without `.get`.
+    3. Not raise AttributeError; not call span.record_exception.
+    """
+    from unittest.mock import MagicMock
+
+    from openai.types.completion_usage import (
+        CompletionTokensDetails,
+        CompletionUsage,
+    )
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+
+    span = MagicMock()
+
+    # Plain OpenAI Pydantic model — has no `.get()`
+    usage = CompletionUsage(
+        completion_tokens=60,
+        prompt_tokens=40,
+        total_tokens=100,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=25),
+    )
+    assert not hasattr(usage, "get"), "precondition: CompletionUsage must lack .get"
+
+    response_obj = {"usage": usage}
+
+    # Must not raise
+    _set_usage_outputs(span, response_obj, SpanAttributes)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 100)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 60)
+    # reasoning_tokens for chat completions live in completion_tokens_details
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 25
+    )
+
+
+def test_set_usage_outputs_pydantic_response_api_usage():
+    """
+    Same crash also affects Responses API with `output_tokens_details` as a
+    Pydantic model that lacks `.get()`. Verifies the responses-API path.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+    from litellm.types.llms.openai import OutputTokensDetails
+
+    # Build an object that mimics openai ResponsesAPI usage but lacks `.get`
+    # (uses a plain class — not BaseLiteLLMOpenAIResponseObject)
+    class PlainResponsesUsage:
+        def __init__(self):
+            self.total_tokens = 370
+            self.input_tokens = 120
+            self.output_tokens = 250
+            self.output_tokens_details = OutputTokensDetails(reasoning_tokens=180)
+
+    usage = PlainResponsesUsage()
+    assert not hasattr(usage, "get")
+
+    span = MagicMock()
+    response_obj = {"usage": usage}
+
+    _set_usage_outputs(span, response_obj, SpanAttributes)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 370)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 120)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 250)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 180
+    )
+
+
 class TestArizeLogger(CustomLogger):
     """
     Custom logger implementation to capture standard_callback_dynamic_params.

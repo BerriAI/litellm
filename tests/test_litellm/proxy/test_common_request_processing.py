@@ -3,8 +3,9 @@ import datetime
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -26,6 +27,48 @@ from litellm.proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
+        self, monkeypatch
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def fake_base_process_llm_request(**kwargs):
+            passthrough_response = kwargs["fastapi_response"]
+            passthrough_response.headers["x-litellm-call-id"] = "test-call-id"
+            passthrough_response.headers["x-litellm-version"] = "test-version"
+            return httpx.Response(
+                status_code=200,
+                content=b'{"ok":true}',
+                headers={
+                    "content-type": "application/json",
+                    "x-amzn-requestid": "bedrock-request-id",
+                },
+            )
+
+        monkeypatch.setattr(
+            processing_obj,
+            "base_process_llm_request",
+            fake_base_process_llm_request,
+        )
+
+        result = await processing_obj.base_passthrough_process_llm_request(
+            request=MagicMock(spec=Request),
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            model="bedrock-test-model",
+        )
+
+        assert result.status_code == 200
+        assert result.body == b'{"ok":true}'
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        assert result.headers["x-litellm-version"] == "test-version"
+
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
         self, monkeypatch
@@ -217,6 +260,141 @@ class TestProxyBaseLLMRequestProcessing:
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
                 headers_with_invalid
             )
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_from_llm_response(self):
+        """
+        Google native :generateContent uses this helper instead of base_process_llm_request;
+        ensure x-litellm-* headers and callback hooks merge like the main proxy path.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        class _FakeGenaiResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "cache_key": "ck-test",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "response_cost": 0.001,
+                "additional_headers": {"llm_provider-ratelimit-requests": "1000"},
+            }
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-test"
+
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-ratelimit-remaining-requests": "999"}
+        )
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeGenaiResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-call-id"] == "call-id-test"
+        assert headers["x-litellm-model-id"] == "deployment-model-id"
+        assert headers["x-litellm-version"] == "9.9.9"
+        assert headers["llm_provider-ratelimit-requests"] == "1000"
+        assert headers["x-ratelimit-remaining-requests"] == "999"
+        proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
+        """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
+
+        class _FakeStreamLike:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            _hidden_params = {
+                "model_id": "stream-model-id",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "cache_key": "",
+                "response_cost": "",
+                "additional_headers": {"llm_provider-x": "y"},
+            }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-stream"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeStreamLike(),
+            request_data={"model": "gemini/gemini-2.0-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "stream-model-id"
+        assert headers["x-litellm-model-api-base"] == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+        assert headers["llm_provider-x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_no_hidden_params_metadata_fallback(
+        self,
+    ):
+        """When response has no _hidden_params, model_id can still come from litellm_metadata."""
+
+        class _BareResponse:
+            pass
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-meta"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_BareResponse(),
+            request_data={
+                "model": "gemini/gemini-1.5-flash",
+                "litellm_metadata": {"model_info": {"id": "meta-model-id"}},
+            },
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "meta-model-id"
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
@@ -1158,13 +1336,6 @@ class TestCommonRequestProcessingHelpers:
             assert mock_tracer.trace.call_count == 4
 
             # Verify that each call was made with the correct operation name
-            expected_calls = [
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-            ]
-
             actual_calls = mock_tracer.trace.call_args_list
             assert len(actual_calls) == 4
 

@@ -268,7 +268,10 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
-    assert test_user_cache.get_cache(key=hash_token(user_key)) == valid_token
+    assert (
+        test_user_cache.get_cache(key=hash_token(user_key), model_type=UserAPIKeyAuth)
+        == valid_token
+    )
 
     try:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -509,34 +512,57 @@ async def test_auth_not_connected_to_db():
     assert valid_token.token == "failed-to-connect-to-db"
 
 
-@pytest.mark.parametrize(
-    "headers, custom_header_name, expected_api_key",
-    [
-        # Test with valid Bearer token
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
-        # Test with raw token (no Bearer prefix)
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
-        # Test with empty header value
-        ({"x-custom-api-key": ""}, "x-custom-api-key", ""),
-        # Test with missing header
-        ({}, "X-Custom-API-Key", ""),
-        # Test with different header casing
-        ({"X-CUSTOM-API-KEY": "Bearer sk-12345678"}, "X-Custom-API-Key", "sk-12345678"),
-    ],
-)
-def test_get_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
+def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
     verbose_proxy_logger.setLevel(logging.DEBUG)
-
-    # Mock the Request object
     request = MagicMock(spec=Request)
     request.headers = headers
-
-    # Call the function and verify it doesn't raise an exception
-
     api_key = get_api_key_from_custom_header(
         request=request, custom_litellm_key_header_name=custom_header_name
     )
     assert api_key == expected_api_key
+
+
+def test_get_api_key_from_custom_header_bearer_token():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": f"Bearer {token}"},
+        custom_header_name="x-custom-api-key",
+        expected_api_key=token,
+    )
+
+
+def test_get_api_key_from_custom_header_raw_token():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": f"Bearer {token}"},
+        custom_header_name="x-custom-api-key",
+        expected_api_key=token,
+    )
+
+
+def test_get_api_key_from_custom_header_empty_value():
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": ""},
+        custom_header_name="x-custom-api-key",
+        expected_api_key="",
+    )
+
+
+def test_get_api_key_from_custom_header_missing_header():
+    _assert_api_key_from_custom_header(
+        headers={},
+        custom_header_name="X-Custom-API-Key",
+        expected_api_key="",
+    )
+
+
+def test_get_api_key_from_custom_header_different_casing():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"X-CUSTOM-API-KEY": f"Bearer {token}"},
+        custom_header_name="X-Custom-API-Key",
+        expected_api_key=token,
+    )
 
 
 from litellm.proxy._types import LitellmUserRoles
@@ -1118,11 +1144,17 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 @pytest.mark.asyncio
 async def test_x_litellm_api_key():
     """
-    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided.
+
+    On a master-key match, ``UserAPIKeyAuth.api_key`` (and the derived
+    ``token``) are now the stable alias ``LITELLM_PROXY_MASTER_KEY_ALIAS``
+    rather than ``hash_token(master_key)`` — the master key (or its hash)
+    must not propagate into spend logs / metrics / audit trails.
     """
     from fastapi import Request
     from starlette.datastructures import URL
 
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LiteLLM_TeamTableCachedObj,
@@ -1148,7 +1180,8 @@ async def test_x_litellm_api_key():
         api_key="Bearer " + ignored_key,
         custom_litellm_key_header=master_key,
     )
-    assert valid_token.token == hash_token(master_key)
+    assert valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert valid_token.token != hash_token(master_key)
 
 
 @pytest.mark.asyncio

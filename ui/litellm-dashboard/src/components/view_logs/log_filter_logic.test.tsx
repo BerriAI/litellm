@@ -112,6 +112,7 @@ describe("useLogFilterLogic", () => {
     expect(filters["Key Alias"]).toBe("");
     expect(filters["Error Code"]).toBe("");
     expect(filters["Error Message"]).toBe("");
+    expect(filters["Public model / search tool"]).toBe("");
   });
 
   it("should return all logs when no filters are applied", () => {
@@ -197,6 +198,51 @@ describe("useLogFilterLogic", () => {
         expect(result.current.filteredLogs.data.every((log) => log.model_id === "gpt-4")).toBe(true);
       },
       { timeout: 500 },
+    );
+  });
+
+  it("should pass model param and filter search-tool rows by spend log model column", async () => {
+    const searchRows = [
+      createLogEntry({
+        request_id: "s1",
+        call_type: "asearch",
+        model: "tavily-marketing",
+        model_id: "",
+        team_id: "team-x",
+      }),
+    ];
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(createPaginatedResponse(searchRows));
+    const logs = createPaginatedResponse([
+      ...searchRows,
+      createLogEntry({
+        request_id: "c1",
+        call_type: "chat",
+        model: "gpt-4o",
+        model_id: "mid-1",
+        team_id: "team-x",
+      }),
+    ]);
+    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+
+    act(() => {
+      result.current.handleFilterChange({ "Public model / search tool": "tavily-marketing" });
+    });
+
+    await waitFor(
+      () => {
+        expect(result.current.filteredLogs.data).toHaveLength(1);
+        expect(result.current.filteredLogs.data[0].model).toBe("tavily-marketing");
+        expect(result.current.filteredLogs.data[0].call_type).toBe("asearch");
+      },
+      { timeout: 500 },
+    );
+
+    expect(vi.mocked(uiSpendLogsCall)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          model: "tavily-marketing",
+        }),
+      }),
     );
   });
 

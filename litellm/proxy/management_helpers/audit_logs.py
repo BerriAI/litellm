@@ -21,26 +21,69 @@ from litellm.proxy._types import (
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
+ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY = "allow_litellm_changed_by_header"
+
+
+def _allows_litellm_changed_by_header(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
+        if (
+            isinstance(admin_metadata, dict)
+            and admin_metadata.get(ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY) is True
+        ):
+            return True
+    return False
+
+
+def get_audit_log_changed_by(
+    *,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+) -> Optional[str]:
+    if litellm_changed_by and _allows_litellm_changed_by_header(user_api_key_dict):
+        return litellm_changed_by
+    return user_api_key_dict.user_id or litellm_proxy_admin_name
 
 
 def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
-    """Resolve a string callback name to a CustomLogger instance, with caching."""
+    """Resolve a string callback name to a CustomLogger instance, with caching.
+
+    For "s3_v2" with `litellm.s3_audit_callback_params` set, constructs a
+    dedicated `S3Logger` so audit logs can target a different bucket than the
+    normal-log singleton served by `_init_custom_logger_compatible_class`.
+    """
     if name in _audit_log_callback_cache:
         return _audit_log_callback_cache[name]
 
-    from litellm.litellm_core_utils.litellm_logging import (
-        _init_custom_logger_compatible_class,
-    )
+    instance: Optional[CustomLogger]
+    if (
+        name == "s3_v2"
+        and getattr(litellm, "s3_audit_callback_params", None) is not None
+    ):
+        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
-    instance = _init_custom_logger_compatible_class(
-        logging_integration=name,  # type: ignore
-        internal_usage_cache=None,
-        llm_router=None,
-    )
+        instance = S3V2Logger(
+            s3_callback_params_override=litellm.s3_audit_callback_params
+        )
+    else:
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
+        instance = _init_custom_logger_compatible_class(
+            logging_integration=name,  # type: ignore
+            internal_usage_cache=None,
+            llm_router=None,
+        )
 
     if instance is not None:
         _audit_log_callback_cache[name] = instance
     return instance
+
+
+def reset_audit_log_callback_cache() -> None:
+    """Clear cached audit-log callback instances. Call on config reload."""
+    _audit_log_callback_cache.clear()
 
 
 def _build_audit_log_payload(
@@ -143,8 +186,10 @@ async def create_object_audit_log(
     if _store_audit_logs is not True:
         return
 
-    _changed_by = (
-        litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name
+    _changed_by = get_audit_log_changed_by(
+        litellm_changed_by=litellm_changed_by,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     await create_audit_log_for_update(

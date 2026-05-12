@@ -379,6 +379,12 @@ export default function ModelInfoView({
           model: localModelData.litellm_model_name,
         },
         {
+          // `id` is required to disambiguate when multiple deployments
+          // share the same model_name (e.g. wildcard `openai/*` with two
+          // different `api_base` values for failover). Without it the
+          // backend silently falls back to deployments[0] and probes
+          // the wrong endpoint.
+          id: localModelData.model_info?.id,
           mode: localModelData.model_info?.mode,
         },
         localModelData.model_info?.mode,
