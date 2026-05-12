@@ -825,6 +825,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         requested_model="gpt-3.5-turbo",
         exception_status="429",
         exception_class="Openai.RateLimitError",
+        rate_limit_category="vendor_rate_limit",
+        rate_limit_type=None,
         route=user_api_key_dict.request_route,
         model_id=None,
         client_ip=None,

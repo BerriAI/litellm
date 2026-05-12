@@ -1814,14 +1814,8 @@ class PrometheusLogger(CustomLogger):
 
         Proxy level tracking - failed client side requests
 
-        labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    REQUESTED_MODEL,
-                    "team",
-                    "team_alias",
-                ] + EXCEPTION_LABELS,
+        See :attr:`PrometheusMetricLabels.litellm_proxy_failed_requests_metric`
+        for the authoritative list of labels emitted on this metric.
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
@@ -2549,11 +2543,22 @@ class PrometheusLogger(CustomLogger):
         # emitting "HTTPException" here. Callers that need to distinguish
         # vendor vs. litellm rate limits should use the new
         # ``rate_limit_category`` / ``rate_limit_type`` labels instead.
-        from litellm.proxy.common_utils.proxy_rate_limit_error import (
-            ProxyRateLimitError,
-        )
+        #
+        # The import is intentionally lazy + ImportError-tolerant: this method
+        # is also called from router-side fallback events
+        # (``log_success_fallback_event`` / ``log_failure_fallback_event``)
+        # which can run in non-proxy installs where ``fastapi`` (a transitive
+        # dep of ``proxy_rate_limit_error``) is not installed.
+        try:
+            from litellm.proxy.common_utils.proxy_rate_limit_error import (
+                ProxyRateLimitError,
+            )
+        except ImportError:
+            ProxyRateLimitError = None  # type: ignore[assignment,misc]
 
-        if isinstance(exception, ProxyRateLimitError):
+        if ProxyRateLimitError is not None and isinstance(
+            exception, ProxyRateLimitError
+        ):
             return "HTTPException"
 
         exception_class_name = ""
