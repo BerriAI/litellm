@@ -2706,11 +2706,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -2736,32 +2734,44 @@ def _rss_mb_for_log() -> str:
     return f"{rss_mb:.2f}"
 
 
+def _is_unexpected_keyword_argument_type_error(exc: BaseException) -> bool:
+    """True when ``exc`` is a TypeError from passing a kwarg the callee does not accept."""
+    return isinstance(exc, TypeError) and (
+        "unexpected keyword argument" in str(exc).lower()
+    )
+
+
 async def _run_direct_health_check_with_instrumentation(
     model_list: list,
     details: Optional[bool],
     max_concurrency: Optional[int],
     instrumentation_context: dict,
 ):
+    """Call ``perform_health_check``, retrying with fewer kwargs on unexpected-kw TypeErrors."""
     _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
-    try:
-        return await perform_health_check(
-            model_list=model_list,
-            details=details,
-            max_concurrency=max_concurrency,
-            instrumentation_context=instrumentation_context,
+    last_type_error: Optional[TypeError] = None
+    for extra_kwargs in (
+        {
+            "instrumentation_context": instrumentation_context,
             **_hc_filter,
-        )
-    except TypeError as e:
-        unsupported_optional_kwargs = ("instrumentation_context", *_hc_filter.keys())
-        if not any(kwarg_name in str(e) for kwarg_name in unsupported_optional_kwargs):
-            raise
-        # Backward compatibility for monkeypatched or wrapped callables
-        # that do not accept newer health check kwargs.
-        return await perform_health_check(
-            model_list=model_list,
-            details=details,
-            max_concurrency=max_concurrency,
-        )
+        },
+        {"instrumentation_context": instrumentation_context},
+        dict(_hc_filter),
+        {},
+    ):
+        try:
+            return await perform_health_check(
+                model_list=model_list,
+                details=details,
+                max_concurrency=max_concurrency,
+                **extra_kwargs,
+            )
+        except TypeError as e:
+            if not _is_unexpected_keyword_argument_type_error(e):
+                raise
+            last_type_error = e
+    assert last_type_error is not None
+    raise last_type_error
 
 
 def _schedule_background_health_check_db_save(
