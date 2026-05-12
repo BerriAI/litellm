@@ -10750,3 +10750,232 @@ async def test_regenerate_premium_gate_allows_actual_master_key_holder():
         )
 
     assert result.token == "sk-new-master"
+
+
+# ---------------------------------------------------------------------------
+# PlrNEsyT priv-esc regression suite
+# ---------------------------------------------------------------------------
+
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: E402
+    _is_proxy_admin_role,
+    _strip_admin_only_fields_for_non_admin,
+)
+
+
+def _internal_user_auth():
+    return UserAPIKeyAuth(
+        api_key="sk-internal",
+        user_id="user-internal",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+
+def _proxy_admin_auth():
+    return UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_id="user-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+
+class TestStripAdminOnlyFields:
+    """Sub-bugs 1 + 4 of PlrNEsyT: ``/key/generate`` and ``/key/update``
+    accepted ``permissions[get_spend_routes]`` (self-grant of cross-tenant
+    spend log read) and ``metadata[max_budget_alert_emails]`` (phishing via
+    proxy's trusted SMTP / Sendgrid / Resend sender) from non-admin
+    callers. The strip helper must zero these for non-admin and pass them
+    through for proxy admin."""
+
+    def test_strips_get_spend_routes_for_non_admin(self):
+        data = GenerateKeyRequest(
+            permissions={"get_spend_routes": True, "custom_flag": "ok"}
+        )
+        _strip_admin_only_fields_for_non_admin(data, _internal_user_auth())
+        assert "get_spend_routes" not in data.permissions
+        # Custom (non-admin-only) permission keys survive — strip is targeted.
+        assert data.permissions.get("custom_flag") == "ok"
+
+    def test_strips_max_budget_alert_emails_for_non_admin(self):
+        data = GenerateKeyRequest(
+            metadata={
+                "max_budget_alert_emails": {"warn": ["attacker@evil.example"]},
+                "team": "core-infra",
+            }
+        )
+        _strip_admin_only_fields_for_non_admin(data, _internal_user_auth())
+        assert "max_budget_alert_emails" not in data.metadata
+        # Unrelated metadata keys survive.
+        assert data.metadata.get("team") == "core-infra"
+
+    def test_admin_caller_unchanged(self):
+        data = GenerateKeyRequest(
+            permissions={"get_spend_routes": True},
+            metadata={"max_budget_alert_emails": {"warn": ["ops@admin.example"]}},
+        )
+        _strip_admin_only_fields_for_non_admin(data, _proxy_admin_auth())
+        assert data.permissions["get_spend_routes"] is True
+        assert "max_budget_alert_emails" in data.metadata
+
+    def test_update_key_request_also_filtered(self):
+        data = UpdateKeyRequest(
+            key="sk-test",
+            permissions={"get_spend_routes": True},
+            metadata={"max_budget_alert_emails": {"warn": ["x@y.example"]}},
+        )
+        _strip_admin_only_fields_for_non_admin(data, _internal_user_auth())
+        assert "get_spend_routes" not in data.permissions
+        assert "max_budget_alert_emails" not in data.metadata
+
+
+class TestProjectKeyLimitsMembershipGate:
+    """Sub-bug 3 of PlrNEsyT: ``_check_project_key_limits`` validated that
+    the project existed but not that the caller was a member. Any
+    enumerated project_id let a non-admin mint keys against the victim
+    project, inheriting its models / budget."""
+
+    @pytest.mark.asyncio
+    async def test_non_admin_member_passes(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+        team_obj = LiteLLM_TeamTableCachedObj(
+            team_id="team-victim",
+            members_with_roles=[
+                Member(role="user", user_id="user-internal", user_email=None)
+            ],
+        )
+
+        prisma_client = MagicMock()
+        user_api_key_cache = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=team_obj),
+            ),
+        ):
+            await _check_project_key_limits(
+                project_id="proj-x",
+                data=GenerateKeyRequest(models=["gpt-4o"], max_budget=10.0),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_api_key_dict=_internal_user_auth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_non_member_blocked(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+        # Team object has no member matching the caller's user_id.
+        team_obj = LiteLLM_TeamTableCachedObj(
+            team_id="team-victim",
+            members_with_roles=[
+                Member(role="user", user_id="someone-else", user_email=None)
+            ],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=team_obj),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _check_project_key_limits(
+                    project_id="proj-x",
+                    data=GenerateKeyRequest(models=["gpt-4o"], max_budget=10.0),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    user_api_key_dict=_internal_user_auth(),
+                )
+            assert exc.value.status_code == 403
+            assert "not a member" in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_proxy_admin_bypasses_membership_gate(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            # Admin should not even reach the team-lookup branch.
+            await _check_project_key_limits(
+                project_id="proj-x",
+                data=GenerateKeyRequest(models=["gpt-4o"], max_budget=10.0),
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                user_api_key_dict=_proxy_admin_auth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_orphan_project_with_no_team_blocks_non_admin(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        # team_id is None — non-admin must not be able to mint against it.
+        project_obj = MagicMock(
+            team_id=None,
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+            new=AsyncMock(return_value=project_obj),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _check_project_key_limits(
+                    project_id="proj-orphan",
+                    data=GenerateKeyRequest(),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    user_api_key_dict=_internal_user_auth(),
+                )
+            assert exc.value.status_code == 403
+
+
+class TestProxyAdminRoleHelper:
+    def test_proxy_admin_role_check(self):
+        assert _is_proxy_admin_role(_proxy_admin_auth()) is True
+        assert _is_proxy_admin_role(_internal_user_auth()) is False
+        # No user_role set → not admin.
+        assert (
+            _is_proxy_admin_role(UserAPIKeyAuth(api_key="x", user_role=None)) is False
+        )
