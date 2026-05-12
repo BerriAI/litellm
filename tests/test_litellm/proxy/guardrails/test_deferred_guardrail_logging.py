@@ -1180,6 +1180,12 @@ class TestStreamingDisconnectFiresDeferredLogging:
         [
             ("normal_completion", True),
             ("client_disconnect", True),  # partial usage still attributed
+            # Starlette / anyio cancel the streaming task on client
+            # disconnect — surfaces as ``asyncio.CancelledError``, which is
+            # a ``BaseException`` not a regular ``Exception``. Must still
+            # fire deferred logging (same financial-integrity property as
+            # GeneratorExit disconnect).
+            ("cancellederror_disconnect", True),
             # Iterator-raised exceptions (post-call guardrail blocked the
             # response, upstream provider error mid-stream, etc.) must NOT
             # fire deferred success — that would persist a blocked /
@@ -1206,9 +1212,18 @@ class TestStreamingDisconnectFiresDeferredLogging:
             yield "c2"
             yield "c3"
 
+        async def _two_then_cancel():
+            # Simulates an upstream iterator that gets cancelled while it's
+            # awaiting the next chunk — mirrors what Starlette / anyio do
+            # when the client disconnects mid-stream.
+            yield "c1"
+            yield "c2"
+            raise asyncio.CancelledError()
+
         response = {
             "normal_completion": _normal(),
             "client_disconnect": _three(),
+            "cancellederror_disconnect": _two_then_cancel(),
             "exception_mid_stream": _raises(),
         }[termination]
         request_data = {"litellm_logging_obj": MagicMock()}
@@ -1226,6 +1241,10 @@ class TestStreamingDisconnectFiresDeferredLogging:
                     if len(chunks_seen) == 2:
                         await gen.aclose()
                         break
+            elif termination == "cancellederror_disconnect":
+                with pytest.raises(asyncio.CancelledError):
+                    async for _ in gen:
+                        pass
             elif termination == "exception_mid_stream":
                 with pytest.raises(RuntimeError, match="guardrail blocked"):
                     async for _ in gen:

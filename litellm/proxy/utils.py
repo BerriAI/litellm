@@ -2363,10 +2363,18 @@ class ProxyLogging:
         try:
             async for chunk in current_response:
                 yield chunk
-        except GeneratorExit:
-            # Client disconnect — partial usage still gets attributed via
-            # the deferred-logging path below. Re-raise so Python doesn't
-            # warn about the async generator ignoring GeneratorExit.
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnect — uvicorn's aclose() raises GeneratorExit;
+            # Starlette / anyio use asyncio task cancellation
+            # (CancelledError) to tear down the streaming response when
+            # the client TCP-disconnects. Both are "the consumer went
+            # away" not "the iterator failed", so partial usage still
+            # gets attributed via the deferred-logging path below.
+            # ``CancelledError`` is a ``BaseException`` (not a regular
+            # ``Exception``) so it must be caught BEFORE the
+            # ``except BaseException`` branch — otherwise client
+            # disconnect via cancellation would suppress the deferred
+            # fire and re-introduce AAr6bXKP.
             raise
         except BaseException:
             # Iterator raised (post-call guardrail blocked, upstream
