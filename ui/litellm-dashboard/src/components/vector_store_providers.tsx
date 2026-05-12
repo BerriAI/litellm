@@ -92,8 +92,8 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
     {
       name: "vertex_collection_id",
       label: "Collection ID (optional)",
-      tooltip: "Discovery Engine collection ID. Leave blank to use default_collection.",
-      placeholder: "default_collection",
+      tooltip: "Discovery Engine collection ID. Leave blank to use the default collection.",
+      placeholder: "e.g. my-custom-collection",
       required: false,
       type: "text",
     },
