@@ -113,6 +113,49 @@ class LiteLLMCompletionResponsesConfig:
         return cleaned
 
     @staticmethod
+    def _ensure_valid_json_arguments(arguments: Any) -> str:
+        """
+        确保 arguments 是有效的 JSON 字符串格式。
+
+        国内模型（火山引擎、阿里等）要求 function.arguments 必须是严格的 JSON 格式。
+        如果 arguments 不是有效的 JSON，返回空对象 "{}"。
+
+        Args:
+            arguments: 原始 arguments 值（可能是字符串、dict、或其他类型）
+
+        Returns:
+            str: 有效的 JSON 字符串
+        """
+        import json
+
+        if arguments is None:
+            return "{}"
+
+        # 如果已经是 dict，直接转 JSON
+        if isinstance(arguments, dict):
+            return json.dumps(arguments)
+
+        # 如果是字符串，尝试解析验证
+        if isinstance(arguments, str):
+            if not arguments.strip():
+                return "{}"
+            try:
+                # 尝试解析验证是否是有效 JSON
+                json.loads(arguments)
+                return arguments
+            except (json.JSONDecodeError, ValueError):
+                # 不是有效 JSON，返回空对象
+                return "{}"
+
+        # 其他类型，尝试转字符串后解析
+        try:
+            str_val = str(arguments)
+            json.loads(str_val)
+            return str_val
+        except (json.JSONDecodeError, ValueError):
+            return "{}"
+
+    @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
         LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
@@ -745,9 +788,15 @@ class LiteLLMCompletionResponsesConfig:
                 function_raw, "arguments"
             )
         )
+        # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+        function_arguments = (
+            LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                function_arguments_raw
+            )
+        )
         function: Dict[str, Any] = {
             "name": function_name_raw or "",
-            "arguments": function_arguments_raw or "{}",
+            "arguments": function_arguments,
         }
         tool_use_id_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
             tool_use_definition, "id"
@@ -766,7 +815,9 @@ class LiteLLMCompletionResponsesConfig:
             type=cast(Literal["function"], tool_use_type),
             function=ChatCompletionToolCallFunctionChunk(
                 name=str(function.get("name", "")),
-                arguments=str(function.get("arguments", "{}")),
+                arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                    function.get("arguments")
+                ),
             ),
             index=index,
         )
@@ -1199,6 +1250,10 @@ class LiteLLMCompletionResponsesConfig:
 
             """
             function: dict = _tool_use_definition.get("function") or {}
+            # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+            arguments = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                function.get("arguments")
+            )
             tool_call_chunk = ChatCompletionToolCallChunk(
                 id=_tool_use_definition.get("id") or "",
                 type=cast(
@@ -1206,7 +1261,7 @@ class LiteLLMCompletionResponsesConfig:
                 ),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
+                    arguments=arguments,
                 ),
                 index=0,
             )
@@ -1245,12 +1300,16 @@ class LiteLLMCompletionResponsesConfig:
         ```
         """
         # Create a tool call for the function call
+        # 确保 arguments 是有效的 JSON 格式（国内模型要求严格）
+        arguments = LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+            function_call.get("arguments")
+        )
         tool_call = ChatCompletionToolCallChunk(
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=function_call.get("name") or "",
-                arguments=str(function_call.get("arguments") or ""),
+                arguments=arguments,
             ),
             index=0,
         )
@@ -1620,7 +1679,9 @@ class LiteLLMCompletionResponsesConfig:
 
                 output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                     name=function_definition.name or "",
-                    arguments=function_definition.get("arguments") or "",
+                    arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                        function_definition.get("arguments")
+                    ),
                     call_id=tool.id or "",
                     id=tool.id or "",
                     type="function_call",  # critical this is "function_call" to work with tools like openai codex
@@ -2129,7 +2190,9 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=tool_call.get("arguments") or "",
+                arguments=LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                    tool_call.get("arguments")
+                ),
             ),
         )
 
