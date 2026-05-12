@@ -7188,11 +7188,13 @@ class ProxyStartupEvent:
                     prisma_client=prisma_client,
                     llm_router=llm_router,
                 )
+                _effective_responses_interval = (
+                    proxy_responses_polling_interval + random.randint(0, 30)
+                )
                 scheduler.add_job(
                     check_responses_cost_job.check_responses_cost,
                     "interval",
-                    seconds=proxy_responses_polling_interval
-                    + random.randint(0, 30),  # Add small random offset
+                    seconds=_effective_responses_interval,
                     # REMOVED jitter parameter - major cause of memory leak
                     id="check_responses_cost_job",
                     replace_existing=True,
@@ -7200,7 +7202,7 @@ class ProxyStartupEvent:
                 )
                 verbose_proxy_logger.info(
                     "Responses cost check job scheduled successfully (interval=%ss)",
-                    proxy_responses_polling_interval,
+                    _effective_responses_interval,
                 )
 
             except Exception as e:

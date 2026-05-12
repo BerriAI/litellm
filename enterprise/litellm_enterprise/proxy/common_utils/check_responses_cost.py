@@ -65,7 +65,19 @@ class CheckResponsesCost:
             return 0
 
         await self.prisma_client.db.litellm_managedobjecttable.update_many(
-            where={"id": {"in": stale_ids}},
+            where={
+                "id": {"in": stale_ids},
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                    ]
+                },
+            },
             data={"status": "stale_expired"},
         )
         return len(stale_ids)
