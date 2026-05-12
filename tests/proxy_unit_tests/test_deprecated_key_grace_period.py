@@ -108,22 +108,24 @@ async def test_lookup_deprecated_key_cache_hit_returns_on_second_call():
 @pytest.mark.asyncio
 async def test_lookup_deprecated_key_pre_warmed_cache_returns():
     """
-    Backward compatibility: if an older 2-tuple cache entry exists, invalidate it
-    and fall back to DB lookup (instead of raising or incorrectly accepting).
+    Pre-warmed 3-tuple cache entry should be served directly from cache.
     """
     from litellm.proxy.utils import _lookup_deprecated_key, _deprecated_key_cache
 
     _deprecated_key_cache.clear()
     now_ts = datetime.now(timezone.utc).timestamp()
-    # Manually insert the legacy 2-tuple cache entry.
-    _deprecated_key_cache[HASHED_TOKEN] = (ACTIVE_TOKEN_HASH, now_ts + 60)
+    _deprecated_key_cache[HASHED_TOKEN] = (
+        ACTIVE_TOKEN_HASH,
+        now_ts + 60,
+        now_ts + 300,
+    )
 
     db = _make_db(active_token_id=ACTIVE_TOKEN_HASH)
 
     result = await _lookup_deprecated_key(db=db, hashed_token=HASHED_TOKEN)
     assert result == ACTIVE_TOKEN_HASH
 
-    db.litellm_deprecatedverificationtoken.find_first.assert_called_once()
+    db.litellm_deprecatedverificationtoken.find_first.assert_not_called()
 
 
 # ── End-to-end reproduction of the demo ──────────────────────────────────────
