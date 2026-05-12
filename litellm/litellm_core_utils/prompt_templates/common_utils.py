@@ -755,14 +755,25 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     else:
         file_content = file_data
     # Convert content to bytes
-    if isinstance(file_content, (str, PathLike)):
-        # If it's a path, open and read the file
-        # Extract filename from path if not already set
+    if isinstance(file_content, str):
+        # Bare string inputs are rejected: when this helper runs in a proxy
+        # request handler the string came from an attacker-controlled form
+        # field, and opening it as a path is an arbitrary file read on the
+        # proxy host. SDK callers who want to upload from a path should
+        # either pass a pathlib.Path (a PathLike instance — see the branch
+        # below) or open the file themselves and pass the handle / bytes.
+        raise ValueError(
+            "extract_file_data does not accept bare str inputs. Pass bytes, "
+            "an open file handle, a (filename, content) tuple, or a "
+            "pathlib.Path. To upload a local file from a path, call "
+            "open(path, 'rb') yourself."
+        )
+    if isinstance(file_content, PathLike):
+        # PathLike (pathlib.Path) is a Python-level type that HTTP form
+        # values can't fabricate. Treat as a local file path for SDK
+        # convenience.
         if filename is None:
-            if isinstance(file_content, PathLike):
-                filename = Path(file_content).name
-            else:
-                filename = Path(str(file_content)).name
+            filename = Path(file_content).name
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
