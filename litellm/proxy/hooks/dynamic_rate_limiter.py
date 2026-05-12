@@ -14,13 +14,12 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.rate_limiter_utils import (
     ProxyHTTPRateLimitError,
+    convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_utc_datetime
-
-from .rate_limiter_utils import convert_priority_to_percent
 
 
 class DynamicRateLimiterCache:
