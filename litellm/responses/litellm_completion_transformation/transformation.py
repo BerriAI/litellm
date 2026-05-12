@@ -902,7 +902,9 @@ class LiteLLMCompletionResponsesConfig:
             if function_name_raw is not None or function_arguments_raw is not None:
                 normalized_definition["function"] = {
                     "name": function_name_raw,
-                    "arguments": function_arguments_raw,
+                    "arguments": LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                        function_arguments_raw
+                    ),
                 }
 
         normalized_definition["id"] = normalized_definition.get("id") or tool_call_id
@@ -1787,7 +1789,9 @@ class LiteLLMCompletionResponsesConfig:
 
         function_dict: Dict[str, Any] = {
             "name": tool_call_item.name,
-            "arguments": tool_call_item.arguments,
+            "arguments": LiteLLMCompletionResponsesConfig._ensure_valid_json_arguments(
+                tool_call_item.arguments
+            ),
         }
 
         if provider_specific_fields:
