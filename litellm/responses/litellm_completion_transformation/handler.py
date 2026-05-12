@@ -158,6 +158,16 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
             completion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
+            # OpenAI 高级参数（国内模型可能不支持）
+            completion_args.pop("frequency_penalty", None)  # 频率惩罚
+            completion_args.pop("presence_penalty", None)  # 存在惩罚
+            completion_args.pop("logprobs", None)  # logprobs
+            completion_args.pop("top_logprobs", None)  # top_logprobs
+            completion_args.pop("response_format", None)  # 响应格式（如 json_object）
+            completion_args.pop("seed", None)  # 随机种子
+            completion_args.pop("logit_bias", None)  # logit bias
+            completion_args.pop("n", None)  # 返回多个结果
+            completion_args.pop("service_tier", None)  # 服务等级
             # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
             completion_args.pop("litellm_metadata", None)
             completion_args.pop("litellm_logging_obj", None)
@@ -287,6 +297,16 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
             acompletion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
+            # OpenAI 高级参数（国内模型可能不支持）
+            acompletion_args.pop("frequency_penalty", None)  # 频率惩罚
+            acompletion_args.pop("presence_penalty", None)  # 存在惩罚
+            acompletion_args.pop("logprobs", None)  # logprobs
+            acompletion_args.pop("top_logprobs", None)  # top_logprobs
+            acompletion_args.pop("response_format", None)  # 响应格式（如 json_object）
+            acompletion_args.pop("seed", None)  # 随机种子
+            acompletion_args.pop("logit_bias", None)  # logit bias
+            acompletion_args.pop("n", None)  # 返回多个结果
+            acompletion_args.pop("service_tier", None)  # 服务等级
             # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
             acompletion_args.pop("litellm_metadata", None)
             acompletion_args.pop("litellm_logging_obj", None)
