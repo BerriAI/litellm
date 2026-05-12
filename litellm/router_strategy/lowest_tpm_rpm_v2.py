@@ -7,6 +7,7 @@ import httpx
 
 import litellm
 from litellm import token_counter
+from litellm.exceptions import RateLimitErrorCategory, RateLimitType
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -108,6 +109,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         ),
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
+                    category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                    rate_limit_type=RateLimitType.REQUESTS,
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
@@ -131,6 +134,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                             ),
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.REQUESTS,
                     )
             return deployment
         except Exception as e:
@@ -193,6 +198,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                     num_retries=deployment.get("num_retries"),
+                    category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                    rate_limit_type=RateLimitType.REQUESTS,
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
@@ -217,6 +224,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                         num_retries=deployment.get("num_retries"),
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.REQUESTS,
                     )
             return deployment
         except Exception as e:
@@ -560,6 +569,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     headers={"retry-after": str(60)},  # type: ignore
                     request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
+                category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                rate_limit_type=RateLimitType.REQUESTS,
             )
 
     def get_available_deployments(

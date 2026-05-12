@@ -15,6 +15,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.exceptions import RateLimitErrorCategory, RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
@@ -127,6 +128,8 @@ class ModelRateLimitingCheck(CustomLogger):
                                 url="https://github.com/BerriAI/litellm",
                             ),
                         ),
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.TOKENS,
                     )
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
@@ -148,6 +151,8 @@ class ModelRateLimitingCheck(CustomLogger):
                                 url="https://github.com/BerriAI/litellm",
                             ),
                         ),
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.REQUESTS,
                     )
 
             return deployment
@@ -205,6 +210,8 @@ class ModelRateLimitingCheck(CustomLogger):
                             ),
                         ),
                         num_retries=0,  # Don't retry - return 429 immediately
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.TOKENS,
                     )
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
@@ -230,6 +237,8 @@ class ModelRateLimitingCheck(CustomLogger):
                             ),
                         ),
                         num_retries=0,  # Don't retry - return 429 immediately
+                        category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+                        rate_limit_type=RateLimitType.REQUESTS,
                     )
 
             return deployment
