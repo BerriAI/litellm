@@ -40,13 +40,18 @@ if [[ ! -d "${PROVIDER_SRC}" ]]; then
   exit 2
 fi
 
-# Test files: test_<provider>*.py under tests/llm_translation/. Glob may
-# expand to multiple files; that's fine for pytest.
+# Test files: test_<provider>.py and test_<provider>_*.py under
+# tests/llm_translation/. The two patterns avoid cross-matching unrelated
+# providers that share a name prefix (e.g. azure vs azure_ai, bedrock vs
+# bedrock_mantle, openai vs openai_like).
 shopt -s nullglob
-test_files=( tests/llm_translation/test_${provider}*.py )
+test_files=(
+  tests/llm_translation/test_${provider}.py
+  tests/llm_translation/test_${provider}_*.py
+)
 shopt -u nullglob
 if [[ ${#test_files[@]} -eq 0 ]]; then
-  echo "No test files matching tests/llm_translation/test_${provider}*.py" >&2
+  echo "No test files matching tests/llm_translation/test_${provider}.py or test_${provider}_*.py" >&2
   exit 2
 fi
 
@@ -86,7 +91,7 @@ case "${mode}" in
       --cov-report="html:${out_dir}/html" \
       --cov-report="xml:${out_dir}/coverage.xml" \
       --cov-fail-under="${fail_under}" \
-      "${pytest_extra[@]}"
+      ${pytest_extra[@]+"${pytest_extra[@]}"}
     ;;
 
   mutation)

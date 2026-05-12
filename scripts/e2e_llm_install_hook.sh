@@ -23,6 +23,16 @@ cmd="${1:-install}"
 
 case "${cmd}" in
   install)
+    if [[ -e "${HOOK}" ]] && ! grep -q "e2e-llm-loop-active" "${HOOK}"; then
+      backup="${HOOK}.bak"
+      if [[ -e "${backup}" ]]; then
+        echo "Refusing to overwrite existing pre-commit hook: ${HOOK}" >&2
+        echo "A backup already exists at ${backup}. Resolve manually before re-running." >&2
+        exit 2
+      fi
+      mv "${HOOK}" "${backup}"
+      echo "Backed up existing pre-commit hook to ${backup}"
+    fi
     cat > "${HOOK}" <<'HOOKBODY'
 #!/usr/bin/env bash
 # Installed by scripts/e2e_llm_install_hook.sh. Blocks commits to
@@ -56,6 +66,11 @@ HOOKBODY
     if [[ -f "${HOOK}" ]] && grep -q "e2e-llm-loop-active" "${HOOK}"; then
       rm "${HOOK}"
       echo "Removed pre-commit hook."
+      backup="${HOOK}.bak"
+      if [[ -e "${backup}" ]]; then
+        mv "${backup}" "${HOOK}"
+        echo "Restored previous pre-commit hook from ${backup}"
+      fi
     else
       echo "No matching pre-commit hook to remove."
     fi
