@@ -89,6 +89,29 @@ def test_transform_embedding_response_success():
     assert result.usage.prompt_tokens == 5
 
 
+def test_transform_embedding_request_user_param():
+    config = DashScopeEmbeddingConfig()
+    data = config.transform_embedding_request(
+        model="text-embedding-v4",
+        input=["hello"],
+        optional_params={"user": "user-123"},
+        headers={},
+    )
+    assert data["user"] == "user-123"
+
+
+def test_map_openai_params_drops_unsupported_with_drop_params():
+    config = DashScopeEmbeddingConfig()
+    result = config.map_openai_params(
+        non_default_params={"dimensions": 512, "unknown_param": "value"},
+        optional_params={},
+        model="text-embedding-v4",
+        drop_params=True,
+    )
+    assert result == {"dimensions": 512}
+    assert "unknown_param" not in result
+
+
 def test_transform_embedding_response_error():
     config = DashScopeEmbeddingConfig()
     payload = {
