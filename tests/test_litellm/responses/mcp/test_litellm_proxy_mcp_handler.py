@@ -213,6 +213,23 @@ def test_create_follow_up_input_handles_response_function_tool_call():
     ]
 
 
+def test_parse_mcp_tools_recognizes_lazymcp_urls():
+    tools, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
+        [
+            {"type": "mcp", "server_url": "https://host.example/lazymcp"},
+            {"type": "mcp", "server_url": "https://host.example/lazymcp/github"},
+            {"type": "mcp", "server_url": "https://host.example/mcp/github"},
+        ]
+    )
+
+    assert other_tools == []
+    assert [tool["server_url"] for tool in tools] == [
+        "litellm_proxy/lazymcp",
+        "litellm_proxy/lazymcp/github",
+        "litellm_proxy/mcp/github",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_execute_tool_calls_strips_server_prefix(monkeypatch):
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
@@ -277,6 +294,120 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
     assert call_tool_mock.await_count == 1
     assert call_tool_mock.await_args is not None
     assert call_tool_mock.await_args.kwargs["name"] == tool_name
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_does_not_hijack_standard_mcp_name_collision(
+    monkeypatch,
+):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "mcp_call"
+    tool_calls = [
+        {
+            "id": "call-standard-mcp",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "standard-server"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["server_name"] == "standard-server"
+    assert call_tool_mock.await_args.kwargs["name"] == tool_name
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_passes_lazymcp_route_scope(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            ["github"], None
+        )
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy",
+                "function": {
+                    "name": "mcp_call",
+                    "arguments": '{"server":"github","tool":"search","arguments":{}}',
+                },
+            }
+        ],
+        user_api_key_auth=None,
+    )
+
+    assert captured["mcp_servers"] == ["github"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_passes_lazymcp_toolset_scope(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        from litellm.proxy._experimental.mcp_server.server import _mcp_active_toolset_id
+
+        captured["active_toolset"] = _mcp_active_toolset_id.get()
+        return _DummyMCPResult()
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            None, "toolset-123"
+        )
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_status": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy-status",
+                "function": {"name": "mcp_status", "arguments": "{}"},
+            }
+        ],
+        user_api_key_auth=None,
+    )
+
+    assert captured["mcp_servers"] is None
+    assert captured["active_toolset"] == "toolset-123"
 
 
 @pytest.mark.asyncio
