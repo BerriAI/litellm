@@ -26,7 +26,3 @@ export const resolveTeamAliasFromTeamID = (teamID: string, teams: Team[]): strin
   const team = teams.find((team) => team.team_id === teamID);
   return team ? team.team_alias : null;
 };
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export const isLikelyTeamId = (value: string): boolean => UUID_REGEX.test(value.trim());
