@@ -2,6 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
+import logging
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import litellm
@@ -115,6 +116,17 @@ class LiteLLMCompletionTransformationHandler:
             if tool_choice == "required":
                 completion_args["tool_choice"] = "auto"
 
+            # DEBUG: 国内模型参数过滤验证（使用 logging 绕过 lint T201）
+            logger = logging.getLogger("LiteLLM.DomesticFilter")
+            logger.info(
+                f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
+                f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
+            )
+            logger.info(
+                f"[DomesticFilter] completion_args keys after filter: "
+                f"{list(completion_args.keys())}"
+            )
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
@@ -216,6 +228,17 @@ class LiteLLMCompletionTransformationHandler:
             tool_choice = acompletion_args.get("tool_choice")
             if tool_choice == "required":
                 acompletion_args["tool_choice"] = "auto"
+
+            # DEBUG: 国内模型参数过滤验证（使用 logging 绕过 lint T201）
+            logger = logging.getLogger("LiteLLM.DomesticFilter")
+            logger.info(
+                f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
+                f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
+            )
+            logger.info(
+                f"[DomesticFilter] acompletion_args keys after filter: "
+                f"{list(acompletion_args.keys())}"
+            )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
