@@ -138,6 +138,36 @@ class TestRegisterPassThroughEndpointCollisionGuard:
         assert _registered_pass_through_routes == {}
 
     @pytest.mark.asyncio
+    async def test_reregistration_does_not_warn_or_drop_metadata(self):
+        # On config reload ``initialize_pass_through_endpoints`` re-invokes
+        # this function with the same path; the route already exists in
+        # ``app.routes`` from the previous load. That's not a collision
+        # with a built-in — the deeper helpers must update metadata in
+        # place rather than emit a "collision" warning + early return.
+        app = FastAPI()
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header",
+            new=AsyncMock(return_value=None),
+        ):
+            for _ in range(2):
+                await _register_pass_through_endpoint(
+                    endpoint={
+                        "id": "ep-reload",
+                        "path": "/forwarder/reload",
+                        "target": "https://example.com",
+                        "auth": True,
+                        "methods": ["POST"],
+                    },
+                    app=app,
+                    premium_user=True,
+                    visited_endpoints=set(),
+                )
+        assert any(
+            k.startswith("ep-reload:exact:/forwarder/reload")
+            for k in _registered_pass_through_routes
+        )
+
+    @pytest.mark.asyncio
     async def test_non_colliding_auth_true_still_appends(self):
         before = set(LiteLLMRoutes.openai_routes.value)
         with patch(

@@ -2063,11 +2063,18 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        if not route_added:
-            # Path collides with an existing route (typically a built-in
-            # management endpoint). Skip metadata add so downstream auth
-            # checks don't honor this entry's ``auth`` flag against the
-            # built-in that will service the request.
+        if (
+            not route_added
+            and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                path
+            )
+        ):
+            # Path collides with a non-pass-through route (typically a
+            # built-in management endpoint). Skip metadata add so
+            # downstream auth checks don't honor this entry's ``auth``
+            # flag against the built-in that will service the request.
+            # Re-registrations of our own pass-through (e.g. on config
+            # reload) fall through and refresh the metadata in place.
             verbose_proxy_logger.warning(
                 "Pass-through path %r (methods %s) collides with a route "
                 "already registered on the app. The pass-through entry is "
@@ -2154,7 +2161,12 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        if not route_added:
+        if (
+            not route_added
+            and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                path
+            )
+        ):
             # Wildcard variant of the collision skip in ``add_exact_path_route``.
             verbose_proxy_logger.warning(
                 "Pass-through wildcard path %r (methods %s) collides with a "
@@ -2347,10 +2359,12 @@ async def _register_pass_through_endpoint(
     auth = endpoint_data.get("auth")
     dependencies = None
 
-    # Bail before any mutation if the path collides with an existing route.
-    # ``LiteLLMRoutes.openai_routes`` is mutated below — adding a colliding
-    # path would mark the existing built-in as an llm_api_route and
-    # short-circuit its RBAC.
+    # Bail before any mutation if the path collides with a non-pass-through
+    # route. ``LiteLLMRoutes.openai_routes`` is mutated below — adding a
+    # colliding path would mark the existing built-in as an llm_api_route
+    # and short-circuit its RBAC. Re-registrations of our own previously
+    # registered pass-through (e.g. config reload) fall through; the
+    # deeper helpers handle the idempotent route add + metadata refresh.
     methods_for_collision_check = endpoint_data.get("methods") or [
         "GET",
         "POST",
@@ -2360,7 +2374,7 @@ async def _register_pass_through_endpoint(
     ]
     if SafeRouteAdder._is_path_registered(
         app=app, path=path, methods=methods_for_collision_check
-    ):
+    ) and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(path):
         verbose_proxy_logger.warning(
             "Pass-through path %r (methods %s) collides with a route already "
             "registered on the app. The pass-through entry is ignored. "
