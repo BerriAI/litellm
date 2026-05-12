@@ -231,6 +231,58 @@ def test_parse_mcp_tools_recognizes_lazymcp_urls():
 
 
 @pytest.mark.asyncio
+async def test_lazymcp_catalog_uses_verified_client_ip(monkeypatch):
+    captured = {}
+
+    async def fake_get_lazymcp_catalog(**kwargs):
+        captured.update(kwargs)
+        return {"description": "ok"}
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_catalog",
+        fake_get_lazymcp_catalog,
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
+        user_api_key_auth=None,
+        effective_filter=["github"],
+        active_toolset_id=None,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        client_ip="10.0.0.8",
+    )
+
+    assert captured["client_ip"] == "10.0.0.8"
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_catalog_uses_fail_closed_client_ip(monkeypatch):
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    captured = {}
+
+    async def fake_get_lazymcp_catalog(**kwargs):
+        captured.update(kwargs)
+        return {"description": "ok"}
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_catalog",
+        fake_get_lazymcp_catalog,
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
+        user_api_key_auth=None,
+        effective_filter=None,
+        active_toolset_id=None,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        client_ip=ResponsesAPIRequestUtils.get_verified_mcp_client_ip(None),
+    )
+
+    assert captured["client_ip"] == "__invalid_mcp_client_ip__"
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_strips_server_prefix(monkeypatch):
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
     tool_name = "deepwiki-read_wiki_structure"
@@ -420,12 +472,60 @@ async def test_execute_tool_calls_passes_lazymcp_client_ip_and_scoped_permission
             }
         ],
         user_api_key_auth=user_auth,
-        raw_headers={"x-forwarded-for": "203.0.113.9, 10.0.0.1"},
+        client_ip="10.0.0.8",
+    )
+
+    assert captured["client_ip"] == "10.0.0.8"
+    assert captured["toolset_permissions"]["resolved_toolset_ids"] == ["toolset-123"]
+    assert captured["toolset_permissions"]["user_api_key_auth"] is user_auth
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_ignores_spoofed_lazymcp_forwarded_header(
+    monkeypatch,
+):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            ["internal"], None
+        )
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy",
+                "function": {
+                    "name": "mcp_call",
+                    "arguments": '{"server":"internal","tool":"search","arguments":{}}',
+                },
+            }
+        ],
+        user_api_key_auth=None,
+        raw_headers={"x-forwarded-for": "10.0.0.1"},
+        client_ip="203.0.113.9",
     )
 
     assert captured["client_ip"] == "203.0.113.9"
-    assert captured["toolset_permissions"]["resolved_toolset_ids"] == ["toolset-123"]
-    assert captured["toolset_permissions"]["user_api_key_auth"] is user_auth
 
 
 @pytest.mark.asyncio

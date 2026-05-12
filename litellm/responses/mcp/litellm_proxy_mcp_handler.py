@@ -92,22 +92,6 @@ class LiteLLM_Proxy_MCP_Handler:
         return decoded
 
     @staticmethod
-    def _infer_client_ip_from_headers(
-        raw_headers: Optional[Dict[str, str]]
-    ) -> Optional[str]:
-        if not raw_headers:
-            return None
-        normalized_headers = {
-            key.lower(): value
-            for key, value in raw_headers.items()
-            if isinstance(key, str)
-        }
-        for header_name in ("x-forwarded-for", "x-real-ip", "x-client-ip"):
-            value = normalized_headers.get(header_name)
-            if isinstance(value, str) and value.strip():
-                return value.split(",")[0].strip()
-        return None
-
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
@@ -290,6 +274,7 @@ class LiteLLM_Proxy_MCP_Handler:
         active_toolset_id: Optional[str],
         mcp_auth_header: Optional[str],
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        client_ip: Optional[str],
     ) -> tuple[List[MCPTool], List[str]]:
         from litellm.proxy._experimental.mcp_server.server import (
             _mcp_active_toolset_id,
@@ -318,7 +303,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=None,
                 raw_headers=None,
-                client_ip=None,
+                client_ip=client_ip,
             )
         finally:
             if token is not None:
@@ -337,6 +322,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_auth_header: Optional[str],
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
         litellm_trace_id: Optional[str],
+        client_ip: Optional[str] = None,
     ) -> tuple[List[MCPTool], List[str]]:
         from litellm.proxy._experimental.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
@@ -405,6 +391,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
+            client_ip=client_ip,
         )
 
         allowed_mcp_server_ids = (
@@ -439,6 +426,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        client_ip: Optional[str] = None,
     ) -> tuple[List[MCPTool], List[str]]:
         """
         Get available tools from the MCP server manager.
@@ -475,6 +463,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 active_toolset_id=active_toolset_id,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                client_ip=client_ip,
             )
 
         return await LiteLLM_Proxy_MCP_Handler._get_standard_mcp_tools(
@@ -484,6 +473,7 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
             litellm_trace_id=litellm_trace_id,
+            client_ip=client_ip,
         )
 
     @staticmethod
@@ -600,6 +590,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        client_ip: Optional[str] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -627,6 +618,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            client_ip=client_ip,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -825,6 +817,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -906,9 +899,7 @@ class LiteLLM_Proxy_MCP_Handler:
                             mcp_server_auth_headers=mcp_server_auth_headers,
                             oauth2_headers=oauth2_headers,
                             raw_headers=raw_headers,
-                            client_ip=LiteLLM_Proxy_MCP_Handler._infer_client_ip_from_headers(
-                                raw_headers
-                            ),
+                            client_ip=client_ip,
                         )
                         result = await lazymcp_tool_call(tool_name, parsed_arguments)
                     finally:

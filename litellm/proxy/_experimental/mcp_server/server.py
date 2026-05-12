@@ -1269,6 +1269,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1360,6 +1361,7 @@ if MCP_AVAILABLE:
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_servers=mcp_servers,
+                client_ip=client_ip,
             )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
