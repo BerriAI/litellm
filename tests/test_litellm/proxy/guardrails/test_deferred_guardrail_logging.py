@@ -1178,24 +1178,22 @@ class TestStreamingDisconnectFiresDeferredLogging:
     @pytest.mark.parametrize(
         "termination,should_fire",
         [
+            # Only StopAsyncIteration completion is safe — that's the only
+            # exit path that guarantees the wrapper chain's end-of-stream
+            # guardrail blocks all completed. Any other termination
+            # (uvicorn GeneratorExit disconnect, Starlette/anyio
+            # CancelledError disconnect, iterator-raised exception) can
+            # interrupt a wrapper's end-of-stream block mid-await, so the
+            # deferred-success path is suppressed to avoid persisting
+            # pre-guardrail content to SpendLogs / logging callbacks.
             ("normal_completion", True),
-            ("client_disconnect", True),  # partial usage still attributed
-            # Starlette / anyio cancel the streaming task on client
-            # disconnect — surfaces as ``asyncio.CancelledError``, which is
-            # a ``BaseException`` not a regular ``Exception``. Must still
-            # fire deferred logging (same financial-integrity property as
-            # GeneratorExit disconnect).
-            ("cancellederror_disconnect", True),
-            # Iterator-raised exceptions (post-call guardrail blocked the
-            # response, upstream provider error mid-stream, etc.) must NOT
-            # fire deferred success — that would persist a blocked /
-            # errored response. The upstream caller's
-            # post_call_failure_hook handles the failure side.
+            ("client_disconnect", False),
+            ("cancellederror_disconnect", False),
             ("exception_mid_stream", False),
         ],
     )
     @pytest.mark.asyncio
-    async def test_deferred_logging_fires_only_on_clean_or_disconnect(
+    async def test_deferred_logging_fires_only_on_clean_completion(
         self, termination, should_fire
     ):
         fired_with: list = []
@@ -1261,36 +1259,24 @@ class TestStreamingDisconnectFiresDeferredLogging:
             ), "deferred success logging must NOT fire when iterator raises"
 
     @pytest.mark.asyncio
-    async def test_disconnect_drives_aclose_but_skips_partial_log(self):
-        """``aclose()`` is driven down the wrapper chain (HTTP / upstream
-        cleanup), but ``_fire_deferred_stream_logging`` no-ops because args
-        weren't populated. Veria-flagged: populating args from partial
-        chunks would persist raw unguardrailed content to SpendLogs and
-        external logging callbacks. Awaiting a usage-only logging path
-        before re-enabling disconnect-time spend attribution."""
+    async def test_disconnect_drives_aclose_but_suppresses_deferred_fire(self):
+        """``aclose()`` is driven down the wrapper chain for HTTP / upstream
+        cleanup, but ``_fire_deferred_stream_logging`` is NOT called on
+        disconnect. The deferred-success path assumes every wrapper's
+        end-of-stream guardrail block completed — disconnect can interrupt
+        them mid-await, so firing would persist raw partial content to
+        SpendLogs / logging callbacks. The upstream caller's
+        post_call_failure_hook handles attribution for the disconnect side
+        (note: a future usage-only logging path can re-enable
+        disconnect-time spend attribution without exporting the body)."""
         fired: list = []
         lo = MagicMock(
             _on_deferred_stream_complete=MagicMock(),
             _deferred_stream_complete_args=None,
         )
-        # _FakeCSW.aclose populates args (mimics CSW pre-Veria-revert) —
-        # but in the real hook flow we use the REAL CSW which no longer
-        # populates. Override _FakeCSW behaviour here:
         csw = _FakeCSW(["c1", "c2", "c3"], lo)
 
-        async def _real_aclose():
-            csw.aclose_calls.append(csw._idx)
-            csw._closed = True
-            # Intentionally do NOT populate args — matches the real
-            # post-Veria CSW.aclose contract.
-
-        csw.aclose = _real_aclose  # type: ignore[assignment]
-
-        with _hook_under_test(
-            lambda r: fired.append(
-                r["litellm_logging_obj"]._deferred_stream_complete_args is not None
-            )
-        ) as pl:
+        with _hook_under_test(lambda r: fired.append(r)) as pl:
             gen = pl.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
                 response=csw,
@@ -1304,10 +1290,9 @@ class TestStreamingDisconnectFiresDeferredLogging:
                     break
 
         assert csw.aclose_calls, "CSW.aclose() must still run for cleanup"
-        assert fired == [False], (
-            "_fire_deferred_stream_logging must be invoked, but with args "
-            "unset on disconnect — the helper itself no-ops internally so "
-            "no body export happens"
+        assert fired == [], (
+            "_fire_deferred_stream_logging must NOT be called on disconnect — "
+            "the wrapper end-of-stream guardrails may not have completed"
         )
 
     @pytest.mark.asyncio

@@ -2347,55 +2347,46 @@ class ProxyLogging:
                             )
                         )
 
-        # Actually iterate through the chained async generator and yield chunks.
-        # The try/finally is load-bearing: this generator is bound to the
-        # client's network connection, so a mid-stream disconnect raises
-        # CancelledError / GeneratorExit inside the async for. Without
-        # finally, the deferred logging is skipped — no SpendLogs row, no
-        # post-call guardrail block (PII / moderation / policy), no token
-        # reconciliation. A caller can terminate the TCP connection right
-        # before the final chunk and consume LLM provider quota without it
-        # being attributed to their key, bypassing budgets / TPM limits /
-        # content guardrails simultaneously. The same shape is used in
-        # pass_through_endpoints/streaming_handler.py:73 for the same
-        # GeneratorExit-on-disconnect reason.
-        exception_raised = False
+        # Actually iterate through the chained async generator and yield
+        # chunks. The try/finally is load-bearing for two reasons:
+        #
+        #  1. ``inner_response`` (typically CustomStreamWrapper) must be
+        #     aclose()d to release the upstream provider HTTP connection,
+        #     regardless of how the loop terminated (normal completion,
+        #     client disconnect, iterator exception).
+        #
+        #  2. The deferred-success logging path (``_run_deferred_stream_
+        #     guardrails`` + ``async_success_handler``) assumes every
+        #     wrapper's end-of-stream guardrail block ran to completion.
+        #     Only a StopAsyncIteration exit guarantees that. Any other
+        #     exit path (GeneratorExit from uvicorn aclose, CancelledError
+        #     from Starlette/anyio task cancellation, exception from a
+        #     post-call guardrail or upstream provider) can interrupt a
+        #     wrapper's end-of-stream block mid-await — firing the
+        #     deferred path then would persist raw partial / pre-guardrail
+        #     content to SpendLogs and export it to logging callbacks.
+        #     Tracking ``stream_completed_cleanly`` gates the fire to the
+        #     only safe path.
+        stream_completed_cleanly = False
         try:
             async for chunk in current_response:
                 yield chunk
-        except (GeneratorExit, asyncio.CancelledError):
-            # Client disconnect — uvicorn's aclose() raises GeneratorExit;
-            # Starlette / anyio use asyncio task cancellation
-            # (CancelledError) to tear down the streaming response when
-            # the client TCP-disconnects. Both are "the consumer went
-            # away" not "the iterator failed", so partial usage still
-            # gets attributed via the deferred-logging path below.
-            # ``CancelledError`` is a ``BaseException`` (not a regular
-            # ``Exception``) so it must be caught BEFORE the
-            # ``except BaseException`` branch — otherwise client
-            # disconnect via cancellation would suppress the deferred
-            # fire and re-introduce AAr6bXKP.
-            raise
-        except BaseException:
-            # Iterator raised (post-call guardrail blocked, upstream
-            # provider error, etc.). Suppress the deferred-success path
-            # below — firing async_success_handler on a guardrail-blocked
-            # response would persist the blocked content to SpendLogs and
-            # external logging callbacks, bypassing the assumption the
-            # deferred handler makes that guardrails already completed
-            # successfully. The upstream caller has its own
-            # post_call_failure_hook that handles the failure side.
-            exception_raised = True
-            raise
+            # Loop exited via StopAsyncIteration. This is the only path
+            # that guarantees the wrapper chain's end-of-stream guardrail
+            # blocks have all completed — the wrappers run their
+            # apply_guardrail / mask / block logic AFTER their own
+            # ``async for chunk in inner`` exits cleanly. Any other exit
+            # path (GeneratorExit, CancelledError, exception) means at
+            # least one wrapper's end-of-stream block may have been
+            # interrupted mid-await.
+            stream_completed_cleanly = True
         finally:
             # Drive aclose() on the INNER iterator (CSW), not the wrapper
             # chain. The wrapper chain's aclose() is a no-op after an
             # exception completes its generator frame, so on the exception
-            # path the cascade would never reach CSW and partial usage
-            # would not get persisted. Closing the inner iterator directly
-            # guarantees CSW.aclose() runs on every termination path —
-            # normal completion (no-op, args already set), client
-            # disconnect, and exception.
+            # path the cascade would never reach CSW and HTTP-connection
+            # cleanup would leak. Closing the inner iterator directly
+            # guarantees CSW.aclose() runs on every termination path.
             try:
                 aclose_fn = getattr(inner_response, "aclose", None)
                 if aclose_fn is not None:
@@ -2404,16 +2395,19 @@ class ProxyLogging:
                 # Cleanup is best-effort; never let aclose errors mask the
                 # original disconnect/exception or block deferred logging.
                 pass
-            # Fire deferred logging AFTER all guardrail end-of-stream blocks
-            # completed.  unified_guardrail writes guardrail_information
-            # during its end-of-stream block (inside current_response), so by
-            # the time we reach this point the metadata is fully populated.
-            #
-            # Skip the success-deferred path when the iterator raised —
-            # that's the guardrail-block or upstream-error case; firing
-            # success here would log a blocked / errored response as if it
-            # succeeded.
-            if not exception_raised:
+            # Only fire the deferred-success path when the entire wrapper
+            # chain completed end-of-stream cleanly. Disconnect (uvicorn
+            # GeneratorExit, Starlette/anyio CancelledError) and iterator
+            # exceptions can interrupt the wrapper's end-of-stream
+            # guardrail block mid-await. ``_run_deferred_stream_guardrails``
+            # assumes those blocks already completed and skips
+            # ``apply_guardrail`` / streaming-iterator guardrails. Firing
+            # the success path on a half-completed stream would persist
+            # raw partial content to SpendLogs and export it to logging
+            # callbacks without the configured guardrail checks. The
+            # upstream caller's post_call_failure_hook handles the
+            # failure / disconnect side independently.
+            if stream_completed_cleanly:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
 
     @staticmethod
