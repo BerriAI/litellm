@@ -90,8 +90,6 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated(monkeypatc
     # must default to "authenticated" — without this, the previous
     # behaviour (``endpoint.get("auth") is not True`` -> True -> empty
     # auth) ships an unauthenticated forwarder.
-    # SERVER_ROOT_PATH is set as a module-level side-effect in another
-    # proxy test file; strip it so the path lookup matches the raw route.
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     request = MagicMock()
     request.headers = {}
