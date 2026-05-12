@@ -380,7 +380,9 @@ if MCP_AVAILABLE:
         # Resolve a server name to its UUID if needed
         _name_resolved = None
         if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=rest_client_ip
+            )
             if _name_resolved is not None and _name_resolved.server_id in set(
                 allowed_server_ids
             ):
@@ -393,11 +395,23 @@ if MCP_AVAILABLE:
             )
             if (
                 _server is not None
-                and rest_client_ip is not None
                 and not global_mcp_server_manager._is_server_accessible_from_ip(
                     _server, rest_client_ip
                 )
             ):
+                if rest_client_ip is None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "client_ip_unknown",
+                            "message": (
+                                "Cannot determine client IP for IP-based access "
+                                "control. If the proxy is behind a load balancer "
+                                "or reverse proxy, configure use_x_forwarded_for "
+                                "and mcp_trusted_proxy_ranges in general_settings."
+                            ),
+                        },
+                    )
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -470,7 +484,9 @@ if MCP_AVAILABLE:
         # Resolve a server name to its UUID if needed
         _name_resolved = None
         if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=rest_client_ip
+            )
             if _name_resolved is not None and _name_resolved.server_id in set(
                 allowed_server_ids
             ):
@@ -483,11 +499,23 @@ if MCP_AVAILABLE:
             )
             if (
                 _server is not None
-                and rest_client_ip is not None
                 and not global_mcp_server_manager._is_server_accessible_from_ip(
                     _server, rest_client_ip
                 )
             ):
+                if rest_client_ip is None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "client_ip_unknown",
+                            "message": (
+                                "Cannot determine client IP for IP-based access "
+                                "control. If the proxy is behind a load balancer "
+                                "or reverse proxy, configure use_x_forwarded_for "
+                                "and mcp_trusted_proxy_ranges in general_settings."
+                            ),
+                        },
+                    )
                 raise HTTPException(
                     status_code=403,
                     detail={

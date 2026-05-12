@@ -265,3 +265,68 @@ class TestWrapSendWithDebugHeaders:
         asyncio.run(wrapped(body_msg))
 
         assert captured[0] == body_msg
+
+
+class TestMaybeBuildDebugHeadersIPGate:
+    """
+    The maybe_build_debug_headers entry point used to promote a missing
+    client_ip to INTERNAL_REQUEST so debug metadata wasn't silently dropped.
+    That bypass let an external caller (in deployments where IP extraction
+    fails) read x-mcp-debug-outbound-url / x-mcp-debug-server-auth-type for
+    internal-only servers named in the request — the IP gate would
+    otherwise hide them. Lock the fixed contract: pass client_ip straight
+    through so the gate fails closed for internal-only servers when IP
+    extraction fails.
+    """
+
+    def _debug_headers_for(self, client_ip, *, server_is_internal_only=True):
+        from unittest.mock import patch
+
+        server = MagicMock()
+        server.url = "https://internal.example/mcp"
+        server.auth_type = "oauth2"
+        server.alias = "alias"
+        server.server_name = "server"
+        server.has_client_credentials = False
+        server.authentication_token = None
+
+        manager = MagicMock()
+
+        # The fix forwards client_ip to get_mcp_server_by_name; we mirror the
+        # gate's contract: None on an internal-only server returns None,
+        # while a real internal IP returns the server.
+        def _by_name(name, client_ip):
+            if server_is_internal_only and client_ip is None:
+                return None
+            return server
+
+        manager.get_mcp_server_by_name.side_effect = _by_name
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager."
+            "global_mcp_server_manager",
+            manager,
+        ):
+            return MCPDebug.maybe_build_debug_headers(
+                raw_headers={MCP_DEBUG_REQUEST_HEADER: "true"},
+                scope={"type": "http", "headers": []},
+                mcp_servers=["internal-only-server"],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers=None,
+                client_ip=client_ip,
+            )
+
+    def test_unknown_ip_does_not_leak_internal_server_metadata(self):
+        headers = self._debug_headers_for(client_ip=None, server_is_internal_only=True)
+        # Outbound URL must NOT echo the internal-only server's URL.
+        assert headers.get("x-mcp-debug-outbound-url") == "(unknown)"
+        assert headers.get("x-mcp-debug-server-auth-type") == "(none)"
+        assert headers.get("x-mcp-debug-auth-resolution") == "no-auth"
+
+    def test_internal_ip_still_resolves_metadata(self):
+        headers = self._debug_headers_for(
+            client_ip="10.0.0.1", server_is_internal_only=True
+        )
+        assert headers.get("x-mcp-debug-outbound-url") == "https://internal.example/mcp"
+        assert headers.get("x-mcp-debug-server-auth-type") == "oauth2"
