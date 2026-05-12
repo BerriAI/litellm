@@ -63,13 +63,19 @@ class LiteLLMCompletionTransformationHandler:
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
 
-        # 只对国内模型过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
-        # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
+        # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
+        # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
         # 双重检查：model名 + api_base endpoint
         api_base = completion_args.get("api_base")
         if is_domestic_model_or_endpoint(model, api_base):
+            # Codex CLI 特有参数
             completion_args.pop("client_metadata", None)
+            # OpenAI 扩展参数（国内模型不支持）
+            completion_args.pop("reasoning_effort", None)  # reasoning 模式
+            completion_args.pop("coding_plan", None)  # Codex coding plan
+            # 其他可能不支持的参数
+            completion_args.pop("parallel_tool_calls", None)  # 并行工具调用
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -121,14 +127,20 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
 
-        # 只对国内模型过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
-        # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
+        # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
+        # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
         # 双重检查：model名 + api_base endpoint
         model_name = acompletion_args.get("model")
         api_base = acompletion_args.get("api_base")
         if is_domestic_model_or_endpoint(model_name, api_base):
+            # Codex CLI 特有参数
             acompletion_args.pop("client_metadata", None)
+            # OpenAI 扩展参数（国内模型不支持）
+            acompletion_args.pop("reasoning_effort", None)  # reasoning 模式
+            acompletion_args.pop("coding_plan", None)  # Codex coding plan
+            # 其他可能不支持的参数
+            acompletion_args.pop("parallel_tool_calls", None)  # 并行工具调用
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
