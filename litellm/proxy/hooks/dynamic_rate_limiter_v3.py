@@ -14,7 +14,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
+)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
@@ -507,6 +510,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             "rate_limit_type": str(status["rate_limit_type"]),
                             "x-litellm-priority": priority or "default",
                         },
+                        rate_limit_type=map_v3_rate_limit_type(
+                            status["rate_limit_type"]
+                        ),
+                        model=model,
                     )
                 if descriptor_key == "priority_model":
                     verbose_proxy_logger.debug(
@@ -530,6 +537,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             "x-litellm-priority": priority or "default",
                             "x-litellm-saturation": f"{saturation:.2%}",
                         },
+                        rate_limit_type=map_v3_rate_limit_type(
+                            status["rate_limit_type"]
+                        ),
+                        model=model,
                     )
 
             # Fail-closed guard: overall_code says OVER_LIMIT but no status
@@ -556,6 +567,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         str(offending["rate_limit_type"]) if offending else "unknown"
                     ),
                 },
+                rate_limit_type=map_v3_rate_limit_type(
+                    offending["rate_limit_type"] if offending else None
+                ),
+                model=model,
                 headers={
                     "retry-after": str(self.v3_limiter.window_size),
                     "x-litellm-priority": priority or "default",

@@ -17,6 +17,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.exceptions import RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
@@ -120,6 +121,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                     f"Max iterations exceeded for session {session_id}. "
                     f"Current count: {current_count}, max_iterations: {max_iterations}."
                 ),
+                rate_limit_type=RateLimitType.MAX_ITERATIONS,
             )
 
         verbose_proxy_logger.debug(

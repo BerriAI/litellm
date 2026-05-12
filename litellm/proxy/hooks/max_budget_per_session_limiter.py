@@ -21,6 +21,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.exceptions import RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
@@ -117,6 +118,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                     f"Current spend: ${current_spend:.4f}, "
                     f"max_budget_per_session: ${max_budget:.2f}."
                 ),
+                rate_limit_type=RateLimitType.BUDGET,
             )
 
         return None

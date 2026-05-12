@@ -12,6 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.exceptions import RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
@@ -226,6 +227,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                             active_projects,
                         )
                     },
+                    rate_limit_type=RateLimitType.TOKENS,
+                    model=data.get("model"),
                 )
             ### CHECK RPM ###
             elif available_rpm is not None and available_rpm == 0:
@@ -238,6 +241,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                             active_projects,
                         )
                     },
+                    rate_limit_type=RateLimitType.REQUESTS,
+                    model=data.get("model"),
                 )
             elif available_rpm is not None or available_tpm is not None:
                 ## UPDATE CACHE WITH ACTIVE PROJECT
