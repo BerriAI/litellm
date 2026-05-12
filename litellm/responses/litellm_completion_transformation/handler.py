@@ -66,9 +66,15 @@ class LiteLLMCompletionTransformationHandler:
         # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
         # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
-        # 双重检查：model名 + api_base endpoint
-        api_base = completion_args.get("api_base")
-        if is_domestic_model_or_endpoint(model, api_base):
+        # 获取实际模型名（可能来自 litellm_params.model 或 completion_args.model）
+        actual_model = completion_args.get("model", model)
+        api_base = completion_args.get("api_base", "")
+        # 从 litellm_params 提取实际模型名（如果是 openai/qwen3.6-plus 格式）
+        litellm_params_model = completion_args.get("litellm_params", {}).get("model", "")
+        if litellm_params_model and litellm_params_model.startswith("openai/"):
+            actual_model = litellm_params_model
+
+        if is_domestic_model_or_endpoint(actual_model, api_base):
             # Codex CLI 特有参数
             completion_args.pop("client_metadata", None)
             # OpenAI 扩展参数（国内模型不支持）
@@ -138,10 +144,15 @@ class LiteLLMCompletionTransformationHandler:
         # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
         # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
-        # 双重检查：model名 + api_base endpoint
-        model_name = acompletion_args.get("model")
-        api_base = acompletion_args.get("api_base")
-        if is_domestic_model_or_endpoint(model_name, api_base):
+        # 获取实际模型名（可能来自 litellm_params.model 或 completion_args.model）
+        actual_model = acompletion_args.get("model", "")
+        api_base = acompletion_args.get("api_base", "")
+        # 从 litellm_params 提取实际模型名（如果是 openai/qwen3.6-plus 格式）
+        litellm_params_model = acompletion_args.get("litellm_params", {}).get("model", "")
+        if litellm_params_model and litellm_params_model.startswith("openai/"):
+            actual_model = litellm_params_model
+
+        if is_domestic_model_or_endpoint(actual_model, api_base):
             # Codex CLI 特有参数
             acompletion_args.pop("client_metadata", None)
             # OpenAI 扩展参数（国内模型不支持）
