@@ -1517,46 +1517,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
 
-    # Strip caller-supplied routing/budget tags unless the admin has opted
-    # this key or team in via metadata.allow_client_tags=True. Tags drive
-    # tag-based routing and tag budget attribution — accepting them from
-    # untrusted callers lets an attacker reach restricted deployments or
-    # misattribute spend to a victim team's tag.
-    _admin_allow_client_tags = False
-    for _admin_meta in (
-        user_api_key_dict.metadata,
-        user_api_key_dict.team_metadata,
-    ):
-        if (
-            isinstance(_admin_meta, dict)
-            and _admin_meta.get("allow_client_tags") is True
-        ):
-            _admin_allow_client_tags = True
-            break
-    if not _admin_allow_client_tags:
-        _stripped_from: List[str] = []
-        for _meta_key in ("metadata", "litellm_metadata"):
-            _user_meta = data.get(_meta_key)
-            if isinstance(_user_meta, dict) and "tags" in _user_meta:
-                _user_meta.pop("tags", None)
-                _stripped_from.append(_meta_key)
-        # Also strip the root-level `tags` field. get_tags_from_request_body
-        # reads request_body["tags"] directly and feeds it to the policy
-        # engine, so leaving it in place here would let the strip-in-metadata
-        # above be trivially bypassed by moving the tags to the body root.
-        if "tags" in data:
-            data.pop("tags", None)
-            _stripped_from.append("tags (root)")
-        if _stripped_from:
-            verbose_proxy_logger.warning(
-                "Stripped caller-supplied tags from %s: this key/team does "
-                "not have `allow_client_tags: true` in its metadata. Set it "
-                "to opt into client-supplied routing/budget tags.",
-                ", ".join(_stripped_from),
-            )
-
     # Fill in the proxy_server_request body snapshot now that metadata has
-    # been parsed and stripped. Consumers (standard_logging_payload, lago,
+    # been parsed. Consumers (standard_logging_payload, lago,
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
     #
@@ -1745,26 +1707,18 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    # Check if using tag based routing. The helper reads caller-controlled
-    # sources (x-litellm-tags header, data["tags"] root-level), so its result
-    # is still gated by the same allow_client_tags flag that gated the
-    # body-metadata tag strip above. Otherwise the strip is trivially
-    # bypassed by sending tags via header or at the root of the body.
+    # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
+    # into request metadata for tag-based routing and spend attribution.
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=llm_router,
         headers=_headers,
         data=data,
     )
 
-    if tags is not None and _admin_allow_client_tags:
+    if tags is not None:
         data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=tags,
-        )
-    elif tags is not None:
-        verbose_proxy_logger.warning(
-            "Ignored caller-supplied tags from header/root body: this "
-            "key/team does not have `allow_client_tags: true` in its metadata."
         )
 
     # Team Callbacks controls
