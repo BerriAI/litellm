@@ -93,6 +93,22 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
 
+        # DEBUG: 国内模型参数过滤日志
+        import sys
+
+        print(
+            f"[DEBUG handler.py sync] actual_model={actual_model}, api_base={api_base}",
+            file=sys.stderr,
+        )
+        print(
+            f"[DEBUG handler.py sync] is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}",
+            file=sys.stderr,
+        )
+        print(
+            f"[DEBUG handler.py sync] completion_args keys: {list(completion_args.keys())}",
+            file=sys.stderr,
+        )
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
@@ -172,6 +188,22 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("store", None)  # 存储参数
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
+
+        # DEBUG: 国内模型参数过滤日志
+        import sys
+
+        print(
+            f"[DEBUG handler.py async] actual_model={actual_model}, api_base={api_base}",
+            file=sys.stderr,
+        )
+        print(
+            f"[DEBUG handler.py async] is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}",
+            file=sys.stderr,
+        )
+        print(
+            f"[DEBUG handler.py async] acompletion_args keys: {list(acompletion_args.keys())}",
+            file=sys.stderr,
+        )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
