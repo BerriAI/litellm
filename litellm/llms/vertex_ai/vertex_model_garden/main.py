@@ -120,8 +120,9 @@ class VertexAIModelGardenModels(VertexBase):
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
+            resolved_location = self.get_vertex_region(vertex_location, model)
             default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
+                vertex_location=resolved_location,
                 vertex_project=vertex_project or project_id,
                 stream=stream,
                 model=model,
@@ -142,7 +143,7 @@ class VertexAIModelGardenModels(VertexBase):
                 url=default_api_base,
                 model=model,
                 vertex_project=vertex_project or project_id,
-                vertex_location=vertex_location or "us-central1",
+                vertex_location=resolved_location,
                 vertex_api_version="v1beta1",
             )
             # Publisher/catalog models: model id must be sent in the JSON body (OpenAPI route).
