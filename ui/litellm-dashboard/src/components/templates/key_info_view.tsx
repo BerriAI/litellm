@@ -403,6 +403,7 @@ export default function KeyInfoView({
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
+          userAlias: currentKeyData.user?.user_alias ?? null,
           createdBy:
             currentKeyData.created_by_user?.user_alias ||
             currentKeyData.created_by_user?.user_email ||
@@ -411,6 +412,7 @@ export default function KeyInfoView({
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+          expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
