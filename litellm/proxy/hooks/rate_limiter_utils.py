@@ -56,7 +56,7 @@ def resolve_llm_provider_for_rate_limit(
         return model, PROXY_LLM_PROVIDER_FALLBACK
 
 
-class ProxyHTTPRateLimitError(HTTPException, RateLimitError):
+class ProxyHTTPRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
     """
     HTTPException raised by proxy-side rate-limit hooks that *also* exposes
     ``model`` and ``llm_provider`` attributes.
