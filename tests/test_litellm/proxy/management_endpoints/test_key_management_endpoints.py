@@ -10892,3 +10892,141 @@ class TestRegenerateProjectMembershipGate:
                 )
             assert exc.value.status_code == 403
             assert "not a member" in str(exc.value.detail)
+
+
+class TestServiceAccountStripVariant:
+    """Variant follow-up: ``/key/service-account/generate`` accepts the
+    same ``GenerateKeyRequest`` shape as ``/key/generate`` but does NOT
+    route through ``generate_key_fn``. The strip must live in the shared
+    chokepoint (``_common_key_generation_helper``) so a team admin
+    cannot self-grant ``permissions[get_spend_routes]`` or
+    ``metadata[max_budget_alert_emails]`` via a service-account key."""
+
+    @pytest.mark.asyncio
+    async def test_helper_strips_admin_only_fields_for_non_admin(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _common_key_generation_helper,
+        )
+
+        data = GenerateKeyRequest(
+            permissions={"get_spend_routes": True, "custom": "ok"},
+            metadata={
+                "max_budget_alert_emails": {"warn": ["attacker@evil.example"]},
+                "team": "ops",
+            },
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.common_key_access_checks",
+                new=MagicMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+                new=AsyncMock(
+                    return_value={
+                        "token": "sk-new",
+                        "expires": None,
+                        "user_id": "user-internal",
+                    }
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+                "default_user_id",
+            ),
+        ):
+            try:
+                await _common_key_generation_helper(
+                    data=data,
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    team_table=None,
+                )
+            except Exception:
+                # Downstream DB-shape failures are fine — strip runs first.
+                pass
+
+        assert "get_spend_routes" not in (data.permissions or {})
+        assert data.permissions.get("custom") == "ok"
+        assert "max_budget_alert_emails" not in (data.metadata or {})
+        assert data.metadata.get("team") == "ops"
+
+
+class TestBulkUpdateStripVariant:
+    """Variant follow-up: ``/key/bulk_update`` and ``/team/key/bulk_update``
+    build ``UpdateKeyRequest`` instances inside a loop and call
+    ``_process_single_key_update`` directly, bypassing
+    ``update_key_fn``'s strip. The strip must live in the shared
+    chokepoint (``_process_single_key_update``) so a non-admin team
+    admin with ``KEY_UPDATE`` cannot grant
+    ``permissions[get_spend_routes]`` or
+    ``metadata[max_budget_alert_emails]`` via the bulk paths."""
+
+    @pytest.mark.asyncio
+    async def test_process_single_key_update_strips_admin_only_fields(self):
+        from litellm.proxy._types import LiteLLM_VerificationToken
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _process_single_key_update,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-victim",
+            permissions={"get_spend_routes": True, "custom": "ok"},
+            metadata={
+                "max_budget_alert_emails": {"warn": ["attacker@evil.example"]},
+                "team": "ops",
+            },
+        )
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token="hashed-victim", team_id="team-x"
+        )
+
+        prisma_client = MagicMock()
+        prisma_client.update_data = AsyncMock(return_value={"token": "hashed-victim"})
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._validate_update_key_data",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data",
+                new=AsyncMock(return_value={"token": "hashed-victim"}),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            try:
+                await _process_single_key_update(
+                    update_key_request=data,
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=MagicMock(),
+                    llm_router=MagicMock(),
+                    existing_key_row=existing_key_row,
+                )
+            except Exception:
+                # Downstream DB-shape failures are fine — strip runs first.
+                pass
+
+        assert "get_spend_routes" not in (data.permissions or {})
+        assert data.permissions.get("custom") == "ok"
+        assert "max_budget_alert_emails" not in (data.metadata or {})
+        assert data.metadata.get("team") == "ops"

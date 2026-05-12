@@ -631,6 +631,16 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         premium_user=premium_user,
     )
 
+    # Chokepoint strip — covers both ``/key/generate`` and
+    # ``/key/service-account/generate``. The service-account flow does
+    # not route through ``generate_key_fn``, so applying the filter
+    # only at the request handler would leak the same priv-esc fields
+    # through the service-account path.
+    _strip_admin_only_fields_for_non_admin(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -1577,14 +1587,6 @@ async def generate_key_fn(
                 prisma_client=prisma_client,
             )
 
-        # Strip admin-only fields (``permissions.get_spend_routes`` self-
-        # grant, ``metadata.max_budget_alert_emails`` SMTP-injection) before
-        # the request reaches the DB write. No-op for proxy admins.
-        _strip_admin_only_fields_for_non_admin(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-        )
-
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
             await _check_project_key_limits(
@@ -2044,6 +2046,17 @@ async def _process_single_key_update(
     Raises:
         HTTPException: For various validation and permission errors
     """
+    # Chokepoint strip — ``/key/bulk_update`` and ``/team/key/bulk_update``
+    # construct ``UpdateKeyRequest`` instances from user input and call this
+    # helper directly, bypassing ``update_key_fn``'s strip. Apply the filter
+    # here so admin-only fields (``permissions.get_spend_routes`` self-grant,
+    # ``metadata.max_budget_alert_emails`` SMTP-injection) cannot reach the
+    # DB write via the bulk paths.
+    _strip_admin_only_fields_for_non_admin(
+        data=update_key_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
 
