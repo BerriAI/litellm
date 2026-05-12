@@ -15168,7 +15168,7 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
 
 
 async def _is_mcp_access_group_cached(name: str) -> bool:
-    """Return True if *name* is a known MCP access group tag, caching the result."""
+    """Return True if *name* is a known MCP access group tag, caching positive results."""
     from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
@@ -15179,11 +15179,12 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     if cached is not None:
         return bool(cached)
     result = bool(await MCPRequestHandler._get_mcp_servers_from_access_groups([name]))
-    await user_api_key_cache.async_set_cache(
-        key=cache_key,
-        value=result,
-        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-    )
+    if result:
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=result,
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
     return result
 
 
