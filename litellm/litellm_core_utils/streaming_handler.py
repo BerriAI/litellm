@@ -222,41 +222,18 @@ class CustomStreamWrapper:
                         e,
                     )
 
-        # Persist partial usage on client disconnect. Normal stream completion
-        # hits the StopAsyncIteration branch in __anext__ which sets
-        # ``logging_obj._deferred_stream_complete_args`` from the assembled
-        # response. On client disconnect we never reach that branch, so the
-        # outer ``ProxyLogging.async_post_call_streaming_iterator_hook``
-        # finally fires ``_fire_deferred_stream_logging`` with no args and
-        # spend tracking + post-call guardrails are silently skipped.
-        # Build a partial response from the chunks we've already streamed
-        # so the deferred closure can still run.
-        if (
-            getattr(self, "logging_obj", None) is not None
-            and getattr(self.logging_obj, "_on_deferred_stream_complete", None)
-            is not None
-            and getattr(self.logging_obj, "_deferred_stream_complete_args", None)
-            is None
-            and getattr(self, "chunks", None)
-        ):
-            try:
-                partial_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=getattr(self, "messages", None),
-                    logging_obj=self.logging_obj,
-                )
-                if partial_response is not None:
-                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
-                        partial_response,
-                        False,
-                    )
-            except BaseException as e:
-                verbose_logger.debug(
-                    "CustomStreamWrapper.aclose: error building partial "
-                    "streaming response from %d chunks: %s",
-                    len(self.chunks),
-                    e,
-                )
+        # NOTE: aclose() intentionally does NOT populate
+        # ``logging_obj._deferred_stream_complete_args`` from accumulated
+        # chunks. An earlier iteration of this fix did, so the outer
+        # ProxyLogging hook could fire deferred success logging on client
+        # disconnect for financial-integrity attribution. That path bypasses
+        # the streaming-iterator guardrail end-of-stream block (which never
+        # runs when the consumer disconnects mid-stream); raw partial content
+        # would then be persisted to SpendLogs and exported to logging
+        # callbacks without the configured ``apply_guardrail`` checks. Until
+        # a usage-only logging path lands that records token counts without
+        # exporting the unguardrailed response body, prefer not logging on
+        # disconnect over leaking content.
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
         return (

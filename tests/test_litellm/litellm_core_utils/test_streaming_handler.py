@@ -1682,35 +1682,36 @@ def _csw_for_aclose(closure, prior_args, chunks):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "scenario,closure,prior_args,chunks,builder_raises,expect_args",
-    [
-        # closure + args unset + chunks → aclose builds partial, sets args
-        ("happy", MagicMock(), None, [_REAL_CHUNK], False, "set"),
-        # normal completion already set args → must not overwrite
-        ("already_set", MagicMock(), ("x", True), [_REAL_CHUNK], False, ("x", True)),
-        # no closure (non-proxy SDK) → don't touch args
-        ("no_closure", None, None, [_REAL_CHUNK], False, None),
-        # builder raises → swallow, leave args None (cleanup best-effort)
-        ("builder_raises", MagicMock(), None, ["bad-chunk"], True, None),
-    ],
-)
-async def test_aclose_partial_args_persistence(
-    scenario, closure, prior_args, chunks, builder_raises, expect_args
-):
-    wrapper, lo = _csw_for_aclose(closure, prior_args, chunks)
-    if builder_raises:
-        with patch("litellm.stream_chunk_builder", side_effect=RuntimeError("boom")):
-            await wrapper.aclose()
-    else:
-        await wrapper.aclose()
-    got = lo._deferred_stream_complete_args
-    if expect_args == "set":
-        assert got is not None and got[1] is False, scenario
-    elif expect_args is None:
-        assert got is None, scenario
-    else:
-        assert got == expect_args, scenario
+async def test_aclose_does_not_populate_deferred_args_on_disconnect():
+    """aclose() intentionally does NOT populate
+    ``_deferred_stream_complete_args`` from accumulated chunks. An earlier
+    iteration of this fix did, so the outer ProxyLogging hook would fire
+    deferred success logging on client disconnect for partial-usage
+    attribution — but that path bypasses the streaming-iterator guardrail
+    end-of-stream block, so raw partial content was leaking to SpendLogs
+    and external logging callbacks without ``apply_guardrail`` checks.
+
+    aclose() now only closes the upstream completion_stream. Partial-usage
+    attribution is deferred to a future usage-only logging path that won't
+    export the unguardrailed response body."""
+    lo = MagicMock()
+    lo._on_deferred_stream_complete = MagicMock()
+    lo._deferred_stream_complete_args = None
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=lo,
+        custom_llm_provider="openai",
+    )
+    wrapper.messages = [{"role": "user", "content": "hi"}]
+    wrapper.chunks = [_REAL_CHUNK]
+
+    await wrapper.aclose()
+
+    assert lo._deferred_stream_complete_args is None, (
+        "aclose() must not populate deferred-stream args from partial "
+        "chunks — that path bypasses apply_guardrail checks"
+    )
 
 
 def test_content_not_dropped_when_finish_reason_already_set(

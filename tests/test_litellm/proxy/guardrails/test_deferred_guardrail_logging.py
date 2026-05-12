@@ -1261,15 +1261,30 @@ class TestStreamingDisconnectFiresDeferredLogging:
             ), "deferred success logging must NOT fire when iterator raises"
 
     @pytest.mark.asyncio
-    async def test_disconnect_persists_partial_usage_via_csw_aclose(self):
-        """``_fire_deferred_stream_logging`` no-ops when args unset (early
-        disconnect). Fix drives ``aclose()`` so CSW persists partial args."""
+    async def test_disconnect_drives_aclose_but_skips_partial_log(self):
+        """``aclose()`` is driven down the wrapper chain (HTTP / upstream
+        cleanup), but ``_fire_deferred_stream_logging`` no-ops because args
+        weren't populated. Veria-flagged: populating args from partial
+        chunks would persist raw unguardrailed content to SpendLogs and
+        external logging callbacks. Awaiting a usage-only logging path
+        before re-enabling disconnect-time spend attribution."""
         fired: list = []
         lo = MagicMock(
             _on_deferred_stream_complete=MagicMock(),
             _deferred_stream_complete_args=None,
         )
+        # _FakeCSW.aclose populates args (mimics CSW pre-Veria-revert) —
+        # but in the real hook flow we use the REAL CSW which no longer
+        # populates. Override _FakeCSW behaviour here:
         csw = _FakeCSW(["c1", "c2", "c3"], lo)
+
+        async def _real_aclose():
+            csw.aclose_calls.append(csw._idx)
+            csw._closed = True
+            # Intentionally do NOT populate args — matches the real
+            # post-Veria CSW.aclose contract.
+
+        csw.aclose = _real_aclose  # type: ignore[assignment]
 
         with _hook_under_test(
             lambda r: fired.append(
@@ -1288,8 +1303,12 @@ class TestStreamingDisconnectFiresDeferredLogging:
                     await gen.aclose()
                     break
 
-        assert csw.aclose_calls, "CSW.aclose() must be driven before fire"
-        assert fired == [True], "args must be set when fire runs"
+        assert csw.aclose_calls, "CSW.aclose() must still run for cleanup"
+        assert fired == [False], (
+            "_fire_deferred_stream_logging must be invoked, but with args "
+            "unset on disconnect — the helper itself no-ops internally so "
+            "no body export happens"
+        )
 
     @pytest.mark.asyncio
     async def test_aclose_reaches_inner_when_wrapper_closed_by_exception(self):
