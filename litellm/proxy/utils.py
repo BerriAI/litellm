@@ -2445,8 +2445,6 @@ async def _lookup_deprecated_key(
         )
         if deprecated_row and deprecated_row.active_token_id:
             revoke_at = deprecated_row.revoke_at
-            if revoke_at is None:
-                return None
             _deprecated_key_cache[hashed_token] = (
                 deprecated_row.active_token_id,
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
