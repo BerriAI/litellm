@@ -508,24 +508,47 @@ def redact_metadata_for_response(metadata: Any) -> Any:
 def restore_masked_callback_vars(new_metadata: Any, existing_metadata: Any) -> Any:
     """When an update payload re-submits the mask sentinel for a callback_vars
     field, substitute the stored value from existing_metadata so a GET-then-PUT
-    round-trip does not overwrite the original credential. Existing entries are
-    matched by callback_name."""
+    round-trip does not overwrite the original credential.
+
+    Entries are matched by position then by callback_name as a fallback
+    (callback_name is not unique at this layer, so name-only matching can
+    silently swap stored credentials between entries that share a name)."""
     if not isinstance(new_metadata, dict) or "logging" not in new_metadata:
         return new_metadata
     new_entries = new_metadata.get("logging")
     if not isinstance(new_entries, list):
         return new_metadata
 
-    existing_lookup: Dict[str, Dict[str, Any]] = {}
+    existing_entries: List[Any] = []
     if isinstance(existing_metadata, dict):
-        for entry in existing_metadata.get("logging") or []:
-            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
-                existing_lookup[entry.get("callback_name", "")] = entry["callback_vars"]
+        candidate = existing_metadata.get("logging")
+        if isinstance(candidate, list):
+            existing_entries = candidate
+
+    def _resolve_existing_vars(index: int, name: str) -> Dict[str, Any]:
+        if index < len(existing_entries):
+            positional = existing_entries[index]
+            if (
+                isinstance(positional, dict)
+                and positional.get("callback_name", "") == name
+                and isinstance(positional.get("callback_vars"), dict)
+            ):
+                return positional["callback_vars"]
+        for candidate in existing_entries:
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("callback_name", "") == name
+                and isinstance(candidate.get("callback_vars"), dict)
+            ):
+                return candidate["callback_vars"]
+        return {}
 
     restored_entries: List[Any] = []
-    for entry in new_entries:
+    for index, entry in enumerate(new_entries):
         if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
-            existing_vars = existing_lookup.get(entry.get("callback_name", ""), {})
+            existing_vars = _resolve_existing_vars(
+                index, entry.get("callback_name", "")
+            )
             restored_vars = {
                 key: (
                     existing_vars[key]

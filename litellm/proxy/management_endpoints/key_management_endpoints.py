@@ -2478,7 +2478,13 @@ async def update_key_fn(  # noqa: PLR0915
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        response_data = response["data"]
+        if hasattr(response_data, "model_dump"):
+            response_data = response_data.model_dump()
+        elif hasattr(response_data, "dict"):
+            response_data = response_data.dict()
+        response_data = _prepare_key_row_for_response(response_data)
+        return {"key": key, **response_data}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception(

@@ -4333,6 +4333,44 @@ class TestCallbackMetadataRedaction:
         assert existing == existing_snapshot  # immutability
         assert incoming == incoming_snapshot
 
+    def test_restore_masked_callback_vars_uses_positional_match_for_duplicate_names(
+        self,
+    ):
+        # Two logging entries with the same callback_name — positional
+        # matching keeps each entry's masked value mapped to its own
+        # stored credential, instead of collapsing both to the second.
+        existing = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": "sk-entry-0"},
+                },
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": "sk-entry-1"},
+                },
+            ]
+        }
+        incoming = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": CALLBACK_VAR_MASK},
+                },
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": CALLBACK_VAR_MASK},
+                },
+            ]
+        }
+        result = restore_masked_callback_vars(incoming, existing)
+        assert (
+            result["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-entry-0"
+        )
+        assert (
+            result["logging"][1]["callback_vars"]["langfuse_secret_key"] == "sk-entry-1"
+        )
+
     def test_restore_masked_callback_vars_keeps_mask_when_no_existing_value(self):
         # If the existing metadata has no stored value for a masked field,
         # the mask is left in place so a downstream check can flag it.
