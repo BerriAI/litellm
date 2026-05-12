@@ -19,7 +19,11 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptorRateLimitObject,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
+from litellm.proxy.hooks.rate_limiter_utils import (
+    ProxyHTTPRateLimitError,
+    convert_priority_to_percent,
+    resolve_llm_provider_for_rate_limit,
+)
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
@@ -487,12 +491,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
             for status in atomic_response["statuses"]:
                 if status["code"] != "OVER_LIMIT":
                     continue
                 descriptor_key = status["descriptor_key"]
                 if descriptor_key == "model_saturation_check":
-                    raise HTTPException(
+                    raise ProxyHTTPRateLimitError(
                         status_code=429,
                         detail={
                             "error": f"Model capacity reached for {model}. "
@@ -507,13 +512,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             "rate_limit_type": str(status["rate_limit_type"]),
                             "x-litellm-priority": priority or "default",
                         },
+                        model=resolved_model,
+                        llm_provider=llm_provider,
                     )
                 if descriptor_key == "priority_model":
                     verbose_proxy_logger.debug(
                         f"Enforcing priority limits for {model}, saturation: {saturation:.1%}, "
                         f"priority: {priority}"
                     )
-                    raise HTTPException(
+                    raise ProxyHTTPRateLimitError(
                         status_code=429,
                         detail={
                             "error": f"Priority-based rate limit exceeded. "
@@ -531,6 +538,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             "x-litellm-priority": priority or "default",
                             "x-litellm-saturation": f"{saturation:.2%}",
                         },
+                        model=resolved_model,
+                        llm_provider=llm_provider,
                     )
 
             # Fail-closed guard: overall_code says OVER_LIMIT but no status
@@ -547,7 +556,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 f"Dynamic rate limiter: OVER_LIMIT response with unknown "
                 f"descriptor_key(s) — refusing request. response={atomic_response}"
             )
-            raise HTTPException(
+            raise ProxyHTTPRateLimitError(
                 status_code=429,
                 detail={
                     "error": "Rate limit exceeded",
@@ -562,6 +571,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     "retry-after": str(self.v3_limiter.window_size),
                     "x-litellm-priority": priority or "default",
                 },
+                model=resolved_model,
+                llm_provider=llm_provider,
             )
 
         # If priority is NOT enforced (saturation below threshold) but
