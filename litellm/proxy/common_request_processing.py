@@ -1145,6 +1145,22 @@ class ProxyBaseLLMRequestProcessing:
                 hidden_params.get("additional_headers", {}) or {},
             )
 
+            # Seed x-ratelimit-* headers from the rate-limit response cached on
+            # `self.data`. The v3 parallel_request_limiter post-call hook updates
+            # `response._hidden_params.additional_headers` *after* this point,
+            # which is too late for streaming routes (SSE chunks are already
+            # in flight before the hook fires). Pulling from the stored response
+            # here ensures both streaming and non-streaming paths receive the
+            # same x-ratelimit-* headers.
+            from litellm.proxy.hooks._rate_limit_headers import (
+                apply_rate_limit_statuses_to_headers,
+            )
+
+            apply_rate_limit_statuses_to_headers(
+                additional_headers,
+                self.data.get("litellm_proxy_rate_limit_response"),
+            )
+
             # Post Call Processing
             if llm_router is not None:
                 self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
@@ -1364,6 +1380,21 @@ class ProxyBaseLLMRequestProcessing:
             getattr(response, "_hidden_params", {}) or {}
         )  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        # Safety-net: re-derive x-ratelimit-* from the stored rate-limit response
+        # for paths where the v3 parallel_request_limiter post-call hook
+        # silently skipped header injection (e.g. /v1/messages non-streaming
+        # returns a plain dict with no `_hidden_params` attribute, which makes
+        # `hasattr(response, "_hidden_params")` False and short-circuits the
+        # hook). setdefault preserves any values the hook successfully set.
+        from litellm.proxy.hooks._rate_limit_headers import (
+            apply_rate_limit_statuses_to_headers,
+        )
+
+        apply_rate_limit_statuses_to_headers(
+            additional_headers,
+            self.data.get("litellm_proxy_rate_limit_response"),
+        )
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
