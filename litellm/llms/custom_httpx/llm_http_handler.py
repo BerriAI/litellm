@@ -1860,6 +1860,7 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         api_key: Optional[str],
         model: str,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         max_attempts = max(
             provider_config.max_retry_on_anthropic_messages_http_error, 1
@@ -1874,6 +1875,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body or json.dumps(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response
@@ -1928,6 +1930,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         stream: Optional[bool] = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -2065,6 +2068,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
+            timeout=timeout,
         )
 
         # used for logging + cost tracking
@@ -2131,6 +2135,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         stream: Optional[bool] = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[
         AnthropicMessagesResponse,
@@ -2153,6 +2158,7 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 api_base=api_base,
                 stream=stream,
+                timeout=timeout,
                 kwargs=kwargs,
             )
         raise ValueError("anthropic_messages_handler is not implemented for sync calls")

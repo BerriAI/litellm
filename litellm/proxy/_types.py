@@ -239,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
@@ -540,6 +541,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -675,6 +677,10 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity",
             "/global/activity/model",
             "/global/activity/cache_hits",
+            # Tag usage endpoints scope internal users to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
@@ -687,7 +693,16 @@ class LiteLLMRoutes(enum.Enum):
         + compliance_check_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = (
+        spend_tracking_routes
+        + compliance_check_routes
+        + [
+            # Tag usage endpoints scope internal viewers to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
+        ]
+    )
 
     self_managed_routes = [
         "/team/member_add",
@@ -4346,10 +4361,16 @@ class JWTRoutingOverride(BaseModel):
 
     A rule matches when all provided selectors match token claims.
     If matched, request is routed to the configured auth path.
+
+    Wildcard selectors use shell-style patterns (* and ?) and are matched with
+    case-sensitive semantics; use the same casing your IdP emits in JWT claims.
+    Space-delimited tokenization applies only to the ``scope`` claim (OAuth/OIDC
+    scope strings), not to ``iss``, ``aud``, or ``client_id``.
     """
 
     iss: Union[str, List[str]]
     client_id: Optional[Union[str, List[str]]] = None
+    scope: Optional[Union[str, List[str]]] = None
     aud: Optional[Union[str, List[str]]] = None
     path: Literal["oauth2"] = "oauth2"
 
