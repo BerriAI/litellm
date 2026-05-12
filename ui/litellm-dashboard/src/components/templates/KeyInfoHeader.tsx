@@ -5,7 +5,7 @@ import {
   SyncOutlined,
   DeleteOutlined,
   PlusOutlined,
-  MailOutlined,
+  UserOutlined,
   CalendarOutlined,
   ClockCircleOutlined,
   ThunderboltOutlined,
@@ -55,7 +55,7 @@ function UserField({
 }) {
   const labelEl = (
     <Space size={4}>
-      <Text type="secondary"><MailOutlined /></Text>
+      <Text type="secondary"><UserOutlined /></Text>
       <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
         User
       </Text>

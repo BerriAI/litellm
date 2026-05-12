@@ -137,6 +137,13 @@ describe("KeyInfoHeader", () => {
   });
 
   describe("User field fallbacks", () => {
+    it("should display userAlias as primary when set, overriding email and userId", () => {
+      const data = { ...MOCK_DATA, userAlias: "alice" };
+      render(<KeyInfoHeader data={data} />);
+      expect(screen.getByText("alice")).toBeInTheDocument();
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    });
+
     it("should display userEmail when alias is null", () => {
       render(<KeyInfoHeader data={MOCK_DATA} />);
       expect(screen.getByText("test@example.com")).toBeInTheDocument();
