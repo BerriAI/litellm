@@ -425,14 +425,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 edits = context_management.get("edits", [])
             elif isinstance(context_management, list):
                 edits = context_management
-            for edit in edits:
-                edit_type = edit.get("type", "")
-                if edit_type in ("compact_20260112", "compaction"):
-                    betas.append(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-                else:
-                    betas.append(
-                        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-                    )
+            has_compact = any(
+                edit.get("type", "") in ("compact_20260112", "compaction")
+                for edit in edits
+            )
+            has_other_edits = any(
+                edit.get("type", "")
+                and edit.get("type", "") not in ("compact_20260112", "compaction")
+                for edit in edits
+            )
+            if has_compact:
+                betas.append(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            elif has_other_edits:
+                betas.append(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
 
         return list(set(betas))
 
