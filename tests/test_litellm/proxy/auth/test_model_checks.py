@@ -227,6 +227,177 @@ def test_get_complete_model_list_order(
     )
 
 
+def test_get_complete_model_list_drops_stale_access_group_string():
+    """
+    Regression for issue #25550.
+
+    A virtual key with `models=["team-sales-api"]` where "team-sales-api"
+    is neither a configured proxy model nor an active access group should
+    NOT leak the bare access-group string into /v1/models.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["team-sales-api"],
+        team_models=[],
+        proxy_model_list=["gpt-4o-mini"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == []
+
+
+def test_get_complete_model_list_drops_stale_access_group_string_team():
+    """Same regression as above but exercised through the team_models path."""
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=["team-sales-api"],
+        proxy_model_list=["gpt-4o-mini"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == []
+
+
+def test_get_complete_model_list_keeps_active_access_group_expansion():
+    """
+    Active access groups still expand to their member models. The filter
+    must not interfere with the existing expansion path (i.e., key_models
+    must arrive already-expanded from get_key_models).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["group-engineering"],
+        api_key="test-key",
+    )
+    proxy_model_list = ["gpt-4o-mini"]
+    model_access_groups = {"group-engineering": ["gpt-4o-mini"]}
+
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+
+    result = get_complete_model_list(
+        key_models=key_models,
+        team_models=[],
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups=model_access_groups,
+    )
+
+    assert result == ["gpt-4o-mini"]
+
+
+def test_get_complete_model_list_keeps_provider_qualified_string():
+    """
+    Provider-qualified identifiers carry a syntactic marker (`/`) and must
+    survive the access-group filter — even if the exact model id is not
+    present in the static litellm.model_list_set.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["bedrock/very-new-model"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["bedrock/very-new-model"]
+
+
+def test_get_complete_model_list_keeps_known_base_model():
+    """
+    A known LiteLLM base model id (in litellm.model_list_set) must survive
+    the filter even when not configured on the proxy.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["gpt-4o-mini"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["gpt-4o-mini"]
+
+
+def test_get_complete_model_list_keeps_custom_proxy_alias():
+    """
+    A custom enterprise proxy model name (e.g. 'internal-assistant') that is
+    listed in proxy_model_list but is NOT a known LiteLLM base model id must
+    survive the filter. This locks in the proxy_model_list-membership branch
+    of _is_unresolvable_model_identifier — the most common preservation path
+    in real deployments.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["internal-assistant"],
+        team_models=[],
+        proxy_model_list=["internal-assistant"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["internal-assistant"]
+
+
+def test_get_complete_model_list_keeps_finetune_id():
+    """OpenAI fine-tune ids (`ft:...`) must survive the filter."""
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    ft_id = "ft:gpt-4o:my-org:custom-suffix:abc123"
+    result = get_complete_model_list(
+        key_models=[ft_id],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == [ft_id]
+
+
+def test_get_complete_model_list_does_not_filter_proxy_admin_path():
+    """
+    The filter must only apply when key_models or team_models is set. When
+    both are empty (proxy-admin / scope=expand path), unique_models is
+    sourced from the authoritative proxy_model_list and should pass through
+    untouched.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["arbitrary-named-model"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["arbitrary-named-model"]
+
+
 def test_get_complete_model_list_byok_wildcard_expansion():
     """
     Test that wildcard models (e.g., openai/*) are expanded when the router has
