@@ -2485,7 +2485,9 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], [], {})
 

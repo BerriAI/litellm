@@ -32,6 +32,7 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
+    health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
 )
@@ -858,6 +859,7 @@ async def _perform_health_check_and_save(
     user_id,
     model_id=None,
     max_concurrency=None,
+    **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
@@ -867,6 +869,7 @@ async def _perform_health_check_and_save(
         details=details,
         max_concurrency=max_concurrency,
         model_id=model_id,
+        **perform_health_check_extra,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -920,10 +923,15 @@ async def health_endpoint(
         background_health_checks: True
     ```
     else, the health checks will be run on models when /health is called.
+
+    To skip deployments that set ``model_info.disable_background_health_check: true``
+    on ``GET /health`` as well as in the background loop, set
+    ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
 
     from litellm.proxy.proxy_server import (
+        general_settings,
         health_check_concurrency,
         health_check_details,
         health_check_results,
@@ -934,6 +942,7 @@ async def health_endpoint(
         user_model,
     )
 
+    _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time = time.time()
 
     # Handle model_id parameter - convert to model name for health check
@@ -1000,6 +1009,7 @@ async def health_endpoint(
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
+                    **_hc_filter,
                 )
                 return _post_process(cli_result)
             raise HTTPException(
@@ -1085,6 +1095,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                **_hc_filter,
             )
             return _post_process(router_result)
     except Exception as e:
