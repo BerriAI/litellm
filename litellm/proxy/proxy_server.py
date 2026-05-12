@@ -2752,15 +2752,15 @@ async def _run_direct_health_check_with_instrumentation(
             **_hc_filter,
         )
     except TypeError as e:
-        if "instrumentation_context" not in str(e):
+        unsupported_optional_kwargs = ("instrumentation_context", *_hc_filter.keys())
+        if not any(kwarg_name in str(e) for kwarg_name in unsupported_optional_kwargs):
             raise
         # Backward compatibility for monkeypatched or wrapped callables
-        # that do not accept instrumentation_context.
+        # that do not accept newer health check kwargs.
         return await perform_health_check(
             model_list=model_list,
             details=details,
             max_concurrency=max_concurrency,
-            **_hc_filter,
         )
 
 
