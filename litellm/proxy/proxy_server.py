@@ -3051,7 +3051,7 @@ async def _run_background_health_check():
                     _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
-                    health_check_details,
+                    details_bool,
                     health_check_concurrency,
                     instrumentation_context,
                 )
@@ -3062,7 +3062,7 @@ async def _run_background_health_check():
                 _exceptions_by_model_id,
             ) = await _run_direct_health_check_with_instrumentation(
                 _llm_model_list,
-                health_check_details,
+                details_bool,
                 health_check_concurrency,
                 instrumentation_context,
             )
