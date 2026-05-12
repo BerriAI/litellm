@@ -152,6 +152,53 @@ class TestProxyRateLimitError:
         e = ProxyRateLimitError(detail={"error": "key over limit"})
         assert "key over limit" in e.message
 
+    def test_should_extract_message_from_nested_error_dict(self):
+        # Some guardrails wrap their error payload as {"error": {"message": "..."}}.
+        # The unwrap helper must dig one level deeper.
+        e = ProxyRateLimitError(
+            detail={"error": {"message": "deep error"}},
+        )
+        assert e.message.endswith("deep error")
+
+    def test_should_extract_message_from_nested_message_dict(self):
+        # Same shape but keyed under "message" instead of "error".
+        e = ProxyRateLimitError(
+            detail={"message": {"message": "deeper"}},
+        )
+        assert e.message.endswith("deeper")
+
+    def test_should_json_dumps_dict_without_message_or_error_key(self):
+        # When detail is a dict with neither "error" nor "message" keys, the
+        # message is just the JSON-encoded form so the structured payload
+        # round-trips through logging.
+        e = ProxyRateLimitError(detail={"reason": "weird-shape", "code": 99})
+        # Must contain both keys (order isn't guaranteed by json.dumps for
+        # older Pythons but is for 3.7+).
+        assert "weird-shape" in e.message
+        assert "99" in e.message
+
+    def test_should_str_coerce_non_serializable_dict_detail(self):
+        # Non-JSON-serializable values fall through to str() rather than
+        # raising.
+        class NotJsonable:
+            def __repr__(self):
+                return "<NotJsonable>"
+
+        e = ProxyRateLimitError(detail={"obj": NotJsonable()})
+        # We only require it does NOT raise during construction and that the
+        # message is non-empty; the exact stringification isn't part of the
+        # contract.
+        assert e.message  # non-empty
+        # And the underlying detail is preserved verbatim.
+        assert isinstance(e.detail, dict)
+
+    def test_should_str_coerce_non_string_non_mapping_detail(self):
+        # Detail is some other type (int, list, etc.) — falls through to
+        # str() as a last resort.
+        e = ProxyRateLimitError(detail=42)
+        assert "42" in e.message
+        assert e.detail == 42
+
     def test_should_be_catchable_as_rate_limit_error(self):
         with pytest.raises(RateLimitError) as exc_info:
             raise ProxyRateLimitError(
@@ -609,6 +656,124 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         e = exc_info.value
         assert e.status_code == 429
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+
+    @pytest.mark.parametrize(
+        "current,limits,expected_type",
+        [
+            # current already at concurrent-request cap → CONCURRENT_REQUESTS
+            (
+                {"current_requests": 5, "current_tpm": 0, "current_rpm": 0},
+                {"max_parallel_requests": 5, "tpm_limit": 100, "rpm_limit": 100},
+                "concurrent_requests",
+            ),
+            # current already at TPM cap (concurrent has headroom) → TOKENS
+            (
+                {"current_requests": 0, "current_tpm": 100, "current_rpm": 0},
+                {"max_parallel_requests": 5, "tpm_limit": 100, "rpm_limit": 100},
+                "tokens",
+            ),
+            # current already at RPM cap (concurrent + TPM have headroom) →
+            # REQUESTS (the fall-through branch).
+            (
+                {"current_requests": 0, "current_tpm": 0, "current_rpm": 100},
+                {"max_parallel_requests": 5, "tpm_limit": 100, "rpm_limit": 100},
+                "requests",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_parallel_request_limiter_v1_inline_raise_dimension_detection(
+        self, current, limits, expected_type
+    ):
+        """
+        v1 parallel_request_limiter's `check_key_in_limits` else-branch must
+        attribute the raise to the dimension that actually tripped — not the
+        first dimension in declaration order.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+
+        cache = MagicMock()
+        cache.async_batch_set_cache = AsyncMock(return_value=None)
+        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.check_key_in_limits(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+                max_parallel_requests=limits["max_parallel_requests"],
+                tpm_limit=limits["tpm_limit"],
+                rpm_limit=limits["rpm_limit"],
+                current=current,
+                request_count_api_key="x",
+                rate_limit_type="key",
+                values_to_update_in_cache=[],
+            )
+        assert exc_info.value.rate_limit_type == expected_type
+
+    @pytest.mark.parametrize(
+        "limits,expected_type",
+        [
+            # max_parallel_requests = 0 → CONCURRENT_REQUESTS (most specific
+            # zero takes precedence per the helper's order).
+            (
+                {"max_parallel_requests": 0, "tpm_limit": 0, "rpm_limit": 0},
+                "concurrent_requests",
+            ),
+            # tpm_limit = 0 (concurrent has a positive limit) → TOKENS
+            (
+                {"max_parallel_requests": 5, "tpm_limit": 0, "rpm_limit": 0},
+                "tokens",
+            ),
+            # only rpm_limit = 0 → REQUESTS (fall-through)
+            (
+                {"max_parallel_requests": 5, "tpm_limit": 100, "rpm_limit": 0},
+                "requests",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_parallel_request_limiter_v1_base_case_dimension_detection(
+        self, limits, expected_type
+    ):
+        """
+        v1 parallel_request_limiter's `check_key_in_limits` base case
+        (``current is None`` and any limit set to 0) must attribute the raise
+        to the most-specific zero. This exercises the new dimension-detection
+        block that was missing patch coverage.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+
+        cache = MagicMock()
+        cache.async_batch_set_cache = AsyncMock(return_value=None)
+        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.check_key_in_limits(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+                max_parallel_requests=limits["max_parallel_requests"],
+                tpm_limit=limits["tpm_limit"],
+                rpm_limit=limits["rpm_limit"],
+                current=None,  # base case
+                request_count_api_key="x",
+                rate_limit_type="key",
+                values_to_update_in_cache=[],
+            )
+        assert exc_info.value.rate_limit_type == expected_type
 
     @pytest.mark.asyncio
     async def test_dynamic_rate_limiter_v1_rpm_branch_raises(self):
