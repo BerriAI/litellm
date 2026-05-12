@@ -2226,20 +2226,17 @@ class BaseTokenUsageProcessor:
                         CompletionTokensDetailsWrapper()
                     )
 
+                # Check what keys exist in the model's completion_tokens_details
+                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
                 for attr in type(usage.completion_tokens_details).model_fields:
                     if not attr.startswith("_") and not callable(
                         getattr(usage.completion_tokens_details, attr)
                     ):
                         current_val = (
-                            getattr(combined.completion_tokens_details, attr, 0)
-                            or 0
+                            getattr(combined.completion_tokens_details, attr, 0) or 0
                         )
-                        new_val = (
-                            getattr(usage.completion_tokens_details, attr, 0) or 0
-                        )
-                        if new_val is not None and isinstance(
-                            new_val, (int, float)
-                        ):
+                        new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
+                        if new_val is not None and isinstance(new_val, (int, float)):
                             setattr(
                                 combined.completion_tokens_details,
                                 attr,
