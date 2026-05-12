@@ -3519,5 +3519,57 @@ class TestGetPublicMCPServers:
         assert manager.get_public_mcp_servers() == []
 
 
+class TestGetPublicMCPServersLegacyMode:
+    """
+    Legacy migration knob: litellm.public_mcp_hub_strict_whitelist=False
+    preserves the pre-fix OR-with-default semantics for one release so
+    operators that relied on the old behavior have a window to call
+    /v1/mcp/make_public before /public/mcp_hub goes empty.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", None)
+    def test_legacy_returns_default_flag_servers_when_whitelist_is_none(self):
+        """Legacy mode + no whitelist → every server with the default
+        available_on_public_internet=True appears (old behavior)."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", ["b"])
+    def test_legacy_unions_whitelist_and_default_flag(self):
+        """Legacy mode unions the whitelist with any
+        available_on_public_internet=True server."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert sorted(s.server_id for s in result) == ["a", "b"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

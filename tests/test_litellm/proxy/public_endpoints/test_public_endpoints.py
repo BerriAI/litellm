@@ -661,13 +661,6 @@ def test_public_mcp_hub_returns_only_whitelisted_servers():
         transport=MCPTransport.http,
         available_on_public_internet=True,
     )
-    hidden = MCPServer(
-        server_id="hidden",
-        name="hidden",
-        server_name="hidden",
-        transport=MCPTransport.http,
-        available_on_public_internet=True,
-    )
 
     mock_manager = MagicMock()
     mock_manager.get_public_mcp_servers.return_value = [listed]
