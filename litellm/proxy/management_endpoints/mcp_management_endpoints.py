@@ -142,6 +142,7 @@ if MCP_AVAILABLE:
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
+        MCPTransport,
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
@@ -152,8 +153,14 @@ if MCP_AVAILABLE:
         UserAPIKeyAuth,
         UserMCPManagementMode,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.auth.user_api_key_auth import (
+        _user_api_key_auth_builder,
+        user_api_key_auth,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body,
+        populate_request_with_path_params,
+    )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -476,6 +483,42 @@ if MCP_AVAILABLE:
 
         allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
+
+    def _sanitize_mcp_server_for_non_admin(
+        mcp_server: LiteLLM_MCPServerTable,
+    ) -> LiteLLM_MCPServerTable:
+        """Strip credential-bearing fields for non-admin viewers.
+
+        Non-admin users may legitimately need to discover MCP servers
+        their team has access to (so they can pick one in the UI), but
+        they must never see fields that can carry bearer tokens or
+        upstream API keys. ``_redact_mcp_credentials`` already clears
+        the explicit ``credentials`` field; this layers on top to catch
+        the URL+headers+env vectors that the virtual-key sanitizer also
+        strips. Reset values match each field's declared default on
+        ``LiteLLM_MCPServerTable`` (``None`` for Optional fields,
+        ``[]``/``{}`` for required list/dict fields).
+        """
+        sanitized = _redact_mcp_credentials(mcp_server)
+        # URL is the highest-impact vector: many MCP integrations embed
+        # the upstream API key directly in the path. spec_path can carry
+        # similar tokens in the OpenAPI spec URL.
+        sanitized.url = None
+        sanitized.spec_path = None
+        sanitized.static_headers = None
+        sanitized.extra_headers = []
+        sanitized.env = {}
+        sanitized.command = None
+        sanitized.args = []
+        sanitized.authorization_url = None
+        sanitized.token_url = None
+        sanitized.registration_url = None
+        return sanitized
+
+    def _sanitize_mcp_server_list_for_non_admin(
+        mcp_servers: Iterable[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        return [_sanitize_mcp_server_for_non_admin(s) for s in mcp_servers]
 
     def _sanitize_mcp_server_for_virtual_key(
         mcp_server: LiteLLM_MCPServerTable,
@@ -926,6 +969,12 @@ if MCP_AVAILABLE:
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
+        # Non-admin authenticated users may see the server inventory but
+        # not credential-bearing fields like `url` (often contains bearer
+        # tokens) or headers/env (often contain Authorization).
+        if not _user_has_admin_view(user_api_key_dict):
+            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -1019,6 +1068,24 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error": "Registration requires an API key associated with a team. Use a team-scoped key."
+                },
+            )
+
+        # stdio servers spawn a local subprocess on the proxy host with the
+        # configured command + args, so accepting them from non-admin callers
+        # would let a team member propose a server config that an admin could
+        # rubber-stamp into local code execution. Restrict stdio submission to
+        # the admin POST /v1/mcp/server path or to config.yaml.
+        if payload.transport == MCPTransport.stdio:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "stdio MCP servers cannot be submitted via the user "
+                        "registration workflow. Ask a proxy admin to add this "
+                        "server via POST /v1/mcp/server or to declare it in "
+                        "config.yaml."
+                    )
                 },
             )
 
@@ -1293,6 +1360,8 @@ if MCP_AVAILABLE:
         redacted = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_for_virtual_key(redacted)
+        if not _user_has_admin_view(user_api_key_dict):
+            return _sanitize_mcp_server_for_non_admin(redacted)
         return redacted
 
     @router.post(
@@ -1448,6 +1517,55 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
+        """
+        Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
+
+        Tries the Authorization header first. Falls back to decoding the UI
+        'token' session cookie (set by SSO login) to extract the API key, which
+        allows browser-based OAuth redirects to work without an explicit
+        Authorization header.
+        """
+        import jwt as _jwt
+
+        from litellm.proxy.proxy_server import master_key
+
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header  # _get_bearer_token will strip "Bearer " prefix
+
+        if not api_key:
+            token_cookie = request.cookies.get("token")
+            if token_cookie and master_key:
+                try:
+                    decoded = _jwt.decode(
+                        token_cookie,
+                        master_key,
+                        algorithms=["HS256"],
+                        # UI session cookies may omit exp; don't require it.
+                        options={"verify_exp": False},
+                    )
+                    if decoded.get("login_method") in ("sso", "username_password"):
+                        cookie_key = decoded.get("key", "")
+                        if cookie_key:
+                            api_key = f"Bearer {cookie_key}"
+                except _jwt.InvalidTokenError:
+                    pass
+
+        request_data = await _read_request_body(request=request)
+        request_data = populate_request_with_path_params(
+            request_data=request_data, request=request
+        )
+
+        return await _user_api_key_auth_builder(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1498,12 +1616,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1543,12 +1661,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
@@ -2120,7 +2238,8 @@ if MCP_AVAILABLE:
 
         Used by the UI to show a discovery grid when adding new MCP servers.
         """
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2177,7 +2296,8 @@ if MCP_AVAILABLE:
     async def get_openapi_registry(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={

@@ -158,6 +158,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
+        _request_extra_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -2138,6 +2139,47 @@ if MCP_AVAILABLE:
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
+            # OpenAPI-backed tools used to bypass `pre_call_tool_check` —
+            # only the managed path ran allowed/banned-tool checks, key/team
+            # tool permissions, and parameter validation. Run the same checks
+            # before dispatching to the local registry. Refuse the call if
+            # we cannot resolve a server: tools registered via
+            # openapi_to_mcp_generator are always tied to a server, so a
+            # missing mcp_server here means the tool->server mapping has
+            # not finished initializing or the registry entry is orphaned.
+            # Skipping the check would re-open the same authorization gap.
+            if mcp_server is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"MCP server for tool '{name}' is not available; "
+                        "refusing to dispatch without authorization checks. "
+                        "Retry once the server is registered."
+                    ),
+                )
+
+            # `pre_call_tool_check` calls into `proxy_logging_obj` for the
+            # pre-call guardrail hooks, so source it from the canonical
+            # `proxy_server` module the same way `_handle_managed_mcp_tool`
+            # does. `kwargs.get("proxy_logging_obj")` is None on the MCP
+            # entry path and would crash with AttributeError after the
+            # security checks pass.
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            hook_result = await global_mcp_server_manager.pre_call_tool_check(
+                name=original_tool_name,
+                arguments=arguments or {},
+                server_name=server_name or mcp_server.name,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=mcp_server,
+                raw_headers=raw_headers,
+            )
+            # `pre_call_tool_check` may return guardrail-modified
+            # arguments; honor them on the local path too.
+            if isinstance(hook_result, dict) and "arguments" in hook_result:
+                arguments = hook_result["arguments"]
+
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
@@ -2154,11 +2196,40 @@ if MCP_AVAILABLE:
                     auth_header_value = f"Basic {mcp_auth_header}"
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
+
+            # Forward named client headers to OpenAPI tool upstream requests.
+            # MCPServer.extra_headers lists header names to copy from raw_headers.
+            # OAuth2 M2M: never take Authorization from the caller (matches
+            # _prepare_mcp_server_headers for managed MCP).
+            forwarded_headers: Optional[Dict[str, str]] = None
+            if mcp_server and mcp_server.extra_headers and raw_headers:
+                normalized_raw = {
+                    str(k).lower(): v
+                    for k, v in raw_headers.items()
+                    if isinstance(k, str)
+                }
+                skip_caller_authorization = bool(mcp_server.has_client_credentials)
+                for header_name in mcp_server.extra_headers:
+                    if not isinstance(header_name, str):
+                        continue
+                    if (
+                        skip_caller_authorization
+                        and header_name.lower() == "authorization"
+                    ):
+                        continue
+                    value = normalized_raw.get(header_name.lower())
+                    if value is not None:
+                        if forwarded_headers is None:
+                            forwarded_headers = {}
+                        forwarded_headers[header_name] = value
+
             _auth_token = _request_auth_header.set(auth_header_value)
+            _extra_token = _request_extra_headers.set(forwarded_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
+                _request_extra_headers.reset(_extra_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)

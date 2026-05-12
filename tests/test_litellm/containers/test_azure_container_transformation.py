@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -13,7 +13,6 @@ from litellm.llms.azure.containers.transformation import AzureContainerConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
-    ContainerFileListResponse,
     ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
@@ -324,6 +323,29 @@ class TestAzureContainerConfig:
         assert url_fc == expected_fc
         assert url_fc.index("/content") < url_fc.index("?")
 
+    def test_transform_requests_encode_path_ids_before_query_string(self):
+        from litellm.types.router import GenericLiteLLMParams
+
+        api_base = (
+            "https://my-resource.openai.azure.com/openai/v1/containers"
+            "?api-version=v1"
+        )
+
+        url, _ = self.config.transform_container_file_content_request(
+            container_id="../../other",
+            file_id="file?download=1#frag",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        expected_url = (
+            "https://my-resource.openai.azure.com/openai/v1/containers/"
+            "..%2F..%2Fother/files/file%3Fdownload%3D1%23frag/content"
+            "?api-version=v1"
+        )
+        assert url == expected_url
+
     def test_provider_config_manager_returns_azure_config(self):
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
@@ -521,7 +543,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert isinstance(c1, AzureContainerConfig)
 
     @pytest.mark.asyncio
-    async def test_proxy_process_request_preserves_managed_container_id(
+    async def test_proxy_process_request_forwards_decoded_container_id(
         self, monkeypatch
     ):
         from starlette.requests import Request
@@ -556,6 +578,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -576,10 +604,12 @@ class TestAzureContainerKnownFailureRegressions:
             path_params={"container_id": encoded_id},
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "alist_container_files"
-        assert captured["data"]["container_id"] == encoded_id
-        assert captured["data"]["custom_llm_provider"] == "openai"
-        assert "model_id" not in captured["data"]
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
         assert "api_base" not in captured["data"]
 
     @pytest.mark.asyncio
@@ -620,6 +650,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -640,10 +676,13 @@ class TestAzureContainerKnownFailureRegressions:
             user_api_key_dict=MagicMock(),
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aretrieve_container_file_content"
-        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["container_id"] == "cntr_123"
         assert captured["data"]["file_id"] == "cfile_abc"
-        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
         assert response.status_code == 200
         assert response.body == b"csv-bytes"
         assert response.headers["x-litellm-call-id"] == "call-123"
@@ -700,6 +739,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -719,6 +764,9 @@ class TestAzureContainerKnownFailureRegressions:
             container_id=encoded_id,
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aupload_container_file"
-        assert captured["data"]["container_id"] == encoded_id
-        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"

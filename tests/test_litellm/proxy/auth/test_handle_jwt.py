@@ -1,5 +1,5 @@
 from typing import Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -492,6 +492,80 @@ async def test_sync_user_role_and_teams_no_cache_write_when_nothing_changes():
     )
 
     mock_cache.async_set_cache.assert_not_called()
+
+
+def test_get_all_jwt_team_ids_unions_singular_and_plural():
+    """get_all_jwt_team_ids must include the singular team_id_jwt_field claim
+    in addition to the plural team_ids_jwt_field, deduplicated."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_ids_jwt_field="teams",
+        ),
+    )
+
+    # singular only — Okta/Auth0 default shape
+    assert jwt_handler.get_all_jwt_team_ids({"team_id": "team-low"}) == ["team-low"]
+
+    # plural only — pre-fix shape
+    assert jwt_handler.get_all_jwt_team_ids({"teams": ["a", "b"]}) == ["a", "b"]
+
+    # both populated, no overlap
+    assert jwt_handler.get_all_jwt_team_ids(
+        {"team_id": "primary", "teams": ["a", "b"]}
+    ) == ["a", "b", "primary"]
+
+    # both populated with overlap — singular dedup'd
+    assert jwt_handler.get_all_jwt_team_ids({"team_id": "a", "teams": ["a", "b"]}) == [
+        "a",
+        "b",
+    ]
+
+    # singular field as multi-element list (some IdPs) — merge all, preserve plural-first order
+    assert jwt_handler.get_all_jwt_team_ids(
+        {"team_id": ["primary", "secondary"], "teams": ["a"]}
+    ) == ["a", "primary", "secondary"]
+
+    # neither populated
+    assert jwt_handler.get_all_jwt_team_ids({}) == []
+
+
+def test_get_all_jwt_team_ids_does_not_use_team_id_default():
+    """team_id_default is a JWT-bearer-flow auth-builder fallback, not a token
+    claim. It must NOT leak into get_all_jwt_team_ids — otherwise SSO logins
+    would silently start adding users to the default team for any tenant that
+    has team_id_default configured."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_ids_jwt_field="teams",
+            team_id_default="default-team",
+        ),
+    )
+
+    # team_id claim missing — must not fall back to default-team
+    assert jwt_handler.get_all_jwt_team_ids({"teams": []}) == []
+    assert jwt_handler.get_all_jwt_team_ids({}) == []
+
+    # only the plural is populated — default still must not be added
+    assert jwt_handler.get_all_jwt_team_ids({"teams": ["a"]}) == ["a"]
+
+    # team_id_jwt_field unset entirely + only default configured: still no default
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="teams",
+            team_id_default="default-team",
+        ),
+    )
+    assert jwt_handler.get_all_jwt_team_ids({"teams": []}) == []
 
 
 @pytest.mark.asyncio
@@ -2567,3 +2641,116 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
         assert result["team_membership"] is None
         mock_get_team.assert_called()
         mock_get_membership.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# JWTHandler._build_decode_kwargs — VERIA-27 (audience + issuer verification)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def _reset_unscoped_warning_flag():
+    """Reset the once-per-process warning sentinel so each test sees a fresh
+    state."""
+    JWTHandler._unscoped_jwt_warning_emitted = False
+    yield
+    JWTHandler._unscoped_jwt_warning_emitted = False
+
+
+def test_build_decode_kwargs_no_env_disables_both_verifications(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] is None
+    assert kwargs["issuer"] is None
+    assert kwargs["options"] == {"verify_aud": False, "verify_iss": False}
+
+
+def test_build_decode_kwargs_audience_only_enables_aud_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] == "my-proxy"
+    assert kwargs["issuer"] is None
+    # verify_aud not in options means PyJWT will verify audience
+    assert kwargs["options"] == {"verify_iss": False}
+
+
+def test_build_decode_kwargs_issuer_only_enables_iss_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setenv("JWT_ISSUER", "https://idp.example.com/")
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] is None
+    assert kwargs["issuer"] == "https://idp.example.com/"
+    assert kwargs["options"] == {"verify_aud": False}
+
+
+def test_build_decode_kwargs_both_set_enables_full_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.setenv("JWT_ISSUER", "https://idp.example.com/")
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] == "my-proxy"
+    assert kwargs["issuer"] == "https://idp.example.com/"
+    # No verification opt-outs — PyJWT verifies both claims by default.
+    assert kwargs["options"] is None
+
+
+def test_build_decode_kwargs_warns_once_when_unscoped(
+    monkeypatch, _reset_unscoped_warning_flag, caplog
+):
+    """The warning about unscoped JWT auth should fire on the first call but
+    not on every subsequent decode."""
+    import logging
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    caplog.set_level(logging.WARNING)
+
+    JWTHandler._build_decode_kwargs()
+    JWTHandler._build_decode_kwargs()
+    JWTHandler._build_decode_kwargs()
+
+    matching = [
+        r
+        for r in caplog.records
+        if "JWT auth is enabled" in r.getMessage()
+        and "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"Expected exactly one warning across 3 calls, got {len(matching)}"
+
+
+def test_build_decode_kwargs_no_warning_when_scoped(
+    monkeypatch, _reset_unscoped_warning_flag, caplog
+):
+    import logging
+
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    caplog.set_level(logging.WARNING)
+
+    JWTHandler._build_decode_kwargs()
+
+    matching = [
+        r
+        for r in caplog.records
+        if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
+    ]
+    assert matching == []

@@ -157,14 +157,15 @@ class TestResponseCompliance:
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly)
+        # Output fields (readOnly). Google renamed `outputs` → `steps` in the
+        # upstream spec; keep this list aligned with the live schema.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
             "role",
-            "outputs",
+            "steps",
             "usage",
         ]
 

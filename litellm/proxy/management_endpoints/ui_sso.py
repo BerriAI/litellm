@@ -678,6 +678,7 @@ async def google_login(
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
+            request=request,
         )
         if return_to is not None and sso_redirect is not None:
             if SSOAuthenticationHandler._validate_return_to(return_to):
@@ -739,7 +740,7 @@ def generic_response_convertor(
 
     all_teams = []
     if sso_jwt_handler is not None:
-        team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = sso_jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
@@ -754,7 +755,7 @@ def generic_response_convertor(
                 f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
             )
     else:
-        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     # Determine user role based on role_mappings if available
@@ -1159,6 +1160,30 @@ async def get_generic_sso_response(
         authorization_code = request.query_params.get("code")
 
         if code_verifier:
+            # State-to-session-cookie binding.  The non-PKCE branch below
+            # delegates to fastapi-sso's ``verify_and_process``, which
+            # performs its own session-cookie check.  The PKCE branch
+            # bypasses that helper, so we validate the URL ``state``
+            # against the ``litellm_oauth_state`` cookie set on the
+            # redirect response — without this an attacker can pre-mint
+            # a state + cached PKCE verifier and hijack a victim's auth
+            # code (Login-CSRF / token theft).
+            url_state = request.query_params.get("state")
+            cookie_state = request.cookies.get("litellm_oauth_state")
+            if (
+                not url_state
+                or not cookie_state
+                or not secrets.compare_digest(url_state, cookie_state)
+            ):
+                raise ProxyException(
+                    message=(
+                        "Invalid OAuth state parameter — does not match "
+                        "the browser-bound state cookie."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="state",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not authorization_code:
                 raise ProxyException(
                     message="Missing authorization code in callback",
@@ -2147,6 +2172,7 @@ class SSOAuthenticationHandler:
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -2156,6 +2182,8 @@ class SSOAuthenticationHandler:
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
+            request: Optional FastAPI request, used to drive the ``Secure``
+                attribute on the ``litellm_oauth_state`` CSRF cookie.
 
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
@@ -2266,6 +2294,7 @@ class SSOAuthenticationHandler:
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                request=request,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2276,6 +2305,7 @@ class SSOAuthenticationHandler:
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2285,10 +2315,13 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
+            # State is bound to the caller's browser via a ``litellm_oauth_state``
+            # HttpOnly cookie set on the redirect response below; the SSO
+            # callback validates the URL ``state`` against that cookie before
+            # completing the PKCE token exchange.  Without this binding, an
+            # attacker who pre-mints a state + a cached PKCE verifier can hand
+            # the link to a victim and capture the resulting access token
+            # (Login CSRF / token theft).
             (
                 redirect_params,
                 code_verifier,
@@ -2355,6 +2388,31 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
+
+                # Bind state to the user's browser session.  The /callback
+                # handler validates the URL ``state`` against this cookie via
+                # ``secrets.compare_digest`` before exchanging the PKCE
+                # code_verifier.  Only set the cookie when PKCE is in use
+                # (i.e. inside this ``code_verifier`` branch) so two
+                # concurrent SSO sessions — one PKCE, one plain — cannot
+                # overwrite each other's state cookie.
+                state_value = redirect_params.get("state")
+                if state_value and redirect_response is not None:
+                    # Production-safe default: require HTTPS for the
+                    # CSRF-protection cookie unless we can prove the
+                    # incoming request is HTTP (local dev).  Without
+                    # ``Secure`` the cookie is sent over plain HTTP,
+                    # letting a network observer read and replay the
+                    # state value and bypass this protection.
+                    secure_flag = request is None or request.url.scheme == "https"
+                    redirect_response.set_cookie(
+                        key="litellm_oauth_state",
+                        value=state_value,
+                        max_age=600,
+                        httponly=True,
+                        samesite="lax",
+                        secure=secure_flag,
+                    )
             return redirect_response
 
     @staticmethod
@@ -3972,6 +4030,7 @@ async def debug_sso_login(request: Request):
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            request=request,
         )
 
 
@@ -4019,6 +4078,8 @@ async def debug_sso_callback(request: Request):
         redirect_url += "/sso/debug/callback"
 
     result = None
+    received_response: Optional[dict] = None
+    access_token_payload: Optional[dict] = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
             request=request,
@@ -4035,12 +4096,14 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result, _, _ = await get_generic_sso_response(
-            request=request,
-            jwt_handler=jwt_handler,
-            generic_client_id=generic_client_id,
-            redirect_url=redirect_url,
-            sso_jwt_handler=sso_jwt_handler,
+        result, received_response, access_token_payload = (
+            await get_generic_sso_response(
+                request=request,
+                jwt_handler=jwt_handler,
+                generic_client_id=generic_client_id,
+                redirect_url=redirect_url,
+                sso_jwt_handler=sso_jwt_handler,
+            )
         )
 
     # If result is None, return a basic error message
@@ -4069,10 +4132,32 @@ async def debug_sso_callback(request: Request):
                 except Exception as e:
                     filtered_result[key] = f"Complex value (not displayable): {str(e)}"
 
+    # Defense-in-depth: ensure no bearer tokens leak into the rendered HTML even if
+    # a non-conforming IdP places them in its userinfo response.
+    safe_raw_claims = {
+        k: v
+        for k, v in (received_response or {}).items()
+        if k not in _OAUTH_TOKEN_FIELDS
+    }
+    safe_access_token_claims = {
+        k: v
+        for k, v in (access_token_payload or {}).items()
+        if k not in _OAUTH_TOKEN_FIELDS
+    }
+
+    sso_payload = {
+        "parsed_by_proxy": filtered_result,
+        "raw_claims": safe_raw_claims,
+        "access_token_claims": safe_access_token_claims,
+    }
+
     # Replace the placeholder in the template with the actual data
+    sso_payload_json = json.dumps(sso_payload, indent=2, default=str).replace(
+        "</", "<\\/"
+    )
     html_content = jwt_display_template.replace(
-        "const userData = SSO_DATA;",
-        f"const userData = {json.dumps(filtered_result, indent=2)};",
+        "const ssoData = SSO_DATA;",
+        f"const ssoData = {sso_payload_json};",
     )
 
     return HTMLResponse(content=html_content)

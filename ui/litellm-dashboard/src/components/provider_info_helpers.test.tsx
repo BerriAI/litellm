@@ -68,6 +68,16 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.OpenAI]);
     });
 
+    it("should resolve the zai (Z.AI) provider value to the Z.AI display name", () => {
+      // Regression test for https://github.com/BerriAI/litellm/issues/25482 —
+      // the backend already returns `zai` from /public/providers and the docs
+      // have a dedicated page, but the UI dropdown was missing an entry, so
+      // `getProviderLogoAndName("zai")` previously returned the raw value as
+      // the display name (no mapping).
+      const result = getProviderLogoAndName("zai");
+      expect(result.displayName).toBe(Providers.ZAI);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -154,6 +164,10 @@ describe("provider_info_helpers", () => {
 
     it("should return watsonx placeholder for Watsonx provider", () => {
       expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
+      expect(getPlaceholder(Providers.ZAI)).toBe("zai/glm-4.5");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

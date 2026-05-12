@@ -224,6 +224,41 @@ class JWTHandler:
 
         return []
 
+    def get_all_jwt_team_ids(self, token: dict) -> List[str]:
+        """
+        Return team IDs from both the plural ``team_ids_jwt_field`` and the
+        singular ``team_id_jwt_field`` claim (string or list of strings), as a
+        deduplicated list preserving plural-first order.
+
+        Membership-reconciliation paths (SSO callback, JWT-bearer sync) need
+        to consider both claim shapes. Reading only the plural field — as
+        callers historically did — silently dropped users whose IdP populates
+        the singular field, which is what Okta and Auth0 default to when a
+        user has a single primary team.
+
+        This intentionally does NOT consult ``team_id_default``: that fallback
+        is a property of how the JWT-bearer auth flow resolves a single
+        request-bound team, not of the token's claims. Callers that want the
+        default-team behavior should still go through ``get_team_id``.
+        """
+        team_ids: List[str] = list(self.get_team_ids_from_jwt(token))
+        if self.litellm_jwtauth.team_id_jwt_field is not None:
+            singular = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_id_jwt_field,
+                default=None,
+            )
+            if isinstance(singular, list):
+                for item in singular:
+                    if item is None:
+                        continue
+                    sid = str(item)
+                    if sid and sid not in team_ids:
+                        team_ids.append(sid)
+            elif singular and str(singular) not in team_ids:
+                team_ids.append(str(singular))
+        return team_ids
+
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
@@ -707,11 +742,48 @@ class JWTHandler:
             verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {str(e)}")
             raise Exception(f"Failed to fetch OIDC UserInfo: {str(e)}")
 
-    async def auth_jwt(self, token: str) -> dict:
+    _unscoped_jwt_warning_emitted = False
+
+    @classmethod
+    def _build_decode_kwargs(cls) -> dict:
+        """Build the audience/issuer/options kwargs for ``jwt.decode``.
+
+        Setting ``JWT_AUDIENCE`` (and optionally ``JWT_ISSUER``) turns on the
+        corresponding PyJWT verifications, blocking cross-tenant tokens
+        minted by other applications that share the same IdP signing keys.
+        When both are unset PyJWT only checks the signature and expiry, which
+        is preserved for backward compatibility but logged once as a warning.
+        """
         audience = os.getenv("JWT_AUDIENCE")
-        decode_options = None
+        issuer = os.getenv("JWT_ISSUER")
+
+        if (
+            audience is None
+            and issuer is None
+            and not cls._unscoped_jwt_warning_emitted
+        ):
+            verbose_proxy_logger.warning(
+                "JWT auth is enabled but neither JWT_AUDIENCE nor JWT_ISSUER "
+                "is configured. Tokens minted by any application that shares "
+                "the same IdP signing keys will be accepted. Set JWT_AUDIENCE "
+                "(and ideally JWT_ISSUER) to scope this proxy."
+            )
+            cls._unscoped_jwt_warning_emitted = True
+
+        options: dict = {}
         if audience is None:
-            decode_options = {"verify_aud": False}
+            options["verify_aud"] = False
+        if issuer is None:
+            options["verify_iss"] = False
+
+        return {
+            "audience": audience,
+            "issuer": issuer,
+            "options": options or None,
+        }
+
+    async def auth_jwt(self, token: str) -> dict:
+        decode_kwargs = self._build_decode_kwargs()
 
         header = jwt.get_unverified_header(token)
 
@@ -747,9 +819,8 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                    options=decode_options,  # type: ignore[arg-type]
-                    audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
+                    **decode_kwargs,
                 )
                 return payload
 
@@ -775,8 +846,7 @@ class JWTHandler:
                     token,
                     key,
                     algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                    audience=audience,
-                    options=decode_options,
+                    **decode_kwargs,
                 )
                 return payload
 

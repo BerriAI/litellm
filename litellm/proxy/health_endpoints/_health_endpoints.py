@@ -776,6 +776,45 @@ def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     return out
 
 
+def _resolve_targeted_model_ids(
+    model_list: list, model: Optional[str], model_id: Optional[str]
+) -> Optional[set]:
+    """
+    Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
+    deployment IDs the response should be scoped to.
+
+    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
+    matches either the deployment's ``model_name`` alias or its
+    ``litellm_params.model`` provider string. ``model_id`` matches
+    ``model_info.id``.
+
+    Both query params are validated against the supplied ``model_list``.
+    Callers pass an already-scoped list (filtered to the caller's allowed
+    models for non-admins, full list for admins), so a ``model_id`` that
+    isn't present resolves to an empty set rather than a single-element
+    set — preventing a non-admin from reading another deployment's cached
+    health entry by guessing its ID.
+
+    Returns ``None`` when no targeting is requested — callers should treat
+    that as "no filter."
+    """
+    if not model and not model_id:
+        return None
+    target_ids: set = set()
+    for m in model_list:
+        deployment_id = (m.get("model_info") or {}).get("id")
+        if not deployment_id:
+            continue
+        if model_id and deployment_id == model_id:
+            target_ids.add(deployment_id)
+            continue
+        if model:
+            litellm_model = (m.get("litellm_params") or {}).get("model")
+            if m.get("model_name") == model or litellm_model == model:
+                target_ids.add(deployment_id)
+    return target_ids
+
+
 def _filter_health_check_results_by_model_ids(
     results: dict, allowed_model_ids: set
 ) -> dict:
@@ -926,6 +965,7 @@ async def health_endpoint(
             )
 
     is_admin = _is_proxy_admin(user_api_key_dict)
+    model_specific_request = bool(model or model_id)
 
     def _post_process(result: dict) -> dict:
         # api_base / api_version reveal which provider/region/internal host the
@@ -933,6 +973,12 @@ async def health_endpoint(
         # still see model/model_id and the healthy/unhealthy status. We also
         # set a header so non-admin clients that previously parsed those
         # fields can detect the change programmatically.
+        # When a caller asked about a specific model/model_id and zero
+        # endpoints came back healthy, surface that as a 503 so monitoring
+        # systems can rely on the HTTP status instead of having to parse the
+        # body. The body shape is unchanged.
+        if model_specific_request and result.get("healthy_count", 0) == 0:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         if is_admin:
             return result
         response.headers["Litellm-Health-Field-Notice"] = (
@@ -975,16 +1021,29 @@ async def health_endpoint(
                 m for m in _llm_model_list if m.get("model_name") in allowed_models
             ]
         if use_background_health_checks:
+            # The cached background result covers every model. When the
+            # caller targets a specific model/model_id we have to narrow the
+            # cache to that deployment before _post_process evaluates
+            # healthy_count, otherwise an unhealthy "foo" combined with any
+            # other healthy model would still report healthy_count > 0 and
+            # the targeted-503 path would never fire.
+            targeted_ids = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
             if len(user_api_key_dict.models) > 0:
                 allowed_model_ids = {
                     (m.get("model_info") or {}).get("id")
                     for m in _llm_model_list
                     if (m.get("model_info") or {}).get("id")
                 }
-                filtered = _filter_health_check_results_by_model_ids(
-                    health_check_results, allowed_model_ids
+                # _llm_model_list is already scoped to the caller's allowed
+                # model_names above, so targeted_ids is implicitly the
+                # intersection of "targeted" and "allowed."
+                filter_ids = (
+                    targeted_ids if targeted_ids is not None else allowed_model_ids
                 )
-                if not allowed_model_ids:
+                filtered = _filter_health_check_results_by_model_ids(
+                    health_check_results, filter_ids
+                )
+                if targeted_ids is None and not allowed_model_ids:
                     # Caller has accessible model_names but none of the
                     # matching deployments expose a model_info.id, so the
                     # cache filter (which keys on model_id) drops every
@@ -1005,6 +1064,15 @@ async def health_endpoint(
                         "to populate model_info.id for these models."
                     ]
                 return _post_process(filtered)
+            if targeted_ids is not None:
+                # Admin caller targeting a specific model: filter the cache
+                # so the response (and the targeted-503 check) reflects only
+                # that deployment, not the global aggregate.
+                return _post_process(
+                    _filter_health_check_results_by_model_ids(
+                        health_check_results, targeted_ids
+                    )
+                )
             return _post_process(health_check_results)
         else:
             router_result = await _perform_health_check_and_save(
@@ -1379,14 +1447,11 @@ def callback_name(callback):
             return str(callback)
 
 
-@router.get(
-    "/health/readiness",
-    tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def health_readiness():
+async def _get_health_readiness_details(
+    response: Optional[Response] = None,
+) -> Dict[str, Any]:
     """
-    Unprotected endpoint for checking if worker can receive requests
+    Detailed health payload for authenticated diagnostics.
     """
     from litellm.proxy.proxy_server import prisma_client, version
 
@@ -1405,7 +1470,7 @@ async def health_readiness():
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type = None
+        cache_type: Any = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1414,11 +1479,12 @@ async def health_readiness():
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
+                index_info: Any
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)
-                cache_type = {"type": cache_type, "index_info": index_info}
+                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
+                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
 
         # check log level
         log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
@@ -1427,6 +1493,12 @@ async def health_readiness():
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
+            # A configured DB that is not reachable means the worker cannot
+            # serve requests that depend on persisted state (keys, budgets,
+            # spend logs). Return 503 so orchestrators take this pod out of
+            # rotation; "Not connected" (no DB configured at all) stays 200.
+            if response is not None and db_health_status["status"] != "connected":
+                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
                 "db": db_health_status["status"],
@@ -1450,6 +1522,52 @@ async def health_readiness():
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+def _allow_public_health_readiness_details() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("allow_public_health_readiness_details") is True
+
+
+async def _set_public_readiness_status(response: Response) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+
+    db_health_status = await _db_health_readiness_check()
+    if db_health_status["status"] != "connected":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@router.get(
+    "/health/readiness",
+    tags=["health"],
+)
+async def health_readiness(response: Response):
+    """
+    Public readiness probe. Keep this low-detail for unauthenticated load
+    balancers by default. Admins can opt into the legacy detailed public
+    payload with general_settings.allow_public_health_readiness_details.
+    """
+    if _allow_public_health_readiness_details():
+        return await _get_health_readiness_details(response=response)
+
+    await _set_public_readiness_status(response=response)
+    return {"status": "healthy"}
+
+
+@router.get(
+    "/health/readiness/details",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_readiness_details(response: Response):
+    """
+    Authenticated readiness diagnostics with DB/cache/callback metadata.
+    """
+    return await _get_health_readiness_details(response=response)
 
 
 @router.get(
@@ -1487,7 +1605,6 @@ async def health_liveliness():
 @router.options(
     "/health/readiness",
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_readiness_options():
     """
@@ -1625,29 +1742,54 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
-        if model_name and llm_router is not None:
+        if llm_router is not None:
+            # Prefer disambiguation by deployment id (`model_info.id`) when
+            # the caller supplies it. This is required when multiple
+            # deployments share a `model_name` (e.g. wildcard `openai/*`
+            # with multiple `api_base` values for failover): the UI's
+            # "Test Connection" button targets a specific row, and that
+            # row's id is the only thing that uniquely identifies which
+            # deployment to probe. Without this, all duplicates collapse
+            # onto `deployments[0]`.
+            request_model_info = model_info or {}
+            request_model_id = request_model_info.get("id")
             try:
-                # First try to find by proxy model_name (e.g., "gpt-4o")
-                deployments = llm_router.get_model_list(model_name=model_name)
-
-                # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
-                if not deployments or len(deployments) == 0:
-                    all_deployments = llm_router.get_model_list(model_name=None)
-                    if all_deployments:
-                        for deployment in all_deployments:
-                            if (
-                                deployment.get("litellm_params", {}).get("model")
-                                == model_name
-                            ):
-                                deployments = [deployment]
-                                break
-
-                if deployments and len(deployments) > 0:
-                    # Use the first deployment's litellm_params as base config
-                    # These already have resolved environment variables from proxy config
-                    config_litellm_params = dict(
-                        deployments[0].get("litellm_params", {})
+                deployment_by_id = None
+                if request_model_id:
+                    deployment_by_id = llm_router.get_deployment(
+                        model_id=request_model_id
                     )
+
+                if deployment_by_id is not None:
+                    config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                elif model_name:
+                    # Fall back to model_name lookup for callers (e.g. the
+                    # "Add Model" wizard, or curl) that don't supply an id.
+                    # First try to find by proxy model_name (e.g., "gpt-4o")
+                    deployments = llm_router.get_model_list(model_name=model_name)
+
+                    # If not found, try to find by litellm model name
+                    # (e.g., "azure/gpt-4o")
+                    if not deployments or len(deployments) == 0:
+                        all_deployments = llm_router.get_model_list(model_name=None)
+                        if all_deployments:
+                            for deployment in all_deployments:
+                                if (
+                                    deployment.get("litellm_params", {}).get("model")
+                                    == model_name
+                                ):
+                                    deployments = [deployment]
+                                    break
+
+                    if deployments and len(deployments) > 0:
+                        # Use the first deployment's litellm_params as base
+                        # config. These already have resolved environment
+                        # variables from proxy config.
+                        config_litellm_params = dict(
+                            deployments[0].get("litellm_params", {})
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
