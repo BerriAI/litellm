@@ -1229,6 +1229,100 @@ def test_validate_trusted_redirect_uri_rejects_fragment_and_bad_scheme():
         assert exc.value.status_code == 400, uri
 
 
+def test_validate_trusted_redirect_uri_rejects_scheme_mismatch_on_same_host():
+    """Regression: an attacker who can serve http on the proxy's own
+    host (e.g. by MITMing an unencrypted LAN hop) must not be able to
+    pass same-origin validation — scheme must match as well as host."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _make_trusted_request("https://llm.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "http://llm.example.com/ui/callback")
+    assert exc.value.status_code == 400
+
+
+def test_validate_trusted_redirect_uri_rejects_userinfo(monkeypatch):
+    """VERIA finding: an attacker can hide the real destination host in
+    the post-``@`` portion of the URL, while the pre-``@`` userinfo is
+    styled to look like an allowlisted host. Without an explicit
+    username/password check, a wildcard allowlist that splits the raw
+    netloc on ``:`` sees ``app.example.com`` and accepts; the browser
+    then navigates to ``attacker.example`` with the authorization code.
+
+    Reject userinfo at every tier — same-origin, loopback, exact-entry
+    allowlist, and wildcard allowlist — so the bypass is closed on
+    every path through the validator.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    # (1) Wildcard allowlist — the original VERIA vector, including the
+    # ``:443`` inside userinfo that makes the raw netloc split deceptive.
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "*.example.com")
+    req = _make_trusted_request("https://llm.other-proxy.com/")
+    for uri in (
+        "https://app.example.com:443@attacker.example/cb",
+        "https://app.example.com@attacker.example/cb",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            validate_trusted_redirect_uri(req, uri)
+        assert exc.value.status_code == 400, uri
+
+    # (2) Exact-entry allowlist — same class of bypass, different path.
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "app.example.com")
+    req = _make_trusted_request("https://llm.other-proxy.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(
+            req, "https://app.example.com@attacker.example/cb"
+        )
+    assert exc.value.status_code == 400
+
+    # (3) Same-origin path — userinfo that mimics the proxy's host.
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+    req = _make_trusted_request("https://llm.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(
+            req, "https://llm.example.com@attacker.example/cb"
+        )
+    assert exc.value.status_code == 400
+
+    # (4) Loopback path — userinfo that mimics 127.0.0.1.
+    req = _make_trusted_request("https://llm.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "http://127.0.0.1@attacker.example/cb")
+    assert exc.value.status_code == 400
+
+
+def test_validate_trusted_redirect_uri_allowlist_entry_with_default_port(monkeypatch):
+    """Regression: operators who write ``app.example.com:443`` in
+    ``MCP_TRUSTED_REDIRECT_ORIGINS`` (natural when copy-pasting from a
+    browser address bar or load-balancer log) must still match a
+    port-less redirect_uri. The redirect_uri's ``:443`` is normalized
+    away for the same-origin compare; the allowlist side has to apply
+    the same normalization or the comparison is asymmetric and silently
+    fails."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        _parse_trusted_redirect_origins,
+        validate_trusted_redirect_uri,
+    )
+
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "app.example.com:443")
+    # Verify the parse step itself drops the default port.
+    assert _parse_trusted_redirect_origins() == ["app.example.com"]
+
+    req = _make_trusted_request("https://llm.example.com/")
+    # Port-less redirect_uri — should match the :443 env entry.
+    validate_trusted_redirect_uri(req, "https://app.example.com/cb")
+    # Explicit :443 on both sides — should still match.
+    validate_trusted_redirect_uri(req, "https://app.example.com:443/cb")
+    # Non-default port on the redirect_uri — must NOT match a default-port entry.
+    with pytest.raises(HTTPException):
+        validate_trusted_redirect_uri(req, "https://app.example.com:8443/cb")
+
+
 def test_validate_trusted_redirect_uri_accepts_exact_allowlisted_host(monkeypatch):
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
         validate_trusted_redirect_uri,
