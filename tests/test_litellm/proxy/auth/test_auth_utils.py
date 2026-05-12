@@ -645,7 +645,28 @@ class TestCoerceUserIdToStr:
 
         assert _coerce_user_id_to_str(["a", "b"]) is None
 
-    def test_json_encoded_dict_string_returns_none(self):
+    def test_json_encoded_dict_string_passes_through_by_default(self):
+        """JSON-encoded dict strings are preserved unless opt-in flag is on.
+
+        This preserves backwards compatibility: existing deployments that
+        intentionally pass JSON-encoded user identifiers keep working.
+        """
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        blob = (
+            '{"device_id":"d5abe9199ee7759a0558974e9371e78c7b38d7621aae26d6609c1de61af6afb0",'
+            '"account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+        )
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            assert _coerce_user_id_to_str(blob) == blob
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_json_encoded_dict_string_returns_none_when_validation_enabled(self):
+        import litellm
         from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
 
         # Same broken shape we saw in spend logs, but pre-stringified to JSON.
@@ -653,12 +674,34 @@ class TestCoerceUserIdToStr:
             '{"device_id":"d5abe9199ee7759a0558974e9371e78c7b38d7621aae26d6609c1de61af6afb0",'
             '"account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
         )
-        assert _coerce_user_id_to_str(blob) is None
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            assert _coerce_user_id_to_str(blob) is None
+        finally:
+            litellm.validate_end_user_id_in_db = original
 
-    def test_json_encoded_list_string_returns_none(self):
+    def test_json_encoded_list_string_passes_through_by_default(self):
+        import litellm
         from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
 
-        assert _coerce_user_id_to_str('["a","b"]') is None
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            assert _coerce_user_id_to_str('["a","b"]') == '["a","b"]'
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_json_encoded_list_string_returns_none_when_validation_enabled(self):
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            assert _coerce_user_id_to_str('["a","b"]') is None
+        finally:
+            litellm.validate_end_user_id_in_db = original
 
     def test_int_returns_str(self):
         from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
@@ -711,7 +754,36 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         assert result is None
 
-    def test_json_encoded_user_string_returns_none(self):
+    def test_json_encoded_user_string_passes_through_by_default(self):
+        """JSON-encoded user strings pass through unless validation is opted in.
+
+        Gating behind ``litellm.validate_end_user_id_in_db`` keeps existing
+        deployments that send JSON-encoded identifiers working until they
+        explicitly opt into the stricter extraction.
+        """
+        import litellm
+
+        blob = (
+            '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
+            '"session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+        )
+        request_body = {"user": blob}
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                result = get_end_user_id_from_request_body(
+                    request_body=request_body, request_headers={}
+                )
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+        assert result == blob
+
+    def test_json_encoded_user_string_returns_none_when_validation_enabled(self):
+        import litellm
+
         request_body = {
             "user": (
                 '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
@@ -719,10 +791,15 @@ class TestGetEndUserIdDropsMalformedBodyValues:
             ),
         }
 
-        with patch("litellm.proxy.proxy_server.general_settings", {}):
-            result = get_end_user_id_from_request_body(
-                request_body=request_body, request_headers={}
-            )
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                result = get_end_user_id_from_request_body(
+                    request_body=request_body, request_headers={}
+                )
+        finally:
+            litellm.validate_end_user_id_in_db = original
 
         assert result is None
 

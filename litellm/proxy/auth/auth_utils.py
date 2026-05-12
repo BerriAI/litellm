@@ -1018,9 +1018,12 @@ def _get_customer_id_from_standard_headers(
 def _coerce_user_id_to_str(value: Any) -> Optional[str]:
     """Return a usable end-user identifier string, or None if the value isn't one.
 
-    Drops dict/list values and strings that are JSON-encoded dict/list payloads,
-    so client-supplied shapes like {"device_id": ..., "session_id": ...} don't
-    pollute spend logs under fake per-session/per-device "users". See
+    Always drops non-string structured values (dict/list/tuple/set) because
+    stringifying them produces garbage spend-log rows like
+    ``"{'device_id': ...}"``. Strings that *decode* to a structured payload
+    are only rejected when ``litellm.validate_end_user_id_in_db`` is enabled
+    — operators who currently pass JSON-encoded identifiers keep their
+    existing behavior until they opt in. See
     auth_utils.py:get_end_user_id_from_request_body for the extraction chain.
     """
     if value is None:
@@ -1034,8 +1037,11 @@ def _coerce_user_id_to_str(value: Any) -> Optional[str]:
         stripped = value.strip()
         if not stripped:
             return None
-        # Reject strings that decode to a structured payload (JSON object/array).
-        if stripped[:1] in ("{", "["):
+        # Reject strings that decode to a structured payload (JSON object/array)
+        # only when the operator has opted into end-user validation. Gating
+        # behind the flag preserves backwards compatibility for deployments
+        # that intentionally pass JSON-encoded user identifiers.
+        if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
             parsed = safe_json_loads(stripped)
             if isinstance(parsed, (dict, list)):
                 return None
