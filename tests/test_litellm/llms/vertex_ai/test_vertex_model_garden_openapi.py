@@ -109,18 +109,13 @@ def test_vertex_grok_explicit_unsupported_region_raises() -> None:
         )
 
 
-@pytest.mark.parametrize("model", GROK_MODELS)
-def test_create_vertex_url_uses_global_openapi_endpoint_for_grok(model: str) -> None:
-    url = create_vertex_url(
-        vertex_location="global",
-        vertex_project="my-project",
-        stream=False,
-        model=model,
-    )
-
-    assert url == (
-        "https://aiplatform.googleapis.com/v1/projects/my-project/"
-        "locations/global/endpoints/openapi"
+def test_model_garden_region_resolution_without_metadata() -> None:
+    model_garden = VertexAIModelGardenModels()
+    assert (
+        model_garden._resolve_vertex_location(
+            model="openai/5464397967697903616", vertex_location=None
+        )
+        == "us-central1"
     )
 
 

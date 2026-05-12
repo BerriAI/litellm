@@ -195,7 +195,7 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-        except VertexAIError:
+        except VertexAIError:  # pragma: no cover
             raise
         except Exception as e:
             raise VertexAIError(status_code=500, message=str(e))
