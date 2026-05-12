@@ -234,6 +234,14 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     # splitter.
     if parsed.username is not None or parsed.password is not None:
         raise HTTPException(status_code=400, detail="invalid_request")
+    # Reject backslash in netloc: urlparse keeps ``\`` as part of netloc,
+    # but browsers normalize ``\`` to ``/`` for http(s) URLs and treat it
+    # as the start of the path. An attacker can exploit that split by
+    # crafting ``https://attacker.net\app.example.com/cb`` — urlparse sees
+    # ``attacker.net\app.example.com`` (matches ``*.example.com``) while
+    # the browser navigates to ``attacker.net`` with the auth code.
+    if "\\" in parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid_request")
 
     redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
 

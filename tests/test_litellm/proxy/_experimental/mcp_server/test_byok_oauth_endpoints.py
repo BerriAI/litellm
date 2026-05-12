@@ -1296,6 +1296,44 @@ def test_validate_trusted_redirect_uri_rejects_userinfo(monkeypatch):
     assert exc.value.status_code == 400
 
 
+def test_validate_trusted_redirect_uri_rejects_backslash_in_netloc(monkeypatch):
+    """VERIA finding: urlparse keeps backslashes in ``netloc``, but
+    browsers normalize ``\\`` to ``/`` on http(s) URLs and treat it as
+    the start of the path. An allowlist of ``*.example.com`` would
+    accept ``https://attacker.net\\app.example.com/cb`` (the raw netloc
+    ends with ``.example.com``) while the browser navigates to
+    ``attacker.net`` and delivers the authorization code there.
+
+    Reject on every path through the validator — same-origin,
+    exact-entry, and wildcard — by bouncing the netloc before any
+    matching runs.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    # (1) Wildcard allowlist — the VERIA vector.
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "*.example.com")
+    req = _make_trusted_request("https://llm.other-proxy.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "https://attacker.net\\app.example.com/cb")
+    assert exc.value.status_code == 400
+
+    # (2) Exact-entry allowlist — same split, different match path.
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "app.example.com")
+    req = _make_trusted_request("https://llm.other-proxy.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "https://attacker.net\\app.example.com/cb")
+    assert exc.value.status_code == 400
+
+    # (3) Same-origin path — backslash that mimics the proxy's host.
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+    req = _make_trusted_request("https://llm.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "https://attacker.net\\llm.example.com/cb")
+    assert exc.value.status_code == 400
+
+
 def test_validate_trusted_redirect_uri_allowlist_entry_with_default_port(monkeypatch):
     """Regression: operators who write ``app.example.com:443`` in
     ``MCP_TRUSTED_REDIRECT_ORIGINS`` (natural when copy-pasting from a
