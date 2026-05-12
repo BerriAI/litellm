@@ -44,6 +44,10 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
             "BLOCKLIST",
             "PROHIBITED_CONTENT",
             "SPII",
+            "LANGUAGE",
+            "OTHER",
+            "IMAGE_SAFETY",
+            "IMAGE_PROHIBITED_CONTENT",
         }
     )
 
