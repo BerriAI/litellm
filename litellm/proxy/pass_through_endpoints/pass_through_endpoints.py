@@ -1940,7 +1940,10 @@ class SafeRouteAdder:
     @staticmethod
     def _is_path_registered(app: FastAPI, path: str, methods: List[str]) -> bool:
         """
-        Check if a path with any of the specified methods is already registered on the app.
+        Check if a path with any of the specified methods is already
+        registered on the app, including parameterized routes that would
+        consume the path (e.g. ``/credentials/foo`` is considered
+        registered when ``/credentials/{credential_name:path}`` exists).
 
         Args:
             app: The FastAPI application instance
@@ -1948,17 +1951,27 @@ class SafeRouteAdder:
             methods: List of HTTP methods to check (e.g., ["GET", "POST"])
 
         Returns:
-            True if the path is already registered with any of the methods, False otherwise
+            True if any registered route on the app would handle the path
+            with any of the methods, False otherwise.
         """
         for route in app.routes:
-            # Use getattr to safely access route attributes
-            route_path = getattr(route, "path", None)
             route_methods = getattr(route, "methods", None)
+            if route_methods is None:
+                continue
+            if not any(method in route_methods for method in methods):
+                continue
 
-            if route_path == path and route_methods is not None:
-                # Check if any of the methods overlap
-                if any(method in route_methods for method in methods):
-                    return True
+            if getattr(route, "path", None) == path:
+                return True
+
+            # Parameterized match: an existing built-in such as
+            # ``/credentials/{credential_name:path}`` will consume a new
+            # pass-through registered as ``/credentials/foo`` because
+            # FastAPI dispatches by first-match on the compiled regex.
+            # Treat that as a collision too.
+            path_regex = getattr(route, "path_regex", None)
+            if path_regex is not None and path_regex.match(path):
+                return True
         return False
 
     @staticmethod

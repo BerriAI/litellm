@@ -111,6 +111,32 @@ def test_non_colliding_path_registers():
     )
 
 
+def test_parameterized_route_collision_skips_metadata():
+    # A built-in such as ``/credentials/{credential_name:path}`` consumes
+    # ``/credentials/foo`` via FastAPI's first-match dispatch. The pass-through
+    # entry would never receive traffic but its ``auth`` flag could still
+    # leak into the built-in's authorization path. Treat parameterized
+    # consumption as a collision.
+    app = FastAPI()
+
+    async def _existing(credential_name: str):
+        return {}
+
+    app.add_api_route(
+        path="/credentials/{credential_name:path}",
+        endpoint=_existing,
+        methods=["POST", "DELETE"],
+    )
+
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=app,
+        path="/credentials/foo",
+        **{**_HELPER_KWARGS, "endpoint_id": "ep-shadowed"},
+    )
+
+    assert _registered_pass_through_routes == {}
+
+
 class TestRegisterPassThroughEndpointCollisionGuard:
     """``_register_pass_through_endpoint`` must bail before any mutation
     of ``LiteLLMRoutes.openai_routes`` — an ``auth=true`` colliding
