@@ -10,6 +10,11 @@ import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.proxy.auth.tag_authorization import (
+    ensure_fresh_privileged_tags,
+    filter_authorized_tags,
+    get_privileged_tags_snapshot,
+)
 from litellm.types.router import RouterErrors
 
 if TYPE_CHECKING:
@@ -160,6 +165,21 @@ async def get_deployments_for_tag(
         metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
         match_any = llm_router_instance.tag_filtering_match_any
+
+        # Drop caller-supplied tags the caller is not authorized to claim.
+        # A tag is "privileged" if some deployment lists it under
+        # ``litellm_params.tags`` or a budget is attached to it in
+        # ``LiteLLM_TagTable``. The caller must hold a glob pattern in
+        # ``key.metadata.tags`` / ``team_metadata.tags`` that matches the
+        # privileged tag. Non-privileged tags pass through unchanged.
+        if request_tags:
+            await ensure_fresh_privileged_tags()
+            request_tags = filter_authorized_tags(
+                request_tags,
+                get_privileged_tags_snapshot(),
+                metadata.get("user_api_key_metadata"),
+                metadata.get("user_api_key_team_metadata"),
+            )
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."

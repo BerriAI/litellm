@@ -4044,6 +4044,11 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
+    from litellm.proxy.auth.tag_authorization import (
+        ensure_fresh_privileged_tags,
+        filter_authorized_tags,
+        get_privileged_tags_snapshot,
+    )
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     if prisma_client is None:
@@ -4051,6 +4056,19 @@ async def _tag_max_budget_check(
 
     # Get tags from request metadata
     tags = get_tags_from_request_body(request_body=request_body)
+    if not tags:
+        return
+
+    # Filter out privileged tags the caller is not authorized to claim,
+    # so an unauthorized caller cannot trigger budget enforcement against
+    # a tag bucket owned by another team. Non-privileged tags pass through.
+    await ensure_fresh_privileged_tags()
+    tags = filter_authorized_tags(
+        tags,
+        get_privileged_tags_snapshot(),
+        getattr(valid_token, "metadata", None) if valid_token else None,
+        getattr(valid_token, "team_metadata", None) if valid_token else None,
+    )
     if not tags:
         return
 
