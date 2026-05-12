@@ -216,10 +216,11 @@ class TestVertexAgentEngineChunkParser:
 
         result = self._iterator().chunk_parser(chunk)
 
-        # StreamingChoices normalizes "safety" → OpenAI "stop"; the key
-        # behavior is that *some* terminal finish_reason is surfaced
-        # instead of being dropped (which is what happens for plain STOP).
-        assert result.choices[0].finish_reason is not None
+        # StreamingChoices normalizes Gemini "SAFETY" → OpenAI "content_filter"
+        # via map_finish_reason; the raw uppercase value must be passed through
+        # so that downstream consumers can distinguish a safety block from a
+        # plain stop.
+        assert result.choices[0].finish_reason == "content_filter"
 
     def test_chunk_parser_surfaces_max_tokens_finish_reason_without_content(self):
         chunk = {

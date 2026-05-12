@@ -119,9 +119,11 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
         if raw_finish_reason and (
             text is not None or raw_finish_reason in self._HARD_STOP_FINISH_REASONS
         ):
-            finish_reason = (
-                "stop" if raw_finish_reason == "STOP" else raw_finish_reason.lower()
-            )
+            # Pass the raw Gemini finish reason (uppercase) through so that
+            # downstream ``map_finish_reason`` can map hard-stop signals like
+            # ``SAFETY`` / ``RECITATION`` to ``content_filter`` instead of
+            # silently falling back to ``stop``.
+            finish_reason = raw_finish_reason
 
         usage = None
         usage_metadata = chunk.get("usage_metadata") or {}
