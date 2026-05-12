@@ -410,9 +410,9 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
             "a pathlib.Path, or a file-like object. To OCR a local file "
             "from a path, call open(path, 'rb') yourself."
         )
-    if isinstance(file_input, Path):
-        # pathlib.Path is a Python-level type that HTTP form values can't
-        # fabricate. Treat as a local file path for SDK ergonomics.
+    if isinstance(file_input, os.PathLike):
+        # os.PathLike (pathlib.Path and custom __fspath__ classes) is a
+        # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
