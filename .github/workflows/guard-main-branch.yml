@@ -2,10 +2,6 @@ name: Guard main branch
 
 on:
   pull_request:
-    # Listen on all PRs so that base-branch edits retrigger this workflow.
-    # The job below short-circuits when base != main, so non-main PRs stay
-    # cheap (a few seconds) while a PR retargeted away from main produces a
-    # fresh passing run that supersedes any earlier failed one.
     types: [opened, synchronize, reopened, edited]
   merge_group:
 
