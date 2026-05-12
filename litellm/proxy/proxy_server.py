@@ -15145,9 +15145,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
     Resolution order:
     1. Registered MCP server alias / name
-    2. Toolset name (DB lookup)
-    3. MCP access group tag — resolves to all servers in that group
-    4. Comma-separated mix of any of the above (e.g. /github_mcp,zapier/mcp)
+    2. Comma-separated list (short-circuits before any DB call)
+    3. Toolset name (DB lookup, cached)
+    4. MCP access group tag (DB lookup, cached)
     """
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -15158,7 +15158,6 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
         async def _forward_as_mcp_path(path_segment: str):
-            """Rewrite path to /mcp/{path_segment} and stream through the MCP handler."""
             from litellm.proxy._experimental.mcp_server.server import (
                 handle_streamable_http_mcp,
             )
@@ -15167,15 +15166,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             scope = dict(request.scope)
             scope["path"] = f"/mcp/{path_segment}"
 
-            response_started = False
             response_body = b""
             response_status = 200
             response_headers: list = []
 
             async def custom_send(message):
-                nonlocal response_started, response_body, response_status, response_headers
+                nonlocal response_body, response_status, response_headers
                 if message["type"] == "http.response.start":
-                    response_started = True
                     response_status = message["status"]
                     response_headers = message.get("headers", [])
                 elif message["type"] == "http.response.body":
@@ -15199,7 +15196,11 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         if mcp_server is not None:
             return await _forward_as_mcp_path(mcp_server_name)
 
-        # 2. Toolset name
+        # 2. Comma-separated list — forward directly before any DB call.
+        if "," in mcp_server_name:
+            return await _forward_as_mcp_path(mcp_server_name)
+
+        # 3. Toolset name (cached)
         if prisma_client is not None:
             from litellm.proxy._experimental.mcp_server.server import (
                 _mcp_active_toolset_id,
@@ -15220,25 +15221,28 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 finally:
                     _mcp_active_toolset_id.reset(token)
 
-        # 3 & 4. MCP access group tag OR comma-separated list of servers/groups.
-        # The MCP handler's _get_mcp_servers_in_path already parses comma lists
-        # from /mcp/<csv>, so we just need to ensure the segment is forwarded as
-        # a path under /mcp/. For a single segment that is an access group we
-        # verify it resolves to at least one server before forwarding so that
-        # unknown names still produce a 404.
-        if "," in mcp_server_name:
-            # Comma-separated — forward directly; the MCP handler resolves each token.
-            return await _forward_as_mcp_path(mcp_server_name)
-
-        # Single segment: check whether it is a known MCP access group tag.
+        # 4. Single segment: check if it is a known MCP access group tag (cached).
+        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
-        group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            [mcp_server_name]
-        )
-        if group_server_ids:
+        cache_key = f"mcp_access_group_exists:{mcp_server_name}"
+        cached_result = await user_api_key_cache.async_get_cache(key=cache_key)
+        if cached_result is None:
+            group_server_ids = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    [mcp_server_name]
+                )
+            )
+            cached_result = bool(group_server_ids)
+            await user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=cached_result,
+                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            )
+
+        if cached_result:
             return await _forward_as_mcp_path(mcp_server_name)
 
         raise HTTPException(

@@ -3,10 +3,11 @@ Tests for the dynamic_mcp_route handler in proxy_server.py.
 
 Covers the resolution order:
   1. Registered MCP server alias  → forwards to /mcp/{name}
-  2. Toolset name                  → sets toolset scope, forwards to /mcp
-  3. MCP access group tag          → forwards to /mcp/{name} when the group
+  2. Comma-separated list          → short-circuits before any DB call;
+                                     forwarded to /mcp/{segment}
+  3. Toolset name (cached)         → sets toolset scope, forwards to /mcp
+  4. MCP access group tag (cached) → forwards to /mcp/{name} when the group
                                      resolves to at least one server
-  4. Comma-separated list          → forwarded directly; MCP handler parses
   5. Unknown name                  → 404
 
 Patch targets are at the source modules because dynamic_mcp_route
@@ -30,6 +31,7 @@ _HANDLE_HTTP = (
 )
 _STREAM_ASGI = "litellm.proxy.proxy_server._stream_mcp_asgi_response"
 _PRISMA = "litellm.proxy.proxy_server.prisma_client"
+_CACHE = "litellm.proxy.proxy_server.user_api_key_cache"
 
 
 def _make_request(path: str = "/test/mcp"):
@@ -64,6 +66,14 @@ def _fake_toolset(name: str = "my_toolset", toolset_id: str = "ts-1"):
     t.toolset_id = toolset_id
     t.name = name
     return t
+
+
+def _miss_cache():
+    """Returns a mock user_api_key_cache that always misses (returns None)."""
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return cache
 
 
 async def _ok_mcp_handle(scope, receive, send):
@@ -104,7 +114,42 @@ async def test_dynamic_mcp_route_resolves_registered_server():
 
 
 # ---------------------------------------------------------------------------
-# 2. Toolset name
+# 2. Comma-separated list (short-circuits before toolset DB call)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_comma_list_forwarded():
+    """A comma-separated segment is forwarded directly to /mcp/{segment}
+    without hitting the toolset or access-group DB lookups."""
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+
+    segment = "github_mcp,zapier"
+    request = _make_request(f"/{segment}/mcp")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+
+    captured_scope = {}
+
+    async def capturing_handle(scope, receive, send):
+        captured_scope.update(scope)
+        await _ok_mcp_handle(scope, receive, send)
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_HANDLE_HTTP, new=capturing_handle),
+    ):
+        response = await dynamic_mcp_route(segment, request)
+
+    assert response.status_code == 200
+    assert captured_scope.get("path") == f"/mcp/{segment}"
+    # Toolset lookup must NOT be called for comma names
+    fake_mgr.get_toolset_by_name_cached.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 3. Toolset name
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +190,7 @@ async def test_dynamic_mcp_route_resolves_toolset():
 
 
 # ---------------------------------------------------------------------------
-# 3. MCP access group tag
+# 4. MCP access group tag (cached)
 # ---------------------------------------------------------------------------
 
 
@@ -170,6 +215,7 @@ async def test_dynamic_mcp_route_resolves_access_group():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
+        patch(_CACHE, new=_miss_cache()),
         patch(
             f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
             new=AsyncMock(return_value=["server-a", "server-b"]),
@@ -198,49 +244,13 @@ async def test_dynamic_mcp_route_access_group_called_with_correct_name():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
+        patch(_CACHE, new=_miss_cache()),
         patch(f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups", new=group_lookup),
         patch(_HANDLE_HTTP, new=_ok_mcp_handle),
     ):
         await dynamic_mcp_route("qa_tools", request)
 
     group_lookup.assert_awaited_once_with(["qa_tools"])
-
-
-# ---------------------------------------------------------------------------
-# 4. Comma-separated list
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dynamic_mcp_route_comma_list_forwarded():
-    """A comma-separated segment is forwarded directly to /mcp/{segment};
-    per-token resolution is delegated to the MCP handler."""
-    from litellm.proxy.proxy_server import dynamic_mcp_route
-
-    segment = "github_mcp,zapier"
-    request = _make_request(f"/{segment}/mcp")
-
-    fake_mgr = MagicMock()
-    # get_mcp_server_by_name must accept a comma-string; return None to fall through
-    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
-    fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=None)
-
-    captured_scope = {}
-
-    async def capturing_handle(scope, receive, send):
-        captured_scope.update(scope)
-        await _ok_mcp_handle(scope, receive, send)
-
-    with (
-        patch(_MCP_MANAGER, fake_mgr),
-        patch(_PRISMA, new=MagicMock()),
-        patch(_HANDLE_HTTP, new=capturing_handle),
-    ):
-        response = await dynamic_mcp_route(segment, request)
-
-    assert response.status_code == 200
-    # Comma list forwarded verbatim; MCP handler splits internally
-    assert captured_scope.get("path") == f"/mcp/{segment}"
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +272,7 @@ async def test_dynamic_mcp_route_unknown_name_returns_404():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
+        patch(_CACHE, new=_miss_cache()),
         patch(
             f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
             new=AsyncMock(return_value=[]),
@@ -288,6 +299,7 @@ async def test_dynamic_mcp_route_empty_access_group_returns_404():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
+        patch(_CACHE, new=_miss_cache()),
         patch(
             f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
             new=AsyncMock(return_value=[]),
