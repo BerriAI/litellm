@@ -85,7 +85,12 @@ function UserField({
         <div key={label} className="flex flex-col min-w-0">
           <span className="text-gray-400">{label}</span>
           {value ? (
-            <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
+            <Typography.Text
+              className="font-mono text-xs"
+              style={{ maxWidth: 220 }}
+              ellipsis={{ tooltip: value }}
+              copyable
+            >
               {value}
             </Typography.Text>
           ) : (
@@ -114,7 +119,13 @@ function UserField({
       {labelEl}
       <div>
         <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-          <Text strong style={{ cursor: "default" }}>{displayValue}</Text>
+          <Text
+            strong
+            ellipsis
+            style={{ cursor: "default", maxWidth: 200, display: "block" }}
+          >
+            {displayValue}
+          </Text>
         </Popover>
       </div>
     </div>
@@ -182,6 +193,13 @@ export function KeyInfoHeader({
       <Flex align="stretch" gap={40} style={{ marginBottom: 40 }}>
         <Space direction="vertical" size={16}>
           <UserField userAlias={data.userAlias} userEmail={data.userEmail} userId={data.userId} />
+          <LabeledField label="Expires" value={data.expires} icon={<FieldTimeOutlined />} />
+        </Space>
+
+        <Divider type="vertical" style={{ height: "auto" }} />
+
+        <Space direction="vertical" size={16}>
+          <LabeledField label="Created At" value={data.createdAt} icon={<CalendarOutlined />} />
           <LabeledField
             label="Created By"
             value={data.createdBy}
@@ -190,13 +208,6 @@ export function KeyInfoHeader({
             copyable
             defaultUserIdCheck
           />
-        </Space>
-
-        <Divider type="vertical" style={{ height: "auto" }} />
-
-        <Space direction="vertical" size={16}>
-          <LabeledField label="Created At" value={data.createdAt} icon={<CalendarOutlined />} />
-          <LabeledField label="Expires" value={data.expires} icon={<FieldTimeOutlined />} />
         </Space>
 
         <Divider type="vertical" style={{ height: "auto" }} />
