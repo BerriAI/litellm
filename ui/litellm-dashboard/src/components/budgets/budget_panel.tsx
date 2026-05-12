@@ -19,6 +19,7 @@ import {
   TabPanels,
   Text,
 } from "@tremor/react";
+import { Tag, Typography } from "antd";
 import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -31,8 +32,18 @@ import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
 
+const { Text: AntText } = Typography;
+
 interface BudgetSettingsPageProps {
   accessToken: string | null;
+}
+
+export interface BudgetLinkedEntity {
+  entity_type: string;
+  entity_id: string;
+  entity_name?: string;
+  parent_entity_id?: string;
+  parent_entity_name?: string;
 }
 
 export interface budgetItem {
@@ -41,7 +52,52 @@ export interface budgetItem {
   rpm_limit: number | null;
   tpm_limit: number | null;
   updated_at: string;
+  linked_entities?: BudgetLinkedEntity[];
 }
+
+const BUDGET_ENTITY_LABELS: Record<string, string> = {
+  organization: "Organization",
+  project: "Project",
+  key: "Key",
+  end_user: "End user",
+  tag: "Tag",
+  team_member: "Team member",
+  team_member_default: "Team default",
+  organization_member: "Organization member",
+};
+
+const getBudgetEntityLabel = (entityType: string): string =>
+  BUDGET_ENTITY_LABELS[entityType] ?? entityType.replace(/_/g, " ");
+
+const getBudgetEntityDisplayName = (entity: BudgetLinkedEntity): string => {
+  const entityName = entity.entity_name || entity.entity_id;
+  if (entity.parent_entity_name) {
+    return `${entity.parent_entity_name} / ${entityName}`;
+  }
+  if (entity.parent_entity_id) {
+    return `${entity.parent_entity_id} / ${entityName}`;
+  }
+  return entityName;
+};
+
+const BudgetLinkedEntitiesCell = ({ linkedEntities = [] }: { linkedEntities?: BudgetLinkedEntity[] }) => {
+  if (linkedEntities.length === 0) {
+    return <AntText type="secondary">Unassigned</AntText>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {linkedEntities.map((entity, index) => (
+        <div key={`${entity.entity_type}-${entity.entity_id}-${entity.parent_entity_id ?? "root"}-${index}`}>
+          <Tag color="blue" className="mb-1">
+            {getBudgetEntityLabel(entity.entity_type)}
+          </Tag>
+          <AntText>{getBudgetEntityDisplayName(entity)}</AntText>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
@@ -125,6 +181,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>Budget ID</TableHeaderCell>
+                      <TableHeaderCell>Assigned To</TableHeaderCell>
                       <TableHeaderCell>Max Budget</TableHeaderCell>
                       <TableHeaderCell>TPM</TableHeaderCell>
                       <TableHeaderCell>RPM</TableHeaderCell>
@@ -138,9 +195,12 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                       .map((value: budgetItem) => (
                         <TableRow key={value.budget_id}>
                           <TableCell>{value.budget_id}</TableCell>
-                          <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
-                          <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
-                          <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
+                          <TableCell>
+                            <BudgetLinkedEntitiesCell linkedEntities={value.linked_entities} />
+                          </TableCell>
+                          <TableCell>{value.max_budget ?? "n/a"}</TableCell>
+                          <TableCell>{value.tpm_limit ?? "n/a"}</TableCell>
+                          <TableCell>{value.rpm_limit ?? "n/a"}</TableCell>
                           {canModify && (
                             <>
                               <TableIconActionButton

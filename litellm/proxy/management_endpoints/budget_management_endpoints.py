@@ -12,6 +12,9 @@ All /budget management endpoints
 """
 
 #### BUDGET TABLE MANAGEMENT ####
+from collections import defaultdict
+from typing import Any, DefaultDict, Dict, Iterable, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -21,6 +24,290 @@ from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.utils import jsonify_object
 
 router = APIRouter()
+
+BudgetLinkedEntity = Dict[str, Optional[str]]
+
+
+def _record_value(record: Any, field_name: str) -> Any:
+    if isinstance(record, dict):
+        return record.get(field_name)
+    return getattr(record, field_name, None)
+
+
+def _budget_row_to_dict(budget_row: Any) -> Dict[str, Any]:
+    if isinstance(budget_row, dict):
+        return {**budget_row}
+    if hasattr(budget_row, "model_dump"):
+        return budget_row.model_dump()
+    return vars(budget_row)
+
+
+def _append_linked_entity(
+    linked_entities_by_budget: DefaultDict[str, List[BudgetLinkedEntity]],
+    budget_id: Optional[str],
+    entity_type: str,
+    entity_id: Optional[str],
+    entity_name: Optional[str] = None,
+    parent_entity_id: Optional[str] = None,
+    parent_entity_name: Optional[str] = None,
+) -> None:
+    if budget_id is None or entity_id is None:
+        return
+
+    entity: BudgetLinkedEntity = {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+    }
+    if entity_name:
+        entity["entity_name"] = entity_name
+    if parent_entity_id:
+        entity["parent_entity_id"] = parent_entity_id
+    if parent_entity_name:
+        entity["parent_entity_name"] = parent_entity_name
+    linked_entities_by_budget[budget_id].append(entity)
+
+
+def _records_by_id(records: Iterable[Any], id_field: str) -> Dict[str, Any]:
+    return {
+        record_id: record
+        for record in records
+        if (record_id := _record_value(record, id_field)) is not None
+    }
+
+
+def _display_name(record: Any, preferred_fields: Iterable[str]) -> Optional[str]:
+    for field_name in preferred_fields:
+        field_value = _record_value(record, field_name)
+        if isinstance(field_value, str) and field_value:
+            return field_value
+    return None
+
+
+async def _get_budget_linked_entities(
+    prisma_client: Any, budget_ids: List[str]
+) -> Dict[str, List[BudgetLinkedEntity]]:
+    linked_entities_by_budget: DefaultDict[str, List[BudgetLinkedEntity]] = defaultdict(
+        list
+    )
+    if len(budget_ids) == 0:
+        return {}
+
+    budget_id_filter = {"budget_id": {"in": budget_ids}}
+
+    organizations = await prisma_client.db.litellm_organizationtable.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "organization_id": True,
+            "organization_alias": True,
+        },
+    )
+    for organization in organizations:
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(organization, "budget_id"),
+            entity_type="organization",
+            entity_id=_record_value(organization, "organization_id"),
+            entity_name=_record_value(organization, "organization_alias"),
+        )
+
+    projects = await prisma_client.db.litellm_projecttable.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "project_id": True,
+            "project_alias": True,
+            "team_id": True,
+        },
+    )
+    for project in projects:
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(project, "budget_id"),
+            entity_type="project",
+            entity_id=_record_value(project, "project_id"),
+            entity_name=_record_value(project, "project_alias"),
+            parent_entity_id=_record_value(project, "team_id"),
+        )
+
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "key_name": True,
+            "key_alias": True,
+            "user_id": True,
+            "team_id": True,
+            "project_id": True,
+        },
+    )
+    for key in keys:
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(key, "budget_id"),
+            entity_type="key",
+            entity_id=_display_name(key, ("key_alias", "key_name")) or "virtual_key",
+            entity_name=_display_name(key, ("key_alias", "key_name")),
+            parent_entity_id=_record_value(key, "project_id")
+            or _record_value(key, "team_id")
+            or _record_value(key, "user_id"),
+        )
+
+    end_users = await prisma_client.db.litellm_endusertable.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "user_id": True,
+            "alias": True,
+        },
+    )
+    for end_user in end_users:
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(end_user, "budget_id"),
+            entity_type="end_user",
+            entity_id=_record_value(end_user, "user_id"),
+            entity_name=_record_value(end_user, "alias"),
+        )
+
+    tags = await prisma_client.db.litellm_tagtable.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "tag_name": True,
+        },
+    )
+    for tag in tags:
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(tag, "budget_id"),
+            entity_type="tag",
+            entity_id=_record_value(tag, "tag_name"),
+            entity_name=_record_value(tag, "tag_name"),
+        )
+
+    team_memberships = await prisma_client.db.litellm_teammembership.find_many(
+        where=budget_id_filter,
+        select={
+            "budget_id": True,
+            "user_id": True,
+            "team_id": True,
+        },
+    )
+    organization_memberships = (
+        await prisma_client.db.litellm_organizationmembership.find_many(
+            where=budget_id_filter,
+            select={
+                "budget_id": True,
+                "user_id": True,
+                "organization_id": True,
+            },
+        )
+    )
+
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        select={
+            "team_id": True,
+            "team_alias": True,
+            "metadata": True,
+        },
+    )
+    users = await prisma_client.db.litellm_usertable.find_many(
+        where={
+            "user_id": {
+                "in": list(
+                    {
+                        _record_value(membership, "user_id")
+                        for membership in [
+                            *team_memberships,
+                            *organization_memberships,
+                        ]
+                        if _record_value(membership, "user_id") is not None
+                    }
+                )
+            }
+        },
+        select={
+            "user_id": True,
+            "user_alias": True,
+            "user_email": True,
+        },
+    )
+
+    teams_by_id = _records_by_id(teams, "team_id")
+    users_by_id = _records_by_id(users, "user_id")
+    organizations_by_id = _records_by_id(organizations, "organization_id")
+
+    organization_member_org_ids = {
+        organization_id
+        for membership in organization_memberships
+        if (organization_id := _record_value(membership, "organization_id")) is not None
+    }
+    missing_organization_ids = [
+        organization_id
+        for organization_id in organization_member_org_ids
+        if organization_id not in organizations_by_id
+    ]
+    if missing_organization_ids:
+        organization_membership_organizations = (
+            await prisma_client.db.litellm_organizationtable.find_many(
+                where={"organization_id": {"in": missing_organization_ids}},
+                select={
+                    "organization_id": True,
+                    "organization_alias": True,
+                },
+            )
+        )
+        organizations_by_id.update(
+            _records_by_id(organization_membership_organizations, "organization_id")
+        )
+
+    for membership in team_memberships:
+        user_id = _record_value(membership, "user_id")
+        team_id = _record_value(membership, "team_id")
+        user = users_by_id.get(user_id)
+        team = teams_by_id.get(team_id)
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(membership, "budget_id"),
+            entity_type="team_member",
+            entity_id=user_id,
+            entity_name=_display_name(user, ("user_alias", "user_email", "user_id")),
+            parent_entity_id=team_id,
+            parent_entity_name=_display_name(team, ("team_alias", "team_id")),
+        )
+
+    for membership in organization_memberships:
+        user_id = _record_value(membership, "user_id")
+        organization_id = _record_value(membership, "organization_id")
+        user = users_by_id.get(user_id)
+        organization = organizations_by_id.get(organization_id)
+        _append_linked_entity(
+            linked_entities_by_budget=linked_entities_by_budget,
+            budget_id=_record_value(membership, "budget_id"),
+            entity_type="organization_member",
+            entity_id=user_id,
+            entity_name=_display_name(user, ("user_alias", "user_email", "user_id")),
+            parent_entity_id=organization_id,
+            parent_entity_name=_display_name(
+                organization, ("organization_alias", "organization_id")
+            ),
+        )
+
+    budget_id_set = set(budget_ids)
+    for team in teams:
+        metadata = _record_value(team, "metadata") or {}
+        team_member_budget_id = metadata.get("team_member_budget_id")
+        if team_member_budget_id in budget_id_set:
+            _append_linked_entity(
+                linked_entities_by_budget=linked_entities_by_budget,
+                budget_id=team_member_budget_id,
+                entity_type="team_member_default",
+                entity_id=_record_value(team, "team_id"),
+                entity_name=_display_name(team, ("team_alias", "team_id")),
+            )
+
+    return dict(linked_entities_by_budget)
 
 
 @router.post(
@@ -317,9 +604,27 @@ async def list_budget(
             },
         )
 
-    response = await prisma_client.db.litellm_budgettable.find_many()
+    budget_rows = await prisma_client.db.litellm_budgettable.find_many()
+    budget_response = [_budget_row_to_dict(budget_row) for budget_row in budget_rows]
+    budget_ids = [
+        budget["budget_id"]
+        for budget in budget_response
+        if isinstance(budget.get("budget_id"), str)
+    ]
+    linked_entities_by_budget = await _get_budget_linked_entities(
+        prisma_client=prisma_client,
+        budget_ids=budget_ids,
+    )
 
-    return response
+    for budget in budget_response:
+        budget_id = budget.get("budget_id")
+        budget["linked_entities"] = (
+            linked_entities_by_budget.get(budget_id, [])
+            if isinstance(budget_id, str)
+            else []
+        )
+
+    return budget_response
 
 
 @router.post(
