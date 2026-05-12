@@ -47,7 +47,17 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
+# Build the OSS Admin UI from source so generated Next.js export files do not
+# need to be committed to the repository.
+RUN --mount=type=cache,target=/root/.npm,id=litellm-ui-npm-cache \
+    cd ui/litellm-dashboard && \
+    npm ci && \
+    npm run build && \
+    rm -rf ../../litellm/proxy/_experimental/out && \
+    mkdir -p ../../litellm/proxy/_experimental/out && \
+    cp -R out/. ../../litellm/proxy/_experimental/out/
+
+# Apply enterprise Admin UI customizations, when present, before final sync.
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
