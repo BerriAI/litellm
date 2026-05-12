@@ -255,10 +255,24 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+        # 先获取 model 和 api_base，用于国内模型判断
+        # 这些参数需要在 session handler 之前获取，确保 orphan 过滤逻辑正确
+        model_name = litellm_completion_request.get("model", "")
+        api_base = litellm_completion_request.get("api_base", "") or kwargs.get(
+            "api_base", ""
+        )
+        # 从 litellm_params 提取实际模型名（如果是 openai/qwen3.6-plus 格式）
+        litellm_params_model = kwargs.get("litellm_params", {}).get("model", "")
+        if litellm_params_model and litellm_params_model.startswith("openai/"):
+            model_name = litellm_params_model
+
         previous_response_id: Optional[str] = responses_api_request.get(
             "previous_response_id"
         )
         if previous_response_id:
+            # 传入正确的 model_name 和 api_base 用于 orphan 过滤
+            litellm_completion_request["model"] = model_name
+            litellm_completion_request["api_base"] = api_base
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
