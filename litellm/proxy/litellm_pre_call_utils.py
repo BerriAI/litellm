@@ -449,6 +449,97 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+# SensitiveDataMasker offers pattern-based redaction with partial masking;
+# callback_vars uses an explicit allowlist because the field set is small,
+# known, and we want full opacity over partial reveal.
+PUBLIC_CALLBACK_VARS = frozenset(
+    {
+        "langfuse_public_key",
+        "langfuse_host",
+        "langfuse_prompt_version",
+        "langsmith_project",
+        "langsmith_base_url",
+        "langsmith_sampling_rate",
+        "langsmith_tenant_id",
+        "arize_space_key",
+        "arize_space_id",
+        "posthog_host",
+        "posthog_api_url",
+        "braintrust_project",
+        "braintrust_host",
+        "lunary_public_key",
+        "gcs_bucket_name",
+        "weave_project_id",
+        "turn_off_message_logging",
+        "litellm_disabled_callbacks",
+    }
+)
+
+CALLBACK_VAR_MASK = "****"
+
+
+def redact_callback_vars(callback_vars: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: (value if key in PUBLIC_CALLBACK_VARS else CALLBACK_VAR_MASK)
+        for key, value in callback_vars.items()
+    }
+
+
+def redact_metadata_for_response(metadata: Any) -> Any:
+    if not isinstance(metadata, dict) or "logging" not in metadata:
+        return metadata
+    entries = metadata.get("logging")
+    if not isinstance(entries, list):
+        return metadata
+    redacted_entries: List[Any] = []
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+            redacted_entries.append(
+                {
+                    **entry,
+                    "callback_vars": redact_callback_vars(entry["callback_vars"]),
+                }
+            )
+        else:
+            redacted_entries.append(entry)
+    return {**metadata, "logging": redacted_entries}
+
+
+def restore_masked_callback_vars(new_metadata: Any, existing_metadata: Any) -> Any:
+    """When an update payload re-submits the mask sentinel for a callback_vars
+    field, substitute the stored value from existing_metadata so a GET-then-PUT
+    round-trip does not overwrite the original credential. Existing entries are
+    matched by callback_name."""
+    if not isinstance(new_metadata, dict) or "logging" not in new_metadata:
+        return new_metadata
+    new_entries = new_metadata.get("logging")
+    if not isinstance(new_entries, list):
+        return new_metadata
+
+    existing_lookup: Dict[str, Dict[str, Any]] = {}
+    if isinstance(existing_metadata, dict):
+        for entry in existing_metadata.get("logging") or []:
+            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+                existing_lookup[entry.get("callback_name", "")] = entry["callback_vars"]
+
+    restored_entries: List[Any] = []
+    for entry in new_entries:
+        if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+            existing_vars = existing_lookup.get(entry.get("callback_name", ""), {})
+            restored_vars = {
+                key: (
+                    existing_vars[key]
+                    if value == CALLBACK_VAR_MASK and key in existing_vars
+                    else value
+                )
+                for key, value in entry["callback_vars"].items()
+            }
+            restored_entries.append({**entry, "callback_vars": restored_vars})
+        else:
+            restored_entries.append(entry)
+    return {**new_metadata, "logging": restored_entries}
+
+
 def _get_validated_callback_metadata(
     item: dict, *, source: str
 ) -> Optional[AddTeamCallback]:
