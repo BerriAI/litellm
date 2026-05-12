@@ -599,6 +599,21 @@ class LiteLLMCompletionResponsesConfig:
                             if call_id:
                                 existing_tool_call_ids.add(call_id)
 
+                        # Skip orphan tool outputs in multi-message batches
+                        # (single-message case handled above at line 547-566)
+                        if role == "tool":
+                            tool_call_id = (
+                                m.get("tool_call_id")
+                                if isinstance(m, dict)
+                                else getattr(m, "tool_call_id", None)
+                            )
+                            if (
+                                tool_call_id
+                                and str(tool_call_id) not in existing_tool_call_ids
+                            ):
+                                # Orphan tool output: no corresponding tool call in history
+                                continue
+
                         deduped_in_place.append(m)
 
                     messages.extend(deduped_in_place)
