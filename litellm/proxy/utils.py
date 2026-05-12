@@ -2440,8 +2440,7 @@ async def _lookup_deprecated_key(
             where={
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
-            },
-            select={"active_token_id": True, "revoke_at": True},
+            }
         )
         if deprecated_row and deprecated_row.active_token_id:
             revoke_at = deprecated_row.revoke_at
