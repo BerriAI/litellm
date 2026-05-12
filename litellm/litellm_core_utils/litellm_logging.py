@@ -5160,12 +5160,20 @@ class StandardLoggingPayloadSetup:
         error_message = str(original_exception)
 
         # For rate-limit errors (litellm.RateLimitError + the proxy-side
-        # ProxyRateLimitError subclass), surface the unified `category` field
-        # so callbacks can distinguish vendor vs. litellm rate limits without
-        # reaching for the raw exception object.
+        # ProxyRateLimitError subclass), surface the unified `category` and
+        # `rate_limit_type` fields so callbacks can distinguish vendor vs.
+        # litellm rate limits AND split by the dimension that was exceeded
+        # (requests / tokens / concurrent_requests / budget / max_iterations)
+        # without reaching for the raw exception object.
+        is_rate_limit_error = isinstance(original_exception, litellm.RateLimitError)
         rate_limit_category: Optional[str] = (
             getattr(original_exception, "category", None)
-            if isinstance(original_exception, litellm.RateLimitError)
+            if is_rate_limit_error
+            else None
+        )
+        rate_limit_type: Optional[str] = (
+            getattr(original_exception, "rate_limit_type", None)
+            if is_rate_limit_error
             else None
         )
 
@@ -5176,6 +5184,7 @@ class StandardLoggingPayloadSetup:
             traceback=traceback_info,
             error_message=error_message if original_exception else "",
             error_rate_limit_category=rate_limit_category,
+            error_rate_limit_type=rate_limit_type,
         )
 
     @staticmethod

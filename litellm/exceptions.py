@@ -48,6 +48,39 @@ class RateLimitErrorCategory(str, enum.Enum):
     """LiteLLM's own batch rate limiter (token/request budget across a batch input file) blocked the request."""
 
 
+class RateLimitType(str, enum.Enum):
+    """
+    The dimension that was exceeded when a rate-limit error fired.
+
+    This is orthogonal to :class:`RateLimitErrorCategory` — *category* tells
+    callers **who** rate-limited the request (the upstream vendor vs. one of
+    litellm's own limiters), while *type* tells them **which limit dimension**
+    was exceeded (an RPM ceiling, a TPM ceiling, a max-parallel-requests
+    ceiling, a budget cap, or a max-iterations cap).
+
+    Surfaced both on every :class:`RateLimitError` instance via the
+    ``rate_limit_type`` attribute and on the structured
+    ``StandardLoggingPayload.error_information.error_rate_limit_type`` field
+    so custom callbacks / metrics consumers can split rate-limit failures by
+    cause without parsing free-text error messages.
+    """
+
+    REQUESTS = "requests"
+    """Requests-per-minute (RPM) or requests-per-window ceiling exceeded."""
+
+    TOKENS = "tokens"
+    """Tokens-per-minute (TPM) or tokens-per-window ceiling exceeded."""
+
+    CONCURRENT_REQUESTS = "concurrent_requests"
+    """``max_parallel_requests`` — too many in-flight requests at once."""
+
+    BUDGET = "budget"
+    """Spend budget cap reached (key, team, user, or per-session)."""
+
+    MAX_ITERATIONS = "max_iterations"
+    """Per-session max-iterations cap reached (agent-style flows)."""
+
+
 _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
 
@@ -377,6 +410,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         category: Union[str, RateLimitErrorCategory] = (
             RateLimitErrorCategory.VENDOR_RATE_LIMIT
         ),
+        rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,
         detail: Any = None,
     ):
@@ -389,6 +423,14 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.num_retries = num_retries
         self.category = (
             category.value if isinstance(category, RateLimitErrorCategory) else category
+        )
+        # Which dimension was exceeded — request count, token count, parallel
+        # requests, budget, max iterations. None when the source didn't
+        # classify the failure (e.g. legacy vendor 429 with no header hints).
+        self.rate_limit_type: Optional[str] = (
+            rate_limit_type.value
+            if isinstance(rate_limit_type, RateLimitType)
+            else rate_limit_type
         )
         # Headers explicitly attached to the error (e.g. retry-after,
         # rate_limit_type, reset_at). Preserved across the proxy boundary so
