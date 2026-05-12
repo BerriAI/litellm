@@ -84,6 +84,17 @@ def _is_unresolvable_model_identifier(
     if it were a real model. The most common case (issue #25550) is a stale
     access-group label whose group was removed; identifiers for proxy models
     that have since been removed from config are filtered for the same reason.
+
+    Known narrow gap: a bare, unprefixed model id (no "/") that is genuinely
+    valid but absent from litellm.model_list_set — for example a brand-new
+    provider model id, or a custom Azure deployment name — will be treated
+    as unresolvable. In practice such names are surfaced to a key/team via
+    either (a) the proxy admin registering them in `model_list` (puts them
+    in proxy_model_list), (b) a provider-qualified form (e.g.
+    `azure/<deployment>`), or (c) wildcard routing — all of which short-
+    circuit the filter above. A bare unknown name that bypasses all three
+    would not be routable by the proxy anyway, so dropping it from
+    /v1/models matches what the call would do at request time.
     """
     if model in proxy_model_list:
         return False
