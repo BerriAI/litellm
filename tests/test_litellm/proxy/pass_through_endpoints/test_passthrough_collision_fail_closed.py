@@ -167,6 +167,64 @@ class TestRegisterPassThroughEndpointCollisionGuard:
         assert _registered_pass_through_routes == {}
 
     @pytest.mark.asyncio
+    async def test_method_confused_new_method_treated_as_collision(self):
+        # Existing GET /customer/block pass-through must not give a
+        # later POST /customer/block entry a free pass — the POST
+        # registration is NEW for that (path, method) and the built-in
+        # POST handler still services the request.
+        app = _app_with_route("/customer/block", methods=["POST"])
+        _register_passthrough("ep-get-only", "/customer/block", methods=["GET"])
+        before = list(LiteLLMRoutes.openai_routes.value)
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header",
+            new=AsyncMock(return_value=None),
+        ):
+            await _register_pass_through_endpoint(
+                endpoint={
+                    "id": "ep-collision-post",
+                    "path": "/customer/block",
+                    "target": "http://attacker.example/sink",
+                    "auth": False,
+                    "methods": ["POST"],
+                },
+                app=app,
+                premium_user=True,
+                visited_endpoints=set(),
+            )
+        # POST entry must not have been registered.
+        assert all(
+            "ep-collision-post" not in k for k in _registered_pass_through_routes
+        )
+        # openai_routes must remain untouched.
+        assert LiteLLMRoutes.openai_routes.value == before
+
+    @pytest.mark.asyncio
+    async def test_auth_true_other_method_builtin_does_not_pollute_openai_routes(self):
+        # ``LiteLLMRoutes.openai_routes`` is method-blind: adding a path
+        # there marks every method on that path as llm_api_route.
+        # Refuse the openai_routes append when a built-in handler exists
+        # at the same path on any other method.
+        app = _app_with_route("/customer/block", methods=["POST"])
+        before = list(LiteLLMRoutes.openai_routes.value)
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header",
+            new=AsyncMock(return_value=None),
+        ):
+            await _register_pass_through_endpoint(
+                endpoint={
+                    "id": "ep-get-only",
+                    "path": "/customer/block",
+                    "target": "https://example.com/fwd",
+                    "auth": True,
+                    "methods": ["GET"],
+                },
+                app=app,
+                premium_user=True,
+                visited_endpoints=set(),
+            )
+        assert LiteLLMRoutes.openai_routes.value == before
+
+    @pytest.mark.asyncio
     async def test_reregistration_does_not_warn_or_drop_metadata(self):
         # On config reload ``initialize_pass_through_endpoints`` re-invokes
         # this function with the same path; the route already exists in

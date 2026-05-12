@@ -2076,18 +2076,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        if (
-            not route_added
-            and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                path
+        all_methods_are_self_reregistration = all(
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=path, method=m
             )
-        ):
+            is not None
+            for m in methods
+        )
+        if not route_added and not all_methods_are_self_reregistration:
             # Path collides with a non-pass-through route (typically a
-            # built-in management endpoint). Skip metadata add so
-            # downstream auth checks don't honor this entry's ``auth``
-            # flag against the built-in that will service the request.
-            # Re-registrations of our own pass-through (e.g. on config
-            # reload) fall through and refresh the metadata in place.
+            # built-in management endpoint) for at least one of the
+            # methods we're registering. Skip metadata add so the
+            # auth-side gate does not honor this entry's ``auth`` flag
+            # against the built-in that will service the request. A
+            # full self-re-registration (all methods already ours) falls
+            # through and refreshes metadata in place.
             verbose_proxy_logger.warning(
                 "Pass-through path %r (methods %s) collides with a route "
                 "already registered on the app. The pass-through entry is "
@@ -2174,12 +2177,14 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        if (
-            not route_added
-            and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                path
+        all_methods_are_self_reregistration = all(
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=path, method=m
             )
-        ):
+            is not None
+            for m in methods
+        )
+        if not route_added and not all_methods_are_self_reregistration:
             # Wildcard variant of the collision skip in ``add_exact_path_route``.
             verbose_proxy_logger.warning(
                 "Pass-through wildcard path %r (methods %s) collides with a "
@@ -2373,11 +2378,12 @@ async def _register_pass_through_endpoint(
     dependencies = None
 
     # Bail before any mutation if the path collides with a non-pass-through
-    # route. ``LiteLLMRoutes.openai_routes`` is mutated below — adding a
-    # colliding path would mark the existing built-in as an llm_api_route
-    # and short-circuit its RBAC. Re-registrations of our own previously
-    # registered pass-through (e.g. config reload) fall through; the
-    # deeper helpers handle the idempotent route add + metadata refresh.
+    # route on any of the methods we're registering. The re-registration
+    # exception is method-aware: only treat the conflict as safe when
+    # every requested method is already registered as one of our
+    # pass-throughs (a full config-reload cycle). A POST entry sneaking
+    # in alongside an existing GET pass-through is NOT safe — the POST
+    # path still dispatches to the built-in handler.
     methods_for_collision_check = endpoint_data.get("methods") or [
         "GET",
         "POST",
@@ -2385,15 +2391,23 @@ async def _register_pass_through_endpoint(
         "DELETE",
         "PATCH",
     ]
-    if SafeRouteAdder._is_path_registered(
-        app=app, path=path, methods=methods_for_collision_check
-    ) and not InitPassThroughEndpointHelpers.is_registered_pass_through_route(path):
+    new_methods = [
+        m
+        for m in methods_for_collision_check
+        if InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=path, method=m
+        )
+        is None
+    ]
+    if new_methods and SafeRouteAdder._is_path_registered(
+        app=app, path=path, methods=new_methods
+    ):
         verbose_proxy_logger.warning(
             "Pass-through path %r (methods %s) collides with a route already "
             "registered on the app. The pass-through entry is ignored. "
             "Rename the pass-through path to avoid shadowing an existing route.",
             path,
-            methods_for_collision_check,
+            new_methods,
         )
         return
 
@@ -2403,7 +2417,34 @@ async def _register_pass_through_endpoint(
         # unless the operator had a license. The safe option must always be free,
         # and unauthenticated forwarding should require explicit opt-in.
         dependencies = [Depends(user_api_key_auth)]
-        if path not in LiteLLMRoutes.openai_routes.value:
+        # ``LiteLLMRoutes.openai_routes`` is method-blind: adding a path
+        # marks it as an llm_api_route for every method. Refuse to pollute
+        # the list when the path already has any built-in handler at any
+        # method — otherwise the built-in's RBAC is silently downgraded.
+        path_used_by_other_route = SafeRouteAdder._is_path_registered(
+            app=app,
+            path=path,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        )
+        all_existing_methods_are_ours = path_used_by_other_route and all(
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=path, method=m
+            )
+            is not None
+            for m in [
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE",
+                "PATCH",
+                "HEAD",
+                "OPTIONS",
+            ]
+            if SafeRouteAdder._is_path_registered(app=app, path=path, methods=[m])
+        )
+        if (
+            not path_used_by_other_route or all_existing_methods_are_ours
+        ) and path not in LiteLLMRoutes.openai_routes.value:
             LiteLLMRoutes.openai_routes.value.append(path)
 
     if target is None:
