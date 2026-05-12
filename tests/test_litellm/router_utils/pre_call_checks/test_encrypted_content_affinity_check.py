@@ -888,13 +888,16 @@ async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_sw
                 return d
         return seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new_callable=AsyncMock,
-        return_value=first_resp,
-    ), patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=first_call_picks_account_a,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=first_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=first_call_picks_account_a,
+        ),
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
@@ -1013,13 +1016,16 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
                 return d
         return seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new_callable=AsyncMock,
-        return_value=first_resp,
-    ), patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=pick_account_a,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=first_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=pick_account_a,
+        ),
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
@@ -1096,3 +1102,73 @@ def test_boundary_fallback_originating_deployment_removed_returns_empty():
     )
     assert matches == []
     mock_router.get_deployment.assert_called_once_with(model_id="dep-removed")
+
+
+def test_boundary_key_accepts_pydantic_litellm_params_instance():
+    """
+    Regression: ``_encryption_boundary_key`` must accept any object exposing
+    dict-style ``.get()`` (incl. ``LiteLLM_Params`` Pydantic instances) — not
+    just plain dicts.
+
+    A stricter ``isinstance(dict)`` guard would silently return ``None`` for a
+    ``LiteLLM_Params`` value, drop the deployment from boundary matching, and
+    fall back to the full pool — which is the exact ``invalid_encrypted_content``
+    failure this check exists to prevent.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+    from litellm.types.router import LiteLLM_Params
+
+    pydantic_params = LiteLLM_Params(
+        model="azure/gpt-5.3-codex",
+        api_base="https://mateo-resource.openai.azure.com",
+        api_key="fake-azure-resource-key-a",
+    )
+    plain_params = {
+        "model": "azure/gpt-5.3-codex",
+        "api_base": "https://mateo-resource.openai.azure.com",
+        "api_key": "fake-azure-resource-key-a",
+    }
+
+    pydantic_key = EncryptedContentAffinityCheck._encryption_boundary_key(
+        pydantic_params
+    )
+    plain_key = EncryptedContentAffinityCheck._encryption_boundary_key(plain_params)
+
+    assert pydantic_key is not None
+    assert (
+        pydantic_key
+        == plain_key
+        == (
+            "https://mateo-resource.openai.azure.com",
+            "fake-azure-resource-key-a",
+        )
+    )
+
+
+def test_boundary_key_rejects_non_dict_like_inputs():
+    """
+    Inputs that don't expose ``.get()`` (None, lists, strings, ints) -> None.
+    Guards against accidentally treating a stray non-dict-like value as a
+    valid boundary.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    for bad in (None, [], "not a dict", 42, object()):
+        assert EncryptedContentAffinityCheck._encryption_boundary_key(bad) is None
+
+    assert (
+        EncryptedContentAffinityCheck._encryption_boundary_key(
+            {"api_base": "", "api_key": "k"}
+        )
+        is None
+    )
+    assert (
+        EncryptedContentAffinityCheck._encryption_boundary_key(
+            {"api_base": "https://x"}
+        )
+        is None
+    )

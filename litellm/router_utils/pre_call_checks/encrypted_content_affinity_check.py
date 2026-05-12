@@ -125,17 +125,26 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _encryption_boundary_key(
-        litellm_params: dict,
+        litellm_params: Any,
     ) -> Optional[tuple]:
         """
         ``(api_base, api_key)`` pair identifying an Azure resource. Two
         deployments sharing both are interchangeable for ``encrypted_content``
         follow-ups; Azure rejects content produced by any other resource.
+
+        Accepts any object exposing dict-style ``.get(key, default)``: plain
+        dicts (the common case in ``healthy_deployments``) as well as
+        ``LiteLLM_Params``-style Pydantic instances, which define a custom
+        ``.get()``. A stricter ``isinstance(dict)`` guard would silently drop
+        the latter from boundary matching and fall back to the full pool —
+        i.e. trigger the exact ``invalid_encrypted_content`` failure this
+        check exists to prevent.
         """
-        if not isinstance(litellm_params, dict):
+        getter = getattr(litellm_params, "get", None)
+        if not callable(getter):
             return None
-        api_base = litellm_params.get("api_base")
-        api_key = litellm_params.get("api_key")
+        api_base = getter("api_base")
+        api_key = getter("api_key")
         if not api_base or not api_key:
             return None
         return (api_base, api_key)
