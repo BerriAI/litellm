@@ -85,6 +85,9 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("reasoning", None)  # reasoning 参数 (Codex 0.130.0+)
             completion_args.pop("coding_plan", None)  # Codex coding plan
             completion_args.pop("parallel_tool_calls", None)  # 并行工具调用
+            # 旧格式参数（国内模型只支持 tools/tool_choice，不支持 functions/function_call）
+            completion_args.pop("functions", None)  # OpenAI 旧格式
+            completion_args.pop("function_call", None)  # OpenAI 旧格式
             # 其他国内模型可能不支持的参数
             completion_args.pop("stream_options", None)  # stream 选项
             completion_args.pop("modalities", None)  # 多模态参数
@@ -198,6 +201,9 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("reasoning", None)  # reasoning 参数 (Codex 0.130.0+)
             acompletion_args.pop("coding_plan", None)  # Codex coding plan
             acompletion_args.pop("parallel_tool_calls", None)  # 并行工具调用
+            # 旧格式参数（国内模型只支持 tools/tool_choice，不支持 functions/function_call）
+            acompletion_args.pop("functions", None)  # OpenAI 旧格式
+            acompletion_args.pop("function_call", None)  # OpenAI 旧格式
             # 其他国内模型可能不支持的参数
             acompletion_args.pop("stream_options", None)  # stream 选项
             acompletion_args.pop("modalities", None)  # 多模态参数
