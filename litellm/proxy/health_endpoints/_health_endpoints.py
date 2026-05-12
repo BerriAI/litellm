@@ -976,7 +976,9 @@ async def health_endpoint(
     _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time = time.time()
 
-    target_model = _health_endpoint_resolve_target_model_name(model, model_id, llm_router)
+    target_model = _health_endpoint_resolve_target_model_name(
+        model, model_id, llm_router
+    )
 
     is_admin = _is_proxy_admin(user_api_key_dict)
     model_specific_request = bool(model or model_id)
