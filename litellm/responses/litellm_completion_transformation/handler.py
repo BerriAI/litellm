@@ -92,6 +92,23 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("store", None)  # 存储参数
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
+            # LiteLLM 内部参数（不应发送给 API）
+            completion_args.pop("litellm_metadata", None)
+            completion_args.pop("litellm_logging_obj", None)
+            completion_args.pop("litellm_trace_id", None)
+            completion_args.pop("litellm_call_id", None)
+            completion_args.pop("proxy_server_request", None)
+            completion_args.pop("shared_session", None)
+            completion_args.pop("model_info", None)
+            completion_args.pop("secret_fields", None)
+            completion_args.pop("use_in_pass_through", None)
+            completion_args.pop("use_litellm_proxy", None)
+            completion_args.pop("merge_reasoning_content_in_choices", None)
+            completion_args.pop("supports_function_calling", None)
+            completion_args.pop("caching", None)
+            completion_args.pop("extra_body", None)
+            completion_args.pop("custom_llm_provider", None)
+            completion_args.pop("max_retries", None)
 
         # DEBUG: 国内模型参数过滤日志
         import sys
@@ -188,6 +205,23 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("store", None)  # 存储参数
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
+            # LiteLLM 内部参数（不应发送给 API）
+            acompletion_args.pop("litellm_metadata", None)
+            acompletion_args.pop("litellm_logging_obj", None)
+            acompletion_args.pop("litellm_trace_id", None)
+            acompletion_args.pop("litellm_call_id", None)
+            acompletion_args.pop("proxy_server_request", None)
+            acompletion_args.pop("shared_session", None)
+            acompletion_args.pop("model_info", None)
+            acompletion_args.pop("secret_fields", None)
+            acompletion_args.pop("use_in_pass_through", None)
+            acompletion_args.pop("use_litellm_proxy", None)
+            acompletion_args.pop("merge_reasoning_content_in_choices", None)
+            acompletion_args.pop("supports_function_calling", None)
+            acompletion_args.pop("caching", None)
+            acompletion_args.pop("extra_body", None)
+            acompletion_args.pop("custom_llm_provider", None)
+            acompletion_args.pop("max_retries", None)
 
         # DEBUG: 国内模型参数过滤日志
         import sys
