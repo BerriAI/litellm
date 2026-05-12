@@ -753,20 +753,6 @@ class MCPRequestHandler:
             if user_api_key_auth is None:
                 return []
 
-            from litellm.proxy.auth.auth_checks import (
-                _get_mcp_server_ids_from_access_groups,
-            )
-
-            try:
-                key_access_group_servers = await _get_mcp_server_ids_from_access_groups(
-                    user_api_key_auth.access_group_ids or []
-                )
-            except Exception as e:
-                verbose_logger.debug(
-                    f"Failed to expand key access groups for MCP servers: {str(e)}"
-                )
-                key_access_group_servers = []
-
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
@@ -792,7 +778,7 @@ class MCPRequestHandler:
                         proxy_logging_obj=proxy_logging_obj,
                     )
             if key_object_permission is None:
-                return list(set(key_access_group_servers))
+                return []
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -818,12 +804,7 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = (
-                direct_mcp_servers
-                + access_group_servers
-                + tool_perm_servers
-                + key_access_group_servers
-            )
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(

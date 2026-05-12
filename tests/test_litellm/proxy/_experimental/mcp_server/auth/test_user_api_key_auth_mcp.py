@@ -1795,8 +1795,8 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_for_key_uses_unified_access_groups_without_object_permission():
-    """Key access_group_ids grant MCP servers even when no object_permission exists."""
+async def test_get_allowed_mcp_servers_for_key_ignores_unified_access_groups_without_object_permission():
+    """Key access_group_ids do not grant MCP access without object_permission."""
 
     mock_user_auth = UserAPIKeyAuth(
         api_key="test-key",
@@ -1809,19 +1809,14 @@ async def test_get_allowed_mcp_servers_for_key_uses_unified_access_groups_withou
             MCPRequestHandler,
             "_get_key_object_permission",
             return_value=None,
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
-            new_callable=AsyncMock,
-            return_value=["mcp-from-key-group"],
-        ) as mock_get_access_group_servers,
+        ) as mock_get_key_perm,
     ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
             mock_user_auth
         )
 
-    assert result == ["mcp-from-key-group"]
-    mock_get_access_group_servers.assert_awaited_once_with(["ag-key"])
+    assert result == []
+    mock_get_key_perm.assert_called_once_with(mock_user_auth)
 
 
 @pytest.mark.asyncio
