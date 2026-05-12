@@ -92,6 +92,7 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("store", None)  # 存储参数
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
+            completion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
             # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
             completion_args.pop("litellm_metadata", None)
             completion_args.pop("litellm_logging_obj", None)
@@ -193,6 +194,7 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("store", None)  # 存储参数
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
+            acompletion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
             # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
             acompletion_args.pop("litellm_metadata", None)
             acompletion_args.pop("litellm_logging_obj", None)
