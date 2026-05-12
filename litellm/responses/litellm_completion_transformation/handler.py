@@ -109,6 +109,10 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("extra_body", None)
             # 注意：custom_llm_provider 必须保留，LiteLLM 需要它识别提供商
             completion_args.pop("max_retries", None)
+            # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
+            tool_choice = completion_args.get("tool_choice")
+            if tool_choice == "required":
+                completion_args["tool_choice"] = "auto"
 
         # DEBUG: 国内模型参数过滤日志
         import sys
@@ -222,6 +226,10 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("extra_body", None)
             # 注意：custom_llm_provider 必须保留，LiteLLM 需要它识别提供商
             acompletion_args.pop("max_retries", None)
+            # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
+            tool_choice = acompletion_args.get("tool_choice")
+            if tool_choice == "required":
+                acompletion_args["tool_choice"] = "auto"
 
         # DEBUG: 国内模型参数过滤日志
         import sys
