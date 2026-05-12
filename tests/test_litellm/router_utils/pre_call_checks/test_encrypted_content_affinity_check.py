@@ -791,3 +791,384 @@ def test_encrypted_content_wrapping_empty_string():
 
     assert extracted_model_id == model_id
     assert unwrapped == original_content
+
+
+# ---------------------------------------------------------------------------
+# LIT-2531: cross-model-group fallback via encryption boundary (api_base + api_key)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_switch():
+    """
+    LIT-2531: Client starts a session on gpt-5.3-codex, follow-up switches to
+    gpt-5.4 mid-chat (e.g. via Codex `model_migrations`). Affinity must pin to
+    the gpt-5.4 deployment on the SAME Azure resource as the originating
+    gpt-5.3-codex deployment -- otherwise Azure rejects the encrypted_content.
+    """
+    first_resp = _build_mock_response(
+        output_items=[
+            {
+                "type": "reasoning",
+                "id": "rs_encrypted_xyz",
+                "status": "completed",
+                "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+            },
+        ],
+        response_id="resp_first",
+    )
+    second_resp = _build_mock_response(
+        output_items=[
+            {
+                "type": "message",
+                "id": "msg_ok",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer"}],
+            },
+        ],
+        response_id="resp_second",
+    )
+
+    ACCOUNT_A_BASE = "https://account-a.openai.azure.com/"
+    ACCOUNT_A_KEY = "key-a"
+    ACCOUNT_B_BASE = "https://account-b.openai.azure.com/"
+    ACCOUNT_B_KEY = "key-b"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.3-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_A_BASE,
+                    "api_key": ACCOUNT_A_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.3-codex-account-a"},
+            },
+            {
+                "model_name": "gpt-5.3-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_B_BASE,
+                    "api_key": ACCOUNT_B_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.3-codex-account-b"},
+            },
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": ACCOUNT_A_BASE,
+                    "api_key": ACCOUNT_A_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.4-account-a"},
+            },
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": ACCOUNT_B_BASE,
+                    "api_key": ACCOUNT_B_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.4-account-b"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+
+    def first_call_picks_account_a(seq):
+        for d in seq:
+            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
+                return d
+        return seq[0]
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=first_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=first_call_picks_account_a,
+        ),
+    ):
+        r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
+
+    assert r1._hidden_params["model_id"] == "gpt-5.3-codex-account-a"
+    encoded_id = _extract_encoded_item_id(r1)
+    assert encoded_id.startswith("encitem_")
+
+    # simple_shuffle.random.choice NOT patched: prove affinity narrows the
+    # candidate pool to a single deployment regardless of which one shuffle picks.
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=second_resp,
+    ):
+        r2 = await router.aresponses(
+            model="gpt-5.4",
+            input=[
+                {
+                    "type": "reasoning",
+                    "id": encoded_id,
+                    "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+                },
+            ],
+        )
+
+    assert r2._hidden_params["model_id"] == "gpt-5.4-account-a"
+
+
+@pytest.mark.asyncio
+async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
+    """
+    LIT-2531 alias path: gpt-5.2-codex is a LiteLLM alias that points at the
+    same underlying Azure model as gpt-5.3-codex. Different model_name groups
+    in the router, so model_id-based pinning misses, but the encryption
+    boundary (api_base + api_key) is identical -> follow-up must still pin.
+    """
+    first_resp = _build_mock_response(
+        output_items=[
+            {
+                "type": "reasoning",
+                "id": "rs_alias_xyz",
+                "status": "completed",
+                "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+            },
+        ],
+        response_id="resp_alias_first",
+    )
+    second_resp = _build_mock_response(
+        output_items=[
+            {
+                "type": "message",
+                "id": "msg_alias_ok",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            },
+        ],
+        response_id="resp_alias_second",
+    )
+
+    ACCOUNT_A_BASE = "https://account-a.openai.azure.com/"
+    ACCOUNT_A_KEY = "key-a"
+    ACCOUNT_B_BASE = "https://account-b.openai.azure.com/"
+    ACCOUNT_B_KEY = "key-b"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.3-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_A_BASE,
+                    "api_key": ACCOUNT_A_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.3-codex-account-a"},
+            },
+            {
+                "model_name": "gpt-5.3-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_B_BASE,
+                    "api_key": ACCOUNT_B_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.3-codex-account-b"},
+            },
+            {
+                "model_name": "gpt-5.2-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_A_BASE,
+                    "api_key": ACCOUNT_A_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.2-codex-account-a"},
+            },
+            {
+                "model_name": "gpt-5.2-codex",
+                "litellm_params": {
+                    "model": "azure/gpt-5.3-codex",
+                    "api_base": ACCOUNT_B_BASE,
+                    "api_key": ACCOUNT_B_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.2-codex-account-b"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+
+    def pick_account_a(seq):
+        for d in seq:
+            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
+                return d
+        return seq[0]
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=first_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=pick_account_a,
+        ),
+    ):
+        r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
+
+    encoded_id = _extract_encoded_item_id(r1)
+    assert encoded_id.startswith("encitem_")
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=second_resp,
+    ):
+        r2 = await router.aresponses(
+            model="gpt-5.2-codex",
+            input=[
+                {
+                    "type": "reasoning",
+                    "id": encoded_id,
+                    "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+                },
+            ],
+        )
+
+    assert r2._hidden_params["model_id"] == "gpt-5.2-codex-account-a"
+
+
+def test_boundary_fallback_no_router_ref_returns_empty():
+    """
+    Standalone use (no router wired in) -> the boundary lookup short-circuits
+    to ``[]`` instead of crashing on ``None.get_deployment``.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    check = EncryptedContentAffinityCheck(router=None)
+    healthy = [
+        {
+            "model_info": {"id": "dep-1"},
+            "litellm_params": {"api_base": "https://x", "api_key": "k"},
+        }
+    ]
+    matches = check._find_deployments_on_same_encryption_boundary(
+        healthy_deployments=healthy,
+        model_id="dep-2",
+    )
+    assert matches == []
+
+
+def test_boundary_fallback_originating_deployment_removed_returns_empty():
+    """
+    If the originating deployment has been removed from the router (e.g. via
+    /model/delete), ``router.get_deployment`` returns None and we return [] so
+    the caller falls back to the full healthy_deployments list.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    healthy = [
+        {
+            "model_info": {"id": "dep-1"},
+            "litellm_params": {"api_base": "https://x", "api_key": "k"},
+        }
+    ]
+    matches = check._find_deployments_on_same_encryption_boundary(
+        healthy_deployments=healthy,
+        model_id="dep-removed",
+    )
+    assert matches == []
+    mock_router.get_deployment.assert_called_once_with(model_id="dep-removed")
+
+
+def test_boundary_key_accepts_pydantic_litellm_params_instance():
+    """
+    Regression: ``_encryption_boundary_key`` must accept any object exposing
+    dict-style ``.get()`` (incl. ``LiteLLM_Params`` Pydantic instances) — not
+    just plain dicts.
+
+    A stricter ``isinstance(dict)`` guard would silently return ``None`` for a
+    ``LiteLLM_Params`` value, drop the deployment from boundary matching, and
+    fall back to the full pool — which is the exact ``invalid_encrypted_content``
+    failure this check exists to prevent.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+    from litellm.types.router import LiteLLM_Params
+
+    pydantic_params = LiteLLM_Params(
+        model="azure/gpt-5.3-codex",
+        api_base="https://mateo-resource.openai.azure.com",
+        api_key="fake-azure-resource-key-a",
+    )
+    plain_params = {
+        "model": "azure/gpt-5.3-codex",
+        "api_base": "https://mateo-resource.openai.azure.com",
+        "api_key": "fake-azure-resource-key-a",
+    }
+
+    pydantic_key = EncryptedContentAffinityCheck._encryption_boundary_key(
+        pydantic_params
+    )
+    plain_key = EncryptedContentAffinityCheck._encryption_boundary_key(plain_params)
+
+    assert pydantic_key is not None
+    assert (
+        pydantic_key
+        == plain_key
+        == (
+            "https://mateo-resource.openai.azure.com",
+            "fake-azure-resource-key-a",
+        )
+    )
+
+
+def test_boundary_key_rejects_non_dict_like_inputs():
+    """
+    Inputs that don't expose ``.get()`` (None, lists, strings, ints) -> None.
+    Guards against accidentally treating a stray non-dict-like value as a
+    valid boundary.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    for bad in (None, [], "not a dict", 42, object()):
+        assert EncryptedContentAffinityCheck._encryption_boundary_key(bad) is None
+
+    assert (
+        EncryptedContentAffinityCheck._encryption_boundary_key(
+            {"api_base": "", "api_key": "k"}
+        )
+        is None
+    )
+    assert (
+        EncryptedContentAffinityCheck._encryption_boundary_key(
+            {"api_base": "https://x"}
+        )
+        is None
+    )
