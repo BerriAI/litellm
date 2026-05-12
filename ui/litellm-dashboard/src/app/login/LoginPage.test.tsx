@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { readFileSync } from "fs";
+import { join } from "path";
 import LoginPage from "./LoginPage";
 
 const mockPush = vi.fn();
@@ -18,6 +20,7 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
 }));
 
 vi.mock("@/utils/cookieUtils", () => ({
+  clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
 }));
 
@@ -95,6 +98,15 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
+
+    expect(screen.getByRole("heading", { name: "Login" }).closest('[data-ui-kit="shadcn"]')).toBeInTheDocument();
+  });
+
+  it("should keep the login page migrated off Ant Design imports", () => {
+    const source = readFileSync(join(process.cwd(), "src/app/login/LoginPage.tsx"), "utf8");
+
+    expect(source).not.toContain('from "antd"');
+    expect(source).not.toContain('from "@ant-design/icons"');
   });
 
   it("should call router.replace to dashboard when jwt is valid", async () => {
