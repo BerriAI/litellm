@@ -17,7 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, NoReturn, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -106,7 +106,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         descriptors: List["RateLimitDescriptor"],
         batch_usage: BatchFileUsage,
         limit_type: str,
-    ) -> None:
+    ) -> NoReturn:
         """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
 
