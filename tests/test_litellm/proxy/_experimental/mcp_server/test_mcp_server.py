@@ -1154,6 +1154,12 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
             mock_get_tools_spy,
         ),
+        # Unit test has no HTTP request context — give the IP gate a real
+        # internal IP so it doesn't fail closed and filter every server out.
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_client_ip_from_context",
+            return_value="127.0.0.1",
+        ),
     ):
         mcp_servers_from_path = _get_mcp_servers_in_path(test_path)
 

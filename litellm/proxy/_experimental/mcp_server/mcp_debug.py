@@ -300,6 +300,10 @@ class MCPDebug:
         server_auth_type: Optional[str] = None
         auth_resolution = "no-auth"
 
+        # Pass client_ip through unchanged. When IP extraction fails the gate
+        # fails closed for internal-only servers, so the debug response stays
+        # empty rather than leaking outbound_url / server_auth_type metadata
+        # for internal-only servers named in the request.
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(
                 server_name, client_ip=client_ip

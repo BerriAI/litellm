@@ -3311,5 +3311,148 @@ class TestOAuthDiscoverySSRFGuard:
         mock_client.get.assert_not_called()
 
 
+class TestIPGatingFailClosed:
+    """
+    The IP-gating helper used to fail open when ``client_ip`` was ``None``,
+    which let request handlers that couldn't determine a client IP reach
+    internal-only MCP servers. Lock the new contract: ``None`` fails closed,
+    ``INTERNAL_REQUEST`` bypasses gating, real IPs apply the existing rules.
+    """
+
+    def _internal_server(self):
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id="internal-1",
+            name="internal",
+            server_name="internal",
+            transport=MCPTransport.http,
+            url="https://internal.local/mcp",
+            available_on_public_internet=False,
+        )
+
+    def _public_server(self):
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id="public-1",
+            name="public",
+            server_name="public",
+            transport=MCPTransport.http,
+            url="https://public.example/mcp",
+            available_on_public_internet=True,
+        )
+
+    @pytest.mark.parametrize(
+        "server_kind,client_ip_kind,expected",
+        [
+            # None fails closed for non-public servers — missing IP signals
+            # an external request that couldn't be attributed and must not
+            # reach internal-only servers.
+            ("internal", "none", False),
+            # None still lets public servers through — otherwise a request
+            # to a public OAuth endpoint behind ASGI middleware that nulls
+            # request.client would 404 with no actionable diagnostic.
+            ("public", "none", True),
+            # INTERNAL_REQUEST bypasses gating for both visibilities.
+            ("internal", "internal_request", True),
+            ("public", "internal_request", True),
+            # Real external IP applies the existing visibility rules.
+            ("internal", "external", False),
+            ("public", "external", True),
+        ],
+    )
+    def test_gate_contract(self, server_kind, client_ip_kind, expected):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = (
+            self._internal_server()
+            if server_kind == "internal"
+            else self._public_server()
+        )
+        client_ip = {
+            "none": None,
+            "internal_request": INTERNAL_REQUEST,
+            "external": "8.8.8.8",
+        }[client_ip_kind]
+        assert manager._is_server_accessible_from_ip(server, client_ip) is expected
+
+    def test_get_filtered_registry_fails_closed_on_none(self):
+        # The wrapper used to return the full registry on None client_ip,
+        # which let unauth callers (e.g. _resolve_oauth2_server_for_root_endpoints
+        # when get_mcp_client_ip returned None) auto-select internal-only
+        # servers. Now fails closed; INTERNAL_REQUEST is the explicit bypass.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+
+        assert manager.get_filtered_registry() == {}
+        assert manager.get_filtered_registry(client_ip=None) == {}
+        assert manager.get_filtered_registry(client_ip="8.8.8.8") == {}
+        assert manager.get_filtered_registry(client_ip=INTERNAL_REQUEST) == {
+            server.server_id: server
+        }
+
+    def test_filter_server_ids_by_ip_fails_closed_on_none(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+        sids = [server.server_id]
+
+        # None fails closed: zero allowed, all reported as blocked.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(sids, None)
+        assert (allowed, blocked) == ([], 1)
+
+        # External IP applies filter — internal server blocked.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(sids, "8.8.8.8")
+        assert (allowed, blocked) == ([], 1)
+
+        # INTERNAL_REQUEST bypasses gating.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            sids, INTERNAL_REQUEST
+        )
+        assert (allowed, blocked) == (sids, 0)
+
+    def test_get_mcp_server_by_name_fails_closed_on_none(self):
+        # External request handlers must extract a real client IP. Passing
+        # None silently bypassed gating before; now it fails closed.
+        # Internal callers (admin debug, registry maintenance) must use
+        # INTERNAL_REQUEST explicitly.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+
+        # Default client_ip is None — fails closed for internal-only servers.
+        result = manager.get_mcp_server_by_name("internal")
+        assert result is None
+
+        # External IP can't reach a non-public server.
+        result = manager.get_mcp_server_by_name("internal", client_ip="8.8.8.8")
+        assert result is None
+
+        # INTERNAL_REQUEST sentinel bypasses gating for internal callers.
+        result = manager.get_mcp_server_by_name("internal", client_ip=INTERNAL_REQUEST)
+        assert result is server
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

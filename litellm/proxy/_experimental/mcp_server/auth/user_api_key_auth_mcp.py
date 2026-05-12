@@ -213,6 +213,7 @@ class MCPRequestHandler:
         # Inline imports avoid a circular dependency: mcp_server_manager imports
         # from this module.
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
             global_mcp_server_manager,
         )
         from litellm.types.mcp import MCPAuth
@@ -229,7 +230,12 @@ class MCPRequestHandler:
             return False
 
         for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            # Metadata lookup ("does this server use OAuth2?") used to decide
+            # whether anonymous OAuth2 fallback is allowed for this path.
+            # Not an access check — the IP gate doesn't apply.
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                name, client_ip=INTERNAL_REQUEST
+            )
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
         return True
