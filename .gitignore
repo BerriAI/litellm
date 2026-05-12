@@ -2,6 +2,21 @@
 .venv
 .venv_policy_test
 .env
+
+# E2E LLM translation: never commit VCR/respx cassettes. Repo uses
+# Redis-backed VCR by default, but if anyone falls back to file mode
+# these patterns block accidental commits that might contain API keys
+# or raw provider responses.
+**/cassettes/
+**/vcr_cassettes/
+*.cassette.yaml
+*.cassette.yml
+*.cassette.json
+e2e_llm_coverage/
+e2e_llm_mutation/
+mutants/
+.e2e-llm-loop-active
+
 .claude
 .newenv
 newenv/*
