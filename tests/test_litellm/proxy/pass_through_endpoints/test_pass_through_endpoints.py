@@ -2617,4 +2617,46 @@ def test_get_response_headers_strips_server_and_date():
     lowered = {k.lower(): v for k, v in result.items()}
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
+
+
+@pytest.mark.asyncio
+async def test_filter_endpoints_by_team_access_group_no_passthrough_routes_returns_all():
+    """Regression for #27344: a team whose AccessGroup contains only model names
+    (no pass-through routes) must see ALL pass-through endpoints, not zero.
+
+    Repro scenario: 3 endpoints total → Team B (AG with `access_model_names`
+    only, empty `access_pass_through_routes`) used to see all 3, now sees 0.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    endpoints = [
+        PassThroughGenericEndpoint(id="endpoint-1", path="/api/openai", target="http://example.com/openai"),
+        PassThroughGenericEndpoint(id="endpoint-2", path="/api/anthropic", target="http://example.com/anthropic"),
+        PassThroughGenericEndpoint(id="endpoint-3", path="/api/azure", target="http://example.com/azure"),
+    ]
+
+    mock_prisma_client = MagicMock()
+    mock_team = MagicMock()
+    mock_team.metadata = None  # no team-level allowed_passthrough_routes
+    mock_team.access_group_ids = ["ag-models-only"]
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
+
+    # AG exists but contributes no pass-through routes (model-only AG).
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_routes_from_access_groups",
+        new=AsyncMock(return_value=[]),
+    ):
+        result = await _filter_endpoints_by_team_allowed_routes(
+            team_id="team-b",
+            pass_through_endpoints=endpoints,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert len(result) == 3, f"expected all 3 endpoints, got {len(result)}"
+    assert {e.id for e in result} == {"endpoint-1", "endpoint-2", "endpoint-3"}
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
