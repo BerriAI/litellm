@@ -7542,6 +7542,7 @@ def stream_chunk_builder(  # noqa: PLR0915
                 delta.get("tool_calls") is not None
                 or delta.get("function_call") is not None
                 or delta.get("reasoning_content") is not None
+                or delta.get("reasoning") is not None
                 or delta.get("thinking_blocks") is not None
                 or delta.get("annotations") is not None
                 or delta.get("audio") is not None
@@ -7649,14 +7650,15 @@ def stream_chunk_builder(  # noqa: PLR0915
             chunk
             for chunk in chunks
             if len(chunk["choices"]) > 0
-            and "reasoning_content" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+            and ("reasoning_content" in chunk["choices"][0]["delta"] or "reasoning" in chunk["choices"][0]["delta"])
+            and (chunk["choices"][0]["delta"].get("reasoning_content") is not None or chunk["choices"][0]["delta"].get("reasoning") is not None)
         ]
 
         if len(reasoning_chunks) > 0:
             response["choices"][0]["message"]["reasoning_content"] = (
                 processor.get_combined_reasoning_content(reasoning_chunks)
             )
+    
 
         annotation_chunks = [
             chunk

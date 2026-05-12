@@ -430,7 +430,10 @@ class ChunkProcessor:
     def get_combined_reasoning_content(
         self, chunks: List[Dict[str, Any]]
     ) -> ChatCompletionAssistantContentValue:
-        return self.get_combined_content(chunks, delta_key="reasoning_content")
+        result = self.get_combined_content(chunks, delta_key="reasoning_content")
+        if result:
+            return result
+        return self.get_combined_content(chunks, delta_key="reasoning")
 
     def get_combined_audio_content(
         self, chunks: List[Dict[str, Any]]
