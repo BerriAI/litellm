@@ -114,22 +114,6 @@ class LiteLLMCompletionTransformationHandler:
             if tool_choice == "required":
                 completion_args["tool_choice"] = "auto"
 
-        # DEBUG: 国内模型参数过滤日志
-        import sys
-
-        print(
-            f"[DEBUG handler.py sync] actual_model={actual_model}, api_base={api_base}",
-            file=sys.stderr,
-        )
-        print(
-            f"[DEBUG handler.py sync] is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}",
-            file=sys.stderr,
-        )
-        print(
-            f"[DEBUG handler.py sync] completion_args keys: {list(completion_args.keys())}",
-            file=sys.stderr,
-        )
-
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
@@ -230,44 +214,6 @@ class LiteLLMCompletionTransformationHandler:
             tool_choice = acompletion_args.get("tool_choice")
             if tool_choice == "required":
                 acompletion_args["tool_choice"] = "auto"
-
-        # DEBUG: 国内模型参数过滤日志
-        import sys
-
-        print(
-            f"[DEBUG handler.py async] actual_model={actual_model}, api_base={api_base}",
-            file=sys.stderr,
-        )
-        print(
-            f"[DEBUG handler.py async] is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}",
-            file=sys.stderr,
-        )
-        print(
-            f"[DEBUG handler.py async] acompletion_args keys: {list(acompletion_args.keys())}",
-            file=sys.stderr,
-        )
-        # 详细日志：查看 tools 和 tool_choice
-        if "tools" in acompletion_args:
-            tools_data = acompletion_args.get("tools", [])
-            print(
-                f"[DEBUG handler.py async] tools count: {len(tools_data)}",
-                file=sys.stderr,
-            )
-            for i, tool in enumerate(tools_data[:3]):  # 只打印前3个
-                tool_type = (
-                    tool.get("type", "unknown")
-                    if isinstance(tool, dict)
-                    else "not_dict"
-                )
-                print(
-                    f"[DEBUG handler.py async] tool[{i}] type: {tool_type}",
-                    file=sys.stderr,
-                )
-        if "tool_choice" in acompletion_args:
-            print(
-                f"[DEBUG handler.py async] tool_choice: {acompletion_args.get('tool_choice')}",
-                file=sys.stderr,
-            )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
