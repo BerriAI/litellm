@@ -1204,6 +1204,8 @@ def test_logprobs():
 
 def test_process_gemini_media():
     """Test the _process_gemini_media function for different image sources"""
+    from unittest.mock import patch
+
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     from litellm.types.llms.vertex_ai import FileDataType
 
@@ -1217,6 +1219,32 @@ def test_process_gemini_media():
     gcs_result = _process_gemini_media("gs://bucket/image", format="image/jpeg")
     assert gcs_result["file_data"] == FileDataType(
         mime_type="image/jpeg", file_uri="gs://bucket/image"
+    )
+
+    # Test gs url without extension using mime_type from image_url object
+    image_message = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "gs://bucket/image-without-extension",
+                        "mime_type": "image/png",
+                    },
+                }
+            ],
+        }
+    ]
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    converted = _gemini_convert_messages_with_history(
+        messages=image_message, model="gemini-2.5-flash"
+    )
+    assert converted[0]["parts"][0]["file_data"] == FileDataType(
+        mime_type="image/png", file_uri="gs://bucket/image-without-extension"
     )
 
     # Test HTTPS JPG URL
@@ -1254,6 +1282,324 @@ def test_process_gemini_media():
     print("base64_result", base64_result)
     assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
+
+
+def test_process_gemini_media_gcs_without_extension_raises_clear_error():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    # Mock the GCS metadata lookup to avoid real outbound HTTP in tests.
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value=None,
+    ):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            _process_gemini_media("gs://bucket/image-without-extension")
+
+    assert "Unable to determine mime type for gs URI" in str(exc_info.value)
+
+
+def test_process_gemini_media_gcs_without_extension_uses_gcs_metadata():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value="image/jpeg",
+    ):
+        result = _process_gemini_media("gs://bucket/image-without-extension")
+
+    assert result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension"
+    )
+
+
+def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/no-extension-object",
+                        "mime_type": "application/pdf",
+                    },
+                }
+            ],
+        }
+    ]
+
+    converted = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-2.5-flash"
+    )
+    assert converted[0]["parts"][0]["file_data"] == FileDataType(
+        mime_type="application/pdf", file_uri="gs://bucket/no-extension-object"
+    )
+
+
+def test_real_file_id_without_extension_resolves_to_metadata_mime_type():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://cdn.pagepop.top/gcs/input/source/18/1851d730e543cb91643835612508d7dd0e8d8c52015fe08b7429a7307c62076c",
+                    },
+                }
+            ],
+        }
+    ]
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value="image/jpeg",
+    ):
+        converted = _gemini_convert_messages_with_history(
+            messages=messages, model="gemini-2.5-flash"
+        )
+
+    assert converted[0]["parts"][0]["file_data"] == FileDataType(
+        mime_type="image/jpeg",
+        file_uri="gs://cdn.pagepop.top/gcs/input/source/18/1851d730e543cb91643835612508d7dd0e8d8c52015fe08b7429a7307c62076c",
+    )
+
+
+def test_dotted_bucket_name_up_to_222_chars_is_accepted():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    dotted_bucket = ("a." * 110) + "aa"  # total length = 222
+    assert len(dotted_bucket) == 222
+    assert _is_valid_gcs_bucket_name(dotted_bucket) is True
+
+
+def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_vertex_base.get_access_token.return_value = ("test-token", "test-project")
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = {"contentType": "image/png"}
+    mock_http_response.raise_for_status.return_value = None
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
+        ) as mock_http_get,
+    ):
+        mock_http_get.return_value = mock_http_response
+        content_type = gemini_transformation._get_gcs_object_content_type(
+            image_url="gs://my-bucket/path/to/image-without-extension",
+            vertex_project="project-123",
+            vertex_credentials="credential-json",
+        )
+
+    assert content_type == "image/png"
+    mock_vertex_base.get_access_token.assert_called_once_with(
+        credentials="credential-json",
+        project_id="project-123",
+    )
+
+
+def test_process_gemini_media_normalizes_metadata_mime_alias():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value="image/jpg",
+    ):
+        result = _process_gemini_media("gs://bucket/image-without-extension")
+
+    assert result["file_data"] == FileDataType(
+        mime_type="image/jpeg", file_uri="gs://bucket/image-without-extension"
+    )
+
+
+def test_process_gemini_media_rejects_unsupported_metadata_mime_type():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value="application/octet-stream",
+    ):
+        with pytest.raises(
+            litellm.BadRequestError, match="File type not supported by gemini"
+        ):
+            _process_gemini_media("gs://bucket/image-without-extension")
+
+
+def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_vertex_base.get_access_token.side_effect = Exception("token failure")
+    with patch.object(
+        gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+    ):
+        with pytest.raises(
+            litellm.BadRequestError,
+            match="Unable to fetch GCS metadata with provided Vertex credentials/project",
+        ):
+            gemini_transformation._get_gcs_object_content_type(
+                image_url="gs://my-bucket/path/to/image-without-extension",
+                vertex_project="project-123",
+                vertex_credentials="credential-json",
+            )
+
+
+def test_get_gcs_object_content_type_without_credentials_skips_auth():
+    """Without explicit Vertex credentials, must not use the server's default
+    Google credentials to access GCS.
+
+    Prevents the Gemini API-key (Google AI Studio) path from being used as an
+    oracle for private GCS objects.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = {"contentType": "image/jpeg"}
+    mock_http_response.raise_for_status.return_value = None
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
+        ) as mock_http_get,
+    ):
+        mock_http_get.return_value = mock_http_response
+        content_type = gemini_transformation._get_gcs_object_content_type(
+            image_url="gs://public-bucket/public-object"
+        )
+
+    # Must not call get_access_token (so default server credentials are not used)
+    mock_vertex_base.get_access_token.assert_not_called()
+    # An anonymous request is still sent, covering publicly-readable objects.
+    mock_http_get.assert_called_once()
+    call_kwargs = mock_http_get.call_args.kwargs
+    assert "Authorization" not in call_kwargs.get("headers", {})
+    assert content_type == "image/jpeg"
+
+
+def test_async_transform_request_body_does_not_block_event_loop():
+    """When the sync GCS metadata lookup blocks, async_transform_request_body must not block the event loop."""
+    import asyncio
+    import time
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "gs://bucket/image-without-extension"},
+                }
+            ],
+        }
+    ]
+
+    # Simulate a blocking sync httpx.get (as if the real GCS metadata lookup
+    # timed out). If async_transform_request_body does not offload the sync
+    # portion to a worker thread, this blocks the event loop and a concurrent
+    # sleep cannot make progress.
+    def slow_http_get(*args, **kwargs):
+        time.sleep(0.5)
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"contentType": "image/png"}
+        return response
+
+    # Stub out the context-caching lookup so it does not make a real HTTP call.
+    async def fake_check_and_create_cache(self, **kwargs):
+        return kwargs["messages"], kwargs["optional_params"], None
+
+    mock_vertex_base = MagicMock()
+    mock_vertex_base.get_access_token.return_value = ("token", "project")
+
+    async def run_scenario() -> float:
+        async def concurrent_sleep() -> float:
+            start = time.monotonic()
+            await asyncio.sleep(0.05)
+            return time.monotonic() - start
+
+        transform_task = asyncio.create_task(
+            gemini_transformation.async_transform_request_body(
+                gemini_api_key=None,
+                messages=messages,
+                api_base=None,
+                model="gemini-2.5-flash",
+                client=None,
+                timeout=None,
+                extra_headers=None,
+                optional_params={},
+                logging_obj=MagicMock(),
+                custom_llm_provider="vertex_ai",
+                litellm_params={},
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+            )
+        )
+        sleep_elapsed = await concurrent_sleep()
+        await transform_task
+        return sleep_elapsed
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch.object(gemini_transformation.httpx, "get", side_effect=slow_http_get),
+        patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
+            "ContextCachingEndpoints.async_check_and_create_cache",
+            new=fake_check_and_create_cache,
+        ),
+    ):
+        sleep_elapsed = asyncio.run(run_scenario())
+
+    # If the loop is not blocked, a 0.05s sleep must not be stretched toward
+    # the sync block duration (0.5s).
+    assert sleep_elapsed < 0.4, (
+        f"Event loop blocked for {sleep_elapsed:.3f}s; "
+        "async_transform_request_body did not offload the sync GCS metadata "
+        "lookup to a worker thread"
+    )
 
 
 def test_get_image_mime_type_from_url():
