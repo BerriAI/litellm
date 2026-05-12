@@ -1432,17 +1432,21 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # tag-based routing and tag budget attribution — accepting them from
     # untrusted callers lets an attacker reach restricted deployments or
     # misattribute spend to a victim team's tag.
-    _admin_allow_client_tags = False
-    for _admin_meta in (
-        user_api_key_dict.metadata,
-        user_api_key_dict.team_metadata,
-    ):
-        if (
-            isinstance(_admin_meta, dict)
-            and _admin_meta.get("allow_client_tags") is True
+    _admin_allow_client_tags = (
+        isinstance(general_settings, dict)
+        and general_settings.get("allow_client_tags") is True
+    )
+    if not _admin_allow_client_tags:
+        for _admin_meta in (
+            user_api_key_dict.metadata,
+            user_api_key_dict.team_metadata,
         ):
-            _admin_allow_client_tags = True
-            break
+            if (
+                isinstance(_admin_meta, dict)
+                and _admin_meta.get("allow_client_tags") is True
+            ):
+                _admin_allow_client_tags = True
+                break
     if not _admin_allow_client_tags:
         _stripped_from: List[str] = []
         for _meta_key in ("metadata", "litellm_metadata"):
