@@ -102,8 +102,11 @@ class TestLowestTpmRpmV2RouterSideCategory:
     The five raise sites in ``router_strategy.lowest_tpm_rpm_v2`` (sync
     pre-check, async pre-check, both their redis-overrun branches, and the
     no-deployments-available raise) must all carry
-    ``category=LITELLM_RATE_LIMIT`` and ``rate_limit_type=REQUESTS``. They
-    were silently labeled as ``vendor_rate_limit`` before this fix.
+    ``category=LITELLM_RATE_LIMIT``. The four pre-check sites also carry
+    ``rate_limit_type=REQUESTS``; the terminal no-deployments-available raise
+    intentionally leaves ``rate_limit_type`` unset because the filtering could
+    have been driven by TPM, RPM, or both. They were silently labeled as
+    ``vendor_rate_limit`` before this fix.
     """
 
     def _build_handler(self):
@@ -155,11 +158,12 @@ class TestLowestTpmRpmV2RouterSideCategory:
         assert exc_info.value.rate_limit_type == RateLimitType.REQUESTS
 
     @pytest.mark.asyncio
-    async def test_should_label_no_deployments_available_as_litellm_requests(self):
+    async def test_should_label_no_deployments_available_as_litellm_rate_limit(self):
         # The terminal "no deployments available" raise — fired from
         # ``async_get_available_deployments`` after every healthy deployment
-        # was filtered out by RPM — must carry the same litellm/REQUESTS
-        # labels.
+        # was filtered out — must carry the litellm category. The
+        # ``rate_limit_type`` dimension is intentionally left unset because
+        # the filtering could have been driven by TPM, RPM, or both.
         handler = self._build_handler()
         with pytest.raises(litellm.RateLimitError) as exc_info:
             await handler.async_get_available_deployments(
@@ -168,7 +172,7 @@ class TestLowestTpmRpmV2RouterSideCategory:
             )
 
         assert exc_info.value.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
-        assert exc_info.value.rate_limit_type == RateLimitType.REQUESTS
+        assert exc_info.value.rate_limit_type is None
 
 
 class TestModelRateLimitCheckRouterSideCategory:
