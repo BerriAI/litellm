@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -28,6 +29,23 @@ if TYPE_CHECKING:
 else:
     Span = Any
     InternalUsageCache = Any
+
+
+def _extract_total_tokens(response_obj: Any) -> int:
+    """Get total_tokens from any supported LiteLLM response type.
+
+    Handles ModelResponse / EmbeddingResponse / TextCompletionResponse /
+    ResponsesAPIResponse. Returns 0 for unsupported types so the cache update
+    becomes a silent no-op (matches the prior behavior for unknown types).
+    """
+    if isinstance(
+        response_obj,
+        (ModelResponse, EmbeddingResponse, TextCompletionResponse, ResponsesAPIResponse),
+    ):
+        usage = getattr(response_obj, "usage", None)
+        if usage is not None:
+            return getattr(usage, "total_tokens", 0) or 0
+    return 0
 
 
 class CacheObject(TypedDict):
@@ -506,10 +524,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             current_minute = datetime.now().strftime("%M")
             precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-            total_tokens = 0
-
-            if isinstance(response_obj, ModelResponse):
-                total_tokens = response_obj.usage.total_tokens  # type: ignore
+            total_tokens = _extract_total_tokens(response_obj)
 
             # ------------
             # Update usage - API Key
@@ -595,10 +610,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(response_obj, ModelResponse):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_user_id}::{precise_minute}::request_count"
@@ -628,10 +640,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = 0
-
-                if isinstance(response_obj, ModelResponse):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_team_id}::{precise_minute}::request_count"
@@ -661,10 +670,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(response_obj, ModelResponse):
-                    total_tokens = response_obj.usage.total_tokens  # type: ignore
+                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_end_user_id}::{precise_minute}::request_count"
