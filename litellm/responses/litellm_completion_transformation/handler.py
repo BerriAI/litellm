@@ -54,49 +54,75 @@ class LiteLLMCompletionTransformationHandler:
             # Check for tool_calls in assistant messages
             if isinstance(fixed_msg, dict):
                 role = fixed_msg.get("role")
-                if role == "assistant":
+            else:
+                role = getattr(fixed_msg, "role", None)
+
+            if role == "assistant":
+                # Handle both dict and object types for tool_calls
+                if isinstance(fixed_msg, dict):
                     tool_calls = fixed_msg.get("tool_calls")
-                    if tool_calls and isinstance(tool_calls, list):
-                        for tc in tool_calls:
-                            if isinstance(tc, dict):
-                                func = tc.get("function")
-                                if isinstance(func, dict):
-                                    args = func.get("arguments")
-                                    original_args = args
-                                    # Ensure arguments is valid JSON
-                                    if args is None:
-                                        func["arguments"] = "{}"
+                else:
+                    tool_calls = getattr(fixed_msg, "tool_calls", None)
+
+                if tool_calls and isinstance(tool_calls, list):
+                    for tc in tool_calls:
+                        # Get function from tool_call (dict or object)
+                        if isinstance(tc, dict):
+                            func = tc.get("function")
+                        else:
+                            func = getattr(tc, "function", None)
+
+                        if func is not None:
+                            # Get arguments from function (dict or object)
+                            if isinstance(func, dict):
+                                args = func.get("arguments")
+                            else:
+                                args = getattr(func, "arguments", None)
+
+                            original_args = args
+                            fixed_args = None
+
+                            # Ensure arguments is valid JSON
+                            if args is None:
+                                fixed_args = "{}"
+                                fixed_count += 1
+                            elif isinstance(args, str):
+                                if not args.strip():
+                                    fixed_args = "{}"
+                                    fixed_count += 1
+                                else:
+                                    try:
+                                        json.loads(args)
+                                        # Valid JSON, keep as-is
+                                    except (json.JSONDecodeError, ValueError):
+                                        fixed_args = "{}"
                                         fixed_count += 1
-                                    elif isinstance(args, str):
-                                        if not args.strip():
-                                            func["arguments"] = "{}"
-                                            fixed_count += 1
-                                        else:
-                                            try:
-                                                json.loads(args)
-                                            except (json.JSONDecodeError, ValueError):
-                                                func["arguments"] = "{}"
-                                                fixed_count += 1
-                                                # 显示原始 arguments 的前50个字符（截断）
-                                                args_preview = (
-                                                    str(original_args)[:50]
-                                                    if original_args
-                                                    else "None"
-                                                )
-                                                logger.warning(
-                                                    f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
-                                                )
-                                    elif isinstance(args, dict):
-                                        func["arguments"] = json.dumps(args)
-                                    else:
-                                        # Other types, try to convert
-                                        try:
-                                            args_str = str(args)
-                                            json.loads(args_str)
-                                            func["arguments"] = args_str
-                                        except (json.JSONDecodeError, ValueError):
-                                            func["arguments"] = "{}"
-                                            fixed_count += 1
+                                        args_preview = (
+                                            str(original_args)[:50]
+                                            if original_args
+                                            else "None"
+                                        )
+                                        logger.warning(
+                                            f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
+                                        )
+                            elif isinstance(args, dict):
+                                fixed_args = json.dumps(args)
+                            else:
+                                # Other types, try to convert
+                                try:
+                                    args_str = str(args)
+                                    json.loads(args_str)
+                                    fixed_args = args_str
+                                except (json.JSONDecodeError, ValueError):
+                                    fixed_args = "{}"
+                                    fixed_count += 1
+
+                            # Set fixed arguments back
+                            if fixed_args is not None:
+                                if isinstance(func, dict):
+                                    func["arguments"] = fixed_args
+                                elif hasattr(func, "arguments"):
+                                    setattr(func, "arguments", fixed_args)
 
             fixed_messages.append(fixed_msg)
 
