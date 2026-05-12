@@ -1647,152 +1647,70 @@ async def test_custom_stream_wrapper_aclose_none_stream():
     await wrapper.aclose()
 
 
-@pytest.mark.asyncio
-async def test_aclose_persists_partial_args_when_deferred_closure_registered():
-    """AAr6bXKP follow-up: when a deferred-streaming closure is registered
-    (proxy + post-call guardrails) but ``__anext__`` hasn't reached
-    StopAsyncIteration yet (client disconnect mid-stream), ``aclose()``
-    must build a partial assembled response from the chunks accumulated
-    so far and set ``_deferred_stream_complete_args`` on logging_obj.
-    Otherwise the outer ``ProxyLogging.async_post_call_streaming_iterator_hook``
-    finally fires ``_fire_deferred_stream_logging`` with no args and spend
-    tracking is silently skipped."""
-    logging_obj = MagicMock()
-    logging_obj._on_deferred_stream_complete = MagicMock()
-    logging_obj._deferred_stream_complete_args = None
-
-    wrapper = CustomStreamWrapper(
-        completion_stream=None,
-        model="gpt-3.5-turbo",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai",
-    )
-    wrapper.messages = [{"role": "user", "content": "hi"}]
-    wrapper.chunks = [
-        ModelResponseStream(
-            id="chatcmpl-test",
-            created=1742056047,
-            model="gpt-3.5-turbo",
-            object="chat.completion.chunk",
-            choices=[
-                StreamingChoices(
-                    finish_reason=None,
-                    index=0,
-                    delta=Delta(
-                        content="partial response so far",
-                        role="assistant",
-                    ),
-                    logprobs=None,
-                )
-            ],
+_REAL_CHUNK = ModelResponseStream(
+    id="chatcmpl-test",
+    created=1,
+    model="gpt-3.5-turbo",
+    object="chat.completion.chunk",
+    choices=[
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(content="partial", role="assistant"),
         )
-    ]
+    ],
+)
 
-    await wrapper.aclose()
 
-    assert logging_obj._deferred_stream_complete_args is not None, (
-        "_deferred_stream_complete_args must be populated from accumulated "
-        "chunks on disconnect so the deferred logging hook fires"
+def _csw_for_aclose(closure, prior_args, chunks):
+    """Build a real CSW pre-populated with chunks for aclose() partial-args
+    coverage. AAr6bXKP follow-up: aclose() must build a partial assembled
+    response from accumulated chunks on disconnect so the outer
+    ProxyLogging hook's deferred logging fires."""
+    lo = MagicMock()
+    lo._on_deferred_stream_complete = closure
+    lo._deferred_stream_complete_args = prior_args
+    w = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=lo,
+        custom_llm_provider="openai",
     )
-    partial, cache_hit = logging_obj._deferred_stream_complete_args
-    assert partial is not None
-    assert cache_hit is False
+    w.messages = [{"role": "user", "content": "hi"}]
+    w.chunks = chunks
+    return w, lo
 
 
 @pytest.mark.asyncio
-async def test_aclose_does_not_persist_args_when_already_set():
-    """If __anext__ reached StopAsyncIteration normally, it already set
-    args. aclose() must not overwrite them."""
-    logging_obj = MagicMock()
-    logging_obj._on_deferred_stream_complete = MagicMock()
-    sentinel = ("already-set", True)
-    logging_obj._deferred_stream_complete_args = sentinel
-
-    wrapper = CustomStreamWrapper(
-        completion_stream=None,
-        model="gpt-3.5-turbo",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai",
-    )
-    wrapper.chunks = [
-        ModelResponseStream(
-            id="x",
-            created=1,
-            model="gpt-3.5-turbo",
-            object="chat.completion.chunk",
-            choices=[
-                StreamingChoices(
-                    finish_reason=None,
-                    index=0,
-                    delta=Delta(content="x", role="assistant"),
-                )
-            ],
-        )
-    ]
-
-    await wrapper.aclose()
-
-    assert logging_obj._deferred_stream_complete_args is sentinel
-
-
-@pytest.mark.asyncio
-async def test_aclose_skips_partial_persist_when_no_deferred_closure():
-    """No deferred closure registered → don't set args (non-proxy SDK
-    path uses CSW.__anext__'s own create_task call instead)."""
-    logging_obj = MagicMock()
-    logging_obj._on_deferred_stream_complete = None
-    logging_obj._deferred_stream_complete_args = None
-
-    wrapper = CustomStreamWrapper(
-        completion_stream=None,
-        model="gpt-3.5-turbo",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai",
-    )
-    wrapper.chunks = [
-        ModelResponseStream(
-            id="x",
-            created=1,
-            model="gpt-3.5-turbo",
-            object="chat.completion.chunk",
-            choices=[
-                StreamingChoices(
-                    finish_reason=None,
-                    index=0,
-                    delta=Delta(content="x", role="assistant"),
-                )
-            ],
-        )
-    ]
-
-    await wrapper.aclose()
-
-    assert logging_obj._deferred_stream_complete_args is None
-
-
-@pytest.mark.asyncio
-async def test_aclose_swallows_stream_chunk_builder_errors():
-    """If stream_chunk_builder raises while building from partial chunks,
-    aclose() must not propagate the error — HTTP connection cleanup is
-    more important than logging."""
-    logging_obj = MagicMock()
-    logging_obj._on_deferred_stream_complete = MagicMock()
-    logging_obj._deferred_stream_complete_args = None
-
-    wrapper = CustomStreamWrapper(
-        completion_stream=None,
-        model="gpt-3.5-turbo",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai",
-    )
-    wrapper.chunks = ["not-a-real-chunk"]  # builder will choke on this
-
-    with patch(
-        "litellm.stream_chunk_builder", side_effect=RuntimeError("builder boom")
-    ):
-        await wrapper.aclose()  # must not raise
-
-    assert logging_obj._deferred_stream_complete_args is None
+@pytest.mark.parametrize(
+    "scenario,closure,prior_args,chunks,builder_raises,expect_args",
+    [
+        # closure + args unset + chunks → aclose builds partial, sets args
+        ("happy", MagicMock(), None, [_REAL_CHUNK], False, "set"),
+        # normal completion already set args → must not overwrite
+        ("already_set", MagicMock(), ("x", True), [_REAL_CHUNK], False, ("x", True)),
+        # no closure (non-proxy SDK) → don't touch args
+        ("no_closure", None, None, [_REAL_CHUNK], False, None),
+        # builder raises → swallow, leave args None (cleanup best-effort)
+        ("builder_raises", MagicMock(), None, ["bad-chunk"], True, None),
+    ],
+)
+async def test_aclose_partial_args_persistence(
+    scenario, closure, prior_args, chunks, builder_raises, expect_args
+):
+    wrapper, lo = _csw_for_aclose(closure, prior_args, chunks)
+    if builder_raises:
+        with patch("litellm.stream_chunk_builder", side_effect=RuntimeError("boom")):
+            await wrapper.aclose()
+    else:
+        await wrapper.aclose()
+    got = lo._deferred_stream_complete_args
+    if expect_args == "set":
+        assert got is not None and got[1] is False, scenario
+    elif expect_args is None:
+        assert got is None, scenario
+    else:
+        assert got == expect_args, scenario
 
 
 def test_content_not_dropped_when_finish_reason_already_set(
