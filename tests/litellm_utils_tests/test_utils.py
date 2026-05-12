@@ -2516,3 +2516,30 @@ def test_get_base_model_from_metadata():
     # Test 6: None input
     result = _get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"
+
+
+def test_stream_chunk_builder_reasoning_field():
+    """Test that 'reasoning' delta field from providers like Scaleway is mapped to 'reasoning_content'"""
+    from litellm.main import stream_chunk_builder
+
+    chunks = [
+        {
+            "id": "test-1",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "scaleway/gemma-4-26b-a4b-it",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "reasoning": "thinking..."}, "finish_reason": None}],
+        },
+        {
+            "id": "test-1",
+            "object": "chat.completion.chunk",
+            "created": 1234567890,
+            "model": "scaleway/gemma-4-26b-a4b-it",
+            "choices": [{"index": 0, "delta": {"content": "Hello!"}, "finish_reason": "stop"}],
+        },
+    ]
+
+    result = stream_chunk_builder(chunks)
+    assert result is not None
+    assert result.choices[0].message.reasoning_content == "thinking..."
+    assert result.choices[0].message.content == "Hello!"
