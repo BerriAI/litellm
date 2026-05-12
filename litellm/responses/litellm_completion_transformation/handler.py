@@ -74,8 +74,12 @@ class LiteLLMCompletionTransformationHandler:
             # OpenAI 扩展参数（国内模型不支持）
             completion_args.pop("reasoning_effort", None)  # reasoning 模式
             completion_args.pop("coding_plan", None)  # Codex coding plan
-            # 其他可能不支持的参数
             completion_args.pop("parallel_tool_calls", None)  # 并行工具调用
+            # 其他国内模型可能不支持的参数
+            completion_args.pop("stream_options", None)  # stream 选项
+            completion_args.pop("modalities", None)  # 多模态参数
+            completion_args.pop("prediction", None)  # 预测参数
+            completion_args.pop("audio", None)  # 音频参数
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -139,8 +143,12 @@ class LiteLLMCompletionTransformationHandler:
             # OpenAI 扩展参数（国内模型不支持）
             acompletion_args.pop("reasoning_effort", None)  # reasoning 模式
             acompletion_args.pop("coding_plan", None)  # Codex coding plan
-            # 其他可能不支持的参数
             acompletion_args.pop("parallel_tool_calls", None)  # 并行工具调用
+            # 其他国内模型可能不支持的参数
+            acompletion_args.pop("stream_options", None)  # stream 选项
+            acompletion_args.pop("modalities", None)  # 多模态参数
+            acompletion_args.pop("prediction", None)  # 预测参数
+            acompletion_args.pop("audio", None)  # 音频参数
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
