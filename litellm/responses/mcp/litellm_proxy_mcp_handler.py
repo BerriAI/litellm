@@ -91,8 +91,6 @@ class LiteLLM_Proxy_MCP_Handler:
             decoded["mcp_servers"] = []
         return decoded
 
-    @staticmethod
-    @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
         Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.

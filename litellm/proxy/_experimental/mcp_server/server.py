@@ -1890,6 +1890,14 @@ if MCP_AVAILABLE:
             for key, value in (raw_headers or {}).items()
             if isinstance(key, str)
         }
+        object_permission_payload = None
+        if object_permission is not None:
+            object_permission_payload = (
+                object_permission.model_dump(mode="json")
+                if hasattr(object_permission, "model_dump")
+                else str(object_permission)
+            )
+
         scope_payload = {
             "api_key_hash": _hash_lazymcp_value(
                 getattr(user_api_key_auth, "api_key", None)
@@ -1910,11 +1918,7 @@ if MCP_AVAILABLE:
             ),
             "raw_header_names": sorted(normalized_raw_headers.keys()),
             "raw_header_values_hash": _hash_lazymcp_value(normalized_raw_headers),
-            "object_permission": (
-                object_permission.model_dump(mode="json")
-                if hasattr(object_permission, "model_dump")
-                else str(object_permission)
-            ),
+            "object_permission": object_permission_payload,
         }
         encoded = json.dumps(scope_payload, sort_keys=True, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
