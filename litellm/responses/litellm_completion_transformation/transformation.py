@@ -1271,7 +1271,10 @@ class LiteLLMCompletionResponsesConfig:
             )
             return [chat_completion_response_message, tool_output_message]
 
-        return [tool_output_message]
+        # 如果找不到对应的 tool call 定义，跳过这个 tool output
+        # 避免模型报错 "No tool calls but found tool output"
+        # 这种情况可能发生在 previous_response_id 链接处理时丢失了历史 tool call
+        return []
 
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
