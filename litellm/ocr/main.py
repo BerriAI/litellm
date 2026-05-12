@@ -10,7 +10,6 @@ import os
 import re
 from functools import partial
 from io import IOBase
-from pathlib import Path
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
