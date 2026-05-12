@@ -610,7 +610,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_user_id}::{precise_minute}::request_count"
@@ -640,7 +639,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_team_id}::{precise_minute}::request_count"
@@ -670,7 +668,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = _extract_total_tokens(response_obj)
 
                 request_count_api_key = (
                     f"{user_api_key_end_user_id}::{precise_minute}::request_count"
