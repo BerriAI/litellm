@@ -1070,17 +1070,93 @@ async def _check_team_key_limits(
     )
 
 
+def _is_proxy_admin_role(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """True when the caller's user_role is PROXY_ADMIN. Centralised because
+    the same check is repeated across key-management endpoints."""
+    return (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+
+# Permission-dict keys that grant admin-equivalent capabilities. Non-admin
+# callers must not be able to set these at key creation / update — letting
+# them would be self-promotion. Currently the only consumer-checked key is
+# ``get_spend_routes`` (read proxy-wide spend logs across every tenant); the
+# set is structured to accept future admin-only flags without needing to
+# touch every call site.
+_ADMIN_ONLY_PERMISSION_KEYS: frozenset = frozenset({"get_spend_routes"})
+
+# Metadata keys that are admin-only because they leverage proxy-side trusted
+# infrastructure (e.g. SMTP / Resend / Sendgrid email senders configured by
+# the operator). Allowing non-admin callers to set ``max_budget_alert_emails``
+# turns the proxy into a phishing relay — alerts are sent FROM the operator's
+# trusted sender to attacker-supplied recipients.
+_ADMIN_ONLY_METADATA_KEYS: frozenset = frozenset({"max_budget_alert_emails"})
+
+
+def _strip_admin_only_fields_for_non_admin(
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Mutate ``data`` in place to remove fields that only PROXY_ADMIN may
+    set. No-op for proxy admins so they retain full control.
+
+    Removed fields:
+      - ``permissions[get_spend_routes]`` — self-grant of cross-tenant spend
+        log read access via ``permissions.get_spend_routes`` was the
+        headline of the PlrNEsyT priv-esc. The whole ``permissions`` dict
+        gets filtered against the admin-only key set; non-admin-only keys
+        survive so user-defined permission flags still work.
+      - ``metadata[max_budget_alert_emails]`` — email recipient injection
+        into the operator's trusted SMTP / Sendgrid / Resend sender.
+    """
+    if _is_proxy_admin_role(user_api_key_dict):
+        return
+
+    permissions = getattr(data, "permissions", None)
+    if isinstance(permissions, dict) and permissions:
+        for key in list(permissions.keys()):
+            if key in _ADMIN_ONLY_PERMISSION_KEYS:
+                permissions.pop(key, None)
+                verbose_proxy_logger.warning(
+                    "Stripped admin-only permission %r from %s by non-admin "
+                    "caller user_id=%s",
+                    key,
+                    type(data).__name__,
+                    user_api_key_dict.user_id,
+                )
+
+    metadata = getattr(data, "metadata", None)
+    if isinstance(metadata, dict) and metadata:
+        for key in list(metadata.keys()):
+            if key in _ADMIN_ONLY_METADATA_KEYS:
+                metadata.pop(key, None)
+                verbose_proxy_logger.warning(
+                    "Stripped admin-only metadata key %r from %s by "
+                    "non-admin caller user_id=%s",
+                    key,
+                    type(data).__name__,
+                    user_api_key_dict.user_id,
+                )
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
     Validate that key's models and budget respect its project's limits.
 
-    - Key models must be a subset of project models
-    - Key max_budget must be <= project max_budget
+    - Caller must be a member of the project's team (or proxy admin) —
+      projects live under a team via ``LiteLLM_ProjectTable.team_id``;
+      without this gate any internal user could enumerate a project_id and
+      mint a key under it, inheriting the victim project's models / budget.
+    - Key models must be a subset of project models.
+    - Key max_budget must be <= project max_budget.
     """
     project_obj = await get_project_object(
         project_id=project_id,
@@ -1093,6 +1169,52 @@ async def _check_project_key_limits(
             status_code=404,
             detail={"error": f"Project not found, project_id={project_id}"},
         )
+
+    # Project IDOR gate: non-admin callers must be a member of the project's
+    # owning team. Project rows that don't have an associated team are
+    # treated as admin-only — no non-admin code path should mint keys against
+    # them.
+    if not _is_proxy_admin_role(user_api_key_dict):
+        project_team_id = getattr(project_obj, "team_id", None)
+        if project_team_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        f"project_id={project_id} has no associated team; "
+                        "only proxy admins may mint keys against it."
+                    )
+                },
+            )
+        try:
+            team_obj = await get_team_object(
+                team_id=project_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                check_db_only=True,
+            )
+        except Exception:
+            team_obj = None
+        member = (
+            _get_user_in_team(
+                team_table=cast(LiteLLM_TeamTableCachedObj, team_obj),
+                user_id=user_api_key_dict.user_id,
+            )
+            if team_obj is not None
+            else None
+        )
+        if member is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        f"User {user_api_key_dict.user_id} is not a member of "
+                        f"the team={project_team_id} that owns "
+                        f"project_id={project_id}."
+                    )
+                },
+            )
 
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
@@ -1455,6 +1577,14 @@ async def generate_key_fn(
                 prisma_client=prisma_client,
             )
 
+        # Strip admin-only fields (``permissions.get_spend_routes`` self-
+        # grant, ``metadata.max_budget_alert_emails`` SMTP-injection) before
+        # the request reaches the DB write. No-op for proxy admins.
+        _strip_admin_only_fields_for_non_admin(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
             await _check_project_key_limits(
@@ -1462,6 +1592,7 @@ async def generate_key_fn(
                 data=data,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                user_api_key_dict=user_api_key_dict,
             )
 
         return await _common_key_generation_helper(
@@ -2211,6 +2342,7 @@ async def _validate_update_key_data(
             data=data,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
         )
 
     # When the caller asks to change the key's organization_id, require that
@@ -2387,6 +2519,14 @@ async def update_key_fn(  # noqa: PLR0915
                     "error": f"max_budget cannot be negative. Received: {data.max_budget}"
                 },
             )
+
+        # Strip admin-only fields (``permissions.get_spend_routes`` self-
+        # grant, ``metadata.max_budget_alert_emails`` SMTP-injection) before
+        # the request reaches the DB write. No-op for proxy admins.
+        _strip_admin_only_fields_for_non_admin(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
@@ -4150,22 +4290,75 @@ async def _execute_virtual_key_regeneration(
     proxy_logging_obj: ProxyLogging,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
-    from litellm.proxy.proxy_server import hash_token
+    from litellm.proxy.proxy_server import hash_token, llm_router
+
+    # Strip admin-only fields (``permissions.get_spend_routes`` self-grant,
+    # ``metadata.max_budget_alert_emails`` SMTP-injection) before this
+    # request can reach the DB write. ``/key/regenerate`` accepts the same
+    # ``RegenerateKeyRequest`` shape that lets callers patch fields on the
+    # key — without this filter the non-admin priv-esc surface that
+    # ``/key/generate`` and ``/key/update`` close above re-opens here.
+    if data is not None:
+        _strip_admin_only_fields_for_non_admin(
+            data=data,  # type: ignore[arg-type]
+            user_api_key_dict=user_api_key_dict,
+        )
 
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
     if data is not None and data.organization_id is not None:
         _existing_org_id = getattr(key_in_db, "organization_id", None)
-        _is_proxy_admin = (
-            user_api_key_dict.user_role is not None
-            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        )
-        if data.organization_id != _existing_org_id and not _is_proxy_admin:
+        if data.organization_id != _existing_org_id and not _is_proxy_admin_role(
+            user_api_key_dict
+        ):
             await _validate_caller_can_assign_key_org(
                 user_api_key_dict=user_api_key_dict,
                 organization_id=data.organization_id,
                 prisma_client=prisma_client,
+            )
+
+    # Same membership rule for team_id changes. ``/key/update`` already runs
+    # ``validate_key_team_change`` when the team changes;
+    # ``/key/regenerate`` was missing this check, so a caller could
+    # re-assign their key's ``team_id`` (and inherit the victim team's
+    # models / budget / rate limits) by hitting regenerate instead of
+    # update. Mirror the ``/key/update`` flow here.
+    if data is not None and data.team_id is not None:
+        _existing_team_id = getattr(key_in_db, "team_id", None)
+        if data.team_id != _existing_team_id and not _is_proxy_admin_role(
+            user_api_key_dict
+        ):
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            "LLM router not initialised — required to "
+                            "validate team-change on /key/regenerate."
+                        )
+                    },
+                )
+            try:
+                team_obj_for_change = await get_team_object(
+                    team_id=data.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    check_db_only=True,
+                )
+            except Exception:
+                team_obj_for_change = None
+            if team_obj_for_change is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"Team not found for team_id={data.team_id}"},
+                )
+            await validate_key_team_change(
+                key=key_in_db,
+                team=cast(LiteLLM_TeamTable, team_obj_for_change),
+                change_initiated_by=user_api_key_dict,
+                llm_router=llm_router,
             )
 
     new_token = await get_new_token(data=data)
