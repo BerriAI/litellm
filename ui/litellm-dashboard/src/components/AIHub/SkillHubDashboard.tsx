@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { Text } from "@tremor/react";
 import { SearchOutlined } from "@ant-design/icons";
-import { Input, Select } from "antd";
+import { Input, Select, Typography } from "antd";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import { skillHubColumns } from "@/components/skill_hub_table_columns";
@@ -26,6 +25,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
 }) => {
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
+  const [namespaceFilter, setNamespaceFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
 
   const copyToClipboard = (text: string) => {
@@ -43,6 +43,9 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     if (domainFilter) {
       result = result.filter((s) => (s.domain || "General") === domainFilter);
     }
+    if (namespaceFilter) {
+      result = result.filter((s) => s.namespace === namespaceFilter);
+    }
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter(
@@ -51,11 +54,11 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           s.description?.toLowerCase().includes(q) ||
           s.domain?.toLowerCase().includes(q) ||
           s.namespace?.toLowerCase().includes(q) ||
-          s.keywords?.some((k) => k.toLowerCase().includes(q))
+          s.keywords?.some((k) => k.toLowerCase().includes(q)),
       );
     }
     return result;
-  }, [skills, search, domainFilter]);
+  }, [skills, search, domainFilter, namespaceFilter]);
 
   if (selectedSkill) {
     return (
@@ -94,9 +97,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">
-            All {publicPage ? "Public " : ""}Skills
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
           <div className="flex items-center gap-2">
             <Select
               placeholder="All Domains"
@@ -105,6 +106,14 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
               onChange={(val) => setDomainFilter(val)}
               style={{ width: 160 }}
               options={domains.map((d) => ({ label: d, value: d }))}
+            />
+            <Select
+              placeholder="All Namespaces"
+              allowClear
+              value={namespaceFilter}
+              onChange={(val) => setNamespaceFilter(val)}
+              style={{ width: 220 }}
+              options={namespaces.map((namespace) => ({ label: namespace, value: namespace }))}
             />
             <Input
               prefix={<SearchOutlined className="text-gray-400" />}
@@ -117,19 +126,15 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           </div>
         </div>
         <ModelDataTable
-          columns={skillHubColumns(
-            (skill) => setSelectedSkill(skill),
-            copyToClipboard,
-            publicPage
-          )}
+          columns={skillHubColumns((skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
           data={filteredSkills}
           isLoading={false}
           defaultSorting={[{ id: "name", desc: false }]}
         />
         <div className="mt-3 text-center">
-          <Text className="text-sm text-gray-500">
+          <Typography.Text className="text-sm text-gray-500">
             Showing {filteredSkills.length} of {totalSkills} skill{totalSkills !== 1 ? "s" : ""}
-          </Text>
+          </Typography.Text>
         </div>
       </div>
     </div>
