@@ -41,8 +41,12 @@ class LiteLLMCompletionTransformationHandler:
             List of messages with corrected tool_calls arguments
         """
         import copy
+        import logging
+
+        logger = logging.getLogger("LiteLLM.DomesticFilter")
 
         fixed_messages = []
+        fixed_count = 0
         for msg in messages:
             # Deep copy to avoid modifying original
             fixed_msg = copy.deepcopy(msg) if isinstance(msg, dict) else msg
@@ -58,17 +62,30 @@ class LiteLLMCompletionTransformationHandler:
                                 func = tc.get("function")
                                 if isinstance(func, dict):
                                     args = func.get("arguments")
+                                    original_args = args
                                     # Ensure arguments is valid JSON
                                     if args is None:
                                         func["arguments"] = "{}"
+                                        fixed_count += 1
                                     elif isinstance(args, str):
                                         if not args.strip():
                                             func["arguments"] = "{}"
+                                            fixed_count += 1
                                         else:
                                             try:
                                                 json.loads(args)
                                             except (json.JSONDecodeError, ValueError):
                                                 func["arguments"] = "{}"
+                                                fixed_count += 1
+                                                # 显示原始 arguments 的前50个字符（截断）
+                                                args_preview = (
+                                                    str(original_args)[:50]
+                                                    if original_args
+                                                    else "None"
+                                                )
+                                                logger.warning(
+                                                    f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
+                                                )
                                     elif isinstance(args, dict):
                                         func["arguments"] = json.dumps(args)
                                     else:
@@ -79,8 +96,14 @@ class LiteLLMCompletionTransformationHandler:
                                             func["arguments"] = args_str
                                         except (json.JSONDecodeError, ValueError):
                                             func["arguments"] = "{}"
+                                            fixed_count += 1
 
             fixed_messages.append(fixed_msg)
+
+        if fixed_count > 0:
+            logger.info(
+                f"[DomesticFilter] Fixed {fixed_count} invalid tool_calls arguments"
+            )
 
         return fixed_messages
 
