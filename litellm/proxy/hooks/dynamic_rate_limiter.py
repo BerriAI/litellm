@@ -218,11 +218,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             ) = await self.check_available_usage(
                 model=data["model"], priority=key_priority
             )
-            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
-                data.get("model")
-            )
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    data.get("model")
+                )
                 raise ProxyHTTPRateLimitError(
                     status_code=429,
                     detail={
@@ -238,6 +238,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
             ### CHECK RPM ###
             elif available_rpm is not None and available_rpm == 0:
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    data.get("model")
+                )
                 raise ProxyHTTPRateLimitError(
                     status_code=429,
                     detail={
