@@ -25,13 +25,13 @@ from fastapi import HTTPException
 # ---------------------------------------------------------------------------
 
 _MCP_MANAGER = "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-_MCP_HANDLER = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler"
 _HANDLE_HTTP = (
     "litellm.proxy._experimental.mcp_server.server.handle_streamable_http_mcp"
 )
 _STREAM_ASGI = "litellm.proxy.proxy_server._stream_mcp_asgi_response"
 _PRISMA = "litellm.proxy.proxy_server.prisma_client"
-_CACHE = "litellm.proxy.proxy_server.user_api_key_cache"
+_IS_ACCESS_GROUP = "litellm.proxy.proxy_server._is_mcp_access_group_cached"
+_FORWARD = "litellm.proxy.proxy_server._mcp_forward_as_path"
 
 
 def _make_request(path: str = "/test/mcp"):
@@ -68,14 +68,6 @@ def _fake_toolset(name: str = "my_toolset", toolset_id: str = "ts-1"):
     return t
 
 
-def _miss_cache():
-    """Returns a mock user_api_key_cache that always misses (returns None)."""
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
-    return cache
-
-
 async def _ok_mcp_handle(scope, receive, send):
     """Stub MCP handler that returns HTTP 200."""
     await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -91,26 +83,24 @@ async def _ok_mcp_handle(scope, receive, send):
 async def test_dynamic_mcp_route_resolves_registered_server():
     """When the segment matches a known server alias the request is forwarded
     to /mcp/{name} and the handler returns 200."""
+    from starlette.responses import Response
+
     from litellm.proxy.proxy_server import dynamic_mcp_route
 
     request = _make_request("/my_server/mcp")
     fake_mgr = MagicMock()
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=_fake_server("my_server"))
 
-    captured_scope = {}
-
-    async def capturing_handle(scope, receive, send):
-        captured_scope.update(scope)
-        await _ok_mcp_handle(scope, receive, send)
+    fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
-        patch(_HANDLE_HTTP, new=capturing_handle),
+        patch(_FORWARD, new=fake_forward),
     ):
         response = await dynamic_mcp_route("my_server", request)
 
     assert response.status_code == 200
-    assert captured_scope.get("path") == "/mcp/my_server"
+    fake_forward.assert_awaited_once_with("my_server", request)
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +110,10 @@ async def test_dynamic_mcp_route_resolves_registered_server():
 
 @pytest.mark.asyncio
 async def test_dynamic_mcp_route_comma_list_forwarded():
-    """A comma-separated segment is forwarded directly to /mcp/{segment}
-    without hitting the toolset or access-group DB lookups."""
+    """A comma-separated segment is forwarded directly without hitting
+    the toolset or access-group DB lookups."""
+    from starlette.responses import Response
+
     from litellm.proxy.proxy_server import dynamic_mcp_route
 
     segment = "github_mcp,zapier"
@@ -130,20 +122,16 @@ async def test_dynamic_mcp_route_comma_list_forwarded():
     fake_mgr = MagicMock()
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
 
-    captured_scope = {}
-
-    async def capturing_handle(scope, receive, send):
-        captured_scope.update(scope)
-        await _ok_mcp_handle(scope, receive, send)
+    fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
-        patch(_HANDLE_HTTP, new=capturing_handle),
+        patch(_FORWARD, new=fake_forward),
     ):
         response = await dynamic_mcp_route(segment, request)
 
     assert response.status_code == 200
-    assert captured_scope.get("path") == f"/mcp/{segment}"
+    fake_forward.assert_awaited_once_with(segment, request)
     # Toolset lookup must NOT be called for comma names
     fake_mgr.get_toolset_by_name_cached.assert_not_called()
 
@@ -196,8 +184,9 @@ async def test_dynamic_mcp_route_resolves_toolset():
 
 @pytest.mark.asyncio
 async def test_dynamic_mcp_route_resolves_access_group():
-    """When the segment is an MCP access group the request is forwarded
-    to /mcp/{group_name} (not 404)."""
+    """When the segment is an MCP access group the request is forwarded (not 404)."""
+    from starlette.responses import Response
+
     from litellm.proxy.proxy_server import dynamic_mcp_route
 
     request = _make_request("/dev_group/mcp")
@@ -206,31 +195,25 @@ async def test_dynamic_mcp_route_resolves_access_group():
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
     fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=None)
 
-    captured_scope = {}
-
-    async def capturing_handle(scope, receive, send):
-        captured_scope.update(scope)
-        await _ok_mcp_handle(scope, receive, send)
+    fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
-        patch(_CACHE, new=_miss_cache()),
-        patch(
-            f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
-            new=AsyncMock(return_value=["server-a", "server-b"]),
-        ),
-        patch(_HANDLE_HTTP, new=capturing_handle),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=True)),
+        patch(_FORWARD, new=fake_forward),
     ):
         response = await dynamic_mcp_route("dev_group", request)
 
     assert response.status_code == 200
-    assert captured_scope.get("path") == "/mcp/dev_group"
+    fake_forward.assert_awaited_once_with("dev_group", request)
 
 
 @pytest.mark.asyncio
 async def test_dynamic_mcp_route_access_group_called_with_correct_name():
     """The access group lookup receives exactly the segment from the URL."""
+    from starlette.responses import Response
+
     from litellm.proxy.proxy_server import dynamic_mcp_route
 
     request = _make_request("/qa_tools/mcp")
@@ -239,18 +222,20 @@ async def test_dynamic_mcp_route_access_group_called_with_correct_name():
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
     fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=None)
 
-    group_lookup = AsyncMock(return_value=["server-x"])
+    is_group = AsyncMock(return_value=True)
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
-        patch(_CACHE, new=_miss_cache()),
-        patch(f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups", new=group_lookup),
-        patch(_HANDLE_HTTP, new=_ok_mcp_handle),
+        patch(_IS_ACCESS_GROUP, new=is_group),
+        patch(
+            _FORWARD,
+            new=AsyncMock(return_value=Response(content=b"{}", status_code=200)),
+        ),
     ):
         await dynamic_mcp_route("qa_tools", request)
 
-    group_lookup.assert_awaited_once_with(["qa_tools"])
+    is_group.assert_awaited_once_with("qa_tools")
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +257,7 @@ async def test_dynamic_mcp_route_unknown_name_returns_404():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
-        patch(_CACHE, new=_miss_cache()),
-        patch(
-            f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
-            new=AsyncMock(return_value=[]),
-        ),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await dynamic_mcp_route("does_not_exist", request)
@@ -299,11 +280,7 @@ async def test_dynamic_mcp_route_empty_access_group_returns_404():
     with (
         patch(_MCP_MANAGER, fake_mgr),
         patch(_PRISMA, new=MagicMock()),
-        patch(_CACHE, new=_miss_cache()),
-        patch(
-            f"{_MCP_HANDLER}._get_mcp_servers_from_access_groups",
-            new=AsyncMock(return_value=[]),
-        ),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await dynamic_mcp_route("empty_group", request)

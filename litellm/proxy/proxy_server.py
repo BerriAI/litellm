@@ -15135,6 +15135,58 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+async def _mcp_forward_as_path(path_segment: str, request: Request):
+    """Rewrite path to /mcp/{path_segment} and buffer the response."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+    )
+    from starlette.responses import Response
+
+    scope = dict(request.scope)
+    scope["path"] = f"/mcp/{path_segment}"
+
+    response_body = b""
+    response_status = 200
+    response_headers: list = []
+
+    async def custom_send(message):
+        nonlocal response_body, response_status, response_headers
+        if message["type"] == "http.response.start":
+            response_status = message["status"]
+            response_headers = message.get("headers", [])
+        elif message["type"] == "http.response.body":
+            response_body += message.get("body", b"")
+
+    await handle_streamable_http_mcp(scope, receive=request.receive, send=custom_send)
+    headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+    return Response(
+        content=response_body,
+        status_code=response_status,
+        headers=headers_dict,
+        media_type=headers_dict.get("content-type", "application/json"),
+    )
+
+
+async def _is_mcp_access_group_cached(name: str) -> bool:
+    """Return True if *name* is a known MCP access group tag, caching the result."""
+    from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    cache_key = f"mcp_access_group_exists:{name}"
+    cached = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached is not None:
+        return bool(cached)
+    result = bool(await MCPRequestHandler._get_mcp_servers_from_access_groups([name]))
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=result,
+        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    )
+    return result
+
+
 # Dynamic MCP server routes - handle /{mcp_server_name}/mcp
 @app.api_route(
     "/{mcp_server_name}/mcp",
@@ -15157,48 +15209,15 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
-        async def _forward_as_mcp_path(path_segment: str):
-            from litellm.proxy._experimental.mcp_server.server import (
-                handle_streamable_http_mcp,
-            )
-            from starlette.responses import Response
-
-            scope = dict(request.scope)
-            scope["path"] = f"/mcp/{path_segment}"
-
-            response_body = b""
-            response_status = 200
-            response_headers: list = []
-
-            async def custom_send(message):
-                nonlocal response_body, response_status, response_headers
-                if message["type"] == "http.response.start":
-                    response_status = message["status"]
-                    response_headers = message.get("headers", [])
-                elif message["type"] == "http.response.body":
-                    response_body += message.get("body", b"")
-
-            await handle_streamable_http_mcp(
-                scope, receive=request.receive, send=custom_send
-            )
-            headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-            return Response(
-                content=response_body,
-                status_code=response_status,
-                headers=headers_dict,
-                media_type=headers_dict.get("content-type", "application/json"),
-            )
-
         # 1. Registered MCP server alias
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        if global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
-        )
-        if mcp_server is not None:
-            return await _forward_as_mcp_path(mcp_server_name)
+        ):
+            return await _mcp_forward_as_path(mcp_server_name, request)
 
         # 2. Comma-separated list — forward directly before any DB call.
         if "," in mcp_server_name:
-            return await _forward_as_mcp_path(mcp_server_name)
+            return await _mcp_forward_as_path(mcp_server_name, request)
 
         # 3. Toolset name (cached)
         if prisma_client is not None:
@@ -15221,29 +15240,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 finally:
                     _mcp_active_toolset_id.reset(token)
 
-        # 4. Single segment: check if it is a known MCP access group tag (cached).
-        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
-
-        cache_key = f"mcp_access_group_exists:{mcp_server_name}"
-        cached_result = await user_api_key_cache.async_get_cache(key=cache_key)
-        if cached_result is None:
-            group_server_ids = (
-                await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                    [mcp_server_name]
-                )
-            )
-            cached_result = bool(group_server_ids)
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=cached_result,
-                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-            )
-
-        if cached_result:
-            return await _forward_as_mcp_path(mcp_server_name)
+        # 4. MCP access group tag (cached)
+        if await _is_mcp_access_group_cached(mcp_server_name):
+            return await _mcp_forward_as_path(mcp_server_name, request)
 
         raise HTTPException(
             status_code=404,
