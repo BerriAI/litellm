@@ -10827,3 +10827,68 @@ class TestProxyAdminRoleHelper:
         assert (
             _is_proxy_admin_role(UserAPIKeyAuth(api_key="x", user_role=None)) is False
         )
+
+
+class TestRegenerateProjectMembershipGate:
+    """Greptile P1 follow-up: ``RegenerateKeyRequest`` inherits
+    ``project_id`` from ``GenerateKeyRequest`` and
+    ``prepare_key_update_data`` persists every set field including
+    ``project_id``. Without an explicit ``_check_project_key_limits``
+    call inside ``_execute_virtual_key_regeneration`` a non-admin caller
+    could enumerate a project_id, regenerate their key into it, and
+    inherit the victim project's models / budget — the same IDOR the
+    /key/generate + /key/update paths close."""
+
+    @pytest.mark.asyncio
+    async def test_non_admin_regen_into_non_member_project_blocked(self):
+        from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _execute_virtual_key_regeneration,
+        )
+
+        # Victim project — exists, has a team, caller is NOT a member.
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=999.0),
+        )
+        team_obj = LiteLLM_TeamTableCachedObj(
+            team_id="team-victim",
+            members_with_roles=[
+                Member(role="user", user_id="someone-else", user_email=None)
+            ],
+        )
+
+        key_in_db = LiteLLM_VerificationToken(
+            token="hashed-existing", project_id=None, team_id=None
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=team_obj),
+            ),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.hash_token", return_value="new-hash"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _execute_virtual_key_regeneration(
+                    prisma_client=MagicMock(),
+                    key_in_db=key_in_db,
+                    hashed_api_key="hashed-existing",
+                    key="sk-existing",
+                    data=RegenerateKeyRequest(
+                        key="sk-existing",
+                        project_id="proj-victim",
+                    ),
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=MagicMock(),
+                )
+            assert exc.value.status_code == 403
+            assert "not a member" in str(exc.value.detail)
