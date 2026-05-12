@@ -14553,14 +14553,8 @@ async def dynamic_lazymcp_route(mcp_server_name: str, request: Request):
                 finally:
                     _mcp_active_toolset_id.reset(token)
 
-        if mcp_server is None:
-            # Defer non-server names to the existing MCP path/group resolver so
-            # access-group routes behave like standard /mcp without pre-leaking
-            # whether the name is a hidden server, group, or invalid target.
-            return await _stream_mcp_asgi_response(
-                handle_streamable_http_lazymcp, scope, request.receive
-            )
-
+        # Defer all remaining names (server, access-group, or invalid target) to
+        # the LazyMCP handler, which applies the existing group/permission resolver.
         return await _stream_mcp_asgi_response(
             handle_streamable_http_lazymcp, scope, request.receive
         )

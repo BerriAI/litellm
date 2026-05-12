@@ -92,6 +92,23 @@ class LiteLLM_Proxy_MCP_Handler:
         return decoded
 
     @staticmethod
+    def _infer_client_ip_from_headers(
+        raw_headers: Optional[Dict[str, str]]
+    ) -> Optional[str]:
+        if not raw_headers:
+            return None
+        normalized_headers = {
+            key.lower(): value
+            for key, value in raw_headers.items()
+            if isinstance(key, str)
+        }
+        for header_name in ("x-forwarded-for", "x-real-ip", "x-client-ip"):
+            value = normalized_headers.get(header_name)
+            if isinstance(value, str) and value.strip():
+                return value.split(",")[0].strip()
+        return None
+
+    @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
         Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
@@ -252,8 +269,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     from litellm.proxy.proxy_server import prisma_client
 
                     if prisma_client is not None:
-                        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
-                            prisma_client, requested_scope
+                        toolset = (
+                            await global_mcp_server_manager.get_toolset_by_name_cached(
+                                prisma_client, requested_scope
+                            )
                         )
                         if toolset is not None:
                             active_toolset_id = toolset.toolset_id
@@ -284,6 +303,14 @@ class LiteLLM_Proxy_MCP_Handler:
             else None
         )
         try:
+            if active_toolset_id is not None and user_api_key_auth is not None:
+                user_api_key_auth = (
+                    await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                        resolved_toolset_ids=[active_toolset_id],
+                        resolved_mcp_servers=effective_filter or [],
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                )
             catalog = await _get_lazymcp_catalog(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -324,8 +351,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     from litellm.proxy.proxy_server import prisma_client
 
                     if prisma_client is not None:
-                        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
-                            prisma_client, name
+                        toolset = (
+                            await global_mcp_server_manager.get_toolset_by_name_cached(
+                                prisma_client, name
+                            )
                         )
                         if toolset is not None:
                             if user_api_key_auth is not None:
@@ -337,9 +366,14 @@ class LiteLLM_Proxy_MCP_Handler:
                                 if not is_admin:
                                     op = user_api_key_auth.object_permission
                                     granted = (
-                                        getattr(op, "mcp_toolsets", None) if op else None
+                                        getattr(op, "mcp_toolsets", None)
+                                        if op
+                                        else None
                                     )
-                                    if granted is None or toolset.toolset_id not in granted:
+                                    if (
+                                        granted is None
+                                        or toolset.toolset_id not in granted
+                                    ):
                                         verbose_logger.debug(
                                             f"Key does not have access to toolset '{name}', skipping."
                                         )
@@ -351,10 +385,12 @@ class LiteLLM_Proxy_MCP_Handler:
             resolved_mcp_servers.append(name)
 
         if resolved_toolset_ids and user_api_key_auth is not None:
-            user_api_key_auth = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
-                resolved_toolset_ids=resolved_toolset_ids,
-                resolved_mcp_servers=resolved_mcp_servers,
-                user_api_key_auth=user_api_key_auth,
+            user_api_key_auth = (
+                await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                    resolved_toolset_ids=resolved_toolset_ids,
+                    resolved_mcp_servers=resolved_mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                )
             )
 
         effective_server_filter = (
@@ -420,6 +456,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+
         mcp_servers, use_lazymcp = LiteLLM_Proxy_MCP_Handler._get_requested_mcp_servers(
             mcp_tools_with_litellm_proxy
         )
@@ -427,8 +464,10 @@ class LiteLLM_Proxy_MCP_Handler:
         if use_lazymcp:
             effective_filter = mcp_servers or None
             active_toolset_id: Optional[str] = None
-            effective_filter, active_toolset_id = await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
-                effective_filter, global_mcp_server_manager
+            effective_filter, active_toolset_id = (
+                await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+                    effective_filter, global_mcp_server_manager
+                )
             )
             return await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
                 user_api_key_auth=user_api_key_auth,
@@ -842,6 +881,18 @@ class LiteLLM_Proxy_MCP_Handler:
                     if not isinstance(lazy_mcp_servers, list):
                         lazy_mcp_servers = None
                     lazy_toolset_id = lazymcp_scope.get("toolset_id")
+                    scoped_user_api_key_auth = user_api_key_auth
+                    if (
+                        isinstance(lazy_toolset_id, str)
+                        and user_api_key_auth is not None
+                    ):
+                        scoped_user_api_key_auth = (
+                            await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                                resolved_toolset_ids=[lazy_toolset_id],
+                                resolved_mcp_servers=lazy_mcp_servers or [],
+                                user_api_key_auth=user_api_key_auth,
+                            )
+                        )
                     token = (
                         _mcp_active_toolset_id.set(lazy_toolset_id)
                         if isinstance(lazy_toolset_id, str)
@@ -849,12 +900,15 @@ class LiteLLM_Proxy_MCP_Handler:
                     )
                     try:
                         set_auth_context(
-                            user_api_key_auth=user_api_key_auth,
+                            user_api_key_auth=scoped_user_api_key_auth,
                             mcp_auth_header=mcp_auth_header,
                             mcp_servers=lazy_mcp_servers,
                             mcp_server_auth_headers=mcp_server_auth_headers,
                             oauth2_headers=oauth2_headers,
                             raw_headers=raw_headers,
+                            client_ip=LiteLLM_Proxy_MCP_Handler._infer_client_ip_from_headers(
+                                raw_headers
+                            ),
                         )
                         result = await lazymcp_tool_call(tool_name, parsed_arguments)
                     finally:

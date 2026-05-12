@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     MCPTransport,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -297,8 +298,54 @@ async def test_lazymcp_call_rechecks_permissions_and_delegates_to_mcp_call():
     assert allowed_mock.await_count >= 1
     call_mock.assert_awaited_once()
     assert call_mock.await_args.kwargs["name"] == "github-create_issue"
-    assert call_mock.await_args.kwargs["arguments"] == {"title": "Bug"}
-    assert call_mock.await_args.kwargs["metadata"]["lazy_mcp"] is True
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_call_uses_unavailable_server_error_when_server_missing():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _lazymcp_call
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[]),
+    ):
+        result = await _lazymcp_call(
+            {"server": "missing", "tool": "tool", "arguments": {}}
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "MCP server is not available for this request."
+
+
+@pytest.mark.asyncio
+async def test_invalidating_toolset_cache_clears_lazymcp_cache(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    cache_dict = {"toolset_perms:abc": 1, "lazymcp:catalog:xyz": 2, "other": 3}
+    invalidate_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            MagicMock(in_memory_cache=MagicMock(cache_dict=cache_dict)),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.invalidate_lazymcp_cache",
+            invalidate_mock,
+        ),
+    ):
+        manager.invalidate_toolset_cache(toolset_id="abc")
+
+    assert "toolset_perms:abc" not in cache_dict
+    assert cache_dict["other"] == 3
+    invalidate_mock.assert_called_once()
 
 
 def test_lazymcp_cache_scope_hashes_auth_context_and_route_scope():

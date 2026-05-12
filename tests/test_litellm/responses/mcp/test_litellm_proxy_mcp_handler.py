@@ -366,6 +366,69 @@ async def test_execute_tool_calls_passes_lazymcp_route_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_passes_lazymcp_client_ip_and_scoped_permissions(
+    monkeypatch,
+):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_apply_toolset_permissions(**kwargs):
+        captured["toolset_permissions"] = kwargs
+        return kwargs["user_api_key_auth"]
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(
+        handler_module.LiteLLM_Proxy_MCP_Handler,
+        "_apply_toolset_permissions",
+        fake_apply_toolset_permissions,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+
+    user_auth = types.SimpleNamespace(api_key="sk-test")
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            ["github"], "toolset-123"
+        )
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy",
+                "function": {
+                    "name": "mcp_call",
+                    "arguments": '{"server":"github","tool":"search","arguments":{}}',
+                },
+            }
+        ],
+        user_api_key_auth=user_auth,
+        raw_headers={"x-forwarded-for": "203.0.113.9, 10.0.0.1"},
+    )
+
+    assert captured["client_ip"] == "203.0.113.9"
+    assert captured["toolset_permissions"]["resolved_toolset_ids"] == ["toolset-123"]
+    assert captured["toolset_permissions"]["user_api_key_auth"] is user_auth
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_passes_lazymcp_toolset_scope(monkeypatch):
     proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)

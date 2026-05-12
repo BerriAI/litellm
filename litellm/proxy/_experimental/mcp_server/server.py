@@ -2256,7 +2256,7 @@ if MCP_AVAILABLE:
             return CallToolResult(
                 content=[
                     TextContent(
-                        text=json.dumps(LAZYMCP_UNAVAILABLE_TOOL_ERROR), type="text"
+                        text=json.dumps(LAZYMCP_UNAVAILABLE_SERVER_ERROR), type="text"
                     )
                 ],
                 isError=True,
