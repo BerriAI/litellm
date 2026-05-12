@@ -1673,7 +1673,7 @@ class Router:
                 for cb in self.optional_callbacks
             )
             if not already_registered:
-                ec_callback = EncryptedContentAffinityCheck()
+                ec_callback = EncryptedContentAffinityCheck(router=self)
                 self.optional_callbacks.append(ec_callback)
                 litellm.logging_callback_manager.add_litellm_callback(ec_callback)
 
@@ -7076,11 +7076,11 @@ class Router:
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
-            litellm.register_model(
-                model_cost={
-                    _model_name: _shared_model_info,
-                }
-            )
+            _backend_alias_cost = {_model_name: _shared_model_info}
+            if "responses/" in _model_name:
+                _stripped_model_name = _model_name.replace("responses/", "")
+                _backend_alias_cost[_stripped_model_name] = _shared_model_info
+            litellm.register_model(model_cost=_backend_alias_cost)
 
             ## Check if LLM Deployment is allowed for this deployment
             if (
@@ -7752,6 +7752,12 @@ class Router:
         # initialize client
         self._add_deployment(deployment=deployment)
 
+        _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
+        for field in CustomPricingLiteLLMParams.model_fields.keys():
+            field_value = deployment.litellm_params.get(field)
+            if field_value is not None:
+                _model_info_dict[field] = field_value
+
         # Register custom pricing in litellm.model_cost.
         # Mirrors _create_deployment() logic to ensure dynamically-added deployments
         # (e.g., loaded from DB) also have their custom pricing registered.
@@ -7759,12 +7765,30 @@ class Router:
         # zero-cost models, causing budget checks to block free models.
         _model_id = deployment.model_info.id
         if _model_id is not None:
-            _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
-                field_value = deployment.litellm_params.get(field)
-                if field_value is not None:
-                    _model_info_dict[field] = field_value
             litellm.register_model(model_cost={_model_id: _model_info_dict})
+
+        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+        _model_name = deployment.litellm_params.model
+        if deployment.litellm_params.custom_llm_provider is not None:
+            _model_name = (
+                deployment.litellm_params.custom_llm_provider + "/" + _model_name
+            )
+
+        # For the shared backend key, strip custom pricing fields so that
+        # one deployment's pricing overrides don't pollute another
+        # deployment sharing the same backend model name.
+        # Each deployment's full pricing is already stored under its
+        # unique model_id above (when present).
+        _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
+        _shared_model_info = {
+            k: v for k, v in _model_info_dict.items() if k not in _custom_pricing_fields
+        }
+        _backend_alias_cost = {_model_name: _shared_model_info}
+        if "responses/" in _model_name:
+            _stripped_model_name = _model_name.replace("responses/", "")
+            _backend_alias_cost[_stripped_model_name] = _shared_model_info
+        litellm.register_model(model_cost=_backend_alias_cost)
 
         # add to model names
         self._add_model_to_list_and_index_map(
