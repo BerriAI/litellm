@@ -559,6 +559,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         "current_rpm": current_rpm,
                         "rpm_limit": _deployment_rpm,
                     }
+            # NOTE: ``rate_limit_type`` is intentionally left unset here. This raise
+            # fires after ``_common_checks_available_deployment`` filters out every
+            # healthy deployment, which can happen for TPM, RPM, or both — we don't
+            # know which dimension caused the filtering, so we leave the dimension as
+            # the honest "unknown" default rather than mis-attributing to REQUESTS.
             raise litellm.RateLimitError(
                 message=f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}",
                 llm_provider="",
@@ -570,7 +575,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
                 category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
-                rate_limit_type=RateLimitType.REQUESTS,
             )
 
     def get_available_deployments(
