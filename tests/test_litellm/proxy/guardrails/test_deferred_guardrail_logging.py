@@ -1176,11 +1176,22 @@ class TestStreamingDisconnectFiresDeferredLogging:
     """
 
     @pytest.mark.parametrize(
-        "termination",
-        ["normal_completion", "client_disconnect", "exception_mid_stream"],
+        "termination,should_fire",
+        [
+            ("normal_completion", True),
+            ("client_disconnect", True),  # partial usage still attributed
+            # Iterator-raised exceptions (post-call guardrail blocked the
+            # response, upstream provider error mid-stream, etc.) must NOT
+            # fire deferred success — that would persist a blocked /
+            # errored response. The upstream caller's
+            # post_call_failure_hook handles the failure side.
+            ("exception_mid_stream", False),
+        ],
     )
     @pytest.mark.asyncio
-    async def test_deferred_logging_fires_on_every_termination_path(self, termination):
+    async def test_deferred_logging_fires_only_on_clean_or_disconnect(
+        self, termination, should_fire
+    ):
         fired_with: list = []
 
         async def _normal():
@@ -1188,7 +1199,7 @@ class TestStreamingDisconnectFiresDeferredLogging:
 
         async def _raises():
             yield "c1"
-            raise RuntimeError("upstream blew up")
+            raise RuntimeError("guardrail blocked")
 
         async def _three():
             yield "c1"
@@ -1216,14 +1227,19 @@ class TestStreamingDisconnectFiresDeferredLogging:
                         await gen.aclose()
                         break
             elif termination == "exception_mid_stream":
-                with pytest.raises(RuntimeError, match="upstream blew up"):
+                with pytest.raises(RuntimeError, match="guardrail blocked"):
                     async for _ in gen:
                         pass
             else:
                 async for _ in gen:
                     pass
 
-        assert fired_with == [request_data]
+        if should_fire:
+            assert fired_with == [request_data]
+        else:
+            assert (
+                fired_with == []
+            ), "deferred success logging must NOT fire when iterator raises"
 
     @pytest.mark.asyncio
     async def test_disconnect_persists_partial_usage_via_csw_aclose(self):
@@ -1260,8 +1276,11 @@ class TestStreamingDisconnectFiresDeferredLogging:
     async def test_aclose_reaches_inner_when_wrapper_closed_by_exception(self):
         """Greptile P1: wrapper.aclose() is a no-op after exception completes
         its generator frame. The snapshot-before-wrap fix closes the inner
-        CSW directly. Here we pass the raw CSW as ``response`` so the hook
-        stores it as inner_response and drives aclose() on it."""
+        CSW directly on every termination path — including iterator
+        exceptions — so HTTP-connection / upstream-stream cleanup runs
+        deterministically. (Veria follow-up: success-deferred logging is
+        explicitly skipped on the exception path; we assert aclose still
+        runs but the deferred fire is NOT called.)"""
         fired: list = []
         lo = MagicMock(
             _on_deferred_stream_complete=MagicMock(),
@@ -1284,4 +1303,7 @@ class TestStreamingDisconnectFiresDeferredLogging:
                     pass
 
         assert csw.aclose_calls, "inner CSW.aclose() must run on exception path"
-        assert fired == [(f"partial_after_{csw._idx}", False)]
+        assert fired == [], (
+            "success-deferred logging must NOT fire on the exception path; "
+            "the upstream post_call_failure_hook handles the failure side"
+        )

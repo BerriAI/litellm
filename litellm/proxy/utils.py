@@ -2359,9 +2359,26 @@ class ProxyLogging:
         # content guardrails simultaneously. The same shape is used in
         # pass_through_endpoints/streaming_handler.py:73 for the same
         # GeneratorExit-on-disconnect reason.
+        exception_raised = False
         try:
             async for chunk in current_response:
                 yield chunk
+        except GeneratorExit:
+            # Client disconnect — partial usage still gets attributed via
+            # the deferred-logging path below. Re-raise so Python doesn't
+            # warn about the async generator ignoring GeneratorExit.
+            raise
+        except BaseException:
+            # Iterator raised (post-call guardrail blocked, upstream
+            # provider error, etc.). Suppress the deferred-success path
+            # below — firing async_success_handler on a guardrail-blocked
+            # response would persist the blocked content to SpendLogs and
+            # external logging callbacks, bypassing the assumption the
+            # deferred handler makes that guardrails already completed
+            # successfully. The upstream caller has its own
+            # post_call_failure_hook that handles the failure side.
+            exception_raised = True
+            raise
         finally:
             # Drive aclose() on the INNER iterator (CSW), not the wrapper
             # chain. The wrapper chain's aclose() is a no-op after an
@@ -2383,7 +2400,13 @@ class ProxyLogging:
             # completed.  unified_guardrail writes guardrail_information
             # during its end-of-stream block (inside current_response), so by
             # the time we reach this point the metadata is fully populated.
-            ProxyLogging._fire_deferred_stream_logging(request_data)
+            #
+            # Skip the success-deferred path when the iterator raised —
+            # that's the guardrail-block or upstream-error case; firing
+            # success here would log a blocked / errored response as if it
+            # succeeded.
+            if not exception_raised:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
 
     @staticmethod
     def _fire_deferred_stream_logging(request_data: dict) -> None:
