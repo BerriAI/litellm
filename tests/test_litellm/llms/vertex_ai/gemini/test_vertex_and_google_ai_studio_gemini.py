@@ -4288,6 +4288,7 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
             )
 
     msg = str(exc_info.value)
+    assert "Error converting to valid response block" in msg
     assert "secret content" not in msg
 
 
