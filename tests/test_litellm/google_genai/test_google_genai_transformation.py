@@ -378,7 +378,6 @@ def test_transform_generate_content_request_normalizes_response_schema_2_5():
     assert "responseSchema" not in gen_config
     assert "responseJsonSchema" in gen_config
     normalized = gen_config["responseJsonSchema"]
-    # _build_json_schema preserves $defs/$ref for 2.0+ models
     assert "$defs" in normalized
     assert normalized["properties"]["highlights"]["items"] == {
         "$ref": "#/$defs/Highlight"
@@ -420,7 +419,6 @@ def test_transform_generate_content_request_flattens_response_schema_1_5():
     assert "responseSchema" in gen_config
     assert "responseJsonSchema" not in gen_config
     normalized = gen_config["responseSchema"]
-    # $defs should be stripped, $ref expanded inline
     assert "$defs" not in normalized
     items = normalized["properties"]["highlights"]["items"]
     assert "$ref" not in items

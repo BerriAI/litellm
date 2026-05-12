@@ -312,19 +312,6 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     def _normalize_response_schema(
         generate_content_config_dict: Dict, model: str
     ) -> None:
-        """
-        Normalize ``responseSchema`` / ``responseJsonSchema`` in-place so the
-        native ``generateContent`` passthrough mirrors the chat/completions
-        path. Without this, schemas containing ``$defs``/``$ref``, ``anyOf``
-        with ``null``, ``default``, ``title``, etc. are forwarded verbatim and
-        Gemini rejects them.
-
-        - Gemini 2.0+ supports ``responseJsonSchema`` natively (preserves
-          ``$defs``/``$ref``). Promote ``responseSchema`` to
-          ``responseJsonSchema`` for those models.
-        - Older models keep ``responseSchema`` but the schema is flattened to
-          the OpenAPI subset via ``_build_vertex_schema``.
-        """
         schema_key = next(
             (
                 k
@@ -360,8 +347,6 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
         if use_json_schema:
             if json_schema_key is not None:
-                # Caller already supplied responseJsonSchema; preserve it and
-                # drop the redundant responseSchema rather than clobbering.
                 generate_content_config_dict.pop(schema_key)
                 return
             generate_content_config_dict.pop(schema_key)
