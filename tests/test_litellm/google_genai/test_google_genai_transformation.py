@@ -452,6 +452,38 @@ def test_transform_generate_content_request_passes_through_response_json_schema(
     assert "responseSchema" not in gen_config
 
 
+def test_transform_generate_content_request_preserves_response_json_schema_when_response_schema_co_present():
+    """When both ``responseJsonSchema`` and ``responseSchema`` are supplied on
+    Gemini 2.0+, the caller's ``responseJsonSchema`` must win — the
+    ``responseSchema`` value must not clobber it."""
+    config = GoogleGenAIConfig()
+
+    caller_json_schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    redundant_response_schema = {
+        "type": "object",
+        "properties": {"other": {"type": "string"}},
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={
+            "responseJsonSchema": caller_json_schema,
+            "responseSchema": redundant_response_schema,
+        },
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseSchema" not in gen_config
+    assert gen_config["responseJsonSchema"] == caller_json_schema
+
+
 def test_transform_generate_content_request_without_schema_unchanged():
     """No schema in config → no normalization side effects."""
     config = GoogleGenAIConfig()

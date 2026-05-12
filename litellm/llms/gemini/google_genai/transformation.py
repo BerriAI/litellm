@@ -359,6 +359,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             return
 
         if use_json_schema:
+            if json_schema_key is not None:
+                # Caller already supplied responseJsonSchema; preserve it and
+                # drop the redundant responseSchema rather than clobbering.
+                generate_content_config_dict.pop(schema_key)
+                return
             generate_content_config_dict.pop(schema_key)
             generate_content_config_dict["responseJsonSchema"] = _build_json_schema(
                 deepcopy(value)
