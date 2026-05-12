@@ -2406,7 +2406,8 @@ def jsonify_object(data: dict) -> dict:
     return db_data
 
 
-# In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
+# In-memory cache for deprecated key lookups:
+# maps old_token_hash -> (active_token_id, cache_expires_at_ts, revoke_at_ts).
 # Avoids a DB query on every auth request for non-deprecated keys.
 # Bounded to prevent memory leaks from accumulated rotations.
 _deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
@@ -2428,26 +2429,25 @@ async def _lookup_deprecated_key(
 
     # Check cache first
     cached = _deprecated_key_cache.get(hashed_token)
-    cached = _deprecated_key_cache.get(hashed_token)
     if cached is not None:
         active_token_id, cache_expires_at_ts, revoke_at_ts = cached
         if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
             return active_token_id
-        else:
-            _deprecated_key_cache.pop(hashed_token, None)
+        _deprecated_key_cache.pop(hashed_token, None)
 
     try:
         deprecated_row = await db.litellm_deprecatedverificationtoken.find_first(
             where={
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
-            },
-            select={"active_token_id": True},
+            }
         )
         if deprecated_row and deprecated_row.active_token_id:
+            revoke_at = deprecated_row.revoke_at
             _deprecated_key_cache[hashed_token] = (
                 deprecated_row.active_token_id,
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+                revoke_at.timestamp(),
             )
             return deprecated_row.active_token_id
         # Only cache positive results; negative lookups are fast on indexed columns
