@@ -103,17 +103,48 @@ case "${mode}" in
     echo "    Mutate scope: ${PROVIDER_SRC}"
     echo "    Output:       ${out_dir}"
     echo ""
-    echo "NOTE: mutmut config in pyproject.toml [tool.mutmut] is the"
-    echo "      default scope (proxy/management_endpoints). This script"
-    echo "      overrides it via env vars MUTMUT_PATHS / MUTMUT_TESTS"
-    echo "      consumed by the wrapper below."
+    echo "NOTE: mutmut 3.x reads paths_to_mutate / tests_dir from"
+    echo "      pyproject.toml [tool.mutmut] and no longer accepts those"
+    echo "      as CLI flags. This script temporarily rewrites the"
+    echo "      [tool.mutmut] section for the duration of the run and"
+    echo "      restores the original file on exit."
 
-    # mutmut reads paths_to_mutate / tests_dir from pyproject.toml. We
-    # override at invocation by exporting and using --paths-to-mutate.
-    uv run --no-sync --with mutmut==3.3.1 mutmut run \
-      --paths-to-mutate="${PROVIDER_SRC}" \
-      --tests-dir="tests/llm_translation" \
-      "$@"
+    # mutmut 3.x removed --paths-to-mutate / --tests-dir; all scope config
+    # must come from pyproject.toml. Back up the file, rewrite the
+    # [tool.mutmut] section in-place, and restore it (even on error) so
+    # the default proxy/management_endpoints scope is preserved for CI.
+    pyproject_backup="$(mktemp)"
+    cp pyproject.toml "${pyproject_backup}"
+    trap 'mv "${pyproject_backup}" pyproject.toml' EXIT
+
+    PROVIDER_SRC="${PROVIDER_SRC}" uv run --no-sync python - <<'PYEOF'
+import os
+import re
+
+provider_src = os.environ["PROVIDER_SRC"]
+with open("pyproject.toml", "r") as f:
+    content = f.read()
+
+new_section = (
+    "[tool.mutmut]\n"
+    f'paths_to_mutate = ["{provider_src}/"]\n'
+    'tests_dir = ["tests/llm_translation/"]\n'
+    'also_copy = ["litellm/"]\n'
+    'pytest_add_cli_args = ["-p", "no:retry", "-p", "no:rerunfailures", "-p", "no:xdist"]\n'
+)
+
+# Replace the existing [tool.mutmut] section (up to but not including the
+# next top-level [section] header or end of file).
+pattern = re.compile(r"\[tool\.mutmut\].*?(?=\n\[[^\]]+\]|\Z)", re.DOTALL)
+if not pattern.search(content):
+    raise SystemExit("Could not find [tool.mutmut] section in pyproject.toml")
+content = pattern.sub(new_section.rstrip("\n"), content, count=1)
+
+with open("pyproject.toml", "w") as f:
+    f.write(content)
+PYEOF
+
+    uv run --no-sync --with mutmut==3.3.1 mutmut run "$@"
 
     # Persist a JSON report alongside coverage output.
     uv run --no-sync --with mutmut==3.3.1 mutmut results > "${out_dir}/results.txt" || true
