@@ -68,7 +68,14 @@ def _mock_request(method: str = "POST") -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_state():
+def _reset_module_state(monkeypatch):
+    # ``SERVER_ROOT_PATH`` is set as a module-level side-effect in
+    # ``tests/test_litellm/proxy/test_custom_proxy.py``. Under xdist a
+    # worker that imports that test module also poisons this one's
+    # env: ``_build_full_path_with_root`` then prepends the foreign
+    # root to every registered path lookup and our gate falsely returns
+    # None. Strip it for the duration of each test.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     _registered_pass_through_routes.clear()
     original_openai_routes = list(LiteLLMRoutes.openai_routes.value)
     yield

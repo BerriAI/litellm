@@ -83,13 +83,16 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_runtime_check_treats_missing_auth_key_as_authenticated():
+async def test_runtime_check_treats_missing_auth_key_as_authenticated(monkeypatch):
     # The runtime dispatch in user_api_key_auth pulls
     # pass_through_endpoints from general_settings as raw dicts (the
     # Pydantic default never applies). A dict without an ``auth`` key
     # must default to "authenticated" — without this, the previous
     # behaviour (``endpoint.get("auth") is not True`` -> True -> empty
     # auth) ships an unauthenticated forwarder.
+    # SERVER_ROOT_PATH is set as a module-level side-effect in another
+    # proxy test file; strip it so the path lookup matches the raw route.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     request = MagicMock()
     request.headers = {}
     request.method = "POST"
@@ -132,7 +135,7 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
 
 
 @pytest.mark.asyncio
-async def test_runtime_check_explicit_auth_false_still_skips_validation():
+async def test_runtime_check_explicit_auth_false_still_skips_validation(monkeypatch):
     # Operators who explicitly set ``auth: False`` get the legacy
     # behaviour — an empty UserAPIKeyAuth, no key required.
     from litellm.proxy._types import UserAPIKeyAuth
@@ -140,6 +143,7 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
         _registered_pass_through_routes,
     )
 
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     request = MagicMock()
     request.headers = {}
     request.method = "POST"

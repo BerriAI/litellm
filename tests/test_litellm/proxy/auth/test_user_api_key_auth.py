@@ -2904,7 +2904,9 @@ async def test_centralized_common_checks_skips_public_routes():
 
 
 @pytest.mark.asyncio
-async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false():
+async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_false(
+    monkeypatch,
+):
     """Regression: user-configured pass-through endpoints with
     ``auth: false`` are explicitly unauthenticated. The builder
     short-circuits and returns a fresh empty UserAPIKeyAuth(); running
@@ -2915,6 +2917,7 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
     from fastapi import Request
     from starlette.datastructures import URL
 
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     token = UserAPIKeyAuth()
     request = Request(scope={"type": "http", "method": "POST"})
     request._url = URL(url="/api/public/ingestion")
