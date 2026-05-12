@@ -3160,15 +3160,22 @@ class MCPServerManager:
 
     def get_public_mcp_servers(self) -> List[MCPServer]:
         """
-        Get the public MCP servers (available_on_public_internet=True flag on server).
-        Also includes servers from litellm.public_mcp_servers for backwards compat.
+        Return the MCP servers published to the AI Hub via /v1/mcp/make_public.
+
+        Mirrors /public/model_hub and /public/agent_hub: gates strictly on the
+        litellm.public_mcp_servers whitelist. Returns an empty list when no
+        servers have been published. The per-server available_on_public_internet
+        flag is unrelated — it governs IP-based access in
+        _is_server_accessible_from_ip, not hub visibility.
         """
-        servers: List[MCPServer] = []
-        public_ids = set(litellm.public_mcp_servers or [])
-        for server in self.get_registry().values():
-            if server.available_on_public_internet or server.server_id in public_ids:
-                servers.append(server)
-        return servers
+        if litellm.public_mcp_servers is None:
+            return []
+        public_ids = set(litellm.public_mcp_servers)
+        return [
+            server
+            for server in self.get_registry().values()
+            if server.server_id in public_ids
+        ]
 
     def expand_permission_list(self, identifiers: List[str]) -> List[str]:
         """
