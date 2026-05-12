@@ -117,18 +117,25 @@ case "${mode}" in
     cp pyproject.toml "${pyproject_backup}"
     trap 'mv "${pyproject_backup}" pyproject.toml' EXIT
 
+    # Newline-delimited list of provider-scoped test files, consumed by the
+    # python heredoc below. Using an env var avoids quoting headaches when
+    # paths are interpolated into a TOML array.
+    TEST_FILES="$(printf '%s\n' "${test_files[@]}")" \
     PROVIDER_SRC="${PROVIDER_SRC}" uv run --no-sync python - <<'PYEOF'
+import json
 import os
 import re
 
 provider_src = os.environ["PROVIDER_SRC"]
+test_files = [p for p in os.environ["TEST_FILES"].splitlines() if p]
 with open("pyproject.toml", "r") as f:
     content = f.read()
 
+test_selection = ", ".join(json.dumps(p) for p in test_files)
 new_section = (
     "[tool.mutmut]\n"
     f'paths_to_mutate = ["{provider_src}/"]\n'
-    'tests_dir = ["tests/llm_translation/"]\n'
+    f'pytest_add_cli_args_test_selection = [{test_selection}]\n'
     'also_copy = ["litellm/"]\n'
     'pytest_add_cli_args = ["-p", "no:retry", "-p", "no:rerunfailures", "-p", "no:xdist"]\n'
 )
