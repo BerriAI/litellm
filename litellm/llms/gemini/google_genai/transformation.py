@@ -13,7 +13,6 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.vertex_ai.common_utils import (
-    _build_json_schema,
     _build_vertex_schema,
     supports_response_json_schema,
 )
@@ -329,14 +328,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             None,
         )
 
-        use_json_schema = supports_response_json_schema(model)
-
-        if json_schema_key is not None:
-            value = generate_content_config_dict[json_schema_key]
-            if isinstance(value, dict):
-                generate_content_config_dict[json_schema_key] = _build_json_schema(
-                    deepcopy(value)
-                )
+        # responseJsonSchema is forwarded as-is — Gemini 2.0+ accepts standard
+        # JSON Schema natively, so no transformation (and no deepcopy) is needed.
 
         if schema_key is None:
             return
@@ -345,14 +338,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         if not isinstance(value, dict):
             return
 
-        if use_json_schema:
+        if supports_response_json_schema(model):
             if json_schema_key is not None:
                 generate_content_config_dict.pop(schema_key)
                 return
             generate_content_config_dict.pop(schema_key)
-            generate_content_config_dict["responseJsonSchema"] = _build_json_schema(
-                deepcopy(value)
-            )
+            generate_content_config_dict["responseJsonSchema"] = value
         else:
             generate_content_config_dict[schema_key] = _build_vertex_schema(
                 parameters=deepcopy(value), add_property_ordering=True
