@@ -222,7 +222,7 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
         raise HTTPException(status_code=400, detail="invalid_request")
     if parsed.fragment:
         raise HTTPException(status_code=400, detail="invalid_request")
-    if not parsed.netloc:
+    if not parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise HTTPException(status_code=400, detail="invalid_request")
     # Reject userinfo (``user:pass@host``) outright: OAuth redirect_uris
     # have no legitimate reason to carry credentials, and allowing them
