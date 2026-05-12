@@ -208,8 +208,7 @@ class SharedHealthCheckManager:
             model_list: List of models to check
             details: Whether to include detailed information
             max_concurrency: Optional limit on concurrent health check requests
-            health_check_skip_disabled_background_models: Same as
-                ``general_settings.health_check_skip_disabled_background_models``
+            health_check_skip_disabled_background_models: Remove models with disable_background_health_check: true
 
         Returns:
             Tuple of (healthy_endpoints, unhealthy_endpoints)
