@@ -1066,6 +1066,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
         )
         if end_user_id:
             try:
@@ -1752,7 +1754,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(
+async def _run_centralized_common_checks(  # noqa: PLR0915
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,
@@ -1830,15 +1832,23 @@ async def _run_centralized_common_checks(
         return
 
     parent_otel_span = user_api_key_auth_obj.parent_otel_span
-    raw_end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
-    end_user_id = await resolve_and_validate_end_user_id(
-        raw_end_user_id=raw_end_user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=parent_otel_span,
-    )
+    # In the integrated auth flow ``_user_api_key_auth_builder`` has already
+    # resolved the end-user id and attached it here. Reuse that to avoid a
+    # second extraction pass; fall back to extracting locally when the
+    # function is invoked in isolation (e.g. in direct unit tests).
+    end_user_id = user_api_key_auth_obj.end_user_id
+    if end_user_id is None:
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
 
     fetch_coros = []
     if user_api_key_auth_obj.team_id is not None:
@@ -2168,20 +2178,6 @@ async def user_api_key_auth(
             parent_otel_span=user_api_key_auth_obj.parent_otel_span,
             api_key=api_key,
         )
-
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-
-    raw_end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
-    end_user_id = await resolve_and_validate_end_user_id(
-        raw_end_user_id=raw_end_user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=user_api_key_auth_obj.parent_otel_span,
-    )
-    if end_user_id is not None:
-        user_api_key_auth_obj.end_user_id = end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj

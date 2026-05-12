@@ -1196,23 +1196,33 @@ async def resolve_and_validate_end_user_id(
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    route: str = "",
 ) -> Optional[str]:
-    """Return raw_end_user_id only if it resolves to a known user in the DB.
+    """Optionally drop end-user ids that don't resolve to a known DB row.
 
-    We accept a value as a valid end-user id when it matches any of:
+    Default: pass-through. LiteLLM's documented pattern is that the `user`
+    field is an arbitrary caller-supplied identifier, so validation is
+    opt-in behind ``litellm.validate_end_user_id_in_db`` to preserve
+    backwards compatibility.
+
+    When the flag is set: accept the id when it matches any of
       - LiteLLM_EndUserTable.user_id
       - LiteLLM_UserTable.user_id
-      - LiteLLM_UserTable.user_email  (case-insensitive)
+      - LiteLLM_UserTable.user_email (case-insensitive)
 
-    Anything else — including opaque client-generated identifiers like the
-    Codex `user_<hash>_account__session_<uuid>` format — returns None so
-    the request is still logged, just without polluting end-user attribution.
+    If the id doesn't match but ``litellm.max_end_user_budget_id`` is set,
+    we still preserve the id so the default end-user budget is applied
+    downstream; otherwise we return None.
 
-    If prisma_client is None we skip validation and pass the value through;
-    setups without a DB don't have a user table to validate against.
+    DB lookups reuse ``get_end_user_object`` / ``get_user_object`` so they
+    share the same cache as the rest of the auth path instead of adding new
+    raw Prisma queries.
     """
     if raw_end_user_id is None:
         return None
+    if not litellm.validate_end_user_id_in_db:
+        return raw_end_user_id
     if prisma_client is None:
         return raw_end_user_id
 
@@ -1221,43 +1231,16 @@ async def resolve_and_validate_end_user_id(
     if cached == "valid":
         return raw_end_user_id
     if cached == "invalid":
-        return None
+        return raw_end_user_id if litellm.max_end_user_budget_id else None
 
-    is_valid = False
-    try:
-        end_user_row = await prisma_client.db.litellm_endusertable.find_unique(
-            where={"user_id": raw_end_user_id}
-        )
-        if end_user_row is not None:
-            is_valid = True
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"end_user validation: LiteLLM_EndUserTable lookup failed: {e}"
-        )
-
-    if not is_valid:
-        try:
-            user_row = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": raw_end_user_id}
-            )
-            if user_row is not None:
-                is_valid = True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"end_user validation: LiteLLM_UserTable.user_id lookup failed: {e}"
-            )
-
-    if not is_valid and "@" in raw_end_user_id:
-        try:
-            email_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_email": {"equals": raw_end_user_id, "mode": "insensitive"}}
-            )
-            if email_row is not None:
-                is_valid = True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"end_user validation: LiteLLM_UserTable.user_email lookup failed: {e}"
-            )
+    is_valid = await _end_user_id_exists_in_db(
+        end_user_id=raw_end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+        route=route,
+    )
 
     await user_api_key_cache.async_set_cache(
         key=cache_key,
@@ -1268,7 +1251,73 @@ async def resolve_and_validate_end_user_id(
             else _END_USER_VALIDATION_NEGATIVE_TTL
         ),
     )
-    return raw_end_user_id if is_valid else None
+
+    if is_valid:
+        return raw_end_user_id
+    # Preserve id so the caller can still apply litellm.max_end_user_budget_id.
+    if litellm.max_end_user_budget_id:
+        return raw_end_user_id
+    return None
+
+
+async def _end_user_id_exists_in_db(
+    end_user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    route: str = "",
+) -> bool:
+    """True when the id matches an EndUser, User, or user_email row."""
+    try:
+        end_user_obj = await get_end_user_object(
+            end_user_id=end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
+        if end_user_obj is not None:
+            return True
+    except litellm.BudgetExceededError:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"end_user validation: get_end_user_object lookup failed: {e}"
+        )
+
+    try:
+        user_obj = await get_user_object(
+            user_id=end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=False,
+        )
+        if user_obj is not None:
+            return True
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"end_user validation: get_user_object lookup failed: {e}"
+        )
+
+    if "@" in end_user_id:
+        try:
+            user_obj = await _get_fuzzy_user_object(
+                prisma_client=prisma_client,
+                user_email=end_user_id,
+            )
+            if user_obj is not None:
+                return True
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"end_user validation: user_email lookup failed: {e}"
+            )
+
+    return False
 
 
 @log_db_metrics
