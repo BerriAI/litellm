@@ -15141,89 +15141,109 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
-    """Handle dynamic MCP server routes like /github_mcp/mcp and toolset routes like /devtooling-prod/mcp"""
+    """Handle /{name}/mcp for MCP server aliases, toolsets, MCP access group tags, and comma-separated lists.
+
+    Resolution order:
+    1. Registered MCP server alias / name
+    2. Toolset name (DB lookup)
+    3. MCP access group tag — resolves to all servers in that group
+    4. Comma-separated mix of any of the above (e.g. /github_mcp,zapier/mcp)
+    """
     try:
-        # Validate that the MCP server exists
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-        from litellm.types.mcp import MCPAuth
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
+        async def _forward_as_mcp_path(path_segment: str):
+            """Rewrite path to /mcp/{path_segment} and stream through the MCP handler."""
+            from litellm.proxy._experimental.mcp_server.server import (
+                handle_streamable_http_mcp,
+            )
+            from starlette.responses import Response
+
+            scope = dict(request.scope)
+            scope["path"] = f"/mcp/{path_segment}"
+
+            response_started = False
+            response_body = b""
+            response_status = 200
+            response_headers: list = []
+
+            async def custom_send(message):
+                nonlocal response_started, response_body, response_status, response_headers
+                if message["type"] == "http.response.start":
+                    response_started = True
+                    response_status = message["status"]
+                    response_headers = message.get("headers", [])
+                elif message["type"] == "http.response.body":
+                    response_body += message.get("body", b"")
+
+            await handle_streamable_http_mcp(
+                scope, receive=request.receive, send=custom_send
+            )
+            headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+            return Response(
+                content=response_body,
+                status_code=response_status,
+                headers=headers_dict,
+                media_type=headers_dict.get("content-type", "application/json"),
+            )
+
+        # 1. Registered MCP server alias
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
-        if mcp_server is None:
-            # Check if this is a toolset name — toolsets are accessible at /{name}/mcp
-            # the same way individual servers are, no separate /toolset/ prefix needed.
-            if prisma_client is not None:
-                from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                    global_mcp_server_manager,
-                )
-                from litellm.proxy._experimental.mcp_server.server import (
-                    _mcp_active_toolset_id,
-                    handle_streamable_http_mcp,
-                )
+        if mcp_server is not None:
+            return await _forward_as_mcp_path(mcp_server_name)
 
-                toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
-                    prisma_client, mcp_server_name
-                )
-                if toolset is not None:
-                    scope = dict(request.scope)
-                    scope["path"] = "/mcp"
-
-                    token = _mcp_active_toolset_id.set(toolset.toolset_id)
-                    try:
-                        return await _stream_mcp_asgi_response(
-                            handle_streamable_http_mcp, scope, request.receive
-                        )
-                    finally:
-                        _mcp_active_toolset_id.reset(token)
-
-            raise HTTPException(
-                status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
+        # 2. Toolset name
+        if prisma_client is not None:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _mcp_active_toolset_id,
+                handle_streamable_http_mcp,
             )
 
-        # Create a new scope with the correct path format that the MCP handler expects
-        # Transform /{mcp_server_name}/mcp to /mcp/{mcp_server_name}
-        scope = dict(request.scope)
-        scope["path"] = f"/mcp/{mcp_server_name}"
+            toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+                prisma_client, mcp_server_name
+            )
+            if toolset is not None:
+                scope = dict(request.scope)
+                scope["path"] = "/mcp"
+                token = _mcp_active_toolset_id.set(toolset.toolset_id)
+                try:
+                    return await _stream_mcp_asgi_response(
+                        handle_streamable_http_mcp, scope, request.receive
+                    )
+                finally:
+                    _mcp_active_toolset_id.reset(token)
 
-        # Import the MCP handler
-        from litellm.proxy._experimental.mcp_server.server import (
-            handle_streamable_http_mcp,
+        # 3 & 4. MCP access group tag OR comma-separated list of servers/groups.
+        # The MCP handler's _get_mcp_servers_in_path already parses comma lists
+        # from /mcp/<csv>, so we just need to ensure the segment is forwarded as
+        # a path under /mcp/. For a single segment that is an access group we
+        # verify it resolves to at least one server before forwarding so that
+        # unknown names still produce a 404.
+        if "," in mcp_server_name:
+            # Comma-separated — forward directly; the MCP handler resolves each token.
+            return await _forward_as_mcp_path(mcp_server_name)
+
+        # Single segment: check whether it is a known MCP access group tag.
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
         )
 
-        # Create a custom send function to capture the response
-        response_started = False
-        response_body = b""
-        response_status = 200
-        response_headers = []
-
-        async def custom_send(message):
-            nonlocal response_started, response_body, response_status, response_headers
-            if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message.get("headers", [])
-            elif message["type"] == "http.response.body":
-                response_body += message.get("body", b"")
-
-        # Call the existing MCP handler
-        await handle_streamable_http_mcp(
-            scope, receive=request.receive, send=custom_send
+        group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            [mcp_server_name]
         )
+        if group_server_ids:
+            return await _forward_as_mcp_path(mcp_server_name)
 
-        # Return the response
-        from starlette.responses import Response
-
-        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-        return Response(
-            content=response_body,
-            status_code=response_status,
-            headers=headers_dict,
-            media_type=headers_dict.get("content-type", "application/json"),
+        raise HTTPException(
+            status_code=404,
+            detail=f"MCP server, toolset, or access group '{mcp_server_name}' not found",
         )
 
     except HTTPException as e:
