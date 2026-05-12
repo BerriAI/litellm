@@ -189,7 +189,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     max_file_size_mb: Optional[float] = None
 
-    # Proxy-wide default rate limits applied to any API key using this deployment
+    # Proxy-wide default rate limits applied to any API key using this
     # when the key does not have a model-specific tpm/rpm limit configured.
     default_api_key_tpm_limit: Optional[int] = None
     default_api_key_rpm_limit: Optional[int] = None

@@ -4,11 +4,12 @@ import TabItem from '@theme/TabItem';
 # Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl examples
 
 LiteLLM Proxy is **OpenAI-Compatible**, and supports:
-* /chat/completions 
+
+* /chat/completions
 * /embeddings
-* /completions 
-* /image/generations 
-* /moderations 
+* /completions
+* /image/generations
+* /moderations
 * /audio/transcriptions
 * /audio/speech
 * [Assistants API endpoints](https://docs.litellm.ai/docs/assistants)
@@ -16,28 +17,29 @@ LiteLLM Proxy is **OpenAI-Compatible**, and supports:
 * [Fine-Tuning API endpoints](https://docs.litellm.ai/docs/fine_tuning)
 
 LiteLLM Proxy is **Azure OpenAI-compatible**:
+
 * /chat/completions
 * /completions
-* /embeddings 
+* /embeddings
 
-LiteLLM Proxy is **Anthropic-compatible**: 
-* /messages 
+LiteLLM Proxy is **Anthropic-compatible**:
+
+* /messages
 
 LiteLLM Proxy is **Vertex AI compatible**:
+
 - [Supports ALL Vertex Endpoints](../vertex_ai)
 
 This doc covers:
 
-*   /chat/completion
-*   /embedding
-
+* /chat/completion
+* /embedding
 
 These are **selected examples**. LiteLLM Proxy is **OpenAI-Compatible**, it works with any project that calls OpenAI. Just change the `base_url`, `api_key` and `model`.
 
 To pass provider-specific args, [go here](https://docs.litellm.ai/docs/completion/provider_specific_params#proxy-usage)
 
 To drop unsupported params (E.g. frequency_penalty for bedrock with librechat), [go here](https://docs.litellm.ai/docs/completion/drop_params#openai-proxy-usage)
-
 
 :::info
 
@@ -52,7 +54,6 @@ How to send requests to the proxy, pass metadata, allow users to pass in their O
 ### Request Format
 
 <Tabs>
-
 
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
@@ -86,6 +87,7 @@ response = client.chat.completions.create(
 
 print(response)
 ```
+
 </TabItem>
 <TabItem value="litellm_sdk" label="LiteLLM Python SDK">
 
@@ -124,6 +126,7 @@ response = client.chat.completions.create(
 
 print(response)
 ```
+
 </TabItem>
 <TabItem value="LlamaIndex" label="LlamaIndex">
 
@@ -159,6 +162,7 @@ response = query_engine.query("What did the author do growing up?")
 print(response)
 
 ```
+
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
@@ -184,6 +188,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 }'
 ```
+
 </TabItem>
 <TabItem value="langchain" label="Langchain">
 
@@ -354,6 +359,7 @@ assert isinstance(user, UserDetail)
 assert user.name == "Jason"
 assert user.age == 25
 ```
+
 </TabItem>
 </Tabs>
 
@@ -394,16 +400,6 @@ from langchain_core.messages import HumanMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
-    model="gpt-4o",
-    extra_body={
-        "metadata": {
-            "tags": ["langchain-integration", "content-gen"],
-            "trace_user_id": "user-456"
-        }
-    }
-)
-
-response = chat.invoke([HumanMessage(content="Generate a blog post")])
 ```
 
 </TabItem>
@@ -453,7 +449,7 @@ async function main() {
 ### Tag Benefits
 
 - **Cost Tracking**: Monitor spending by project/team/feature
-- **Analytics**: Filter requests by tags in logs and dashboards  
+- **Analytics**: Filter requests by tags in logs and dashboards
 - **Routing**: Use tags for conditional model routing
 - **Debugging**: Easier troubleshooting with categorized requests
 
@@ -488,7 +484,6 @@ async function main() {
 
 ### **Streaming**
 
-
 <Tabs>
 <TabItem value="curl" label="curl">
 
@@ -507,10 +502,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   "stream": true
 }'
 ```
+
 </TabItem>
 <TabItem value="sdk" label="SDK">
 
-```python 
+```python
 from openai import OpenAI
 client = OpenAI(
     api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
@@ -527,15 +523,15 @@ completion = client.chat.completions.create(
 print(completion)
 
 ```
+
 </TabItem>
 </Tabs>
 
+### Function Calling
 
-### Function Calling 
+Here's some examples of doing function calling with the proxy.
 
-Here's some examples of doing function calling with the proxy. 
-
-You can use the proxy for function calling with **any** openai-compatible project. 
+You can use the proxy for function calling with **any** openai-compatible project.
 
 <Tabs>
 <TabItem value="curl" label="curl">
@@ -578,10 +574,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   "tool_choice": "auto"
 }'
 ```
+
 </TabItem>
 <TabItem value="sdk" label="SDK">
 
-```python 
+```python
 from openai import OpenAI
 client = OpenAI(
     api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
@@ -619,12 +616,14 @@ completion = client.chat.completions.create(
 print(completion)
 
 ```
+
 </TabItem>
 </Tabs>
 
 ## `/embeddings`
 
 ### Request Format
+
 Input, Output and Exceptions are mapped to the OpenAI format for all supported models
 
 <Tabs>
@@ -646,6 +645,7 @@ response = client.embeddings.create(
 print(response)
 
 ```
+
 </TabItem>
 <TabItem value="Curl" label="Curl Request">
 
@@ -657,6 +657,7 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
   "input": ["write a litellm poem"]
   }'
 ```
+
 </TabItem>
 
 <TabItem value="langchain-embedding" label="Langchain Embeddings">
@@ -692,9 +693,9 @@ query_result = embeddings.embed_query(text)
 print(f"TITAN EMBEDDINGS")
 print(query_result[:5])
 ```
+
 </TabItem>
 </Tabs>
-
 
 ### Response Format
 
@@ -724,8 +725,8 @@ print(query_result[:5])
 
 ## `/moderations`
 
-
 ### Request Format
+
 Input, Output and Exceptions are mapped to the OpenAI format for all supported models
 
 <Tabs>
@@ -747,6 +748,7 @@ response = client.moderations.create(
 print(response)
 
 ```
+
 </TabItem>
 <TabItem value="Curl" label="Curl Request">
 
@@ -756,9 +758,9 @@ curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Authorization: Bearer sk-1234' \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
 ```
+
 </TabItem>
 </Tabs>
-
 
 ### Response Format
 
@@ -800,8 +802,8 @@ curl --location 'http://0.0.0.0:4000/moderations' \
 }
 ```
 
-
 ## Using with OpenAI compatible projects
+
 Set `base_url` to the LiteLLM Proxy server
 
 <Tabs>
@@ -825,10 +827,12 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 print(response)
 
 ```
+
 </TabItem>
 <TabItem value="librechat" label="LibreChat">
 
 #### Start the LiteLLM proxy
+
 ```shell
 litellm --model gpt-3.5-turbo
 
@@ -841,24 +845,28 @@ litellm --model gpt-3.5-turbo
 git clone https://github.com/danny-avila/LibreChat.git
 ```
 
-
 #### 2. Modify Librechat's `docker-compose.yml`
+
 LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
+
 ```yaml
 OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 ```
 
-#### 3. Save fake OpenAI key in Librechat's `.env` 
+#### 3. Save fake OpenAI key in Librechat's `.env`
 
 Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
+
 ```env
 OPENAI_API_KEY=sk-1234
 ```
 
-#### 4. Run LibreChat: 
+#### 4. Run LibreChat:
+
 ```shell
 docker compose up
 ```
+
 </TabItem>
 
 <TabItem value="continue-dev" label="ContinueDev">
@@ -866,6 +874,7 @@ docker compose up
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
 
 In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
+
 ```python
   default=OpenAI(
       api_key="IGNORED",
@@ -875,7 +884,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
   ),
 ```
 
-Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial.
 </TabItem>
 
 <TabItem value="aider" label="Aider">
@@ -885,6 +894,7 @@ $ pip install aider
 
 $ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 ```
+
 </TabItem>
 <TabItem value="autogen" label="AutoGen">
 
@@ -922,7 +932,7 @@ Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomme
 A guidance language for controlling large language models.
 https://github.com/guidance-ai/guidance
 
-**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
+**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it.
 
 **Fix**: Start your proxy using the `--drop_params` flag
 
@@ -957,6 +967,7 @@ Don't answer the question yet.
 result = experts(query='How can I be more productive?')
 print(result)
 ```
+
 </TabItem>
 </Tabs>
 
@@ -975,13 +986,13 @@ Use this when you want to send 1 request to N Models
 Pass model as a string of comma separated value of models. Example `"model"="llama3,gpt-3.5-turbo"`
 
 This same request will be sent to the following model groups on the [litellm proxy config.yaml](https://docs.litellm.ai/docs/proxy/configs)
+
 - `model_name="llama3"`
-- `model_name="gpt-3.5-turbo"` 
+- `model_name="gpt-3.5-turbo"`
 
 <Tabs>
 
 <TabItem value="openai-py" label="OpenAI Python SDK">
-
 
 ```python
 import openai
@@ -997,8 +1008,6 @@ response = client.chat.completions.create(
 
 print(response)
 ```
-
-
 
 #### Expected Response Format
 
@@ -1059,13 +1068,9 @@ Get a list of responses when `model` is passed as a list
 ]
 ```
 
-
 </TabItem>
 
 <TabItem value="curl" label="Curl">
-
-
-
 
 ```shell
 curl --location 'http://localhost:4000/chat/completions' \
@@ -1083,9 +1088,6 @@ curl --location 'http://localhost:4000/chat/completions' \
     ]
 }'
 ```
-
-
-
 
 #### Expected Response Format
 
@@ -1140,9 +1142,5 @@ Get a list of responses when `model` is passed as a list
 ]
 ```
 
-
 </TabItem>
 </Tabs>
-
-
-

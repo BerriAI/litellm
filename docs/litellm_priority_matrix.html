@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MaaS&API规划</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e4e4e7;
+    --text-muted: #9ca3af;
+    --axis: #4b5563;
+    --accent-green: #34d399;
+    --accent-blue: #60a5fa;
+    --accent-amber: #fbbf24;
+    --accent-rose: #f87171;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 20px;
+  }
+
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 48px; }
+
+  header h1 {
+    font-size: 2.2rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 12px;
+    letter-spacing: -0.5px;
+  }
+
+  header p {
+    color: var(--text-muted);
+    font-size: 1rem;
+    font-weight: 300;
+  }
+
+  /* Stats bar */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    text-align: center;
+  }
+
+  .stat-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* ========== MATRIX with (0,0) origin ========== */
+  .matrix-outer {
+    position: relative;
+    margin-bottom: 60px;
+  }
+
+  /* Y-axis: vertical line through center */
+  .axis-y {
+    position: absolute;
+    left: 50%;
+    top: -24px;
+    bottom: -24px;
+    width: 2px;
+    background: var(--axis);
+    transform: translateX(-50%);
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .axis-y::before {
+    content: '';
+    position: absolute;
+    top: -7px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 10px solid var(--axis);
+  }
+
+  /* X-axis: horizontal line through center */
+  .axis-x {
+    position: absolute;
+    top: 50%;
+    left: -24px;
+    right: -24px;
+    height: 2px;
+    background: var(--axis);
+    transform: translateY(-50%);
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  .axis-x::before {
+    content: '';
+    position: absolute;
+    right: -7px;
+    top: 50%;
+    transform: translateY(-50%);
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-left: 10px solid var(--axis);
+  }
+
+  /* Origin dot */
+  .origin {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  .origin-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(8px, 6px);
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  /* Axis labels */
+  .label-y-top {
+    position: absolute;
+    left: 50%;
+    top: -56px;
+    transform: translateX(-50%);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  .label-y-top .arrow { font-size: 0.9rem; display: block; color: var(--axis); }
+
+  .label-x-right {
+    position: absolute;
+    right: -20px;
+    top: 50%;
+    transform: translateY(14px);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+
+  .label-neg-y {
+    position: absolute;
+    left: 50%;
+    bottom: -52px;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .label-neg-x {
+    position: absolute;
+    left: -20px;
+    top: 50%;
+    transform: translateY(14px);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  /* Grid */
+  .matrix-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 0;
+    min-height: 680px;
+    position: relative;
+  }
+
+  .quadrant {
+    padding: 28px 24px;
+    position: relative;
+    transition: background 0.3s ease;
+  }
+
+  /* Q1: top-left — Quick Wins (II quadrant in math: -x, +y) */
+  .q1 {
+    grid-row: 1; grid-column: 1;
+    background: linear-gradient(135deg, rgba(6,78,59,0.15), rgba(6,95,70,0.08));
+    border-radius: 20px 0 0 0;
+    border-top: 1px solid #34d39930;
+    border-left: 1px solid #34d39930;
+  }
+
+  /* Q2: top-right — Strategic Bets (I quadrant: +x, +y) */
+  .q2 {
+    grid-row: 1; grid-column: 2;
+    background: linear-gradient(135deg, rgba(30,58,95,0.15), rgba(30,64,175,0.08));
+    border-radius: 0 20px 0 0;
+    border-top: 1px solid #60a5fa30;
+    border-right: 1px solid #60a5fa30;
+  }
+
+  /* Q3: bottom-left — Low Priority (III quadrant: -x, -y) */
+  .q3 {
+    grid-row: 2; grid-column: 1;
+    background: linear-gradient(135deg, rgba(120,53,15,0.12), rgba(146,64,14,0.06));
+    border-radius: 0 0 0 20px;
+    border-bottom: 1px solid #fbbf2430;
+    border-left: 1px solid #fbbf2430;
+  }
+
+  /* Q4: bottom-right — Reconsider (IV quadrant: +x, -y) */
+  .q4 {
+    grid-row: 2; grid-column: 2;
+    background: linear-gradient(135deg, rgba(127,29,29,0.12), rgba(153,27,27,0.06));
+    border-radius: 0 0 20px 0;
+    border-bottom: 1px solid #f8717130;
+    border-right: 1px solid #f8717130;
+  }
+
+  /* Q headers */
+  .q-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .q-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  .q-title { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.3px; }
+  .q-subtitle { font-size: 0.72rem; color: var(--text-muted); font-weight: 400; }
+
+  .q1 .q-icon { background: #34d39918; color: var(--accent-green); }
+  .q1 .q-title { color: var(--accent-green); }
+  .q2 .q-icon { background: #60a5fa18; color: var(--accent-blue); }
+  .q2 .q-title { color: var(--accent-blue); }
+  .q3 .q-icon { background: #fbbf2418; color: var(--accent-amber); }
+  .q3 .q-title { color: var(--accent-amber); }
+  .q4 .q-icon { background: #f8717118; color: var(--accent-rose); }
+  .q4 .q-title { color: var(--accent-rose); }
+
+  /* Capability cards */
+  .capability {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    margin-bottom: 6px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.035);
+    transition: all 0.2s ease;
+    cursor: default;
+  }
+
+  .capability:hover {
+    background: rgba(255,255,255,0.065);
+    border-color: rgba(255,255,255,0.1);
+    transform: translateX(3px);
+  }
+
+  .cap-num {
+    min-width: 24px; height: 24px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 700; flex-shrink: 0; margin-top: 1px;
+  }
+
+  .q1 .cap-num { background: #34d39915; color: var(--accent-green); }
+  .q2 .cap-num { background: #60a5fa15; color: var(--accent-blue); }
+  .q3 .cap-num { background: #fbbf2415; color: var(--accent-amber); }
+  .q4 .cap-num { background: #f8717115; color: var(--accent-rose); }
+
+  .cap-content { flex: 1; }
+  .cap-name { font-size: 0.84rem; font-weight: 600; margin-bottom: 2px; line-height: 1.3; }
+  .cap-desc { font-size: 0.73rem; color: var(--text-muted); line-height: 1.45; }
+
+  .cap-tag {
+    display: inline-block;
+    font-size: 0.62rem;
+    padding: 1px 7px;
+    border-radius: 20px;
+    font-weight: 500;
+    margin-top: 3px;
+  }
+
+  .q1 .cap-tag { background: #34d39912; color: #6ee7b7; }
+  .q2 .cap-tag { background: #60a5fa12; color: #93c5fd; }
+  .q3 .cap-tag { background: #fbbf2412; color: #fcd34d; }
+  .q4 .cap-tag { background: #f8717112; color: #fca5a5; }
+
+  /* Strategy */
+  .strategy { margin-top: 40px; }
+
+  .strategy h2 {
+    font-size: 1.4rem; font-weight: 700; margin-bottom: 24px;
+    background: linear-gradient(135deg, #e4e4e7, #9ca3af);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  .strategy-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .strategy-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+
+  .strategy-card:nth-child(1)::after { background: var(--accent-green); }
+  .strategy-card:nth-child(2)::after { background: var(--accent-blue); }
+  .strategy-card:nth-child(3)::after { background: var(--accent-amber); }
+  .strategy-card:nth-child(4)::after { background: var(--accent-rose); }
+
+  .strategy-step {
+    font-size: 0.7rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px;
+  }
+
+  .strategy-card:nth-child(1) .strategy-step { color: var(--accent-green); }
+  .strategy-card:nth-child(2) .strategy-step { color: var(--accent-blue); }
+  .strategy-card:nth-child(3) .strategy-step { color: var(--accent-amber); }
+  .strategy-card:nth-child(4) .strategy-step { color: var(--accent-rose); }
+
+  .strategy-card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 8px; }
+  .strategy-card p { font-size: 0.8rem; color: var(--text-muted); line-height: 1.6; }
+
+  footer {
+    text-align: center; margin-top: 48px; padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted); font-size: 0.8rem;
+  }
+
+  @media (max-width: 768px) {
+    .matrix-grid { grid-template-columns: 1fr; grid-template-rows: auto; min-height: auto; }
+    .q1, .q2, .q3, .q4 { grid-row: auto; grid-column: auto; border-radius: 14px !important; border: 1px solid var(--border) !important; margin-bottom: 8px; }
+    .axis-x, .axis-y, .origin, .origin-label,
+    .label-y-top, .label-x-right, .label-neg-y, .label-neg-x { display: none; }
+    .strategy-grid { grid-template-columns: 1fr 1fr; }
+    .stats-bar { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>MaaS&API规划</h1>
+  </header>
+
+
+  <!-- Matrix -->
+  <div class="matrix-outer">
+
+    <!-- Axes -->
+    <div class="axis-y"></div>
+    <div class="axis-x"></div>
+    <div class="origin"></div>
+    <div class="origin-label">O</div>
+
+    <!-- Labels -->
+    <div class="label-y-top">
+      <span class="arrow">▲</span>
+      重要程度 (+)
+    </div>
+    <div class="label-x-right">实现成本 (+) ▶</div>
+    <div class="label-neg-y">(-)</div>
+    <div class="label-neg-x">(-)</div>
+
+    <div class="matrix-grid">
+
+      <!-- Q1: top-left = Quick Wins (低成本 高价值) -->
+      <div class="quadrant q1">
+        <div class="q-header">
+          <div class="q-icon">★</div>
+          <div>
+            <div class="q-title">Quick Wins</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑤</div>
+          <div class="cap-content">
+            <div class="cap-name">AI@Work</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑥</div>
+          <div class="cap-content">
+            <div class="cap-name">租户管理</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑦</div>
+          <div class="cap-content">
+            <div class="cap-name">流量控制</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑧</div>
+          <div class="cap-content">
+            <div class="cap-name">外采模型</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑨</div>
+          <div class="cap-content">
+            <div class="cap-name">数据支持</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑩</div>
+          <div class="cap-content">
+            <div class="cap-name">Prompt 管理</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑪</div>
+          <div class="cap-content">
+            <div class="cap-name">可观测性</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑫</div>
+          <div class="cap-content">
+            <div class="cap-name">安全护栏</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Q2: top-right = Strategic Bets (高成本 高价值) -->
+      <div class="quadrant q2">
+        <div class="q-header">
+          <div class="q-icon">★★</div>
+          <div>
+            <div class="q-title">Strategic Bets</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">①</div>
+          <div class="cap-content">
+            <div class="cap-name">服务稳定性</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">②</div>
+          <div class="cap-content">
+            <div class="cap-name">统一 API 接口</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">③</div>
+          <div class="cap-content">
+            <div class="cap-name">智能路由 & 负载均衡</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">④</div>
+          <div class="cap-content">
+            <div class="cap-name">费用追踪 & 预算管理</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Q3: bottom-left = Low Priority (低成本 低价值) -->
+      <div class="quadrant q3">
+        <div class="q-header">
+          <div class="q-icon">✧</div>
+          <div>
+            <div class="q-title">Low Priority</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑬</div>
+          <div class="cap-content">
+            <div class="cap-name">多级缓存</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑭</div>
+          <div class="cap-content">
+            <div class="cap-name">SDK 支持</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Q4: bottom-right = Reconsider (高成本 低价值) -->
+      <div class="quadrant q4">
+        <div class="q-header">
+          <div class="q-icon">✦</div>
+          <div>
+            <div class="q-title">Reconsider</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑮</div>
+          <div class="cap-content">
+            <div class="cap-name">MCP Tool</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑯</div>
+          <div class="cap-content">
+            <div class="cap-name">A2A 协议支持</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑰</div>
+          <div class="cap-content">
+            <div class="cap-name">Skills 加载</div>
+          </div>
+        </div>
+        <div class="capability">
+          <div class="cap-num">⑱</div>
+          <div class="cap-content">
+            <div class="cap-name">出海</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+
+</div>
+</body>
+</html>

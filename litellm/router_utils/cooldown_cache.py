@@ -1,5 +1,5 @@
 """
-Wrapper around router cache. Meant to handle model cooldown logic
+路由器缓存的封装层，用于处理模型冷却（cooldown）相关逻辑。
 """
 
 import functools
@@ -33,11 +33,11 @@ class CooldownCache:
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
         self.in_memory_cache = InMemoryCache()
-        # Initialize the masker with custom settings for exception strings
+        # 使用自定义配置初始化脱敏器，用于处理异常字符串
         self.exception_masker = SensitiveDataMasker(
-            visible_prefix=50,  # Show first 50 characters
-            visible_suffix=0,  # Show last 0 characters
-            mask_char="*",  # Use * for masking
+            visible_prefix=50,  # 保留前 50 个字符
+            visible_suffix=0,  # 保留后 0 个字符
+            mask_char="*",  # 使用 * 进行脱敏替换
         )
 
     def _common_add_cooldown_logic(
@@ -47,7 +47,7 @@ class CooldownCache:
             current_time = time.time()
             cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
 
-            # Store the cooldown information for the deployment separately
+            # 单独存储该部署（deployment）的冷却信息
             cooldown_data = CooldownCacheValue(
                 exception_received=self.exception_masker._mask_value(
                     str(original_exception)
@@ -75,9 +75,9 @@ class CooldownCache:
     ):
         try:
             #########################################################
-            # get cooldown time
-            # 1. If dynamic cooldown time is set for the model/deployment, use that
-            # 2. If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
+            # 获取冷却时间
+            # 1. 如果该模型/部署设置了动态冷却时间，则使用该动态值
+            # 2. 否则使用 CooldownCache 上设置的默认冷却时间
             _cooldown_time = cooldown_time
             if _cooldown_time is None:
                 _cooldown_time = self.default_cooldown_time
@@ -90,7 +90,7 @@ class CooldownCache:
                 cooldown_time=_cooldown_time,
             )
 
-            # Set the cache with a TTL equal to the cooldown time
+            # 将缓存的 TTL 设置为冷却时间
             self.cache.set_cache(
                 value=cooldown_data,
                 key=cooldown_key,
@@ -112,16 +112,16 @@ class CooldownCache:
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
-        # Generate the keys for the deployments
+        # 根据各部署生成对应的缓存 key
         keys = [
             CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
         ]
 
-        # Retrieve the values for the keys using mget
-        ## more likely to be none if no models ratelimited. So just check redis every 1s
-        ## each redis call adds ~100ms latency.
+        # 使用 mget 批量获取 key 对应的值
+        ## 如果没有模型被限流，结果很可能全部为 None，因此 Redis 只需每秒检查一次即可
+        ## 每次 Redis 调用大约会增加 100ms 的延迟
 
-        ## check in memory cache first
+        ## 优先检查内存缓存
         results = await self.cache.async_batch_get_cache(
             keys=keys, parent_otel_span=parent_otel_span
         )
@@ -130,7 +130,7 @@ class CooldownCache:
         if results is None or all(v is None for v in results):
             return active_cooldowns
 
-        # Process the results
+        # 处理查询结果
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
@@ -141,18 +141,18 @@ class CooldownCache:
     def get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
-        # Generate the keys for the deployments
+        # 根据各部署生成对应的缓存 key
         keys = [
             CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
         ]
-        # Retrieve the values for the keys using mget
+        # 使用 mget 批量获取 key 对应的值
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
             or []
         )
 
         active_cooldowns = []
-        # Process the results
+        # 处理查询结果
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
@@ -163,19 +163,19 @@ class CooldownCache:
     def get_min_cooldown(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> float:
-        """Return min cooldown time required for a group of model id's."""
+        """返回一组模型 ID 所需的最小冷却时间。"""
 
-        # Generate the keys for the deployments
+        # 根据各部署生成对应的缓存 key
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
-        # Retrieve the values for the keys using mget
+        # 使用 mget 批量获取 key 对应的值
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
             or []
         )
 
         min_cooldown_time: Optional[float] = None
-        # Process the results
+        # 处理查询结果
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
@@ -187,7 +187,7 @@ class CooldownCache:
         return min_cooldown_time or self.default_cooldown_time
 
 
-# Usage example:
+# 使用示例：
 # cooldown_cache = CooldownCache(cache=your_cache_instance, cooldown_time=your_cooldown_time)
 # cooldown_cache.add_deployment_to_cooldown(deployment, original_exception, exception_status)
 # active_cooldowns = cooldown_cache.get_active_cooldowns()

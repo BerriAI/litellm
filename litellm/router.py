@@ -1,11 +1,11 @@
 # +-----------------------------------------------+
 # |                                               |
-# |           Give Feedback / Get Help            |
+# |           反馈与求助（Give Feedback / Get Help）            |
 # | https://github.com/BerriAI/litellm/issues/new |
 # |                                               |
 # +-----------------------------------------------+
 #
-#  Thank you ! We ❤️ you! - Krrish & Ishaan
+#  感谢使用！我们 ❤️ 你！ - Krrish 与 Ishaan
 
 import asyncio
 import copy
@@ -187,7 +187,6 @@ from litellm.utils import (
     get_utc_datetime,
     is_region_allowed,
 )
-
 from .router_utils.pattern_match_deployments import PatternMatchRouter
 
 if TYPE_CHECKING:
@@ -210,7 +209,7 @@ else:
 
 
 class RoutingArgs(enum.Enum):
-    ttl = 60  # 1min (RPM/TPM expire key)
+    ttl = 60  # 1 分钟（RPM/TPM 缓存 key 的过期时间）
 
 
 class Router:
@@ -240,11 +239,11 @@ class Router:
         redis_password: Optional[str] = None,
         redis_db: Optional[int] = None,
         cache_responses: Optional[bool] = False,
-        cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
+        cache_kwargs: dict = {},  # 传递给 RedisCache 的额外参数（见 caching.py）
         caching_groups: Optional[
             List[tuple]
-        ] = None,  # if you want to cache across model groups
-        client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
+        ] = None,  # 如果希望跨 model group 共享缓存，可以在这里配置
+        client_ttl: int = 3600,  # 缓存的 client 的 TTL（单位：秒），超过后会重新初始化
         ## SCHEDULER ##
         polling_interval: Optional[float] = None,
         default_priority: Optional[int] = None,
@@ -252,18 +251,18 @@ class Router:
         num_retries: Optional[int] = None,
         max_fallbacks: Optional[
             int
-        ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
+        ] = None,  # 在放弃请求之前最多尝试的 fallback 次数，默认 5 次
         timeout: Optional[float] = None,
         stream_timeout: Optional[float] = None,
         default_litellm_params: Optional[
             dict
-        ] = None,  # default params for Router.chat.completion.create
+        ] = None,  # Router.chat.completion.create 的默认参数
         default_max_parallel_requests: Optional[int] = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         default_fallbacks: Optional[
             List[str]
-        ] = None,  # generic fallbacks, works across all deployments
+        ] = None,  # 通用 fallback，对所有 deployment 生效
         fallbacks: List = [],
         context_window_fallbacks: List = [],
         content_policy_fallbacks: List = [],
@@ -273,22 +272,22 @@ class Router:
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
-        retry_after: int = 0,  # min time to wait before retrying a failed request
+        retry_after: int = 0,  # 重试失败请求前的最短等待时间（单位：秒）
         retry_policy: Optional[
             Union[RetryPolicy, dict]
-        ] = None,  # set custom retries for different exceptions
+        ] = None,  # 针对不同异常类型的自定义重试策略
         model_group_retry_policy: Dict[
             str, RetryPolicy
-        ] = {},  # set custom retry policies based on model group
+        ] = {},  # 按 model group 维度的自定义重试策略
         allowed_fails: Optional[
             int
-        ] = None,  # Number of times a deployment can failbefore being added to cooldown
+        ] = None,  # 在被加入冷却列表前，一个 deployment 允许失败的次数
         allowed_fails_policy: Optional[
             AllowedFailsPolicy
-        ] = None,  # set custom allowed fails policy
+        ] = None,  # 自定义的 allowed_fails 策略
         cooldown_time: Optional[
             float
-        ] = None,  # (seconds) time to cooldown a deployment after failure
+        ] = None,  # deployment 失败后进入冷却的时长（单位：秒）
         disable_cooldowns: Optional[bool] = None,
         routing_strategy: Literal[
             "simple-shuffle",
@@ -299,7 +298,7 @@ class Router:
             "usage-based-routing-v2",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
-        routing_strategy_args: dict = {},  # just for latency-based
+        routing_strategy_args: dict = {},  # 仅用于 latency-based 策略
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
@@ -313,48 +312,48 @@ class Router:
         health_check_ignore_transient_errors: bool = False,
     ) -> None:
         """
-        Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
+        使用给定的缓存、可靠性和路由策略参数来初始化 Router 类。
 
-        Args:
-            model_list (Optional[list]): List of models to be used. Defaults to None.
-            redis_url (Optional[str]): URL of the Redis server. Defaults to None.
-            redis_host (Optional[str]): Hostname of the Redis server. Defaults to None.
-            redis_port (Optional[int]): Port of the Redis server. Defaults to None.
-            redis_password (Optional[str]): Password of the Redis server. Defaults to None.
-            cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
-            cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
-            caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
-            client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
-            polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
-            default_priority: (Optional[int]): the default priority for a request. Only for '.scheduler_acompletion()'. Default is None.
-            num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
-            timeout (Optional[float]): Timeout for requests. Defaults to None.
-            default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
-            set_verbose (bool): Flag to set verbose mode. Defaults to False.
-            debug_level (Literal["DEBUG", "INFO"]): Debug level for logging. Defaults to "INFO".
-            fallbacks (List): List of fallback options. Defaults to [].
-            context_window_fallbacks (List): List of context window fallback options. Defaults to [].
-            enable_pre_call_checks (boolean): Filter out deployments which are outside context window limits for a given prompt
-            model_group_alias (Optional[dict]): Alias for model groups. Defaults to {}.
-            retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
-            allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
-            cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
-            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
-            routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
-            alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
-            provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
-            deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
-            ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
-        Returns:
-            Router: An instance of the litellm.Router class.
+        参数：
+            model_list (Optional[list])：要使用的模型列表。默认为 None。
+            redis_url (Optional[str])：Redis 服务器的 URL。默认为 None。
+            redis_host (Optional[str])：Redis 服务器的主机名。默认为 None。
+            redis_port (Optional[int])：Redis 服务器的端口。默认为 None。
+            redis_password (Optional[str])：Redis 服务器的密码。默认为 None。
+            cache_responses (Optional[bool])：是否启用响应缓存。默认 False。
+            cache_kwargs (dict)：传递给 RedisCache 的额外参数。默认 {}。
+            caching_groups (Optional[List[tuple]])：用于跨 model group 共享缓存的分组列表。默认 None。
+            client_ttl (int)：缓存的 client 存活时间（秒）。默认 3600。
+            polling_interval (Optional[float])：队列轮询频率，仅用于 '.scheduler_acompletion()'。默认 3ms。
+            default_priority (Optional[int])：请求的默认优先级，仅用于 '.scheduler_acompletion()'。默认 None。
+            num_retries (Optional[int])：失败请求的重试次数。默认 2。
+            timeout (Optional[float])：请求超时时间。默认 None。
+            default_litellm_params (dict)：Router.chat.completion.create 的默认参数。默认 {}。
+            set_verbose (bool)：是否开启 verbose 模式。默认 False。
+            debug_level (Literal["DEBUG", "INFO"])：日志级别。默认 "INFO"。
+            fallbacks (List)：fallback 列表。默认 []。
+            context_window_fallbacks (List)：上下文窗口 fallback 列表。默认 []。
+            enable_pre_call_checks (boolean)：对给定 prompt，过滤掉超出上下文窗口限制的 deployment。
+            model_group_alias (Optional[dict])：model group 别名。默认 {}。
+            retry_after (int)：重试失败请求的最短等待时间。默认 0。
+            allowed_fails (Optional[int])：被加入冷却前允许的失败次数。默认 None。
+            cooldown_time (float)：deployment 失败后冷却的秒数。默认 1。
+            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"])：路由策略。默认 "simple-shuffle"。
+            routing_strategy_args (dict)：基于延迟路由策略的额外参数。默认 {}。
+            alerting_config (AlertingConfig)：Slack 告警配置。默认 None。
+            provider_budget_config (ProviderBudgetConfig)：各 LLM 厂商的预算配置。例如：OpenAI $100/天、Azure $100/天。默认 None。
+            deployment_affinity_ttl_seconds (int)：user-key → deployment 亲和性映射的 TTL。默认 3600。
+            ignore_invalid_deployments (bool)：忽略非法 deployment，继续使用其他有效 deployment。默认是抛错。
+        返回：
+            Router：litellm.Router 类的一个实例。
 
-        Example Usage:
+        使用示例：
         ```python
         from litellm import Router
         model_list = [
         {
-            "model_name": "azure-gpt-3.5-turbo", # model alias
-            "litellm_params": { # params for litellm completion/embedding call
+            "model_name": "azure-gpt-3.5-turbo", # 模型别名
+            "litellm_params": { # 用于 litellm completion/embedding 调用的参数
                 "model": "azure/<your-deployment-name-1>",
                 "api_key": <your-api-key>,
                 "api_version": <your-api-version>,
@@ -362,8 +361,8 @@ class Router:
             },
         },
         {
-            "model_name": "azure-gpt-3.5-turbo", # model alias
-            "litellm_params": { # params for litellm completion/embedding call
+            "model_name": "azure-gpt-3.5-turbo", # 模型别名
+            "litellm_params": { # 用于 litellm completion/embedding 调用的参数
                 "model": "azure/<your-deployment-name-2>",
                 "api_key": <your-api-key>,
                 "api_version": <your-api-version>,
@@ -371,8 +370,8 @@ class Router:
             },
         },
         {
-            "model_name": "openai-gpt-3.5-turbo", # model alias
-            "litellm_params": { # params for litellm completion/embedding call
+            "model_name": "openai-gpt-3.5-turbo", # 模型别名
+            "litellm_params": { # 用于 litellm completion/embedding 调用的参数
                 "model": "gpt-3.5-turbo",
                 "api_key": <your-api-key>,
             },
@@ -391,7 +390,7 @@ class Router:
         from litellm._service_logger import ServiceLogging
 
         self.service_logger_obj: ServiceLogging = ServiceLogging()
-        litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
+        litellm.suppress_debug_info = True  # 避免 Router 使用时打出 'Give Feedback/Get help' 提示 —— 相关 Issue：https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -406,11 +405,11 @@ class Router:
         self.guardrail_list = guardrail_list or []
         self.deployment_names: List = (
             []
-        )  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        )  # litellm_params 中的模型名称列表，例如 azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
+            "local"  # 默认使用进程内内存缓存
         )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
@@ -443,43 +442,43 @@ class Router:
 
         if cache_responses:
             if litellm.cache is None:
-                # the cache can be initialized on the proxy server. We should not overwrite it
+                # cache 可能已经在 proxy server 中初始化过，这里不应覆盖
                 litellm.cache = litellm.Cache(type=cache_type, **cache_config)  # type: ignore
             self.cache_responses = cache_responses
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
-        )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        )  # 使用双层缓存（Redis + 内存）来跟踪冷却、用量等信息
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(
             polling_interval=polling_interval, redis_cache=redis_cache
         )
         self.default_priority = default_priority
-        self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
+        self.default_deployment = None  # 当用户使用 model = * 时，用来记录默认的 deployment
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
             {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        )  # 按 team 划分的 PatternMatchRouter，结构为 {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
 
-        # Initialize model_group_alias early since it's used in set_model_list
+        # 由于 set_model_list 会用到 model_group_alias，这里提前初始化
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
             model_group_alias or {}
-        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
+        )  # router 使用的 model group 别名，例如 {"gpt-4": "gpt-3.5-turbo"} —— 所有请求 gpt-4 会被路由到 gpt-3.5-turbo 组
 
-        # Initialize model ID to deployment index mapping for O(1) lookups
+        # 初始化 model ID → deployment 索引的映射，便于 O(1) 查找
         self.model_id_to_deployment_index_map: Dict[str, int] = {}
-        # Initialize model name to deployment indices mapping for O(1) lookups
-        # Maps model_name -> list of indices in model_list
+        # 初始化 model name → deployment 索引列表的映射，便于 O(1) 查找
+        # 映射关系：model_name -> model_list 中的索引列表
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
-        # Maps (team_id, team_public_model_name) -> list of indices in model_list
+        # 映射关系：(team_id, team_public_model_name) -> model_list 中的索引列表
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
 
         if model_list is not None:
-            # set_model_list will build indices automatically
+            # set_model_list 会自动构建索引
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
@@ -488,7 +487,7 @@ class Router:
         else:
             self.model_list: List = (
                 []
-            )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+            )  # 初始化为空列表，以便 _add_deployment 和 delete_deployment 能正常工作
 
         self._access_groups_cache: Optional[Dict[str, List[str]]] = None
 
@@ -511,7 +510,7 @@ class Router:
         )
         self.failed_calls = (
             InMemoryCache()
-        )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
+        )  # 每个 deployment 失败次数的缓存；如果 1 分钟内失败次数 > allowed_fails，就会被加入冷却列表
 
         if num_retries is not None:
             self.num_retries = num_retries
@@ -533,12 +532,12 @@ class Router:
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
 
-        ## SETTING FALLBACKS ##
-        ### validate if it's set + in correct format
+        ## 设置 FALLBACKS ##
+        ### 校验格式是否正确
         _fallbacks = fallbacks or litellm.fallbacks
 
         self.validate_fallbacks(fallback_param=_fallbacks)
-        ### set fallbacks
+        ### 正式设置 fallbacks
         self.fallbacks = _fallbacks
 
         if default_fallbacks is not None or litellm.default_fallbacks is not None:
@@ -559,22 +558,22 @@ class Router:
         self.content_policy_fallbacks = _content_policy_fallbacks
         self.total_calls: defaultdict = defaultdict(
             int
-        )  # dict to store total calls made to each model
+        )  # 记录每个模型的总调用次数
         self.fail_calls: defaultdict = defaultdict(
             int
-        )  # dict to store fail_calls made to each model
+        )  # 记录每个模型的失败调用次数
         self.success_calls: defaultdict = defaultdict(
             int
-        )  # dict to store success_calls  made to each model
+        )  # 记录每个模型的成功调用次数
         self.previous_models: List = (
             []
-        )  # list to store failed calls (passed in as metadata to next call)
+        )  # 存储失败调用的历史（会作为 metadata 传递给下一次调用）
 
-        # make Router.chat.completions.create compatible for openai.chat.completions.create
+        # 让 Router.chat.completions.create 与 openai.chat.completions.create 保持兼容
         default_litellm_params = default_litellm_params or {}
         self.chat = litellm.Chat(params=default_litellm_params, router_obj=self)
 
-        # default litellm args
+        # litellm 的默认参数
         self.default_litellm_params = default_litellm_params
         self.default_litellm_params.setdefault("timeout", timeout)
         self.default_litellm_params.setdefault("max_retries", 0)
@@ -582,9 +581,10 @@ class Router:
             {"caching_groups": caching_groups}
         )
 
-        self.deployment_stats: dict = {}  # used for debugging load balancing
+        self.deployment_stats: dict = {}  # 用于调试负载均衡
         """
-        deployment_stats = {
+        deployment_stats 示例结构：
+        {
             "122999-2828282-277:
             {
                 "model": "gpt-3",
@@ -597,13 +597,13 @@ class Router:
         }
         """
 
-        ### ROUTING SETUP ###
+        ### 路由配置 ###
         self.routing_strategy_init(
             routing_strategy=routing_strategy,
             routing_strategy_args=routing_strategy_args,
         )
         self.access_groups = None
-        ## USAGE TRACKING ##
+        ## 用量跟踪 ##
         if isinstance(litellm._async_success_callback, list):
             litellm.logging_callback_manager.add_litellm_async_success_callback(
                 self.deployment_callback_on_success
@@ -626,7 +626,7 @@ class Router:
             litellm._async_failure_callback = [
                 self.async_deployment_callback_on_failure
             ]
-        ## COOLDOWNS ##
+        ## 冷却相关回调 ##
         if isinstance(litellm.failure_callback, list):
             litellm.logging_callback_manager.add_litellm_failure_callback(
                 self.deployment_callback_on_failure
@@ -683,9 +683,9 @@ class Router:
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
 
-        # If model_group_affinity_config is set but no global affinity checks were
-        # enabled, we still need the DeploymentAffinityCheck callback (with global
-        # flags all False) so per-group config can activate affinity per model group.
+        # 如果设置了 model_group_affinity_config 但没有开启任何全局亲和性检查，
+        # 仍需要 DeploymentAffinityCheck 回调（所有全局开关为 False），
+        # 以便按 model group 的配置单独启用亲和性。
         if self.model_group_affinity_config and not any(
             isinstance(cb, DeploymentAffinityCheck)
             for cb in (self.optional_callbacks or [])
@@ -713,7 +713,7 @@ class Router:
     @staticmethod
     def get_valid_args() -> List[str]:
         """
-        Returns a list of valid arguments for the Router.__init__ method.
+        返回 Router.__init__ 方法所支持的有效参数名列表。
         """
         arg_spec = inspect.getfullargspec(Router.__init__)
         valid_args = arg_spec.args + arg_spec.kwonlyargs
@@ -723,7 +723,7 @@ class Router:
 
     def apply_default_settings(self):
         """
-        Apply the default settings to the router.
+        应用默认配置到 router。
         """
 
         default_pre_call_checks: OptionalPreCallChecks = []
@@ -732,8 +732,8 @@ class Router:
 
     def discard(self):
         """
-        Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
-        For now, unhook router's callbacks from all lists
+        伪析构方法：当 router 不再使用时，用于清理全局数据结构。
+        目前的功能是将 router 注册的所有回调从l所在列表中移除。
         """
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             litellm._async_success_callback, self
@@ -757,7 +757,7 @@ class Router:
             litellm.callbacks, self
         )
 
-        # Remove ForwardClientSideHeadersByModelGroup if it exists
+        # 如果存在 ForwardClientSideHeadersByModelGroup，也移除它
         if self.optional_callbacks is not None:
             for callback in self.optional_callbacks:
                 litellm.logging_callback_manager.remove_callback_from_list_by_object(
@@ -769,7 +769,7 @@ class Router:
         cache_config: Dict[str, Any],
     ) -> Union[RedisCache, RedisClusterCache]:
         """
-        Initializes either a RedisCache or RedisClusterCache based on the cache_config.
+        根据 cache_config 初始化 RedisCache 或 RedisClusterCache。
         """
         startup_nodes = cache_config.get("startup_nodes")
         if not startup_nodes:
@@ -784,14 +784,14 @@ class Router:
 
     def _update_redis_cache(self, cache: RedisCache):
         """
-        Update the redis cache for the router, if none set.
+        如果 router 尚未配置 redis 缓存，将传入的 cache 设置为其 redis 缓存。
 
-        Allows proxy user to just do
+        这样 proxy 用户只需要写：
         ```yaml
         litellm_settings:
             cache: true
         ```
-        and caching to just work.
+        缓存就能开箱即用。
         """
         if self.cache.redis_cache is None:
             self.cache.redis_cache = cache
@@ -801,9 +801,9 @@ class Router:
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
 
-        # Validate routing_strategy value to fail fast with helpful error
-        # See: https://github.com/BerriAI/litellm/issues/11330
-        # Derive valid strategies from RoutingStrategy enum + "simple-shuffle" (default, not in enum)
+        # 校验 routing_strategy 取值，带有帮助信息地快速失败
+        # 参考：https://github.com/BerriAI/litellm/issues/11330
+        # 有效策略来自 RoutingStrategy 枚举 + "simple-shuffle"（默认值，未在枚举中）
         valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
 
         if routing_strategy is not None:
@@ -814,10 +814,10 @@ class Router:
             is_valid_enum = isinstance(routing_strategy, RoutingStrategy)
             if not is_valid_string and not is_valid_enum:
                 raise ValueError(
-                    f"Invalid routing_strategy: '{routing_strategy}'. "
-                    f"Valid options: {valid_strategy_strings}. "
-                    f"Check 'router_settings.routing_strategy' in your config.yaml "
-                    f"or the 'routing_strategy' parameter if using the Router SDK directly."
+                    f"非法的 routing_strategy：'{routing_strategy}'。 "
+                    f"有效选项：{valid_strategy_strings}。 "
+                    f"请检查 config.yaml 中的 'router_settings.routing_strategy'，"
+                    f"或者直接使用 Router SDK 时的 'routing_strategy' 参数。"
                 )
 
         if (
@@ -825,7 +825,7 @@ class Router:
             or routing_strategy == RoutingStrategy.LEAST_BUSY
         ):
             self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
-            ## add callback
+            ## 注册回调
             if isinstance(litellm.input_callback, list):
                 litellm.input_callback.append(self.leastbusy_logger)  # type: ignore
             else:
@@ -876,7 +876,7 @@ class Router:
             pass
 
     def initialize_assistants_endpoint(self):
-        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
+        ## 初始化直通型（pass-through）的 Assistants 端点 ##
         self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
         self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
         self.aget_assistants = self.factory_function(litellm.aget_assistants)
@@ -887,7 +887,7 @@ class Router:
         self.arun_thread = self.factory_function(litellm.arun_thread)
 
     def _initialize_core_endpoints(self):
-        """Helper to initialize core router endpoints."""
+        """初始化 router 核心端点的辅助方法。"""
         self.amoderation = self.factory_function(
             litellm.amoderation, call_type="moderation"
         )
@@ -955,11 +955,11 @@ class Router:
         self.allm_passthrough_route = self.factory_function(
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )
-        # Note: acancel_batch is defined as a method on the Router class (not using factory_function)
-        # to properly handle model-to-provider mapping like acreate_batch and aretrieve_batch
+        # 注：acancel_batch 直接在 Router 类上实现（而不使用 factory_function），
+        # 以便像 acreate_batch、aretrieve_batch 一样处理模型 → 厂商的映射关系
 
     def _initialize_vector_store_endpoints(self):
-        """Initialize vector store endpoints."""
+        """初始化 vector store 相关端点。"""
         from litellm.vector_stores.main import (
             adelete,
             alist,
@@ -1009,7 +1009,7 @@ class Router:
         )
 
     def _initialize_vector_store_file_endpoints(self):
-        """Initialize vector store file endpoints."""
+        """初始化 vector store file 相关端点。"""
         from litellm.vector_store_files.main import (
             acreate as avector_store_file_create_fn,
         )
@@ -1081,7 +1081,7 @@ class Router:
         )
 
     def _initialize_google_genai_endpoints(self):
-        """Initialize Google GenAI endpoints."""
+        """初始化 Google GenAI 相关端点。"""
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
@@ -1103,7 +1103,7 @@ class Router:
         )
 
     def _initialize_ocr_search_endpoints(self):
-        """Initialize OCR and search endpoints."""
+        """初始化 OCR 与搜索相关端点。"""
         from litellm.ocr import aocr, ocr
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
@@ -1115,7 +1115,7 @@ class Router:
         self.search = self.factory_function(search, call_type="search")
 
     def _initialize_video_endpoints(self):
-        """Initialize video endpoints."""
+        """初始化视频相关端点。"""
         from litellm.videos import (
             avideo_content,
             avideo_create_character,
@@ -1183,7 +1183,7 @@ class Router:
         )
 
     def _initialize_container_endpoints(self):
-        """Initialize container endpoints."""
+        """初始化 container 相关端点。"""
         from litellm.containers import (
             acreate_container,
             adelete_container,
@@ -1223,12 +1223,12 @@ class Router:
             delete_container, call_type="delete_container"
         )
 
-        # Auto-register JSON-generated container file endpoints
+        # 自动注册由 JSON 生成的 container file 端点
         for name, func in container_file_endpoints.items():
             setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
 
     def _initialize_skills_endpoints(self):
-        """Initialize Anthropic Skills API endpoints."""
+        """初始化 Anthropic Skills API 相关端点。"""
         self.acreate_skill = self.factory_function(
             litellm.acreate_skill, call_type="acreate_skill"
         )
@@ -1243,7 +1243,7 @@ class Router:
         )
 
     def _initialize_interactions_endpoints(self):
-        """Initialize Google Interactions API endpoints."""
+        """初始化 Google Interactions API 相关端点。"""
         from litellm.interactions import acancel as acancel_interaction
         from litellm.interactions import acreate as acreate_interaction
         from litellm.interactions import adelete as adelete_interaction
@@ -1279,12 +1279,12 @@ class Router:
         )
 
     def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
+        """初始化专项类端点（vector store、OCR、search、video、container、skills、interactions）的辅助方法。"""
         self._initialize_vector_store_endpoints()
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
         self._initialize_ocr_search_endpoints()
-        # Override vector store methods with router-aware implementations
+        # 用 router 感知的实现覆盖默认的 vector store 方法
         self._override_vector_store_methods_for_router()
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
@@ -1297,16 +1297,16 @@ class Router:
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
-        Validate the fallbacks parameter.
+        校验 fallbacks 参数的格式是否合法。
         """
         if fallback_param is None:
             return
         for fallback_dict in fallback_param:
             if not isinstance(fallback_dict, dict):
-                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
+                raise ValueError(f"元素 '{fallback_dict}' 不是一个字典。")
             if len(fallback_dict) != 1:
                 raise ValueError(
-                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
+                    f"字典 '{fallback_dict}' 必须有且仅有一个 key，当前 key 个数为 {len(fallback_dict)}。"
                 )
 
     def add_optional_pre_call_checks(
@@ -1316,7 +1316,7 @@ class Router:
             return
 
         # ---------------------------------------------------------------------
-        # Unified deployment affinity (session stickiness)
+        # 统一的 deployment 亲和性（会话粘性）
         # ---------------------------------------------------------------------
         enable_user_key_affinity = "deployment_affinity" in optional_pre_call_checks
         enable_responses_api_affinity = (
@@ -1370,7 +1370,7 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         # ---------------------------------------------------------------------
-        # Encrypted content affinity
+        # 加密内容亲和性
         # ---------------------------------------------------------------------
         if "encrypted_content_affinity" in optional_pre_call_checks:
             from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
@@ -1390,7 +1390,7 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(ec_callback)
 
         # ---------------------------------------------------------------------
-        # Remaining optional pre-call checks
+        # 其他可选的预调用检查
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:
             _callback: Optional[CustomLogger] = None
@@ -1422,9 +1422,9 @@ class Router:
 
     def print_deployment(self, deployment: dict):
         """
-        returns a copy of the deployment with the api key masked
+        返回 deployment 的一份拷贝，其中 api key 被脱敏处理。
 
-        Only returns 2 characters of the api key and masks the rest with * (10 *).
+        仅保留 api key 的前 2 个字符，其余部分用 10 个 * 代替。
         """
         try:
             _deployment_copy = copy.deepcopy(deployment)
@@ -1439,17 +1439,17 @@ class Router:
             return _deployment_copy
         except Exception as e:
             verbose_router_logger.debug(
-                f"Error occurred while printing deployment - {str(e)}"
+                f"打印 deployment 时发生错误 - {str(e)}"
             )
             raise e
 
-    ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
+    ### COMPLETION、EMBEDDING、IMAGE GENERATION 相关方法
 
     def completion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
-        Example usage:
+        使用示例：
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
         """
         try:
@@ -1470,28 +1470,28 @@ class Router:
         model_name = None
         deployment = None
         try:
-            # Capture kwargs before deployment selection so the streaming
-            # fallback iterator can re-dispatch with the original model group.
+            # 在选择 deployment 之前记录一份 kwargs。
+            # 这样流式 fallback 迭代器就能用原始的 model group 重新派发请求。
             input_kwargs_for_streaming_fallback = kwargs.copy()
             input_kwargs_for_streaming_fallback["model"] = model
 
-            # pick the one that is available (lowest TPM/RPM)
+            # 按策略（例如最低 TPM/RPM）选择一个可用的 deployment
             deployment = self.get_available_deployment(
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            # Check for silent model experiment
-            # Make a local copy of litellm_params to avoid mutating the Router's state
+            # 检查是否配置了“静默模型实验”
+            # 复制一份 litellm_params 避免修改到 Router 的状态
             litellm_params = deployment["litellm_params"].copy()
             silent_model = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
-                # Mirroring traffic to a secondary model
-                # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
-                # requires pickling args, which fails when kwargs contain unpicklable
-                # objects (e.g. _thread.RLock from OTEL spans, loggers) in deployment.
+                # 镜像流量到第二个模型
+                # 使用 threading.Thread（而非 ThreadPoolExecutor）：executor.submit()
+                # 需要 pickle 参数，但 deployment 里的 kwargs 可能包含不可 pickle 的对象
+                # （例如 OTEL span 内的 _thread.RLock、logger 等）。
                 thread = threading.Thread(
                     target=self._silent_experiment_completion,
                     args=(silent_model, messages),
@@ -1501,12 +1501,12 @@ class Router:
                 thread.start()
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("silent_model", None)  # 确保 silent_model 也不残留在 kwargs 中
             model_name = litellm_params["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
             )
-            # check if provided keys == client keys #
+            # 检查传入的 key 是否与 client 的 key 一致 #
             dynamic_api_key = kwargs.get("api_key", None)
             if (
                 dynamic_api_key is not None
@@ -1517,8 +1517,8 @@ class Router:
             else:
                 model_client = potential_model_client
 
-            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
-            ## only run if model group given, not model id
+            ### deployment 级别的预调用检查（例如预先更新 rpm；若超限则抛错） ###
+            ## 仅当传入的是 model group（而非具体 model id）时执行
             if not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
@@ -1534,7 +1534,7 @@ class Router:
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
 
-            ## CHECK CONTENT FILTER ERROR ##
+            ## 检查内容过滤（content filter）错误 ##
             if isinstance(response, ModelResponse):
                 _should_raise = self._should_raise_content_policy_error(
                     model=model, response=response, kwargs=kwargs
@@ -1546,8 +1546,8 @@ class Router:
                         llm_provider="",
                     )
 
-            # Wrap streaming responses so MidStreamFallbackError (raised
-            # during iteration) triggers the Router's fallback chain.
+            # 包装流式响应：如果迭代过程中抛出 MidStreamFallbackError，
+            # 则触发 Router 的 fallback 链。
             if isinstance(response, CustomStreamWrapper):
                 return self._completion_streaming_iterator(
                     model_response=response,
@@ -1560,30 +1560,29 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
             )
-            # Set per-deployment num_retries on exception for retry logic
+            # 在异常上设置当前 deployment 的 num_retries，用于重试逻辑
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
 
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
         """
-        Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
+        为静默实验准备 kwargs，确保它与主调用彻底隔离。
 
-        Guarantee metadata isolation: safe_deep_copy falls back to the original
-        reference when deepcopy fails (e.g. metadata contains UserAPIKeyAuth with
-        parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
-        copy of the metadata dict so mutations (model_group, is_silent_experiment)
-        never corrupt the main call's metadata.
+        确保 metadata 隔离：safe_deep_copy 在 deepcopy 失败时
+        （例如 metadata 中含有带 parent_otel_span 的 UserAPIKeyAuth，
+        OTel Span 无法 deepcopy）会退化到返回原始引用。
+        这里强制对 metadata dict 做一次浅拷贝，防止修改（model_group、
+        is_silent_experiment）污染到主调用的 metadata。
         """
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
         silent_kwargs = safe_deep_copy(kwargs)
 
-        # safe_deep_copy may fall back to the original metadata reference when
-        # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
-        # Detect this via identity check and force a shallow copy so that setting
-        # model_group / is_silent_experiment on the silent dict doesn't corrupt
-        # the primary call's metadata.
+        # safe_deep_copy 在 deepcopy 失败时（UserAPIKeyAuth.parent_otel_span 不可 deepcopy）
+        # 会退回原始 metadata 引用。这里用身份比较检测这种情况，
+        # 并强制做一次浅拷贝，这样给 silent_kwargs 设置
+        # model_group / is_silent_experiment 时就不会污染主调用的 metadata。
         original_metadata = kwargs.get("metadata")
         if (
             original_metadata is not None
@@ -1594,22 +1593,22 @@ class Router:
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
 
-        # OTel spans are not safe to use across event loops. The silent
-        # experiment runs in a new event loop, so strip the span to prevent
-        # cross-loop tracing races or span corruption.
+        # OTel span 在不同事件循环间使用是不安全的。
+        # 静默实验会在新事件循环中运行，这里剔除 span，
+        # 避免跨循环追踪竞态或 span 状态损坏。
         silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
-        # Force stream=False so the response is fully consumed and callbacks fire
+        # 强制 stream=False，保证响应被完整消费且回调能触发
         silent_kwargs["stream"] = False
 
-        # Pop logging objects and call IDs to ensure a fresh logging context
-        # This prevents collisions in the Proxy's database (spend_logs)
+        # 移除日志对象和 call ID，保证静默实验有全新的日志上下文
+        # 避免与 Proxy 数据库（spend_logs）中的主调用记录发生冲突
         silent_kwargs.pop("litellm_call_id", None)
         silent_kwargs.pop("litellm_logging_obj", None)
         silent_kwargs.pop("standard_logging_object", None)
-        # DON'T pop proxy_server_request — it's needed for spend log metadata
+        # 注意：不要移除 proxy_server_request —— 它是费用日志 metadata 所需的
 
         return silent_kwargs
 
@@ -1617,26 +1616,26 @@ class Router:
         self, silent_model: str, messages: List[Any], **kwargs
     ):
         """
-        Run a silent experiment in the background (thread).
+        在后台（新线程）中运行一次静默实验。
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
+            # 防止无限递归：若静默模型自身又挂有静默模型，则直接返回
             if kwargs.get("metadata", {}).get("is_silent_experiment", False):
                 return
 
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info(
-                f"Starting silent experiment for model {silent_model}"
+                f"开始针对模型 {silent_model} 的静默实验"
             )
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
 
-            # Override model_group to correctly attribute metrics to the silent model
+            # 覆盖 model_group，保证指标归类到静默模型
             silent_kwargs["metadata"]["model_group"] = silent_model
 
-            # Create a new event loop for this thread so that async success
-            # callbacks (e.g. _ProxyDBLogger) can schedule and run DB writes.
+            # 为本线程创建新的事件循环，以便异步成功回调
+            # （如 _ProxyDBLogger）可以调度并写入数据库。
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -1647,8 +1646,8 @@ class Router:
                         messages=cast(List[AllMessageValues], messages),
                         **silent_kwargs,
                     )
-                    # Drain any fire-and-forget tasks (e.g. alerting hooks)
-                    # scheduled via asyncio.create_task during acompletion.
+                    # 排干 acompletion 中通过 asyncio.create_task
+                    # 创建的“发射后不管”任务（例如告警钩子）。
                     pending = asyncio.all_tasks()
                     current = asyncio.current_task()
                     if current is not None:
@@ -1661,7 +1660,7 @@ class Router:
                 loop.close()
         except Exception as e:
             verbose_router_logger.error(
-                f"Silent experiment failed for model {silent_model}: {str(e)}"
+                f"针对模型 {silent_model} 的静默实验失败：{str(e)}"
             )
 
     # fmt: off
@@ -1686,7 +1685,7 @@ class Router:
 
     # fmt: on
 
-    # The actual implementation of the function
+    # 函数的真正实现
     async def acompletion(
         self,
         model: str,
@@ -1745,7 +1744,7 @@ class Router:
         fallback_item: ModelResponseStream,
         complete_response_object_usage: Optional[Usage],
     ) -> None:
-        """Merge partial-stream usage with fallback-stream usage on the chunk."""
+        """将部分流的 usage 与 fallback 流的 usage 合并到当前 chunk 上。"""
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
         usage = cast(Optional[Usage], getattr(fallback_item, "usage", None))
@@ -1768,15 +1767,15 @@ class Router:
         initial_kwargs: dict,
     ) -> CustomStreamWrapper:
         """
-        Helper to iterate over a streaming response.
+        遍历流式响应的辅助方法。
 
-        Catches errors for fallbacks using the router's fallback system
+        捕获迭代过程中的异常，交给 router 的 fallback 系统处理。
         """
         from litellm.exceptions import MidStreamFallbackError
 
         class FallbackStreamWrapper(CustomStreamWrapper):
             def __init__(self, async_generator: AsyncGenerator):
-                # Copy attributes from the original model_response
+                # 从原始 model_response 复制属性
                 super().__init__(
                     completion_stream=async_generator,
                     model=model_response.model,
@@ -1784,7 +1783,7 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
-                # Preserve hidden params (including litellm_overhead_time_ms) from original response
+                # 保留原始响应的隐式参数（包含 litellm_overhead_time_ms 等）
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
 
@@ -1795,7 +1794,7 @@ class Router:
                 return await self._async_generator.__anext__()
 
         async def stream_with_fallbacks():
-            fallback_response = None  # Track for cleanup in finally
+            fallback_response = None  # 用于在 finally 中清理
             try:
                 async for item in model_response:
                     yield item
@@ -1810,7 +1809,7 @@ class Router:
                     getattr(complete_response_object, "usage", None),
                 )
                 try:
-                    # Use the router's fallback system
+                    # 使用 router 的 fallback 系统
                     model_group = cast(str, initial_kwargs.get("model"))
                     fallbacks: Optional[List] = initial_kwargs.get(
                         "fallbacks", self.fallbacks
@@ -1823,10 +1822,9 @@ class Router:
                     )
                     initial_kwargs["original_function"] = self._acompletion
                     if e.is_pre_first_chunk or not e.generated_content:
-                        # No content was generated before the error (e.g. a
-                        # rate-limit 429 on the very first chunk).  Retry with
-                        # the original messages — adding a continuation prompt
-                        # would waste tokens and confuse the model.
+                        # 错误发生前还未生成任何内容（例如首个 chunk 就遭遇 429 限流）。
+                        # 用原始 messages 重新重试——此时添加“续写”提示反而
+                        # 会浪费 token 并使模型困惑。
                         initial_kwargs["messages"] = messages
                     else:
                         initial_kwargs["messages"] = messages + [
@@ -1856,7 +1854,7 @@ class Router:
                         )
                     )
 
-                    # If fallback returns a streaming response, iterate over it
+                    # 如果 fallback 返回的是流式响应，则对其迭代
                     if hasattr(fallback_response, "__aiter__"):
                         async for fallback_item in fallback_response:  # type: ignore
                             if (
@@ -1869,20 +1867,19 @@ class Router:
                                 )
                             yield fallback_item
                     else:
-                        # If fallback returns a non-streaming response, yield None
+                        # fallback 返回的是非流式响应，则返回 None
                         yield None
 
                 except Exception as fallback_error:
-                    # If fallback also fails, log and re-raise original error
+                    # fallback 也失败时，记录日志并再度抛出异常
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
                     raise fallback_error
             finally:
-                # Close the underlying streams to release HTTP connections
-                # back to the connection pool when the generator is closed
-                # (e.g. on client disconnect).
-                # Shield from anyio cancellation so the awaits can complete.
+                # 关闭底层流：当生成器被关闭时（例如客户端断连），
+                # 将 HTTP 连接释放回连接池。
+                # 使用 anyio 的 CancelScope(shield=True) 避免被取消，让 await 能完成。
                 with anyio.CancelScope(shield=True):
                     if hasattr(model_response, "aclose"):
                         try:
@@ -1912,11 +1909,11 @@ class Router:
         initial_kwargs: dict,
     ) -> CustomStreamWrapper:
         """
-        Sync equivalent of _acompletion_streaming_iterator.
+        _acompletion_streaming_iterator 的同步版本。
 
-        Wraps a sync streaming response so that MidStreamFallbackError
-        (raised by CustomStreamWrapper.__next__) triggers the Router's
-        fallback chain instead of surfacing directly to the caller.
+        包装同步流式响应，使 MidStreamFallbackError（由
+        CustomStreamWrapper.__next__ 抛出）能触发 Router 的 fallback
+        链，而不会直接报给调用方。
         """
         from litellm.exceptions import MidStreamFallbackError
 
@@ -2038,24 +2035,24 @@ class Router:
         self, silent_model: str, messages: List[Any], **kwargs
     ):
         """
-        Run a silent experiment in the background.
+        在后台异步运行一次静默实验。
         """
         try:
-            # Prevent infinite recursion if silent model also has a silent model
+            # 防止无限递归：若静默模型本身又挂有静默模型，则直接返回
             if kwargs.get("metadata", {}).get("is_silent_experiment", False):
                 return
 
             messages = copy.deepcopy(messages)
 
             verbose_router_logger.info(
-                f"Starting silent experiment for model {silent_model}"
+                f"开始针对模型 {silent_model} 的静默实验"
             )
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
-            # Override model_group to correctly attribute metrics to the silent model
+            # 覆盖 model_group，保证指标归类到静默模型
             silent_kwargs["metadata"]["model_group"] = silent_model
 
-            # Trigger the silent request
+            # 触发静默请求
             await self.acompletion(
                 model=silent_model,
                 messages=cast(List[AllMessageValues], messages),
@@ -2063,7 +2060,7 @@ class Router:
             )
         except Exception as e:
             verbose_router_logger.error(
-                f"Silent experiment failed for model {silent_model}: {str(e)}"
+                f"针对模型 {silent_model} 的静默实验失败：{str(e)}"
             )
 
     async def _acompletion(  # noqa: PLR0915
@@ -2073,16 +2070,16 @@ class Router:
         CustomStreamWrapper,
     ]:
         """
-        - Get an available deployment
-        - call it with a semaphore over the call
-        - semaphore specific to it's rpm
-        - in the semaphore,  make a check against it's local rpm before running
+        - 获取一个可用的 deployment
+        - 用信号量（semaphore）并发保护调用
+        - 信号量与 deployment 的 rpm 一一对应
+        - 在信号量内部，执行前还会对本地 rpm 做一次预检查
         """
         model_name = None
         deployment = None
         _timeout_debug_deployment_dict = (
             {}
-        )  # this is a temporary dict to debug timeout issues
+        )  # 临时字典，用于调试超时问题
         try:
             input_kwargs_for_streaming_fallback = kwargs.copy()
             input_kwargs_for_streaming_fallback["model"] = model
@@ -2110,30 +2107,30 @@ class Router:
                 )
             )
 
-            # debug how often this deployment picked
+            # 记录当前 deployment 被选中的频率，便于调试
 
             self._track_deployment_metrics(
                 deployment=deployment, parent_otel_span=parent_otel_span
             )
 
-            # Check for silent model experiment
-            # Make a local copy of litellm_params to avoid mutating the Router's state
+            # 检查是否配置了静默模型实验
+            # 拷贝一份 litellm_params，避免修改 Router 的状态
             litellm_params = deployment["litellm_params"].copy()
             silent_model = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
-                # Mirroring traffic to a secondary model
-                # This is a silent experiment, so we don't want to block the primary request
+                # 镜像流量到第二个模型
+                # 这是静默实验，因此不能阻塞主请求
                 asyncio.create_task(
                     self._silent_experiment_acompletion(
                         silent_model=silent_model,
-                        messages=messages,  # Use messages instead of *args
+                        messages=messages,  # 使用 messages 而不是 *args
                         **kwargs,
                     )
                 )
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            kwargs.pop("silent_model", None)  # 确保 silent_model 也不残留在 kwargs 中
 
             model_name = litellm_params["model"]
 
@@ -2168,8 +2165,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前检查 rpm 是否超限
+                    - 若允许，则增加 rpm 计数（允许全局值更新，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment,
@@ -2186,7 +2183,7 @@ class Router:
 
                 response = await _response
 
-            ## CHECK CONTENT FILTER ERROR ##
+            ## 检查内容过滤（content filter）错误 ##
             if isinstance(response, ModelResponse):
                 _should_raise = self._should_raise_content_policy_error(
                     model=model, response=response, kwargs=kwargs
@@ -2202,7 +2199,7 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
-            # debug how often this deployment picked
+            # 记录 deployment 被选中的频率，便于调试
             self._track_deployment_metrics(
                 deployment=deployment,
                 response=response,
@@ -2225,7 +2222,7 @@ class Router:
                 "litellm_params", {}
             ).get("timeout", None)
             e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
-            # Set per-deployment num_retries on exception for retry logic
+            # 在异常上设置当前 deployment 的 num_retries，用于重试逻辑
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
@@ -2235,7 +2232,7 @@ class Router:
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
-            # Set per-deployment num_retries on exception for retry logic
+            # 在异常上设置当前 deployment 的 num_retries，用于重试逻辑
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
@@ -2247,7 +2244,7 @@ class Router:
         metadata_variable_name: Optional[str] = "metadata",
     ) -> None:
         """
-        Adds/updates to kwargs:
+        向 kwargs 添加或更新：
         - num_retries
         - litellm_trace_id
         - metadata
@@ -2265,12 +2262,12 @@ class Router:
         self, exception: Exception, deployment: dict
     ) -> None:
         """
-        Set num_retries from deployment litellm_params on the exception.
+        将 deployment 的 litellm_params 中配置的 num_retries 设置到异常上。
 
-        This allows the retry logic in async_function_with_retries to use
-        per-deployment retry settings instead of the global setting.
+        这使得 async_function_with_retries 中的重试逻辑能使用
+        deployment 级别的重试配置，而不是全局的默认值。
         """
-        # Only set if exception doesn't already have num_retries
+        # 仅在异常尚未设置 num_retries 时才设置
         if hasattr(exception, "num_retries") and exception.num_retries is not None:  # type: ignore
             return
 
@@ -2278,43 +2275,43 @@ class Router:
         dep_num_retries = litellm_params.get("num_retries")
         if dep_num_retries is not None:
             try:
-                exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
+                exception.num_retries = int(dep_num_retries)  # type: ignore  # 同时兼容 int 和 str
             except (ValueError, TypeError):
-                pass  # Skip if value can't be converted to int
+                pass  # 若无法转为 int，则跳过
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
     ) -> None:
         """
-        Adds default litellm params to kwargs, if set.
+        如果配置了默认的 litellm 参数，将其合并到 kwargs 中。
 
-        Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
+        根据 metadata_variable_name，选择插入为 "metadata" 或 "litellm_metadata"。
         """
-        # 1) copy your defaults and pull out metadata
+        # 1) 拷贝默认值，并取出其中的 metadata
         defaults = self.default_litellm_params.copy()
         metadata_defaults = defaults.pop("metadata", {}) or {}
 
-        # 2) add any non-metadata defaults that aren't already in kwargs
+        # 2) 将非 metadata 默认值中尚未出现在 kwargs 中的填入
         for key, value in defaults.items():
             if value is None:
                 continue
             kwargs.setdefault(key, value)
 
-        # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
+        # 3) 合并 metadata（根据 metadata_variable_name 决定插入到 "metadata" 还是 "litellm_metadata"）
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict, function_name: Optional[str] = None
     ) -> Deployment:
         """
-        Handle clientside credential
+        处理客户端凭据（clientside credential）。
         """
         model_info = deployment.get("model_info", {}).copy()
         litellm_params = deployment["litellm_params"].copy()
         dynamic_litellm_params = get_dynamic_litellm_params(
             litellm_params=litellm_params, request_kwargs=kwargs
         )
-        # Use deployment model_name as model_group for generating model_id
+        # 使用 deployment 的 model_name 作为 model_group，生成 model_id
         metadata_variable_name = _get_router_metadata_variable_name(
             function_name=function_name,
         )
@@ -2332,15 +2329,15 @@ class Router:
         )
         self.upsert_deployment(
             deployment=deployment_pydantic_obj
-        )  # add new deployment to router
+        )  # 将新 deployment 加入 router
         return deployment_pydantic_obj
 
     @staticmethod
     def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
         """
-        Merge tools from deployment litellm_params with request kwargs.
-        When both have tools, concatenate them (deployment tools first, then request tools).
-        tool_choice: use request value if provided, else deployment's.
+        将 deployment 的 litellm_params 中的 tools 与请求 kwargs 中的 tools 合并。
+        如果两者都有 tools，则拼接（deployment tools 在前，请求 tools 在后）。
+        tool_choice：优先用请求中的值，否则用 deployment 的。
         """
         dep_params_raw = deployment.get("litellm_params", {}) or {}
         if isinstance(dep_params_raw, dict):
@@ -2362,10 +2359,10 @@ class Router:
         function_name: Optional[str] = None,
     ) -> None:
         """
-        3 jobs:
-        - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
-        - Adds default litellm params to kwargs, if set.
-        - Merges tools from deployment with request (proxy-configured tools + request tools).
+        做三件事：
+        - 将选中的 deployment、model_info、api_base 写入 kwargs["metadata"]（用于日志）
+        - 如果配置了默认的 litellm 参数，将其合并到 kwargs
+        - 合并 deployment 和请求中的 tools（proxy 配置的 tools + 请求中的 tools）
         """
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
@@ -2394,7 +2391,7 @@ class Router:
             }
         )
 
-        ## DEPLOYMENT-LEVEL TAGS
+        ## DEPLOYMENT 级别的 TAGS
         deployment_tags = deployment.get("litellm_params", {}).get("tags")
         if deployment_tags:
             existing_tags = kwargs[metadata_variable_name].get("tags") or []
@@ -2404,7 +2401,7 @@ class Router:
                     merged_tags.append(tag)
             kwargs[metadata_variable_name]["tags"] = merged_tags
 
-        ## CREDENTIAL NAME AS TAG
+        ## 将凭据名称作为 TAG
         credential_name = deployment.get("litellm_params", {}).get(
             "litellm_credential_name"
         )
@@ -2427,18 +2424,18 @@ class Router:
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
-        Helper to get AsyncOpenAI or AsyncAzureOpenAI client that was created for the deployment
+        获取为当前 deployment 创建的 AsyncOpenAI 或 AsyncAzureOpenAI client 的辅助方法。
 
-        The same OpenAI client is re-used to optimize latency / performance in production
+        生产环境中会复用同一个 OpenAI client 以优化延迟/性能。
 
-        If dynamic api key is provided:
-            Do not re-use the client. Pass model_client=None. The OpenAI/ AzureOpenAI client will be recreated in the handler for the llm provider
+        如果传入了动态 api key：
+            则不复用 client，传 model_client=None。OpenAI/AzureOpenAI client 会在对应厂商的 handler 中重建。
         """
         potential_model_client = self._get_client(
             deployment=deployment, kwargs=kwargs, client_type="async"
         )
 
-        # check if provided keys == client keys #
+        # 检查传入的 key 是否与 client 的 key 一致 #
         dynamic_api_key = kwargs.get("api_key", None)
         if (
             dynamic_api_key is not None
@@ -2454,43 +2451,43 @@ class Router:
     def _get_stream_timeout(
         self, kwargs: dict, data: dict
     ) -> Optional[Union[float, int]]:
-        """Helper to get stream timeout from kwargs or deployment params"""
+        """从 kwargs 或 deployment 参数中获取流式超时的辅助方法。"""
         return (
-            kwargs.get("stream_timeout", None)  # the params dynamically set by user
+            kwargs.get("stream_timeout", None)  # 用户动态传入的参数
             or data.get(
                 "stream_timeout", None
-            )  # timeout set on litellm_params for this deployment
-            or self.stream_timeout  # timeout set on router
+            )  # deployment 的 litellm_params 上设置的超时
+            or self.stream_timeout  # router 上设置的超时
             or self.default_litellm_params.get("stream_timeout", None)
         )
 
     def _get_non_stream_timeout(
         self, kwargs: dict, data: dict
     ) -> Optional[Union[float, int]]:
-        """Helper to get non-stream timeout from kwargs or deployment params"""
+        """从 kwargs 或 deployment 参数中获取非流式超时的辅助方法。"""
         timeout = (
-            kwargs.get("timeout", None)  # the params dynamically set by user
-            or kwargs.get("request_timeout", None)  # the params dynamically set by user
+            kwargs.get("timeout", None)  # 用户动态传入的参数
+            or kwargs.get("request_timeout", None)  # 用户动态传入的参数
             or data.get(
                 "timeout", None
-            )  # timeout set on litellm_params for this deployment
+            )  # deployment 的 litellm_params 上设置的超时
             or data.get(
                 "request_timeout", None
-            )  # timeout set on litellm_params for this deployment
-            or self.timeout  # timeout set on router
+            )  # deployment 的 litellm_params 上设置的超时
+            or self.timeout  # router 上设置的超时
             or self.default_litellm_params.get("timeout", None)
         )
         return timeout
 
     def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
-        """Helper to get timeout from kwargs or deployment params"""
+        """从 kwargs 或 deployment 参数中获取超时时间的辅助方法。"""
         timeout: Optional[Union[float, int]] = None
         if kwargs.get("stream", False):
             timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
         if timeout is None:
             timeout = self._get_non_stream_timeout(
                 kwargs=kwargs, data=data
-            )  # default to this if no stream specific timeout set
+            )  # 若未设置流式专用超时，则默认使用非流式超时
         return timeout
 
     async def abatch_completion(
@@ -2500,11 +2497,11 @@ class Router:
         **kwargs,
     ):
         """
-        Async Batch Completion. Used for 2 scenarios:
-        1. Batch Process 1 request to N models on litellm.Router. Pass messages as List[Dict[str, str]] to use this
-        2. Batch Process N requests to M models on litellm.Router. Pass messages as List[List[Dict[str, str]]] to use this
+        异步批量 completion。支持两种场景：
+        1. 在 litellm.Router 上将 1 个请求批量分发到 N 个模型。此时把 messages 作为 List[Dict[str, str]] 传入。
+        2. 在 litellm.Router 上将 N 个请求批量分发到 M 个模型。此时把 messages 作为 List[List[Dict[str, str]]] 传入。
 
-        Example Request for 1 request to N models:
+        示例：1 个请求分发到 N 个模型：
         ```
             response = await router.abatch_completion(
                 models=["gpt-3.5-turbo", "groq-llama"],
@@ -2516,7 +2513,7 @@ class Router:
         ```
 
 
-        Example Request for N requests to M models:
+        示例：N 个请求分发到 M 个模型：
         ```
             response = await router.abatch_completion(
                 models=["gpt-3.5-turbo", "groq-llama"],
@@ -2527,13 +2524,13 @@ class Router:
             )
         ```
         """
-        ############## Helpers for async completion ##################
+        ############## 异步 completion 的辅助函数 ##################
 
         async def _async_completion_no_exceptions(
             model: str, messages: List[AllMessageValues], **kwargs
         ):
             """
-            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            对 self.async_completion 的包装器，捕获异常并将其作为结果返回
             """
             try:
                 return await self.acompletion(model=model, messages=messages, **kwargs)
@@ -2543,11 +2540,11 @@ class Router:
         async def _async_completion_no_exceptions_return_idx(
             model: str,
             messages: List[AllMessageValues],
-            idx: int,  # index of message this response corresponds to
+            idx: int,  # 该响应所对应的 message 的下标
             **kwargs,
         ):
             """
-            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            对 self.async_completion 的包装器，捕获异常并将其作为结果返回
             """
             try:
                 return (
@@ -2557,12 +2554,12 @@ class Router:
             except Exception as e:
                 return e, idx
 
-        ############## Helpers for async completion ##################
+        ############## 异步 completion 的辅助函数 ##################
 
         if isinstance(messages, list) and all(isinstance(m, dict) for m in messages):
             _tasks = []
             for model in models:
-                # add each task but if the task fails
+                # 逐个添加任务；即便某个任务失败也不影响其他任务
                 _tasks.append(_async_completion_no_exceptions(model=model, messages=messages, **kwargs))  # type: ignore
             response = await asyncio.gather(*_tasks)
             return response
@@ -2570,7 +2567,7 @@ class Router:
             _tasks = []
             for idx, message in enumerate(messages):
                 for model in models:
-                    # Request Number X, Model Number Y
+                    # 第 X 个请求，第 Y 个模型
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
                             model=model, idx=idx, messages=message, **kwargs  # type: ignore
@@ -2589,15 +2586,15 @@ class Router:
         self, model: str, messages: List[List[AllMessageValues]], **kwargs
     ):
         """
-        Async Batch Completion - Batch Process multiple Messages to one model_group on litellm.Router
+        异步批量 completion —— 在 litellm.Router 上将多条 message 批量发送到一个 model_group。
 
-        Use this for sending multiple requests to 1 model
+        适用于向同一个模型发送多个请求的场景。
 
-        Args:
-            model (List[str]): model group
-            messages (List[List[Dict[str, str]]]): list of messages. Each element in the list is one request
-            **kwargs: additional kwargs
-        Usage:
+        参数：
+            model (List[str]): 模型组
+            messages (List[List[Dict[str, str]]]): message 列表，列表中的每个元素代表一次请求
+            **kwargs: 其他参数
+        用法示例：
             response = await self.abatch_completion_one_model_multiple_requests(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -2611,7 +2608,7 @@ class Router:
             model: str, messages: List[AllMessageValues], **kwargs
         ):
             """
-            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            对 self.async_completion 的包装器，捕获异常并将其作为结果返回
             """
             try:
                 return await self.acompletion(model=model, messages=messages, **kwargs)
@@ -2620,7 +2617,7 @@ class Router:
 
         _tasks = []
         for message_request in messages:
-            # add each task but if the task fails
+            # 逐个添加任务；即便某个任务失败也不影响其他任务
             _tasks.append(
                 _async_completion_no_exceptions(
                     model=model, messages=message_request, **kwargs
@@ -2656,9 +2653,9 @@ class Router:
         **kwargs,
     ):
         """
-        model - List of comma-separated model names. E.g. model="gpt-4, gpt-3.5-turbo"
+        model —— 以逗号分隔的模型名列表。例如 model="gpt-4, gpt-3.5-turbo"
 
-        Returns fastest response from list of model names. OpenAI-compatible endpoint.
+        从多个模型中返回最先成功响应的那一个。是一个 OpenAI 兼容端点。
         """
         models = [m.strip() for m in model.split(",")]
 
@@ -2666,14 +2663,14 @@ class Router:
             model: str, messages: List[Dict[str, str]], stream: bool, **kwargs: Any
         ) -> Union[ModelResponse, CustomStreamWrapper, Exception]:
             """
-            Wrapper around self.acompletion that catches exceptions and returns them as a result
+            对 self.acompletion 的包装器，捕获异常并将其作为结果返回
             """
             try:
                 result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
                 return result
             except asyncio.CancelledError:
                 verbose_router_logger.debug(
-                    "Received 'task.cancel'. Cancelling call w/ model={}.".format(model)
+                    "收到 'task.cancel'，取消对 model={} 的调用。".format(model)
                 )
                 raise
             except Exception as e:
@@ -2687,17 +2684,17 @@ class Router:
                 result = await task
                 if isinstance(result, (ModelResponse, CustomStreamWrapper)):
                     verbose_router_logger.debug(
-                        "Received successful response. Cancelling other LLM API calls."
+                        "收到成功响应，取消其他所有正在进行的 LLM API 调用。"
                     )
-                    # If a desired response is received, cancel all other pending tasks
+                    # 一旦收到期望的响应，取消其他所有仍在等待的任务
                     for t in pending_tasks:
                         t.cancel()
                     return result
             except Exception:
-                # Ignore exceptions, let the loop handle them
+                # 忽略异常，交给外层循环处理
                 pass
             finally:
-                # Remove the task from pending tasks if it finishes
+                # 任务结束时将其从 pending tasks 中移除
                 try:
                     pending_tasks.remove(task)
                 except KeyError:
@@ -2711,7 +2708,7 @@ class Router:
             )
             pending_tasks.append(task)
 
-        # Await the first task to complete successfully
+        # 等待第一个成功完成的任务
         while pending_tasks:
             done, pending_tasks = await asyncio.wait(  # type: ignore
                 pending_tasks, return_when=asyncio.FIRST_COMPLETED
@@ -2720,14 +2717,14 @@ class Router:
                 result = await check_response(completed_task)
 
                 if result is not None:
-                    # Return the first successful result
+                    # 返回第一个成功的结果
                     result._hidden_params["fastest_response_batch_completion"] = True
                     return result
 
-        # If we exit the loop without returning, all tasks failed
+        # 如果循环结束还没有返回，说明所有任务都失败了
         raise Exception("All tasks failed")
 
-    ### SCHEDULER ###
+    ### 调度器（SCHEDULER） ###
 
     # fmt: off
 
@@ -2754,36 +2751,36 @@ class Router:
         **kwargs,
     ):
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
+        ### 构造队列中的 FLOW ITEM ###
         _request_id = str(uuid.uuid4())
         item = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+            priority=priority,  # 👈 设置请求优先级
+            request_id=_request_id,  # 👈 设置请求 ID
+            model_name=model,  # 👈 与 'Router' 保持一致
         )
-        ### [fin] ###
+        ### [完成] ###
 
-        ## ADDS REQUEST TO QUEUE ##
+        ## 将请求加入队列 ##
         await self.scheduler.add_request(request=item)
 
-        ## POLL QUEUE
+        ## 轮询队列
         end_time = time.monotonic() + self.timeout
         curr_time = time.monotonic()
-        poll_interval = self.scheduler.polling_interval  # poll every 3ms
+        poll_interval = self.scheduler.polling_interval  # 默认每 3ms 轮询一次
         make_request = False
 
         while curr_time < end_time:
             _healthy_deployments, _ = await self._async_get_healthy_deployments(
                 model=model, parent_otel_span=parent_otel_span
             )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
+            make_request = await self.scheduler.poll(  ## 轮询队列 ## ——有健康 deployment 或当前请求已处于队头时返回 True
                 id=item.request_id,
                 model_name=item.model_name,
                 health_deployments=_healthy_deployments,
             )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
+            if make_request:  ## 为 True 则发起请求
                 break
-            else:  ## ELSE -> loop till default_timeout
+            else:  ## 否则继续循环，直到达到 default_timeout
                 await asyncio.sleep(poll_interval)
                 curr_time = time.monotonic()
 
@@ -2801,7 +2798,7 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
+            # 抛出超时异常之前，先从调度器队列中清理该请求
             await self.scheduler.remove_request(
                 request_id=item.request_id, model_name=item.model_name
             )
@@ -2820,36 +2817,36 @@ class Router:
         kwargs: Dict[str, Any],
     ):
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
+        ### 构造队列中的 FLOW ITEM ###
         _request_id = str(uuid.uuid4())
         item = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+            priority=priority,  # 👈 设置请求优先级
+            request_id=_request_id,  # 👈 设置请求 ID
+            model_name=model,  # 👈 与 'Router' 保持一致
         )
-        ### [fin] ###
+        ### [完成] ###
 
-        ## ADDS REQUEST TO QUEUE ##
+        ## 将请求加入队列 ##
         await self.scheduler.add_request(request=item)
 
-        ## POLL QUEUE
+        ## 轮询队列
         end_time = time.monotonic() + self.timeout
         curr_time = time.monotonic()
-        poll_interval = self.scheduler.polling_interval  # poll every 3ms
+        poll_interval = self.scheduler.polling_interval  # 默认每 3ms 轮询一次
         make_request = False
 
         while curr_time < end_time:
             _healthy_deployments, _ = await self._async_get_healthy_deployments(
                 model=model, parent_otel_span=parent_otel_span
             )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
+            make_request = await self.scheduler.poll(  ## 轮询队列 ## ——有健康 deployment 或当前请求已处于队头时返回 True
                 id=item.request_id,
                 model_name=item.model_name,
                 health_deployments=_healthy_deployments,
             )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
+            if make_request:  ## 为 True 则发起请求
                 break
-            else:  ## ELSE -> loop till default_timeout
+            else:  ## 否则继续循环，直到达到 default_timeout
                 await asyncio.sleep(poll_interval)
                 curr_time = time.monotonic()
 
@@ -2866,7 +2863,7 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
+            # 抛出超时异常之前，先从调度器队列中清理该请求
             await self.scheduler.remove_request(
                 request_id=item.request_id, model_name=item.model_name
             )
@@ -2918,7 +2915,7 @@ class Router:
 
         litellm_model = data.get("model", None)
 
-        # litellm_agent/ prefix only strips the model name, no prompt_id needed
+        # litellm_agent/ 前缀仅用于剥离模型名称，不需要 prompt_id
         is_litellm_agent_model = isinstance(
             litellm_model, str
         ) and litellm_model.startswith("litellm_agent/")
@@ -2959,7 +2956,7 @@ class Router:
             prompt_label=prompt_label,
         )
 
-        # Filter out prompt management specific parameters from data before merging
+        # 合并前先从 data 中过滤掉 prompt management 专用的参数
         prompt_management_params = {
             "bitbucket_config",
             "dotprompt_config",
@@ -2981,7 +2978,7 @@ class Router:
         kwargs["prompt_label"] = prompt_label
 
         _model_list = self.get_model_list(model_name=model)
-        if _model_list is None or len(_model_list) == 0:  # if direct call to model
+        if _model_list is None or len(_model_list) == 0:  # 直接调用模型而非通过 Router
             kwargs.pop("original_function")
             return await litellm.acompletion(**kwargs)
 
@@ -3004,7 +3001,7 @@ class Router:
         model_name = ""
         try:
             verbose_router_logger.debug(
-                f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
+                f"进入 _image_generation() — model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
                 model=model,
@@ -3021,7 +3018,7 @@ class Router:
 
             self.total_calls[model_name] += 1
 
-            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            ### 特定 deployment 的调用前检查　### （例如在调用前更新 rpm；若该 deployment 已超限则抛出异常）
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
             response = litellm.image_generation(
@@ -3071,7 +3068,7 @@ class Router:
         model_name = model
         try:
             verbose_router_logger.debug(
-                f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
+                f"进入 _image_generation() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -3113,8 +3110,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -3133,7 +3130,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.aimage_generation(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.aimage_generation(model={model_name})\033[31m 异常 {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
@@ -3141,7 +3138,7 @@ class Router:
 
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
         """
-        Example Usage:
+        用法示例：
 
         ```
         from litellm import Router
@@ -3185,7 +3182,7 @@ class Router:
         model_name = model
         try:
             verbose_router_logger.debug(
-                f"Inside _atranscription()- model: {model}; kwargs: {kwargs}"
+                f"进入 _atranscription() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -3213,7 +3210,7 @@ class Router:
                 }
             )
 
-            ### CONCURRENCY-SAFE RPM CHECKS ###
+            ### 并发安全的 RPM 检查 ###
             rpm_semaphore = self._get_client(
                 deployment=deployment,
                 kwargs=kwargs,
@@ -3225,8 +3222,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -3245,7 +3242,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.atranscription(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.atranscription(model={model_name})\033[31m 异常 {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
@@ -3253,7 +3250,7 @@ class Router:
 
     async def aspeech(self, model: str, input: str, voice: str, **kwargs):
         """
-        Example Usage:
+        用法示例：
 
         ```
         from litellm import Router
@@ -3299,7 +3296,7 @@ class Router:
             for k, v in self.default_litellm_params.items():
                 if (
                     k not in kwargs
-                ):  # prioritize model-specific params > default router params
+                ):  # 模型级参数优先于路由器默认参数
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
@@ -3307,7 +3304,7 @@ class Router:
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs, client_type="async"
             )
-            # check if provided keys == client keys #
+            # 检查传入的 key 是否与客户端中的 key 一致 #
             dynamic_api_key = kwargs.get("api_key", None)
             if (
                 dynamic_api_key is not None
@@ -3362,7 +3359,7 @@ class Router:
         model_name = None
         try:
             verbose_router_logger.debug(
-                f"Inside _rerank()- model: {model}; kwargs: {kwargs}"
+                f"进入 _rerank() — model: {model}; kwargs: {kwargs}"
             )
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -3395,7 +3392,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.arerank(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.arerank(model={model_name})\033[31m 异常 {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
@@ -3417,7 +3414,7 @@ class Router:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            # pick the one that is available (lowest TPM/RPM)
+            # 选择一个可用的 deployment（TPM/RPM 最低的）
             deployment = self.get_available_deployment(
                 model=model,
                 messages=messages,
@@ -3428,12 +3425,12 @@ class Router:
             for k, v in self.default_litellm_params.items():
                 if (
                     k not in kwargs
-                ):  # prioritize model-specific params > default router params
+                ):  # 模型级参数优先于路由器默认参数
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
 
-            # call via litellm.completion()
+            # 通过 litellm.completion() 发起调用
             return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
         except Exception as e:
             raise e
@@ -3478,7 +3475,7 @@ class Router:
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
         try:
             verbose_router_logger.debug(
-                f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
+                f"进入 _atext_completion() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -3519,8 +3516,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -3539,7 +3536,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.atext_completion(model={model})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.atext_completion(model={model})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -3577,7 +3574,7 @@ class Router:
     async def _aadapter_completion(self, adapter_id: str, model: str, **kwargs):
         try:
             verbose_router_logger.debug(
-                f"Inside _aadapter_completion()- model: {model}; kwargs: {kwargs}"
+                f"进入 _aadapter_completion() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -3618,8 +3615,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -3638,7 +3635,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.aadapter_completion(model={model})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.aadapter_completion(model={model})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -3646,8 +3643,8 @@ class Router:
 
     async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
         """
-        Helper function to make a search API call through the router with load balancing and fallbacks.
-        Reuses the router's retry/fallback infrastructure.
+        通过 Router 发起 search API 调用的辅助函数，支持负载均衡与回退。
+        复用 Router 原有的重试/回退基础设施。
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
@@ -3661,8 +3658,8 @@ class Router:
         self, model: str, original_generic_function: Callable, **kwargs
     ):
         """
-        Helper function for search API calls - selects a search tool and calls the original function.
-        Called by async_function_with_fallbacks for each retry attempt.
+        search API 调用的辅助函数 ——选择一个 search 工具并调用原始函数。
+        由 async_function_with_fallbacks 在每次重试时调用。
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
@@ -3680,17 +3677,17 @@ class Router:
         **kwargs,
     ):
         """
-        Execute a guardrail with load balancing and fallbacks.
+        带负载均衡和回退地执行一个 guardrail。
 
-        Args:
-            guardrail_name: Name of the guardrail to execute
-            original_function: The guardrail's execution function (e.g., async_pre_call_hook)
-            **kwargs: Additional arguments passed to the guardrail
+        参数：
+            guardrail_name: 要执行的 guardrail 名称
+            original_function: guardrail 的执行函数（例如 async_pre_call_hook）
+            **kwargs: 传给 guardrail 的其他参数
 
-        Returns:
-            Result from the guardrail execution
+        返回：
+            guardrail 执行后的结果
         """
-        kwargs["model"] = guardrail_name  # For fallback system compatibility
+        kwargs["model"] = guardrail_name  # 为了兼容回退系统，那一套以 model 为键
         kwargs["original_generic_function"] = original_function
         kwargs["original_function"] = self._aguardrail_helper
         self._update_kwargs_before_fallbacks(
@@ -3699,7 +3696,7 @@ class Router:
             metadata_variable_name="litellm_metadata",
         )
         verbose_router_logger.debug(
-            f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
+            f"进入 aguardrail() — guardrail_name: {guardrail_name}; kwargs: {kwargs}"
         )
         response = await self.async_function_with_fallbacks(**kwargs)
         return response
@@ -3711,13 +3708,13 @@ class Router:
         **kwargs,
     ):
         """
-        Helper for aguardrail - selects a guardrail deployment and executes it.
-        Called by async_function_with_fallbacks for each retry attempt.
+        aguardrail 的辅助函数 ——选择一个 guardrail 部署并执行。
+        由 async_function_with_fallbacks 在每次重试时调用。
 
-        Args:
-            model: The guardrail_name (named 'model' for fallback system compatibility)
-            original_generic_function: The guardrail's execution function
-            **kwargs: Additional arguments
+        参数：
+            model: 实际是 guardrail_name（为保持与回退系统的占位符兼容而命名为 'model'）
+            original_generic_function: guardrail 的执行函数
+            **kwargs: 其他参数
         """
         guardrail_name = model
         selected_guardrail = self.get_available_guardrail(
@@ -3725,10 +3722,10 @@ class Router:
         )
 
         verbose_router_logger.debug(
-            f"Selected guardrail deployment: {selected_guardrail.get('litellm_params', {}).get('guardrail')}"
+            f"已选中的 guardrail 部署：{selected_guardrail.get('litellm_params', {}).get('guardrail')}"
         )
 
-        # Pass the selected guardrail config to the original function
+        # 将所选中的 guardrail 配置传递给原始函数
         kwargs["selected_guardrail"] = selected_guardrail
         response = await original_generic_function(**kwargs)
         return response
@@ -3738,13 +3735,13 @@ class Router:
         guardrail_name: str,
     ) -> "GuardrailTypedDict":
         """
-        Select a guardrail deployment using the router's load balancing strategy.
+        基于 Router 的负载均衡策略选择一个 guardrail 部署。
 
-        Args:
-            guardrail_name: Name of the guardrail to select
+        参数：
+            guardrail_name: 要选择的 guardrail 名称
 
-        Returns:
-            Selected guardrail configuration dict
+        返回：
+            选中的 guardrail 配置字典
         """
         from litellm.router_strategy.simple_shuffle import simple_shuffle
 
@@ -3758,7 +3755,7 @@ class Router:
         if len(healthy_deployments) == 1:
             return healthy_deployments[0]
 
-        # Use simple_shuffle for weighted selection
+        # 使用 simple_shuffle 做权重选择
         return cast(
             GuardrailTypedDict,
             simple_shuffle(
@@ -3772,7 +3769,7 @@ class Router:
         self, model: str, original_function: Callable, **kwargs
     ):
         """
-        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        通过 Router 发起通用 LLM API 调用的辅助函数，以便在任意接口上使用 litellm router 的重试/回退能力。
         """
         try:
             kwargs["model"] = model
@@ -3782,7 +3779,7 @@ class Router:
                 model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata"
             )
             verbose_router_logger.debug(
-                f"Inside ageneric_api_call_with_fallbacks() - model: {model}; kwargs: {kwargs}"
+                f"进入 ageneric_api_call_with_fallbacks() — model: {model}; kwargs: {kwargs}"
             )
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
@@ -3803,18 +3800,18 @@ class Router:
         self, kwargs: Dict[str, Any], model: str, model_name: str
     ) -> Dict[str, Any]:
         """
-        Add the deployment model to the endpoint for LLM passthrough route.
+        在 LLM passthrough 路由下，把 deployment 实际模型名填入 endpoint 中。
 
-        e.g for bedrock invoke users can pass endpoint as /model/special-bedrock-model/invoke
-          it should be actually sent as /model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke
+        例如 bedrock invoke 的用户可能传入 endpoint 为 /model/special-bedrock-model/invoke，
+        实际向下游发送时应将其替换为 /model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke。
         """
         if "endpoint" in kwargs and kwargs["endpoint"]:
-            # For provider-specific endpoints, strip the provider prefix from model_name
-            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            # 对于特定厂商的 endpoint，需从 model_name 中剥除厂商前缀
+            # 例如 "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
             from litellm import get_llm_provider
 
             try:
-                # get_llm_provider returns (model_without_prefix, provider, api_key, api_base)
+                # get_llm_provider 返回的是 (去前缀模型名, provider, api_key, api_base)
                 stripped_model_name, _, _, _ = get_llm_provider(
                     model=model_name,
                     custom_llm_provider=kwargs.get("custom_llm_provider"),
@@ -3822,7 +3819,7 @@ class Router:
                 )
                 replacement_model_name = stripped_model_name
             except Exception:
-                # If get_llm_provider fails, fall back to using model_name as-is
+                # 若 get_llm_provider 失败，则回退为直接使用 model_name
                 replacement_model_name = model_name
 
             kwargs["endpoint"] = kwargs["endpoint"].replace(
@@ -3834,7 +3831,7 @@ class Router:
         self, model: str, original_generic_function: Callable, **kwargs
     ):
         """
-        Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+        通过 Router 发起通用 LLM API 调用的辅助函数，以便在任意接口上使用 litellm router 的重试/回退能力。
         """
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
@@ -3865,7 +3862,7 @@ class Router:
                 kwargs=kwargs, model=model, model_name=model_name
             )
             
-            # Get custom_llm_provider from deployment params
+            # 从 deployment 参数中获取 custom_llm_provider
             try:
                 custom_llm_provider = data.get("custom_llm_provider")
                 _, inferred_custom_llm_provider, _, _ = get_llm_provider(
@@ -3876,13 +3873,13 @@ class Router:
             except Exception:
                 custom_llm_provider = None
             
-            # Build response kwargs
+            # 构造下游响应调用的 kwargs
             response_kwargs = {
                 **data,
                 "caching": self.cache_responses,
                 **kwargs,
             }
-            # Only set custom_llm_provider if it's not None
+            # 仅在非 None 时才设置 custom_llm_provider
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
             
@@ -3899,8 +3896,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -3920,7 +3917,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"ageneric_api_call_with_fallbacks(model={model})\033[31m Exception {str(e)}\033[0m"
+                f"ageneric_api_call_with_fallbacks(model={model})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -3930,13 +3927,13 @@ class Router:
         self, model: str, original_function: Callable, **kwargs
     ):
         """
-        Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
-        Args:
-            model: The model to use
-            original_function: The handler function to call (e.g., litellm.completion)
-            **kwargs: Additional arguments to pass to the handler function
-        Returns:
-            The response from the handler function
+        通过 Router 发起通用 LLM API 调用，以便在任意接口上使用 litellm router 的重试/回退能力。
+        参数：
+            model: 要使用的模型
+            original_function: 实际要调用的处理函数（例如 litellm.completion）
+            **kwargs: 传给处理函数的其他参数
+        返回：
+            处理函数的调用结果
         """
         handler_name = original_function.__name__
         metadata_variable_name = _get_router_metadata_variable_name(
@@ -3944,7 +3941,7 @@ class Router:
         )
         try:
             verbose_router_logger.debug(
-                f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+                f"进入 _generic_api_call() — handler: {handler_name}, model: {model}; kwargs: {kwargs}"
             )
             self._update_kwargs_before_fallbacks(
                 model=model,
@@ -3966,13 +3963,13 @@ class Router:
 
             self.total_calls[model_name] += 1
 
-            # For passthrough routes, use the actual model from deployment
-            # and swap model name in endpoint if present
+            # 对于 passthrough 路由，需要用 deployment 的真实模型名，
+            # 并将 endpoint 中的逻辑模型名替换为真实模型名
             if "endpoint" in kwargs and kwargs["endpoint"]:
                 kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
             kwargs["model"] = model_name
 
-            # Perform pre-call checks for routing strategy
+            # 执行路由策略的调用前检查
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
             try:
@@ -4001,7 +3998,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"{handler_name}(model={model})\033[31m Exception {str(e)}\033[0m"
+                f"{handler_name}(model={model})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -4028,7 +4025,7 @@ class Router:
         model_name = None
         try:
             verbose_router_logger.debug(
-                f"Inside embedding()- model: {model}; kwargs: {kwargs}"
+                f"进入 embedding() — model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
                 model=model,
@@ -4042,7 +4039,7 @@ class Router:
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs, client_type="sync"
             )
-            # check if provided keys == client keys #
+            # 检查传入的 key 是否与客户端中的 key 一致 #
             dynamic_api_key = kwargs.get("api_key", None)
             if (
                 dynamic_api_key is not None
@@ -4055,7 +4052,7 @@ class Router:
 
             self.total_calls[model_name] += 1
 
-            ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
+            ### 特定 deployment 的调用前检查　### （例如在调用前更新 rpm；若该 deployment 已超限则抛出异常）
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
             response = litellm.embedding(
@@ -4074,7 +4071,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.embedding(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.embedding(model={model_name})\033[31m 异常 {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
@@ -4109,7 +4106,7 @@ class Router:
         model_name = None
         try:
             verbose_router_logger.debug(
-                f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
+                f"进入 _aembedding() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -4137,7 +4134,7 @@ class Router:
                 }
             )
 
-            ### CONCURRENCY-SAFE RPM CHECKS ###
+            ### 并发安全的 RPM 检查 ###
             rpm_semaphore = self._get_client(
                 deployment=deployment,
                 kwargs=kwargs,
@@ -4149,8 +4146,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -4169,13 +4166,13 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.info(
-                f"litellm.aembedding(model={model_name})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.aembedding(model={model_name})\033[31m 异常 {str(e)}\033[0m"
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
 
-    #### FILES API ####
+    #### 文件（FILES）API ####
     async def acreate_file(
         self,
         model: str,
@@ -4209,7 +4206,7 @@ class Router:
             from litellm.router_utils.common_utils import add_model_file_id_mappings
 
             verbose_router_logger.debug(
-                f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
+                f"进入 _atext_completion() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             healthy_deployments = await self.async_get_healthy_deployments(
@@ -4238,17 +4235,17 @@ class Router:
                 )
                 self.total_calls[model_name] += 1
 
-                ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-                # For DB/config deployments, use provider from deployment params
+                ## 将文件中的模型名替换为所选中 deployment 的模型名 ##
+                # 对于配置/数据库下发的 deployment，优先使用 deployment 参数中的 provider
                 custom_llm_provider = data.get("custom_llm_provider")
                 stripped_model, inferred_custom_llm_provider, _, _ = get_llm_provider(
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                # Preserve explicitly stored provider, fallback to inferred
+                # 保留显式存储的 provider，其次才回退到推断值
                 custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
-                ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
+                ## 将文件中的模型名替换为所选中 deployment 的模型名 ##
                 purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
                 file = cast(Optional[FileTypes], kwargs.get("file"))
                 if not file or not purpose:
@@ -4268,7 +4265,7 @@ class Router:
                     kwargs_copy["file"] = file
                 if (
                     "gcs_bucket_name" in data
-                ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
+                ):  # TODO: 待有更好的处理方式后移除：问题在于 create_file 调用需要将 gcs_bucket_name 传给 router，但它并不会自动出现在这里
                     kwargs_copy.setdefault("litellm_metadata", {})[
                         "gcs_bucket_name"
                     ] = data["gcs_bucket_name"]
@@ -4293,8 +4290,8 @@ class Router:
                 ):
                     async with rpm_semaphore:
                         """
-                        - Check rpm limits before making the call
-                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                        - 调用前先检查 rpm 限额
+                        - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                         """
                         await self.async_routing_strategy_pre_call_checks(
                             deployment=deployment, parent_otel_span=parent_otel_span
@@ -4324,7 +4321,7 @@ class Router:
             responses = await asyncio.gather(*tasks)
 
             if len(responses) == 0:
-                raise Exception("No healthy deployments found.")
+                raise Exception("未找到任何健康的 deployment。")
 
             model_file_id_mapping = add_model_file_id_mappings(
                 healthy_deployments=healthy_deployments, responses=responses
@@ -4336,34 +4333,34 @@ class Router:
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.acreate_file(model={model}, {kwargs})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
 
-    #### VECTOR STORES API ####
+    #### 向量存储（VECTOR STORES）API ####
     async def avector_store_create(
         self,
         model: Union[str, None],
         **kwargs,
     ):
         """
-        Create a vector store for a specific model.
+        为指定模型创建一个向量存储。
 
-        Args:
-            model: Model name from router config
-            **kwargs: Vector store creation parameters
+        参数：
+            model: router 配置中的模型名
+            **kwargs: 向量存储创建参数
 
-        Returns:
+        返回：
             VectorStoreCreateResponse
         """
         try:
-            # If model is None, use the factory function approach (direct SDK call)
+            # 如果 model 为 None，则采用工厂函数方式（直接 SDK 调用）
             if model is None:
                 from litellm.vector_stores.main import acreate
 
-                # Use the factory function to handle the call
+                # 用工厂函数来处理本次调用
                 factory_fn = self.factory_function(
                     acreate, call_type="avector_store_create"
                 )
@@ -4392,7 +4389,7 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            # Get custom provider from deployment params
+            # 从 deployment 参数中获取 custom provider
             custom_llm_provider = data.get("custom_llm_provider")
             _, inferred_custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"],
@@ -4438,7 +4435,7 @@ class Router:
             return response
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm.avector_store_create(model={model})\033[31m Exception {str(e)}\033[0m"
+                f"litellm.avector_store_create(model={model})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -4446,14 +4443,14 @@ class Router:
 
     def _override_vector_store_methods_for_router(self):
         """
-        Override factory-generated vector store methods with router-aware implementations.
-        This is called after _initialize_vector_store_endpoints() to ensure our custom
-        methods that handle deployment selection and credential injection are used instead
-        of the generic factory-generated ones.
+        用 router 感知的实现覆盖由工厂生成的向量存储相关方法。
+        在 _initialize_vector_store_endpoints() 之后调用，确保所使用的是
+        我们自定义的、能够处理 deployment 选择和凭证注入的方法，
+        而不是通用的工厂生成方法。
         """
-        # Store references to the custom methods defined above
-        # These methods handle proper routing through deployments
-        pass  # The methods are already defined as instance methods above
+        # 保留对上面定义的自定义方法的引用
+        # 这些方法已经处理好了经由 deployment 的路由逻辑
+        pass  # 这些方法已在上方作为实例方法定义
 
     async def acreate_batch(
         self,
@@ -4493,7 +4490,7 @@ class Router:
     ) -> LiteLLMBatch:
         try:
             verbose_router_logger.debug(
-                f"Inside _acreate_batch()- model: {model}; kwargs: {kwargs}"
+                f"进入 _acreate_batch() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -4515,7 +4512,7 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
+            ## 将 custom provider 设为所选中 deployment 的值 ##
             custom_llm_provider = data.get("custom_llm_provider")
             _, inferred_custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"],
@@ -4544,8 +4541,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -4565,7 +4562,7 @@ class Router:
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acreate_batch(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
+                f"litellm._acreate_batch(model={model}, {kwargs})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -4577,9 +4574,9 @@ class Router:
         **kwargs,
     ) -> LiteLLMBatch:
         """
-        Iterate through all models in a model group to check for batch
+        遍历模型组中的所有模型，查找对应的 batch。
 
-        Future Improvement - cache the result.
+        未来改进 —— 缓存查找结果。
         """
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
@@ -4596,7 +4593,7 @@ class Router:
             else:
                 filtered_model_list = self.get_model_list()
             if filtered_model_list is None:
-                raise Exception("Router not yet initialized.")
+                raise Exception("Router 尚未初始化。")
 
             receieved_exceptions = []
 
@@ -4609,10 +4606,10 @@ class Router:
                     custom_llm_provider = data.get("custom_llm_provider")
                     if model is None:
                         raise Exception(
-                            f"Model not found in litellm_params for deployment: {model_name}"
+                            f"deployment 的 litellm_params 中未找到 model：{model_name}"
                         )
-                    # Update kwargs with the current model name or any other model-specific adjustments
-                    ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
+                    # 根据当前模型名，更新 kwargs 以包含模型专有的调整
+                    ## 将 custom provider 设为所选中 deployment 的值 ##
                     if not custom_llm_provider:
                         _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
                             model=model
@@ -4639,7 +4636,7 @@ class Router:
                     receieved_exceptions.append(e)
                     return None
 
-            # Check all models in parallel
+            # 并行查询所有模型
             if (
                 filtered_model_list is not None
                 and isinstance(filtered_model_list, list)
@@ -4659,9 +4656,9 @@ class Router:
                     cast(DeploymentTypedDict, filtered_model_list)
                 )
             else:
-                raise Exception("No healthy deployments found.")
+                raise Exception("未找到任何健康的 deployment。")
 
-            # Check for successful responses and handle exceptions
+            # 检查成功响应并处理异常
             if results is not None:
                 if isinstance(results, LiteLLMBatch):
                     return results
@@ -4670,11 +4667,11 @@ class Router:
                         if isinstance(result, LiteLLMBatch):
                             return result
 
-            # If no valid Batch response was found, raise the first encountered exception
+            # 如果未找到有效的 Batch 响应，就抛出遇到的第一个异常
             if receieved_exceptions:
-                raise receieved_exceptions[0]  # Raising the first exception encountered
+                raise receieved_exceptions[0]  # 抛出遇到的第一个异常
 
-            # If no exceptions were encountered, raise a generic exception
+            # 如果没有收集到异常，则抛出一个通用异常
             raise Exception(
                 "Unable to find batch in any model. Received errors - {}".format(
                     receieved_exceptions
@@ -4697,7 +4694,7 @@ class Router:
         **kwargs,
     ) -> LiteLLMBatch:
         """
-        Cancel a batch through the router with proper model-to-provider mapping.
+        通过 router 取消一个 batch，同时维护正确的模型到 provider 的映射。
         """
         try:
             kwargs["model"] = model
@@ -4732,7 +4729,7 @@ class Router:
     ) -> LiteLLMBatch:
         try:
             verbose_router_logger.debug(
-                f"Inside _acancel_batch()- model: {model}; kwargs: {kwargs}"
+                f"进入 _acancel_batch() — model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
@@ -4754,7 +4751,7 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
+            ## 将 custom provider 设为所选中 deployment 的值 ##
             custom_llm_provider = data.get("custom_llm_provider")
             _, inferred_custom_llm_provider, _, _ = get_llm_provider(
                 model=data["model"],
@@ -4783,8 +4780,8 @@ class Router:
             ):
                 async with rpm_semaphore:
                     """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    - 调用前先检查 rpm 限额
+                    - 如果通过检查，自增 rpm 计数（修改全局值，并发安全）
                     """
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
@@ -4804,7 +4801,7 @@ class Router:
             return response  # type: ignore
         except Exception as e:
             verbose_router_logger.exception(
-                f"litellm._acancel_batch(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
+                f"litellm._acancel_batch(model={model}, {kwargs})\033[31m 异常 {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
@@ -4816,23 +4813,23 @@ class Router:
         **kwargs,
     ):
         """
-        Return all the batches across all deployments of a model group.
+        返回一个模型组下所有 deployment 的 batch。
         """
 
         filtered_model_list = self.get_model_list(model_name=model)
         if filtered_model_list is None:
-            raise Exception("Router not yet initialized.")
+            raise Exception("Router 尚未初始化。")
 
         async def try_retrieve_batch(model: DeploymentTypedDict):
             try:
-                # Update kwargs with the current model name or any other model-specific adjustments
+                # 根据当前模型名，更新 kwargs 以包含模型专有的调整
                 return await litellm.alist_batches(
                     **{**model["litellm_params"], **kwargs}
                 )
             except Exception:
                 return None
 
-        # Check all models in parallel
+        # 并行查询所有模型
         results = await asyncio.gather(
             *[try_retrieve_batch(model) for model in filtered_model_list]
         )
@@ -4847,19 +4844,19 @@ class Router:
 
         for result in results:
             if result is not None:
-                ## check batch id
+                ## 检查 batch id
                 if final_results["first_id"] is None and hasattr(result, "first_id"):
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
                 final_results["data"].extend(result.data)  # type: ignore
 
-                ## check 'has_more'
+                ## 检查 'has_more'
                 if getattr(result, "has_more", False) is True:
                     final_results["has_more"] = True
 
         return final_results
 
-    #### PASSTHROUGH API ####
+    #### 透传（PASSTHROUGH）API ####
 
     async def _pass_through_moderation_endpoint_factory(
         self,
@@ -4867,7 +4864,7 @@ class Router:
         custom_llm_provider: Optional[str] = None,
         **kwargs,
     ):
-        # update kwargs with model_group
+        # 将 model_group 添加进 kwargs
         self._update_kwargs_before_fallbacks(
             model=kwargs.get("model", ""),
             kwargs=kwargs,
@@ -4994,13 +4991,13 @@ class Router:
         ] = "assistants",
     ):
         """
-        Creates appropriate wrapper functions for different API call types.
+        针对不同的 API 调用类型，创建合适的包装函数。
 
-        Returns:
-            - A synchronous function for synchronous call types
-            - An asynchronous function for asynchronous call types
+        返回：
+            - 对于同步调用类型，返回同步函数
+            - 对于异步调用类型，返回异步函数
         """
-        # Handle synchronous call types
+        # 处理同步调用类型
         if call_type in (
             "responses",
             "generate_content",
@@ -5075,7 +5072,7 @@ class Router:
 
             return vector_store_file_sync_wrapper
 
-        # Handle asynchronous call types
+        # 处理异步调用类型
         async def async_wrapper(
             custom_llm_provider: Optional[str] = None,
             client: Optional[Any] = None,
@@ -5218,22 +5215,22 @@ class Router:
         **kwargs,
     ):
         """
-        Initialize the Vector Store API endpoints on the router.
+        在 router 上初始化向量存储（Vector Store）API 端点。
 
-        If a model is provided in kwargs, use model-based routing to get
-        the deployment credentials. Otherwise, call the original function directly.
+        如果 kwargs 中传入了 model，则使用基于 model 的路由来获取 deployment 凭证；
+        否则直接调用原始函数。
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
 
-        # If model is provided, use generic API call with fallbacks for proper routing
+        # 若传入 model，则使用通用 API 调用+回退的逻辑走正确路由
         if kwargs.get("model"):
             return await self._ageneric_api_call_with_fallbacks(
                 original_function=original_function,
                 **kwargs,
             )
 
-        # Otherwise, call the original function directly
+        # 否则直接调用原始函数
         return await original_function(**kwargs)
 
     async def _init_containers_api_endpoints(
@@ -5243,10 +5240,10 @@ class Router:
         **kwargs,
     ):
         """
-        Initialize the Containers API endpoints on the router.
+        在 router 上初始化 Containers API 端点。
 
-        Container operations don't need model-based routing, so we call the
-        original function directly with the custom_llm_provider.
+        Container 相关操作不需要基于 model 的路由，所以我们直接带上 custom_llm_provider
+        调用原始函数。
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -5258,9 +5255,10 @@ class Router:
         **kwargs,
     ):
         """
-        Initialize the Responses API endpoints on the router.
+        在 router 上初始化 Responses API 端点。
 
-        GET, DELETE, CANCEL Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        GET/DELETE/CANCEL 类 Responses API 请求会将 model_id 编码在 response_id 中，
+        此函数会解码 response_id 并将 model 设置为解出的 model_id。
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -5281,14 +5279,14 @@ class Router:
         **kwargs,
     ):
         """
-        Initialize the Interactions API endpoints on the router.
+        在 router 上初始化 Interactions API 端点。
 
-        GET, DELETE, CANCEL Interactions API Requests don't need model-based routing,
-        so we call the original function directly with the custom_llm_provider.
+        GET/DELETE/CANCEL 类 Interactions API 请求不需要基于 model 的路由，
+        所以我们直接带上 custom_llm_provider 调用原始函数。
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
-        # Default to gemini for interactions API
+        # Interactions API 默认使用 gemini
         if "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = "gemini"
         return await original_function(**kwargs)
@@ -5300,7 +5298,7 @@ class Router:
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ):
-        """Internal helper function to pass through the assistants endpoint"""
+        """透传到 assistants 端点的内部辅助函数"""
         if custom_llm_provider is None:
             if self.assistants_config is not None:
                 custom_llm_provider = self.assistants_config["custom_llm_provider"]
@@ -5313,7 +5311,7 @@ class Router:
             custom_llm_provider=custom_llm_provider, client=client, **kwargs
         )
 
-    #### [END] ASSISTANTS API ####
+    #### [结束] ASSISTANTS API ####
 
     async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
         self,
@@ -5327,9 +5325,9 @@ class Router:
         kwargs: dict,
     ):
         """
-        Common utilities for async_function_with_fallbacks
+        async_function_with_fallbacks 的公共工具方法
         """
-        verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
+        verbose_router_logger.debug(f"异常堆栈：{traceback.format_exc()}")
         original_exception = e
         fallback_model_group = None
         original_model_group: Optional[str] = kwargs.get("model")  # type: ignore
@@ -5349,8 +5347,8 @@ class Router:
         if "fallback_depth" not in input_kwargs:
             input_kwargs["fallback_depth"] = 0
 
-        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
-        # Skip for error types that have their own dedicated fallback handlers
+        # 基于 order 的回退：把更高 order 层级添加到回退列表前面
+        # 对于有专用回退处理器的异常类型，跳过此逻辑
         _skip_order_fallback = isinstance(
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
@@ -5368,23 +5366,23 @@ class Router:
         }
         order_values: list = sorted(_order_set)
         if len(order_values) > 1 and not _skip_order_fallback:
-            # Determine which order levels have already been tried
+            # 判断哪些 order 层级已经尝试过
             current_target = kwargs.get("_target_order")
             skip_up_to = (
                 current_target if current_target is not None else order_values[0]
             )
-            # Build order-based fallback entries (skip already-tried levels)
+            # 构建基于 order 的回退条目（跳过已试过的层级）
             order_fallback_entries: List = [
                 {"model": original_model_group, "_target_order": o}
                 for o in order_values
                 if o > skip_up_to
             ]
-            # Get external fallbacks — handle both standard and non-standard formats
+            # 获取外部回退 —— 同时处理标准和非标准格式
             external_fallback_group: Optional[List] = None
             if fallbacks is not None and model_group is not None:
                 if _check_non_standard_fallback_format(fallbacks=fallbacks):
-                    # Non-standard formats (e.g. ["claude-3-haiku"] or
-                    # [{"model": "...", "messages": [...]}]) are passed through directly
+                    # 非标准格式（例如 ["claude-3-haiku"] 或
+                    # [{"model": "...", "messages": [...]}]）直接透传
                     external_fallback_group = fallbacks
                 else:
                     external_fallback_group, generic_idx = get_fallback_model_group(
@@ -5394,7 +5392,7 @@ class Router:
                     if external_fallback_group is None and generic_idx is not None:
                         external_fallback_group = fallbacks[generic_idx]["*"]
 
-            # Combined list: order fallbacks first, then external
+            # 合并后的列表：order 回退在前，外部回退在后
             combined_fallbacks = order_fallback_entries + (
                 external_fallback_group or []
             )
@@ -5413,9 +5411,9 @@ class Router:
                 return response
 
         try:
-            verbose_router_logger.info("Trying to fallback b/w models")
+            verbose_router_logger.info("尝试在模型之间回退")
 
-            # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
+            # 检查是否使用了客户端定义的回退（例如 fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"]，或 fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]）
             is_non_standard_fallback_format = _check_non_standard_fallback_format(
                 fallbacks=fallbacks
             )
@@ -5464,8 +5462,8 @@ class Router:
                         model_group, context_window_fallbacks, fallbacks
                     )
                     verbose_router_logger.info(
-                        msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
-                        to fallbacks, if available.{}".format(
+                        msg="捕获到 'ContextWindowExceededError'，但未配置 context_window_fallback，\
+                        如有 fallbacks 则回退到其上。{}".format(
                             error_message
                         )
                     )
@@ -5499,32 +5497,32 @@ class Router:
                         model_group, content_policy_fallbacks, fallbacks
                     )
                     verbose_router_logger.info(
-                        msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
-                        to fallbacks, if available.{}".format(
+                        msg="捕获到 'ContentPolicyViolationError'，但未配置 content_policy_fallback，\
+                        如有 fallbacks 则回退到其上。{}".format(
                             error_message
                         )
                     )
 
                     e.message += "\n{}".format(error_message)
             if fallbacks is not None and model_group is not None:
-                verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
+                verbose_router_logger.debug(f"进入 model fallbacks 分支：{fallbacks}")
                 (
                     fallback_model_group,
                     generic_fallback_idx,
                 ) = get_fallback_model_group(
-                    fallbacks=fallbacks,  # if fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
+                    fallbacks=fallbacks,  # 例如 fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
                     model_group=cast(str, model_group),
                 )
-                ## if none, check for generic fallback
+                ## 若未命中具体配置，再查看是否有通用回退
                 if fallback_model_group is None and generic_fallback_idx is not None:
                     fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
                 if fallback_model_group is None:
                     verbose_router_logger.info(
-                        f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
+                        f"未为原始模型组 model_group={model_group} 找到可用的回退模型组。Fallbacks={fallbacks}"
                     )
                     if hasattr(original_exception, "message"):
-                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"  # type: ignore
+                        original_exception.message += f"未为原始模型组 model_group={model_group} 找到可用的回退模型组。Fallbacks={fallbacks}"  # type: ignore
                     raise original_exception
 
                 input_kwargs.update(
@@ -5543,7 +5541,7 @@ class Router:
         except Exception as new_exception:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             verbose_router_logger.error(
-                "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
+                "litellm.router.py::async_function_with_fallbacks() — 执行回退时发生错误 — {}\n{}\n\n调试信息：\n当前冷却中的 Deployments={}".format(
                     str(new_exception),
                     traceback.format_exc(),
                     await _async_get_cooldown_deployments_with_debug_info(
@@ -5555,7 +5553,7 @@ class Router:
             fallback_failure_exception_str = str(new_exception)
 
         if hasattr(original_exception, "message"):
-            # add the available fallbacks to the exception
+            # 将可用的回退信息追加到异常信息中
             original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
                 model_group,
                 fallback_model_group,
@@ -5572,8 +5570,8 @@ class Router:
     @tracer.wrap()
     async def async_function_with_fallbacks(self, *args, **kwargs):
         """
-        Try calling the function_with_retries
-        If it fails after num_retries, fall back to another model group
+        先尝试调用 function_with_retries；
+        如果在 num_retries 轮重试后仍失败，则回退到另一个模型组。
         """
         model_group: Optional[str] = kwargs.get("model")
         disable_fallbacks: Optional[bool] = kwargs.pop("disable_fallbacks", False)
@@ -5603,7 +5601,7 @@ class Router:
             else:
                 response = await self.async_function_with_retries(*args, **kwargs)
             if verbose_router_logger.isEnabledFor(logging.DEBUG):
-                verbose_router_logger.debug(f"Async Response: {response}")
+                verbose_router_logger.debug(f"异步响应：{response}")
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=0,
@@ -5630,12 +5628,12 @@ class Router:
         content_policy_fallbacks: Optional[List] = None,
     ):
         """
-        Helper function to raise a litellm Error for mock testing purposes.
+        辅助函数：用于 mock 测试时主动抛出 litellm 错误。
 
-        Raises:
-            litellm.InternalServerError: when `mock_testing_fallbacks=True` passed in request params
-            litellm.ContextWindowExceededError: when `mock_testing_context_fallbacks=True` passed in request params
-            litellm.ContentPolicyViolationError: when `mock_testing_content_policy_fallbacks=True` passed in request params
+        抛出异常的情况：
+            litellm.InternalServerError: 请求参数中传入 `mock_testing_fallbacks=True` 时
+            litellm.ContextWindowExceededError: 请求参数中传入 `mock_testing_context_fallbacks=True` 时
+            litellm.ContentPolicyViolationError: 请求参数中传入 `mock_testing_content_policy_fallbacks=True` 时
         """
         mock_testing_params = MockRouterTestingParams.from_kwargs(kwargs)
         if (
@@ -5670,7 +5668,7 @@ class Router:
 
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
-        verbose_router_logger.debug("Inside async function with retries.")
+        verbose_router_logger.debug("进入 async_function_with_retries。")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
@@ -5680,14 +5678,14 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
-        # Support per-request model_group_retry_policy override (from key/team settings)
+        # 支持按请求级别覆盖 model_group_retry_policy（可来自 key/team 的设置）
         model_group_retry_policy = kwargs.pop(
             "model_group_retry_policy", self.model_group_retry_policy
         )
         model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
-        ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
+        ## 将 model group 大小写入 metadata ——用于 model_group_rate_limit_error 追踪
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
         if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
             model_list = self.get_model_list(model_name=_metadata["model_group"])
@@ -5695,18 +5693,18 @@ class Router:
                 _metadata.update({"model_group_size": len(model_list)})
 
         verbose_router_logger.debug(
-            f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
+            f"异步函数重试：original_function={original_function}, num_retries={num_retries}"
         )
-        ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
+        ## 将重试追踪信息写入 metadata ——用于耗费日志的重试追踪
         _metadata["attempted_retries"] = 0
         _metadata["max_retries"] = (
-            num_retries  # Updated after overrides in exception handler
+            num_retries  # 在异常处理分支中被覆盖后再更新
         )
         try:
             self._handle_mock_testing_rate_limit_error(
                 model_group=model_group, kwargs=kwargs
             )
-            # if the function call is successful, no exception will be raised and we'll break out of the loop
+            # 若调用成功，不会抛出异常，从而跳出循环
             response = await self.make_call(original_function, *args, **kwargs)
             response = add_retry_headers_to_response(
                 response=response, attempted_retries=0, max_retries=None
@@ -5722,7 +5720,7 @@ class Router:
             ):
                 num_retries = deployment_num_retries
             """
-            Retry Logic
+            重试逻辑
             """
             (
                 _healthy_deployments,
@@ -5732,17 +5730,17 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
 
-            # Check retry policy FIRST, before should_retry_this_error
-            # This allows retry policies to override the healthy deployments check
+            # 在 should_retry_this_error 之前先检查 retry policy
+            # 这样 retry policy 可以覆盖“有无健康 deployment”的检查
             _retry_policy_applies = False
             if self.retry_policy is not None or model_group_retry_policy is not None:
-                # get num_retries from retry policy
-                # Use the model_group captured at the start of the function, or get it from metadata
-                # kwargs.get("model") at this point is the deployment model, not the model_group
+                # 从 retry policy 中取 num_retries
+                # 优先使用函数开头捕获到的 model_group，其次从 metadata 或 kwargs 中取
+                # 此时 kwargs.get("model") 已经是具体 deployment 的模型名，而不是模型组名
                 _model_group_for_retry_policy = (
                     model_group or _metadata.get("model_group") or kwargs.get("model")
                 )
-                # Use per-request model_group_retry_policy if provided, otherwise use self
+                # 如果请求级别传入了 model_group_retry_policy 则优先使用，否则使用 router 实例自带的
                 _retry_policy_retries = _get_num_retries_from_retry_policy(
                     exception=original_exception,
                     model_group=_model_group_for_retry_policy,
@@ -5753,8 +5751,8 @@ class Router:
                     num_retries = _retry_policy_retries
                     _retry_policy_applies = True
 
-            # raises an exception if this error should not be retries
-            # Skip this check if retry policy applies (retry policy takes precedence)
+            # 若该错误不应重试，则直接抛出异常
+            # 若 retry policy 已生效，则跳过这一检查（retry policy 优先）
             if not _retry_policy_applies:
                 self.should_retry_this_error(
                     error=e,
@@ -5764,19 +5762,19 @@ class Router:
                     regular_fallbacks=fallbacks,
                     content_policy_fallbacks=content_policy_fallbacks,
                 )
-            # Update max_retries after overrides (deployment_num_retries / retry_policy)
+            # 在经过 deployment_num_retries / retry_policy 覆盖之后更新 max_retries
             _metadata["max_retries"] = num_retries
 
-            ## LOGGING
+            ## 日志记录
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             else:
                 raise
 
             verbose_router_logger.debug(
-                f"Retrying request with num_retries: {num_retries}"
+                f"即将重试请求，num_retries={num_retries}"
             )
-            # decides how long to sleep before retry
+            # 决定重试前要 sleep 多久
             retry_after = self._time_to_sleep_before_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
@@ -5789,14 +5787,14 @@ class Router:
 
             for current_attempt in range(num_retries):
                 try:
-                    # Update retry tracking metadata before each retry attempt
+                    # 每次重试前更新重试追踪信息
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
-                    # if the function call is successful, no exception will be raised and we'll break out of the loop
+                    # 若调用成功，不会抛出异常，从而跳出循环
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(
                         response
-                    ):  # async errors are often returned as coroutines
+                    ):  # 异步错误通常以 coroutine 形式返回
                         response = await response
 
                     response = add_retry_headers_to_response(
@@ -5807,11 +5805,11 @@ class Router:
                     return response
 
                 except Exception as e:
-                    # Always track the latest error so we raise the most
-                    # recent exception instead of the first one.
+                    # 始终记录最新遇到的错误，这样最终抛出的是最后一次失败的异常，
+                    # 而不是最初的那一次。
                     original_exception = e
 
-                    ## LOGGING
+                    ## 日志记录
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
                     _model: Optional[str] = kwargs.get("model")  # type: ignore
@@ -5826,10 +5824,9 @@ class Router:
                     else:
                         _healthy_deployments = []
 
-                    # Check if this error is non-retryable (e.g., 400 context
-                    # window exceeded). If so, raise immediately instead of
-                    # continuing the retry loop. Respect retry policy
-                    # precedence - only check when no retry policy applies.
+                    # 检查本次错误是否不可重试（例如 400 context window exceeded）。
+                    # 若不可重试，则立即抛出异常而不继续重试循环。
+                    # 同时尊重 retry policy 的优先级——仅在 retry policy 不适用时才做此检查。
                     if not _retry_policy_applies:
                         try:
                             self.should_retry_this_error(
@@ -5854,11 +5851,11 @@ class Router:
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)
-                # current_attempt is 0-indexed (0 to num_retries-1), so after loop completion
-                # it represents the last attempt index. The actual number of retries attempted
-                # is current_attempt + 1, which equals num_retries when all retries are exhausted.
-                # We've already verified num_retries > 0 before entering the loop, so current_attempt
-                # will always be set (never None) when we reach this point.
+                # current_attempt 是从 0 开始的索引（0 到 num_retries-1），所以循环结束后
+                # 它表示最后一次尝试的索引。实际已重试次数 = current_attempt + 1，
+                # 当所有重试用尽时它正好等于 num_retries。
+                # 因为在进入循环前已经验证 num_retries > 0，所以走到这里时
+                # current_attempt 一定会被赋值，不会为 None。
                 actual_retries_attempted = (
                     current_attempt + 1 if current_attempt is not None else num_retries
                 )
@@ -5868,7 +5865,7 @@ class Router:
 
     async def make_call(self, original_function: Any, *args, **kwargs):
         """
-        Handler for making a call to the .completion()/.embeddings()/etc. functions.
+        调用 .completion()/.embeddings()/等函数的统一入口。
         """
         model_group = kwargs.get("model")
         response = original_function(*args, **kwargs)
@@ -5876,7 +5873,7 @@ class Router:
             response
         ):
             response = await response
-        ## PROCESS RESPONSE HEADERS
+        ## 处理响应头
         response = await self.set_response_headers(
             response=response, model_group=model_group
         )
@@ -5887,10 +5884,10 @@ class Router:
         self, kwargs: dict, model_group: Optional[str] = None
     ):
         """
-        Helper function to raise a mock litellm.RateLimitError error for testing purposes.
+        辅助函数：用于测试时主动抛出模拟的 litellm.RateLimitError 错误。
 
-        Raises:
-            litellm.RateLimitError error when `mock_testing_rate_limit_error=True` passed in request params
+        抛出异常的情况：
+            请求参数中传入 `mock_testing_rate_limit_error=True` 时抛出 litellm.RateLimitError
         """
         mock_testing_rate_limit_error: Optional[bool] = kwargs.pop(
             "mock_testing_rate_limit_error", None
@@ -5909,7 +5906,7 @@ class Router:
             and mock_testing_rate_limit_error is True
         ):
             verbose_router_logger.info(
-                f"litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model={model_group}"
+                f"litellm.router.py::_mock_rate_limit_error() — 为 model={model_group} 抛出模拟的 RateLimitError"
             )
             raise litellm.RateLimitError(
                 model=model_group,
@@ -5928,12 +5925,12 @@ class Router:
         regular_fallbacks: Optional[List] = None,
     ):
         """
-        1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
-        2. raise an exception for ContentPolicyViolationError if content_policy_fallbacks is not None
+        1. 若 context_window_fallbacks 不为 None，碰到 ContextWindowExceededError 时抛出异常
+        2. 若 content_policy_fallbacks 不为 None，碰到 ContentPolicyViolationError 时抛出异常
 
-        2. raise an exception for RateLimitError if
-            - there are no fallbacks
-            - there are no healthy deployments in the same model group
+        2. 碰到 RateLimitError 时，如果满足以下任一条件则抛出：
+            - 没有配置 fallbacks
+            - 同一模型组内没有健康的 deployment
         """
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
@@ -5943,7 +5940,7 @@ class Router:
         if all_deployments is not None and isinstance(all_deployments, list):
             _num_all_deployments = len(all_deployments)
 
-        ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR / CONTENT POLICY VIOLATION ERROR w/ fallbacks available / Bad Request Error
+        ### 判断是否为 RateLimit / ContextWindowExceeded / ContentPolicyViolation（且已配置 fallbacks）/ BadRequest 等错误
         if (
             isinstance(error, litellm.ContextWindowExceededError)
             and context_window_fallbacks is not None
@@ -5958,43 +5955,42 @@ class Router:
 
         status_code = getattr(error, "status_code", None)
         if status_code is not None and not litellm._should_retry(status_code):
-            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
+            # 401/403 是特殊情况：如果多个 deployment 可用则允许重试（在下方处理）
             if status_code not in (401, 403):
                 raise error
 
         if isinstance(error, litellm.NotFoundError):
             raise error
-        # Error we should only retry if there are other deployments
+        # 仅在有其他 deployment 可用时才重试的错误
         if isinstance(error, openai.RateLimitError):
             if (
-                _num_healthy_deployments <= 0  # if no healthy deployments
-                and regular_fallbacks is not None  # and fallbacks available
+                _num_healthy_deployments <= 0  # 如果没有健康的 deployment
+                and regular_fallbacks is not None  # 且没有配置 fallbacks
                 and len(regular_fallbacks) > 0
             ):
-                raise error  # then raise the error
+                raise error  # 则抛出异常
 
         if isinstance(error, openai.AuthenticationError):
             """
-            - if other deployments available -> retry
-            - else -> raise error
+            - 如果该模型组还有其他 deployment，则重试
+            - 否则直接抛出异常
             """
             if (
                 _num_all_deployments <= 1
-            ):  # if there is only 1 deployment for this model group then don't retry
-                raise error  # then raise error
+            ):  # 若该模型组只有 1 个 deployment 则不重试
+                raise error  # 抛出异常
 
-        # Do not retry if there are no healthy deployments
-        # just raise the error
-        if _num_healthy_deployments <= 0:  # if no healthy deployments
+        # 如果没有健康的 deployment，直接抛出异常
+        if _num_healthy_deployments <= 0:  # 没有健康的 deployment
             raise error
 
         return True
 
     def function_with_fallbacks(self, *args, **kwargs):
         """
-        Sync wrapper for async_function_with_fallbacks
+        async_function_with_fallbacks 的同步包装器。
 
-        Wrapped to reduce code duplication and prevent bugs.
+        包装的目的是减少重复代码、防止维护时出现 bug。
         """
         return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
 
@@ -6004,11 +6000,11 @@ class Router:
         model_group: Optional[str] = None,
     ) -> Optional[List[str]]:
         """
-        Returns the list of fallback models to use for a given model group
+        返回指定模型组对应的回退模型列表。
 
-        If no fallback model group is found, returns None
+        如果未找到对应的回退模型组，返回 None。
 
-        Example:
+        示例：
             fallbacks = [{"gpt-3.5-turbo": ["gpt-4"]}, {"gpt-4o": ["gpt-3.5-turbo"]}]
             model_group = "gpt-3.5-turbo"
             returns: ["gpt-4"]
@@ -6017,7 +6013,7 @@ class Router:
             return None
 
         fallback_model_group: Optional[List[str]] = None
-        for item in fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+        for item in fallbacks:  # 例如 [{"gpt-3.5-turbo": ["gpt-4"]}]
             if list(item.keys())[0] == model_group:
                 fallback_model_group = item[model_group]
                 break
@@ -6025,7 +6021,7 @@ class Router:
 
     def _get_first_default_fallback(self) -> Optional[str]:
         """
-        Returns the first model from the default_fallbacks list, if it exists.
+        如果 default_fallbacks 存在，返回其中的第一个模型。
         """
         if self.fallbacks is None:
             return None
@@ -6045,14 +6041,14 @@ class Router:
         all_deployments: Optional[List] = None,
     ) -> Union[int, float]:
         """
-        Calculate back-off, then retry
+        计算退避时间，然后重试。
 
-        It should instantly retry only when:
-            1. there are healthy deployments in the same model group
-            2. there are fallbacks for the completion call
+        只有在下面两种情形下才应立即重试：
+            1. 同一个模型组中还有健康的 deployment
+            2. completion 调用配置了 fallbacks
         """
 
-        ## base case - single deployment
+        ## 基础情形 —— 只有 1 个 deployment
         if all_deployments is not None and len(all_deployments) == 1:
             pass
         elif (
@@ -6085,17 +6081,17 @@ class Router:
 
         return timeout
 
-    ### HELPER FUNCTIONS
+    ### 辅助函数
 
     async def deployment_callback_on_success(
         self,
-        kwargs,  # kwargs to completion
-        completion_response,  # response from completion
+        kwargs,  # completion 的 kwargs
+        completion_response,  # completion 返回的响应
         start_time,
-        end_time,  # start/end time
+        end_time,  # 开始/结束时间
     ):
         """
-        Track remaining tpm/rpm quota for model in model_list
+        追踪 model_list 中每个模型剩余的 tpm/rpm 额度
         """
         from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -6110,8 +6106,8 @@ class Router:
             else:
                 deployment_name = kwargs["litellm_params"]["metadata"].get(
                     "deployment", None
-                )  # stable name - works for wildcard routes as well
-                # Get model_group and id from kwargs like the sync version does
+                )  # 稳定名称，即便对于通配符路由也能正确工作
+                # 和同步版本一样，从 kwargs 中获取 model_group 和 id
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
@@ -6132,25 +6128,25 @@ class Router:
                         deployment=deployment_info,
                         received_model_name=model_group,
                     )
-                    # get tpm/rpm from deployment info
+                    # 从 deployment 信息中获取 tpm/rpm
                     tpm = deployment_info.get("tpm", None)
                     rpm = deployment_info.get("rpm", None)
 
-                    ## check tpm/rpm in litellm_params
+                    ## 检查 litellm_params 中的 tpm/rpm
                     tpm_litellm_params = deployment_info.litellm_params.tpm
                     rpm_litellm_params = deployment_info.litellm_params.rpm
 
-                    ## check tpm/rpm in model_info
+                    ## 检查 model_info 中的 tpm/rpm
                     tpm_model_info = deployment_model_info.get("tpm", None)
                     rpm_model_info = deployment_model_info.get("rpm", None)
 
-                # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
+                # 不管是否设置了 TPM/RPM 限额，都始终追踪 deployment 的成功次数，供冷却逻辑使用
                 increment_deployment_successes_for_current_minute(
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
 
-                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                ## 如果全为 None，则返回 —— 未设置 tpm/rpm 的模型无需追踪当前用量
                 if (
                     tpm is None
                     and rpm is None
@@ -6165,20 +6161,20 @@ class Router:
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
 
                 # ------------
-                # Setup values
+                # 准备各种值
                 # ------------
                 dt = get_utc_datetime()
                 current_minute = dt.strftime(
                     "%H-%M"
-                )  # use the same timezone regardless of system clock
+                )  # 无论系统时区如何，统一使用 UTC 时间
 
                 tpm_key = RouterCacheEnum.TPM.value.format(
                     id=id, current_minute=current_minute, model=deployment_name
                 )
                 # ------------
-                # Update usage
+                # 更新用量
                 # ------------
-                # update cache
+                # 更新缓存
                 pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
                 ## TPM
@@ -6211,7 +6207,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.debug(
-                "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
+                "litellm.router.Router::deployment_callback_on_success() — 发生异常：{}".format(
                     str(e)
                 )
             )
@@ -6225,11 +6221,11 @@ class Router:
         end_time,  # start/end time
     ) -> Optional[str]:
         """
-        Tracks the number of successes for a deployment in the current minute (using in-memory cache)
+        使用内存缓存追踪当前分钟内某个 deployment 的成功次数。
 
-        Returns:
-        - key: str - The key used to increment the cache
-        - None: if no key is found
+        返回：
+        - key: str，用于自增缓存的 key
+        - None：未找到 key 时
         """
         id = None
         if kwargs["litellm_params"].get("metadata") is None:
@@ -6260,20 +6256,20 @@ class Router:
         end_time,  # start/end time
     ) -> bool:
         """
-        2 jobs:
-        - Tracks the number of failures for a deployment in the current minute (using in-memory cache)
-        - Puts the deployment in cooldown if it exceeds the allowed fails / minute
+        该方法有两个职责：
+        - 使用内存缓存追踪当前分钟内某个 deployment 的失败次数
+        - 若超过每分钟允许的失败次数，将该 deployment 置于冷却状态
 
-        Returns:
-        - True if the deployment should be put in cooldown
-        - False if the deployment should not be put in cooldown
+        返回：
+        - True：应将该 deployment 置于冷却状态
+        - False：不应将该 deployment 置于冷却状态
         """
-        verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
+        verbose_router_logger.debug("Router：进入 'deployment_callback_on_failure'")
         try:
             exception = kwargs.get("exception", None)
             exception_status = getattr(exception, "status_code", "")
 
-            # Cache litellm_params to avoid repeated dict lookups
+            # 缓存 litellm_params，避免重复的字典查找
             litellm_params = kwargs.get("litellm_params", {})
             _model_info = litellm_params.get("model_info", {})
 
@@ -6281,7 +6277,7 @@ class Router:
                 original_exception=exception
             )
 
-            # Determine cooldown time with priority: deployment config > response header > router default
+            # 确定冷却时间，优先级从高到低：deployment 配置 > 响应头 > router 默认值
             deployment_cooldown = litellm_params.get("cooldown_time", None)
 
             header_cooldown = None
@@ -6290,10 +6286,10 @@ class Router:
                     response_headers=exception_headers
                 )
             ##############################################
-            # Logic to determine cooldown time
-            # 1. Check if a cooldown time is set in the deployment config
-            # 2. Check if a cooldown time is set in the response header
-            # 3. If no cooldown time is set, use the router default cooldown time
+            # 冷却时间的决策逻辑
+            # 1. 优先查看 deployment 配置中是否设置了冷却时间
+            # 2. 其次查看响应头中是否返回了冷却时间
+            # 3. 都没有时则使用 router 的默认冷却时间
             ##############################################
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
@@ -6316,12 +6312,12 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                )  # setting deployment_id in cooldown deployments
+                )  # 将 deployment_id 写入冷却清单
 
                 return result
             else:
                 verbose_router_logger.debug(
-                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. No model_info found."
+                    "Router：未找到 model_info，退出 'deployment_callback_on_failure' 且未进入冷却。"
                 )
                 return False
 
@@ -6332,11 +6328,11 @@ class Router:
         self, kwargs, completion_response: Optional[Any], start_time, end_time
     ):
         """
-        Update RPM usage for a deployment
+        更新 deployment 的 RPM 使用量
         """
         deployment_name = kwargs["litellm_params"]["metadata"].get(
             "deployment", None
-        )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
+        )  # 兼容通配符路由 ——返回的是当初传给 `litellm.completion` 的原始名称
         model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
         model_info = kwargs["litellm_params"].get("model_info", {}) or {}
         id = model_info.get("id", None)
@@ -6349,7 +6345,7 @@ class Router:
         dt = get_utc_datetime()
         current_minute = dt.strftime(
             "%H-%M"
-        )  # use the same timezone regardless of system clock
+        )  # 无论系统时区如何，统一使用 UTC 时间
 
         ## RPM
         rpm_key = RouterCacheEnum.RPM.value.format(
@@ -6366,27 +6362,27 @@ class Router:
         self, kwargs: dict
     ) -> Literal["metadata", "litellm_metadata"]:
         """
-        Helper to return what the "metadata" field should be called in the request data
+        辅助方法：返回请求数据中“元数据字段”应该使用的名称。
 
-        - New endpoints return `litellm_metadata`
-        - Old endpoints return `metadata`
+        - 新端点返回 `litellm_metadata`
+        - 旧端点返回 `metadata`
 
-        Context:
-        - LiteLLM used `metadata` as an internal field for storing metadata
-        - OpenAI then started using this field for their metadata
-        - LiteLLM is now moving to using `litellm_metadata` for our metadata
+        背景：
+        - LiteLLM 最初使用 `metadata` 作为内部存储元数据的字段
+        - 之后 OpenAI 开始用该字段保存它们的元数据
+        - 现在 LiteLLM 已逐步切换为使用 `litellm_metadata` 来保存我们自己的元数据
         """
         return get_metadata_variable_name_from_kwargs(kwargs)
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
-        When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
+        发生重试或回退时，记录刚刚失败的模型调用细节 —— 类似 Sentry 的 breadcrumb。
         """
         try:
             _metadata_var = (
                 "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
             )
-            # Log failed model as the previous model
+            # 将失败的模型记录为“上一个模型”
             previous_model = {
                 "exception_type": type(e).__name__,
                 "exception_string": str(e),
@@ -6396,7 +6392,7 @@ class Router:
                 v,
             ) in (
                 kwargs.items()
-            ):  # log everything in kwargs except the old previous_models value - prevent nesting
+            ):  # 除了旧的 previous_models 值以外，将 kwargs 中全部东西写入日志——避免嵌套
                 if k not in [_metadata_var, "messages", "original_function"]:
                     previous_model[k] = v
                 elif k == _metadata_var and isinstance(v, dict):
@@ -6405,7 +6401,7 @@ class Router:
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
 
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
+            # 检查 self.previous_models 的长度，超过 3 时移除最前面那个
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
@@ -6419,10 +6415,10 @@ class Router:
         self, deployment_id: str, parent_otel_span: Optional[Span]
     ) -> int:
         """
-        Update deployment rpm for that minute
+        更新当前分钟内某个 deployment 的 rpm。
 
-        Returns:
-        - int: request count
+        返回：
+        - int：当前请求计数
         """
         rpm_key = deployment_id
 
@@ -6433,12 +6429,12 @@ class Router:
             request_count = 1
             self.cache.set_cache(
                 key=rpm_key, value=request_count, local_only=True, ttl=60
-            )  # only store for 60s
+            )  # 只保存 60 秒
         else:
             request_count += 1
             self.cache.set_cache(
                 key=rpm_key, value=request_count, local_only=True
-            )  # don't change existing ttl
+            )  # 不修改现有的 ttl
 
         return request_count
 
@@ -6455,11 +6451,10 @@ class Router:
         self, model: str, response: ModelResponse, kwargs: dict
     ) -> bool:
         """
-        Determines if a content policy error should be raised.
+        判断是否应抛出 content policy 错误。
 
-        Only raised if a fallback is available.
-
-        Else, original response is returned.
+        仅在存在可用的回退方案时才抛出。
+        否则直接返回原始响应。
         """
         if response.choices and len(response.choices) > 0:
             if response.choices[0].finish_reason != "content_filter":
@@ -6469,21 +6464,21 @@ class Router:
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
 
-        ### ONLY RAISE ERROR IF CP FALLBACK AVAILABLE ###
+        ### 仅当存在 content policy fallback 时才抛出异常 ###
         if content_policy_fallbacks is not None:
             fallback_model_group = None
-            for item in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+            for item in content_policy_fallbacks:  # 例如 [{"gpt-3.5-turbo": ["gpt-4"]}]
                 if list(item.keys())[0] == model:
                     fallback_model_group = item[model]
                     break
 
             if fallback_model_group is not None:
                 return True
-        elif self._has_default_fallbacks():  # default fallbacks set
+        elif self._has_default_fallbacks():  # 设置了默认回退
             return True
 
         verbose_router_logger.debug(
-            "Content Policy Error occurred. No available fallbacks. Returning original response. model={}, content_policy_fallbacks={}".format(
+            "碰到 Content Policy 错误，但无可用回退，返回原始响应。model={}, content_policy_fallbacks={}".format(
                 model, content_policy_fallbacks
             )
         )
@@ -6516,10 +6511,10 @@ class Router:
         self, model: str, parent_otel_span: Optional[Span]
     ) -> Tuple[List[Dict], List[Dict]]:
         """
-        Returns Tuple of:
+        返回一个元组：
         - Tuple[List[Dict], List[Dict]]:
-            1. healthy_deployments: list of healthy deployments
-            2. all_deployments: list of all deployments
+            1. healthy_deployments：健康 deployment 的列表
+            2. all_deployments：所有 deployment 的列表
         """
         _all_deployments: list = []
         try:
@@ -6544,15 +6539,15 @@ class Router:
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
         """
-        Mimics 'async_routing_strategy_pre_call_checks'
+        模仿 'async_routing_strategy_pre_call_checks' 的同步版本。
 
-        Ensures consistent update rpm implementation for 'usage-based-routing-v2'
+        用于 'usage-based-routing-v2' 中保持 rpm 更新逻辑的一致性。
 
-        Returns:
+        返回：
         - None
 
-        Raises:
-        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits
+        抛出：
+        - RateLimit 异常：如果 deployment 超出其 tpm/rpm 限额
         """
         for _callback in litellm.callbacks:
             if isinstance(_callback, CustomLogger):
@@ -6565,22 +6560,22 @@ class Router:
         logging_obj: Optional[LiteLLMLogging] = None,
     ):
         """
-        For usage-based-routing-v2, enables running rpm checks before the call is made, inside the semaphore.
+        用于 usage-based-routing-v2：在信号量内、发起调用前执行 rpm 检查。
 
-        -> makes the calls concurrency-safe, when rpm limits are set for a deployment
+        -> 当为 deployment 设置了 rpm 限额时，可以保证调用的并发安全。
 
-        Returns:
+        返回：
         - None
 
-        Raises:
-        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits
+        抛出：
+        - RateLimit 异常：如果 deployment 超出其 tpm/rpm 限额
         """
         for _callback in litellm.callbacks:
             if isinstance(_callback, CustomLogger):
                 try:
                     await _callback.async_pre_call_check(deployment, parent_otel_span)
                 except litellm.RateLimitError as e:
-                    ## LOG FAILURE EVENT
+                    ## 记录失败事件
                     if logging_obj is not None:
                         asyncio.create_task(
                             logging_obj.async_failure_handler(
@@ -6593,7 +6588,7 @@ class Router:
                         threading.Thread(
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
-                        ).start()  # log response
+                        ).start()  # 记录响应
                     _set_cooldown_deployments(
                         litellm_router_instance=self,
                         exception_status=e.status_code,
@@ -6603,7 +6598,7 @@ class Router:
                     )
                     raise e
                 except Exception as e:
-                    ## LOG FAILURE EVENT
+                    ## 记录失败事件
                     if logging_obj is not None:
                         asyncio.create_task(
                             logging_obj.async_failure_handler(
@@ -6612,11 +6607,11 @@ class Router:
                                 end_time=time.time(),
                             )
                         )
-                        ## LOGGING
+                        ## 日志
                         threading.Thread(
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
-                        ).start()  # log response
+                        ).start()  # 记录响应
                     raise e
 
     async def async_callback_filter_deployments(
@@ -6629,15 +6624,15 @@ class Router:
         logging_obj: Optional[LiteLLMLogging] = None,
     ):
         """
-        For usage-based-routing-v2, enables running rpm checks before the call is made, inside the semaphore.
+        用于 usage-based-routing-v2：在信号量内、发起调用前执行 rpm 检查。
 
-        -> makes the calls concurrency-safe, when rpm limits are set for a deployment
+        -> 当为 deployment 设置了 rpm 限额时，可以保证调用的并发安全。
 
-        Returns:
+        返回：
         - None
 
-        Raises:
-        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits
+        抛出：
+        - RateLimit 异常：如果 deployment 超出其 tpm/rpm 限额
         """
         returned_healthy_deployments = healthy_deployments
         for _callback in litellm.callbacks:
@@ -6653,7 +6648,7 @@ class Router:
                         )
                     )
                 except Exception as e:
-                    ## LOG FAILURE EVENT
+                    ## 记录失败事件
                     if logging_obj is not None:
                         asyncio.create_task(
                             logging_obj.async_failure_handler(
@@ -6662,24 +6657,24 @@ class Router:
                                 end_time=time.time(),
                             )
                         )
-                        ## LOGGING
+                        ## 日志
                         threading.Thread(
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
-                        ).start()  # log response
+                        ).start()  # 记录响应
                     raise e
         return returned_healthy_deployments
 
     def _generate_model_id(self, model_group: str, litellm_params: dict):
         """
-        Helper function to consistently generate the same id for a deployment
+        辅助函数：为同一个 deployment 一致性地生成相同的 id。
 
-        - create a string from all the litellm params
-        - hash
-        - use hash as id
+        - 把所有 litellm 参数拼成一个字符串
+        - 做哈希
+        - 使用哈希值作为 id
         """
-        # Optimized: Use list and join instead of string concatenation in loop
-        # This avoids creating many temporary string objects (O(n) vs O(n²) complexity)
+        # 性能优化：在循环中使用 list + join 代替字符串拼接
+        # 避免创建大量临时字符串对象（复杂度 O(n) 而非 O(n²)）
         parts = [model_group]
         for k, v in litellm_params.items():
             if isinstance(k, str):
@@ -6709,13 +6704,13 @@ class Router:
         _model_info: dict,
     ) -> Optional[Deployment]:
         """
-        Create a deployment object and add it to the model list
+        创建一个 deployment 对象，并将其加入 model_list。
 
-        If the deployment is not active for the current environment, it is ignored
+        如果该 deployment 在当前环境下未启用，则会被忽略。
 
-        Returns:
-        - Deployment: The deployment object
-        - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
+        返回：
+        - Deployment：创建的 deployment 对象
+        - None：当该 deployment 在当前环境下未启用时（即 litellm_params 中配置了 'supported_environments'）
         """
         try:
             litellm_params: LiteLLM_Params = LiteLLM_Params(**_litellm_params)
@@ -6729,7 +6724,7 @@ class Router:
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
 
-            ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+            ## 将 model info 注册到 litellm 的 model cost 映射表中
             model_id = deployment.model_info.id
             if model_id is not None:
                 litellm.register_model(
@@ -6738,18 +6733,17 @@ class Router:
                     }
                 )
 
-            ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+            ## 旧版模型注册逻辑 ## 保留以避免破坏兼容性
             _model_name = deployment.litellm_params.model
             if deployment.litellm_params.custom_llm_provider is not None:
                 _model_name = (
                     deployment.litellm_params.custom_llm_provider + "/" + _model_name
                 )
 
-            # For the shared backend key, strip custom pricing fields so that
-            # one deployment's pricing overrides don't pollute another
-            # deployment sharing the same backend model name.
-            # Each deployment's full pricing is already stored under its
-            # unique model_id above.
+            # 对于共享的后端模型 key，剥离 custom pricing 字段，
+            # 防止一个 deployment 的定价覆盖污染到使用相同后端模型名的
+            # 另一个 deployment。
+            # 每个 deployment 的完整定价信息已经通过上面其唯一 model_id 保存。
             _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
@@ -6760,25 +6754,25 @@ class Router:
                 }
             )
 
-            ## Check if LLM Deployment is allowed for this deployment
+            ## 检查该 LLM Deployment 在当前环境下是否被允许
             if (
                 self.deployment_is_active_for_environment(deployment=deployment)
                 is not True
             ):
                 verbose_router_logger.warning(
-                    f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
+                    f"忽略 deployment {deployment.model_name}，因为它在当前环境下未启用：{deployment.model_info['supported_environments']}"
                 )
                 return None
 
-            # Validate tag_regex patterns BEFORE adding the deployment so we never
-            # have partially-initialised router state if a pattern is invalid.
+            # 在添加 deployment 之前先校验 tag_regex 的正则表达式，
+            # 这样一来，即使某个 pattern 无效，也不会让 router 处于部分初始化的状态。
             _tag_regex = deployment.litellm_params.get("tag_regex") or []
             for pattern in _tag_regex:
                 try:
                     re.compile(pattern)
                 except re.error as exc:
                     raise ValueError(
-                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"model '{deployment.model_name}' 的 tag_regex 中存在无效正则表达式："
                         f"{pattern!r} — {exc}"
                     ) from exc
 
@@ -6793,7 +6787,7 @@ class Router:
         except Exception as e:
             if self.ignore_invalid_deployments:
                 verbose_router_logger.exception(
-                    f"Error creating deployment: {e}, ignoring and continuing with other deployments."
+                    f"创建 deployment 失败：{e}，忽略该 deployment 并继续处理其余 deployment。"
                 )
                 return None
             else:
@@ -6801,10 +6795,10 @@ class Router:
 
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
-        Check if the deployment is an auto-router deployment (semantic router).
+        判断该 deployment 是否为 auto-router（基于语义的路由）deployment。
 
-        Returns True if the litellm_params model starts with "auto_router/"
-        but NOT "auto_router/complexity_router" (which uses complexity routing).
+        当 litellm_params.model 以 "auto_router/" 开头且
+        不以 "auto_router/complexity_router" 开头时返回 True（后者走 complexity 路由）。
         """
         if litellm_params.model.startswith("auto_router/complexity_router"):
             return False  # This is handled by complexity_router
@@ -6814,9 +6808,9 @@ class Router:
 
     def init_auto_router_deployment(self, deployment: Deployment):
         """
-        Initialize the auto-router deployment.
+        初始化 auto-router 类型的 deployment。
 
-        This will initialize the auto-router and add it to the auto-routers dictionary.
+        会创建 auto-router 实例并将其加入 self.auto_routers 字典。
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
@@ -6826,7 +6820,7 @@ class Router:
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
-                "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
+                "auto-router 类型的 deployment 必须配置 auto_router_config_path 或 auto_router_config，请在 litellm_params 中设置。"
             )
 
         default_model: Optional[str] = (
@@ -6834,7 +6828,7 @@ class Router:
         )
         if default_model is None:
             raise ValueError(
-                "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
+                "auto-router 类型的 deployment 必须配置 auto_router_default_model，请在 litellm_params 中设置。"
             )
 
         embedding_model: Optional[str] = (
@@ -6842,7 +6836,7 @@ class Router:
         )
         if embedding_model is None:
             raise ValueError(
-                "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
+                "auto-router 类型的 deployment 必须配置 auto_router_embedding_model，请在 litellm_params 中设置。"
             )
 
         autor_router: AutoRouter = AutoRouter(
@@ -6855,15 +6849,15 @@ class Router:
         )
         if deployment.model_name in self.auto_routers:
             raise ValueError(
-                f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
+                f"auto-router deployment {deployment.model_name} 已经存在，请使用不同的 model_name。"
             )
         self.auto_routers[deployment.model_name] = autor_router
 
     def _is_complexity_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
-        Check if the deployment is a complexity-router deployment.
+        判断该 deployment 是否为 complexity-router（基于复杂度的路由）deployment。
 
-        Returns True if the litellm_params model starts with "auto_router/complexity_router"
+        当 litellm_params.model 以 "auto_router/complexity_router" 开头时返回 True。
         """
         if litellm_params.model.startswith("auto_router/complexity_router"):
             return True
@@ -6871,13 +6865,13 @@ class Router:
 
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
-        Initialize the complexity-router deployment.
+        初始化 complexity-router 类型的 deployment。
 
-        This will initialize the complexity-router and add it to the complexity-routers dictionary.
+        会创建 complexity-router 实例并将其加入 self.complexity_routers 字典。
         """
-        # Import here to avoid circular imports — ComplexityRouter is a CustomLogger
-        # subclass that imports litellm internals which depend on router.py.
-        # This matches the AutoRouter pattern in init_auto_router_deployment above.
+        # 在函数内导入以避免循环引用 —— ComplexityRouter 是 CustomLogger 的子类，
+        # 它会 import 依赖 router.py 的 litellm 内部模块。
+        # 这里的处理方式与上面 init_auto_router_deployment 中的 AutoRouter 相同。
         from litellm.router_strategy.complexity_router.complexity_router import (
             ComplexityRouter,
         )
@@ -6890,16 +6884,16 @@ class Router:
             deployment.litellm_params.complexity_router_default_model
         )
 
-        # If no default model specified, try to get from config tiers
+        # 如果没有指定默认模型，尝试从 config 的 tiers 中取
         if default_model is None and complexity_router_config:
             tiers = complexity_router_config.get("tiers", {})
-            # Use MEDIUM tier as fallback default
+            # 使用 MEDIUM 层级作为兜底的默认值
             default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
 
         if default_model is None:
             raise ValueError(
-                "complexity_router_default_model is required for complexity-router deployments, "
-                "or configure tiers in complexity_router_config. Please set it in the litellm_params"
+                "complexity-router 类型的 deployment 必须配置 complexity_router_default_model，"
+                "或在 complexity_router_config 中配置 tiers，请在 litellm_params 中设置。"
             )
 
         complexity_router: ComplexityRouter = ComplexityRouter(
@@ -6910,22 +6904,22 @@ class Router:
         )
         if deployment.model_name in self.complexity_routers:
             raise ValueError(
-                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
+                f"complexity-router deployment {deployment.model_name} 已经存在，请使用不同的 model_name。"
             )
         self.complexity_routers[deployment.model_name] = complexity_router
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
-        Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
+        判断某个 llm deployment 在当前环境下是否启用。可以在多个环境中复用同一份 config.yaml。
 
-        Requires `LITELLM_ENVIRONMENT` to be set in .env. Valid values for environment:
+        需要在 .env 中设置 `LITELLM_ENVIRONMENT`。合法的取值：
             - development
             - staging
             - production
 
-        Raises:
-        - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
-        - ValueError: If supported_environments is not set in model_info or not one of the valid values
+        抛出：
+        - ValueError：.env 中未设置 LITELLM_ENVIRONMENT，或其值不在合法集合内
+        - ValueError：model_info 中未设置 supported_environments，或其中的值不在合法集合内
         """
         if (
             deployment.model_info is None
@@ -6936,18 +6930,18 @@ class Router:
         litellm_environment = get_secret_str(secret_name="LITELLM_ENVIRONMENT")
         if litellm_environment is None:
             raise ValueError(
-                "Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env"
+                "已为模型设置 'supported_environments'，但 .env 中未设置 'LITELLM_ENVIRONMENT'。"
             )
 
         if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
             raise ValueError(
-                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+                f"LITELLM_ENVIRONMENT 必须是 {VALID_LITELLM_ENVIRONMENTS} 中的一个，但当前值是：{litellm_environment}"
             )
 
         for _env in deployment.model_info["supported_environments"]:
             if _env not in VALID_LITELLM_ENVIRONMENTS:
                 raise ValueError(
-                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
+                    f"supported_environments 中的每个值都必须属于 {VALID_LITELLM_ENVIRONMENTS}，但对于 deployment {deployment}，出现了非法值：{_env}"
                 )
 
         if litellm_environment in deployment.model_info["supported_environments"]:
@@ -6957,17 +6951,17 @@ class Router:
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
-        self.model_id_to_deployment_index_map = {}  # Reset the index
-        self.model_name_to_deployment_indices = {}  # Reset the model_name index
-        self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.model_id_to_deployment_index_map = {}  # 重置索引
+        self.model_name_to_deployment_indices = {}  # 重置 model_name 索引
+        self.team_model_to_deployment_indices = {}  # 重置 team_model 索引
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
-        # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
+        # 给每个模型加上 api_base/api_key，这样在 api_base1、api_base2 上对 azure/gpt 做负载均衡才能正常工作
 
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
-            ## check if litellm params in os.environ
+            ## 检查 litellm 参数中是否引用了 os.environ
             if isinstance(_litellm_params, dict):
                 for k, v in _litellm_params.items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
@@ -6975,14 +6969,14 @@ class Router:
 
             _model_info: dict = model.pop("model_info", {})
 
-            # check if model info has id
+            # 检查 model_info 中是否已经有 id
             if "id" not in _model_info:
                 _id = self._generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
             if _litellm_params.get("organization", None) is not None and isinstance(
                 _litellm_params["organization"], list
-            ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
+            ):  # 修复 https://github.com/BerriAI/litellm/issues/3949
                 for org in _litellm_params["organization"]:
                     _litellm_params["organization"] = org
                     self._create_deployment(
@@ -7000,18 +6994,18 @@ class Router:
                 )
 
         verbose_router_logger.debug(
-            f"\nInitialized Model List {self.get_model_names()}"
+            f"\n已初始化 Model List：{self.get_model_names()}"
         )
         self.model_names = {m["model_name"] for m in model_list}
 
-        # Note: model_name_to_deployment_indices is already built incrementally
-        # by _create_deployment -> _add_model_to_list_and_index_map
+        # 注：model_name_to_deployment_indices 已经通过
+        # _create_deployment -> _add_model_to_list_and_index_map 逐条建立好了
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
-        #### VALIDATE MODEL ########
-        # Check if this is a prompt management model before validating as LLM provider
+        #### 校验模型 ########
+        # 在按照 LLM provider 做校验前，先判断是否为 prompt 管理模型
         litellm_model = deployment.litellm_params.model
         is_prompt_management_model = False
 
@@ -7021,14 +7015,14 @@ class Router:
                 is_prompt_management_model = True
 
         if is_prompt_management_model:
-            # For prompt management models, skip LLM provider validation
-            # The actual model will be resolved at runtime from the prompt file
+            # 对于 prompt 管理模型，跳过 LLM provider 校验
+            # 实际使用的模型名将在运行时从 prompt 文件中解析
             _model = litellm_model
             custom_llm_provider = None
             dynamic_api_key = None
             api_base = None
         else:
-            # check if model provider in supported providers
+            # 检查 provider 是否在支持列表中
             (
                 _model,
                 custom_llm_provider,
@@ -7040,19 +7034,19 @@ class Router:
                     "custom_llm_provider", None
                 ),
             )
-            # done reading model["litellm_params"]
-            # Check if provider is supported: either in enum or JSON-configured
+            # model["litellm_params"] 解析完毕
+            # 检查 provider 是否被支持：位于枚举列表或通过 JSON 配置注册
             if (
                 custom_llm_provider not in litellm.provider_list
                 and not JSONProviderRegistry.exists(custom_llm_provider)
             ):
-                raise Exception(f"Unsupported provider - {custom_llm_provider}")
+                raise Exception(f"不支持的 provider - {custom_llm_provider}")
 
-        #### DEPLOYMENT NAMES INIT ########
+        #### 初始化 DEPLOYMENT NAMES ########
         self.deployment_names.append(deployment.litellm_params.model)
-        ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
-        # for get_available_deployment, we use the litellm_param["rpm"]
-        # in this snippet we also set rpm to be a litellm_param
+        ############ 用户可以将 tpm/rpm 作为 litellm_param 传入，也可以作为 router 参数 ###########
+        # 在 get_available_deployment 中，使用 litellm_param["rpm"]
+        # 这一段逻辑也会确保 rpm 被设置为一个 litellm_param
         if (
             deployment.litellm_params.rpm is None
             and getattr(deployment, "rpm", None) is not None
@@ -7065,19 +7059,19 @@ class Router:
         ):
             deployment.litellm_params.tpm = getattr(deployment, "tpm")
 
-        # Check if user is trying to use model_name == "*"
-        # this is a catch all model for their specific api key
+        # 检查用户是否试图使用 model_name == "*"
+        # 这是针对该 api key 的通配模型
         # if deployment.model_name == "*":
         #     if deployment.litellm_params.model == "*":
-        #         # user wants to pass through all requests to litellm.acompletion for unknown deployments
+        #         # 用户希望将未知 deployment 的所有请求透传给 litellm.acompletion
         #         self.router_general_settings.pass_through_all_models = True
         #     else:
         #         self.default_deployment = deployment.to_json(exclude_none=True)
-        # Check if user is using provider specific wildcard routing
-        # example model_name = "databricks/*" or model_name = "anthropic/*"
+        # 检查用户是否使用了 provider 级别的通配路由
+        # 例如 model_name = "databricks/*" 或 model_name = "anthropic/*"
         if "*" in deployment.model_name:
-            # store this as a regex pattern - all deployments matching this pattern will be sent to this deployment
-            # Store deployment.model_name as a regex pattern
+            # 将其存为正则表达式，所有命中该 pattern 的 deployment 都会被路由到这里
+            # 将 deployment.model_name 当作正则 pattern 存储
             self.pattern_router.add_pattern(
                 deployment.model_name, deployment.to_json(exclude_none=True)
             )
@@ -7097,18 +7091,18 @@ class Router:
                 _team_public_model_name, deployment.to_json(exclude_none=True)
             )
 
-        # Azure GPT-Vision Enhancements, users can pass os.environ/
+        # Azure GPT-Vision 增强功能配置，用户可以使用 os.environ/ 引用环境变量
         data_sources = deployment.litellm_params.get("dataSources", []) or []
 
         for data_source in data_sources:
             params = data_source.get("parameters", {})
             for param_key in ["endpoint", "key"]:
-                # if endpoint or key set for Azure GPT Vision Enhancements, check if it's an env var
+                # 如果 Azure GPT Vision Enhancements 中设置了 endpoint 或 key，检查是否使用了环境变量
                 if param_key in params and params[param_key].startswith("os.environ/"):
                     env_name = params[param_key].replace("os.environ/", "")
                     params[param_key] = os.environ.get(env_name, "")
 
-        # # init OpenAI, Azure clients
+        # # 初始化 OpenAI / Azure 客户端
         # InitalizeOpenAISDKClient.set_client(
         #     litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         # )
@@ -7121,13 +7115,13 @@ class Router:
             )
 
         #########################################################
-        # Check if this is an auto-router deployment
+        # 判断该 deployment 是否为 auto-router
         #########################################################
         if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
             self.init_auto_router_deployment(deployment=deployment)
 
         #########################################################
-        # Check if this is a complexity-router deployment
+        # 判断该 deployment 是否为 complexity-router
         #########################################################
         if self._is_complexity_router_deployment(
             litellm_params=deployment.litellm_params
@@ -7140,9 +7134,9 @@ class Router:
         self, deployment: Deployment, custom_llm_provider: str, model: str
     ):
         """
-        Optional: Initialize deployment for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
+        可选：当 `deployment.litellm_params.use_in_pass_through` 为 True 时，为透传端点初始化 deployment。
 
-        Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
+        不同 provider 的透传端点使用不同的 .env 变量，这个辅助方法会根据 deployment 的凭证设置相应的 .env 变量。
         """
         if deployment.litellm_params.use_in_pass_through is True:
             from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -7172,7 +7166,7 @@ class Router:
 
                 if vertex_project is None or vertex_location is None:
                     raise ValueError(
-                        "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
+                        "透传端点需要在 litellm_params 中设置 vertex_project 和 vertex_location。"
                     )
                 passthrough_endpoint_router.add_vertex_credentials(
                     project_id=vertex_project,
@@ -7198,29 +7192,29 @@ class Router:
 
     def add_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
-        Parameters:
-        - deployment: Deployment - the deployment to be added to the Router
+        参数：
+        - deployment: Deployment - 要添加到 Router 的 deployment
 
-        Returns:
-        - The added deployment
-        - OR None (if deployment already exists)
+        返回：
+        - 添加进去的 deployment
+        - 或 None（当该 deployment 已经存在时）
         """
-        # check if deployment already exists
+        # 检查该 deployment 是否已存在
 
         _deployment_model_id = deployment.model_info.id
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
 
-        # add to model list
+        # 加入 model_list
         _deployment = deployment.to_json(exclude_none=True)
-        # initialize client
+        # 初始化 client
         self._add_deployment(deployment=deployment)
 
-        # Register custom pricing in litellm.model_cost.
-        # Mirrors _create_deployment() logic to ensure dynamically-added deployments
-        # (e.g., loaded from DB) also have their custom pricing registered.
-        # Without this, _is_model_cost_zero() cannot detect explicitly-configured
-        # zero-cost models, causing budget checks to block free models.
+        # 将 custom pricing 注册到 litellm.model_cost 中。
+        # 与 _create_deployment() 的逻辑保持一致，确保动态添加的 deployment
+        # （例如从数据库加载的）也能正确注册自定义定价。
+        # 否则 _is_model_cost_zero() 无法识别显式配置为 0 的模型，
+        # 会导致预算检查错误地拦截免费模型。
         _model_id = deployment.model_info.id
         if _model_id is not None:
             _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
@@ -7230,7 +7224,7 @@ class Router:
                     _model_info_dict[field] = field_value
             litellm.register_model(model_cost={_model_id: _model_info_dict})
 
-        # add to model names
+        # 加入 model_names
         self._add_model_to_list_and_index_map(
             model=_deployment, model_id=deployment.model_info.id
         )
@@ -7241,57 +7235,57 @@ class Router:
         self, model_id: str, removal_idx: int
     ) -> None:
         """
-        Helper method to update deployment indices after a deployment has been removed from model_list.
+        辅助方法：当某个 deployment 从 model_list 中移除后，更新相关的 deployment 索引。
 
-        Parameters:
-        - model_id: str - the id of the deployment that was removed
-        - removal_idx: int - the index where the deployment was removed from model_list
+        参数：
+        - model_id: str - 被移除 deployment 的 id
+        - removal_idx: int - 被移除 deployment 在 model_list 中的原索引位置
         """
-        # Update indices for all models after the removed one
+        # 更新所有位于被删除元素之后的模型索引
         for deployment_id, idx in self.model_id_to_deployment_index_map.items():
             if idx > removal_idx:
                 self.model_id_to_deployment_index_map[deployment_id] = idx - 1
-        # Remove the deleted model from index
+        # 将被删除模型从索引中移除
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
 
-        # Update model_name_to_deployment_indices
+        # 更新 model_name_to_deployment_indices
         for model_name, indices in list(self.model_name_to_deployment_indices.items()):
-            # Build new list without mutating the original
+            # 构建新列表，不直接修改原列表
             updated_indices = []
             for idx in indices:
                 if idx == removal_idx:
-                    # Skip the removed index
+                    # 跳过被删除的索引
                     continue
                 elif idx > removal_idx:
-                    # Decrement indices after removal
+                    # 对于位于被删除元素之后的索引递减
                     updated_indices.append(idx - 1)
                 else:
-                    # Keep indices before removal unchanged
+                    # 对于位于被删除元素之前的索引，保持不变
                     updated_indices.append(idx)
 
-            # Update or remove the entry
+            # 更新或删除该条目
             if len(updated_indices) > 0:
                 self.model_name_to_deployment_indices[model_name] = updated_indices
             else:
                 del self.model_name_to_deployment_indices[model_name]
 
-        # Update team_model_to_deployment_indices
+        # 更新 team_model_to_deployment_indices
         for key, indices in list(self.team_model_to_deployment_indices.items()):
-            # Build new list without mutating the original
+            # 构建新列表，不直接修改原列表
             updated_indices = []
             for idx in indices:
                 if idx == removal_idx:
-                    # Skip the removed index
+                    # 跳过被删除的索引
                     continue
                 elif idx > removal_idx:
-                    # Decrement indices after removal
+                    # 对于位于被删除元素之后的索引递减
                     updated_indices.append(idx - 1)
                 else:
-                    # Keep indices before removal unchanged
+                    # 对于位于被删除元素之前的索引，保持不变
                     updated_indices.append(idx)
 
-            # Update or remove the entry
+            # 更新或删除该条目
             if len(updated_indices) > 0:
                 self.team_model_to_deployment_indices[key] = updated_indices
             else:
@@ -7299,11 +7293,11 @@ class Router:
 
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
-        Helper to update team_model_to_deployment_indices for a single deployment.
+        辅助方法：为单个 deployment 更新 team_model_to_deployment_indices。
 
-        Parameters:
-        - model: dict - the deployment to index
-        - idx: int - the index in model_list
+        参数：
+        - model: dict - 要索引的 deployment
+        - idx: int - 在 model_list 中的索引位置
         """
         team_id = (model.get("model_info") or {}).get("team_id")
         team_public_model_name = (model.get("model_info") or {}).get(
@@ -7320,60 +7314,60 @@ class Router:
         self, model: dict, model_id: Optional[str] = None
     ) -> None:
         """
-        Helper method to add a model to the model_list and update both indices.
+        辅助方法：将一个 model 添加到 model_list 并同时更新两个索引。
 
-        Parameters:
-        - model: dict - the model to add to the list
-        - model_id: Optional[str] - the model ID to use for indexing. If None, will try to get from model["model_info"]["id"]
+        参数：
+        - model: dict - 要加入列表的 model
+        - model_id: Optional[str] - 用于索引的 model ID。如果为 None，尝试从 model["model_info"]["id"] 中获取
         """
         idx = len(self.model_list)
         self.model_list.append(model)
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 
-        # Update model_id index for O(1) lookup
+        # 更新 model_id 索引，以实现 O(1) 查找
         if model_id is not None:
             self.model_id_to_deployment_index_map[model_id] = idx
         elif model.get("model_info", {}).get("id") is not None:
             self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
 
-        # Update model_name index for O(1) lookup
+        # 更新 model_name 索引，以实现 O(1) 查找
         model_name = model.get("model_name")
         if model_name:
             if model_name not in self.model_name_to_deployment_indices:
                 self.model_name_to_deployment_indices[model_name] = []
             self.model_name_to_deployment_indices[model_name].append(idx)
 
-        # Update team_model index for O(1) team-scoped lookup
+        # 更新 team_model 索引，以实现按 team 范围的 O(1) 查找
         self._update_team_model_index(model, idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
-        Add or update deployment
-        Parameters:
-        - deployment: Deployment - the deployment to be added to the Router
+        添加或更新 deployment
+        参数：
+        - deployment: Deployment - 要添加/更新的 deployment
 
-        Returns:
-        - The added/updated deployment
+        返回：
+        - 添加/更新后的 deployment
         """
         try:
-            # check if deployment already exists
+            # 检查该 deployment 是否已存在
             _deployment_model_id = deployment.model_info.id or ""
 
             _deployment_on_router: Optional[Deployment] = self.get_deployment(
                 model_id=_deployment_model_id
             )
             if _deployment_on_router is not None:
-                # deployment with this model_id exists on the router
+                # router 中已存在使用相同 model_id 的 deployment
                 if (
                     deployment.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
                 ):
-                    # No need to update
+                    # 配置完全相同，无需更新
                     return None
 
-                # if there is a new litellm param -> then update the deployment
-                # remove the previous deployment
+                # 存在新的 litellm 参数 -> 需要更新该 deployment
+                # 先移除旧的 deployment
                 removal_idx: Optional[int] = None
                 deployment_id = deployment.model_info.id
                 deployment_fast_mapping = self.model_id_to_deployment_index_map
@@ -7389,13 +7383,13 @@ class Router:
                             model_id=deployment_id, removal_idx=removal_idx
                         )
 
-            # if the model_id is not in router
+            # 如果 router 中不存在该 model_id，直接添加
             self.add_deployment(deployment=deployment)
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
                 verbose_router_logger.debug(
-                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                    f"upsert deployment 失败：{e}，忽略该 deployment 并继续处理其余。"
                 )
                 return None
             else:
@@ -7403,12 +7397,12 @@ class Router:
 
     def delete_deployment(self, id: str) -> Optional[Deployment]:
         """
-        Parameters:
-        - id: str - the id of the deployment to be deleted
+        参数：
+        - id: str - 要删除的 deployment 的 id
 
-        Returns:
-        - The deleted deployment
-        - OR None (if deleted deployment not found)
+        返回：
+        - 被删除的 deployment
+        - 或 None（当未找到要删除的 deployment 时）
         """
         deployment_idx = None
         if id in self.model_id_to_deployment_index_map:
@@ -7416,7 +7410,7 @@ class Router:
 
         try:
             if deployment_idx is not None:
-                # Pop the item from the list first
+                # 先从列表中弹出该条目
                 item = self.model_list.pop(deployment_idx)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
@@ -7431,11 +7425,11 @@ class Router:
 
     def get_deployment(self, model_id: str) -> Optional[Deployment]:
         """
-        Returns -> Deployment or None
+        返回 -> Deployment 或 None
 
-        Raise Exception -> if model found in invalid format
+        抛出异常 -> 如果查找到的 model 格式不合法
         """
-        # Use O(1) lookup via model_id_to_deployment_index_map only
+        # 仅通过 model_id_to_deployment_index_map 实现 O(1) 查找
         if model_id in self.model_id_to_deployment_index_map:
             idx = self.model_id_to_deployment_index_map[model_id]
             model = self.model_list[idx]
@@ -7444,13 +7438,13 @@ class Router:
             elif isinstance(model, Deployment):
                 return model
             else:
-                raise Exception("Model invalid format - {}".format(type(model)))
+                raise Exception("Model 格式不合法 - {}".format(type(model)))
 
         return None
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
         """
-        Returns -> dict of credentials for a given model id
+        返回 -> 指定 model id 对应的凭证字典
         """
         deployment = self.get_deployment(model_id=model_id)
         if deployment is None:
@@ -7463,32 +7457,32 @@ class Router:
         self, model_group_name: str
     ) -> Optional[Deployment]:
         """
-        Returns -> Deployment or None
+        返回 -> Deployment 或 None
 
-        Raise Exception -> if model found in invalid format
+        抛出异常 -> 如果查找到的 model 格式不合法
 
-        Optimized with O(1) index lookup instead of O(n) linear scan.
+        使用索引实现 O(1) 查找，避免 O(n) 的线性扫描。
         """
-        # O(1) lookup in model_name index
+        # model_name 索引上的 O(1) 查找
         if model_group_name in self.model_name_to_deployment_indices:
             indices = self.model_name_to_deployment_indices[model_group_name]
             if indices:
-                # Return first deployment for this model_name
+                # 返回该 model_name 下的第一个 deployment
                 model = self.model_list[indices[0]]
                 if isinstance(model, dict):
                     return Deployment(**model)
                 elif isinstance(model, Deployment):
                     return model
                 else:
-                    raise Exception("Model Name invalid - {}".format(type(model)))
+                    raise Exception("Model Name 格式不合法 - {}".format(type(model)))
         return None
 
     def get_deployment_credentials_with_provider(
         self, model_id: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Get API credentials and provider info from a model name in model_list.
-        Useful for passthrough endpoints (files, batches, etc.) that need credentials.
+        根据 model_list 中的 model 名称，获取 API 凭证和 provider 信息。
+        对于需要凭证的透传端点（files、batches 等）很有用。
 
         This method tries to find a deployment by model_id first, and if not found,
         it tries to find by model_group_name (model_name).
