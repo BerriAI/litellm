@@ -33,19 +33,33 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
 
+    #: Hard-stop Gemini finish reasons that must be surfaced even when the
+    #: chunk has no user-facing content (text/tool_calls). ``STOP`` is excluded
+    #: because Agent Engine emits it on every inner action — see #19121.
+    _HARD_STOP_FINISH_REASONS = frozenset(
+        {
+            "SAFETY",
+            "MAX_TOKENS",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        }
+    )
+
     @staticmethod
     def _extract_parts_from_chunk(
         chunk: dict,
     ) -> tuple[Optional[str], List[ChatCompletionToolCallChunk]]:
         """
         Walk the ``content.parts`` array and split it into:
-          - the first text part (if any)
+          - concatenated text from all text parts (if any)
           - any function_call parts converted to OpenAI tool_calls
 
         Vertex Agent Engine returns parts in either ``functionCall`` (camelCase,
         REST API) or ``function_call`` (snake_case, Python SDK) form.
         """
-        text: Optional[str] = None
+        text_parts: List[str] = []
         tool_calls: List[ChatCompletionToolCallChunk] = []
 
         content = chunk.get("content") or {}
@@ -55,8 +69,8 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
             if not isinstance(part, dict):
                 continue
 
-            if text is None and "text" in part:
-                text = part["text"]
+            if "text" in part and isinstance(part["text"], str):
+                text_parts.append(part["text"])
                 continue
 
             function_call = part.get("functionCall") or part.get("function_call")
@@ -74,6 +88,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
                     )
                 )
 
+        text = "".join(text_parts) if text_parts else None
         return text, tool_calls
 
     def chunk_parser(
@@ -90,16 +105,20 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
         end-of-response signal.
 
         We therefore only surface ``finish_reason`` when the chunk has
-        user-facing text content. Function-call and thought-only chunks must
-        keep ``finish_reason=None`` so the downstream stream wrapper does not
-        close the stream after the first inner action and drop the actual
-        response (see issue #19121).
+        user-facing text content, or when the raw finish reason is a hard-stop
+        signal (SAFETY, MAX_TOKENS, RECITATION, ...) that downstream
+        consumers must act on. Function-call and thought-only chunks with a
+        plain ``STOP`` keep ``finish_reason=None`` so the downstream stream
+        wrapper does not close the stream after the first inner action and
+        drop the actual response (see issue #19121).
         """
         text, tool_calls = self._extract_parts_from_chunk(chunk)
 
         finish_reason: Optional[str] = None
         raw_finish_reason = chunk.get("finish_reason")
-        if raw_finish_reason and text is not None:
+        if raw_finish_reason and (
+            text is not None or raw_finish_reason in self._HARD_STOP_FINISH_REASONS
+        ):
             finish_reason = (
                 "stop" if raw_finish_reason == "STOP" else raw_finish_reason.lower()
             )

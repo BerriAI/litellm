@@ -184,6 +184,54 @@ class TestVertexAgentEngineChunkParser:
         assert result.choices[0].delta.content is None
         assert result.choices[0].delta.tool_calls is None
 
+    def test_chunk_parser_concatenates_multiple_text_parts(self):
+        """
+        If Vertex emits a chunk whose ``content.parts`` contains more than one
+        text entry we must surface ALL of them, not just the first.
+        """
+        chunk = {
+            "content": {
+                "parts": [
+                    {"text": "Hello "},
+                    {"text": "world"},
+                ],
+                "role": "model",
+            },
+        }
+
+        result = self._iterator().chunk_parser(chunk)
+
+        assert result.choices[0].delta.content == "Hello world"
+
+    def test_chunk_parser_surfaces_safety_finish_reason_without_content(self):
+        """
+        Hard-stop signals (SAFETY, MAX_TOKENS, ...) must propagate even when
+        the chunk has no text/tool_call content. Otherwise a safety-blocked
+        Agent Engine response looks identical to a benign intermediate chunk.
+        """
+        chunk = {
+            "content": {"parts": [], "role": "model"},
+            "finish_reason": "SAFETY",
+        }
+
+        result = self._iterator().chunk_parser(chunk)
+
+        # StreamingChoices normalizes "safety" → OpenAI "stop"; the key
+        # behavior is that *some* terminal finish_reason is surfaced
+        # instead of being dropped (which is what happens for plain STOP).
+        assert result.choices[0].finish_reason is not None
+
+    def test_chunk_parser_surfaces_max_tokens_finish_reason_without_content(self):
+        chunk = {
+            "content": {"parts": [], "role": "model"},
+            "finish_reason": "MAX_TOKENS",
+        }
+
+        result = self._iterator().chunk_parser(chunk)
+
+        # StreamingChoices normalizes "max_tokens" → OpenAI "length".
+        assert result.choices[0].finish_reason == "length"
+
     def test_chunk_parser_camelcase_function_call(self):
         """
         Vertex's REST API uses ``functionCall`` (camelCase) — make sure we
