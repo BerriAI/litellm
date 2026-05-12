@@ -73,7 +73,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
-            raise ValueError("api_key is required for DashScope authentication")
+            api_key = get_secret_str("DASHSCOPE_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
+            )
         default_headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -106,7 +110,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             "model": model,
             "input": input,
         }
-        for key in ("dimensions", "encoding_format"):
+        for key in ("dimensions", "encoding_format", "user"):
             value = optional_params.get(key)
             if value is not None:
                 data[key] = value

@@ -77,7 +77,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
         if cleaned.endswith("/v1"):
             return f"{cleaned}/reranks"
 
-        return DEFAULT_RERANK_URL
+        # Unknown base: append /reranks rather than silently ignoring the caller's api_base.
+        return f"{cleaned}/reranks"
 
     def validate_environment(
         self,
