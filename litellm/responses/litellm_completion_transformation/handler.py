@@ -45,93 +45,130 @@ class LiteLLMCompletionTransformationHandler:
 
         logger = logging.getLogger("LiteLLM.DomesticFilter")
 
-        fixed_messages = []
         fixed_count = 0
+        result_messages = []
+
         for msg in messages:
-            # Deep copy to avoid modifying original
-            fixed_msg = copy.deepcopy(msg) if isinstance(msg, dict) else msg
-
-            # Check for tool_calls in assistant messages
-            if isinstance(fixed_msg, dict):
-                role = fixed_msg.get("role")
+            # 获取 role
+            if isinstance(msg, dict):
+                role = msg.get("role")
+                tool_calls = msg.get("tool_calls")
             else:
-                role = getattr(fixed_msg, "role", None)
+                role = getattr(msg, "role", None)
+                tool_calls = getattr(msg, "tool_calls", None)
 
-            if role == "assistant":
-                # Handle both dict and object types for tool_calls
-                if isinstance(fixed_msg, dict):
-                    tool_calls = fixed_msg.get("tool_calls")
+            # 只处理 assistant 消息的 tool_calls
+            if role != "assistant" or not tool_calls or not isinstance(tool_calls, list):
+                result_messages.append(msg)
+                continue
+
+            # 需要重建 tool_calls，因为 Pydantic 模型属性可能不可修改
+            needs_rebuild = False
+            new_tool_calls = []
+
+            for tc in tool_calls:
+                # 获取 id, type, function
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id")
+                    tc_type = tc.get("type", "function")
+                    func = tc.get("function")
                 else:
-                    tool_calls = getattr(fixed_msg, "tool_calls", None)
+                    tc_id = getattr(tc, "id", None)
+                    tc_type = getattr(tc, "type", "function")
+                    func = getattr(tc, "function", None)
 
-                if tool_calls and isinstance(tool_calls, list):
-                    for tc in tool_calls:
-                        # Get function from tool_call (dict or object)
-                        if isinstance(tc, dict):
-                            func = tc.get("function")
-                        else:
-                            func = getattr(tc, "function", None)
+                # 获取 function 的 name 和 arguments
+                if func is not None:
+                    if isinstance(func, dict):
+                        func_name = func.get("name", "")
+                        args = func.get("arguments")
+                    else:
+                        func_name = getattr(func, "name", "")
+                        args = getattr(func, "arguments", None)
+                else:
+                    func_name = ""
+                    args = None
 
-                        if func is not None:
-                            # Get arguments from function (dict or object)
-                            if isinstance(func, dict):
-                                args = func.get("arguments")
-                            else:
-                                args = getattr(func, "arguments", None)
+                # 检查并修复 arguments
+                original_args = args
+                fixed_args = None
 
-                            original_args = args
-                            fixed_args = None
+                if args is None:
+                    fixed_args = "{}"
+                    needs_rebuild = True
+                    fixed_count += 1
+                elif isinstance(args, str):
+                    args_stripped = args.strip()
+                    if not args_stripped:
+                        fixed_args = "{}"
+                        needs_rebuild = True
+                        fixed_count += 1
+                    else:
+                        try:
+                            json.loads(args_stripped)
+                            # Valid JSON, keep as-is
+                            fixed_args = args_stripped
+                        except (json.JSONDecodeError, ValueError):
+                            fixed_args = "{}"
+                            needs_rebuild = True
+                            fixed_count += 1
+                            args_preview = str(original_args)[:50] if original_args else "None"
+                            logger.warning(
+                                f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
+                            )
+                elif isinstance(args, dict):
+                    # dict 类型需要转成 JSON string
+                    fixed_args = json.dumps(args)
+                    needs_rebuild = True
+                else:
+                    # 其他类型，尝试转换
+                    try:
+                        args_str = str(args)
+                        json.loads(args_str)
+                        fixed_args = args_str
+                    except (json.JSONDecodeError, ValueError):
+                        fixed_args = "{}"
+                        needs_rebuild = True
+                        fixed_count += 1
 
-                            # Ensure arguments is valid JSON
-                            if args is None:
-                                fixed_args = "{}"
-                                fixed_count += 1
-                            elif isinstance(args, str):
-                                if not args.strip():
-                                    fixed_args = "{}"
-                                    fixed_count += 1
-                                else:
-                                    try:
-                                        json.loads(args)
-                                        # Valid JSON, keep as-is
-                                    except (json.JSONDecodeError, ValueError):
-                                        fixed_args = "{}"
-                                        fixed_count += 1
-                                        args_preview = (
-                                            str(original_args)[:50]
-                                            if original_args
-                                            else "None"
-                                        )
-                                        logger.warning(
-                                            f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
-                                        )
-                            elif isinstance(args, dict):
-                                fixed_args = json.dumps(args)
-                            else:
-                                # Other types, try to convert
-                                try:
-                                    args_str = str(args)
-                                    json.loads(args_str)
-                                    fixed_args = args_str
-                                except (json.JSONDecodeError, ValueError):
-                                    fixed_args = "{}"
-                                    fixed_count += 1
+                # 重建 tool_call dict（确保 arguments 是有效 JSON string）
+                new_tool_calls.append({
+                    "id": tc_id,
+                    "type": tc_type,
+                    "function": {
+                        "name": func_name,
+                        "arguments": fixed_args if fixed_args is not None else "{}",
+                    }
+                })
 
-                            # Set fixed arguments back
-                            if fixed_args is not None:
-                                if isinstance(func, dict):
-                                    func["arguments"] = fixed_args
-                                elif hasattr(func, "arguments"):
-                                    setattr(func, "arguments", fixed_args)
-
-            fixed_messages.append(fixed_msg)
+            if needs_rebuild:
+                # 重建整个消息为 dict（确保所有字段被正确复制）
+                if isinstance(msg, dict):
+                    new_msg = copy.deepcopy(msg)
+                    new_msg["tool_calls"] = new_tool_calls
+                else:
+                    # 对于非 dict 对象，创建一个新的 dict 消息
+                    # 提取所有可能的字段
+                    new_msg = {
+                        "role": role,
+                        "tool_calls": new_tool_calls,
+                    }
+                    # 复制其他可能存在的字段
+                    for field in ["content", "name", "audio"]:
+                        val = getattr(msg, field, None) if not isinstance(msg, dict) else msg.get(field)
+                        if val is not None:
+                            new_msg[field] = val
+                result_messages.append(new_msg)
+            else:
+                # 不需要修复，保留原消息
+                result_messages.append(msg)
 
         if fixed_count > 0:
             logger.info(
-                f"[DomesticFilter] Fixed {fixed_count} invalid tool_calls arguments"
+                f"[DomesticFilter] Fixed {fixed_count} invalid tool_calls arguments, rebuilt {fixed_count} messages"
             )
 
-        return fixed_messages
+        return result_messages
 
     def response_api_handler(
         self,
