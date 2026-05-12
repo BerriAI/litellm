@@ -36,12 +36,15 @@ Safe to enable globally:
 - No cache required.
 """
 
-from typing import Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -55,8 +58,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
     Wired via ``Router(optional_pre_call_checks=["encrypted_content_affinity"])``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, router: Optional["Router"] = None) -> None:
         super().__init__()
+        self.router = router
 
     # ------------------------------------------------------------------
     # Helpers
@@ -119,6 +123,49 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return deployment
         return None
 
+    @staticmethod
+    def _encryption_boundary_key(
+        litellm_params: dict,
+    ) -> Optional[tuple]:
+        """
+        ``(api_base, api_key)`` pair identifying an Azure resource. Two
+        deployments sharing both are interchangeable for ``encrypted_content``
+        follow-ups; Azure rejects content produced by any other resource.
+        """
+        if not isinstance(litellm_params, dict):
+            return None
+        api_base = litellm_params.get("api_base")
+        api_key = litellm_params.get("api_key")
+        if not api_base or not api_key:
+            return None
+        return (api_base, api_key)
+
+    def _find_deployments_on_same_encryption_boundary(
+        self,
+        healthy_deployments: List[dict],
+        model_id: str,
+    ) -> List[dict]:
+        """
+        Deployments in ``healthy_deployments`` sharing the originating
+        deployment's ``(api_base, api_key)``. Returns ``[]`` if router isn't
+        wired in, the originating deployment was removed, or no boundary match.
+        """
+        if self.router is None:
+            return []
+        originating = self.router.get_deployment(model_id=model_id)
+        if originating is None:
+            return []
+        boundary = self._encryption_boundary_key(
+            originating.litellm_params.model_dump(exclude_none=True)
+        )
+        if boundary is None:
+            return []
+        return [
+            d
+            for d in healthy_deployments
+            if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
+        ]
+
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
@@ -172,8 +219,25 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return [deployment]
 
+        # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
+        boundary_matches = self._find_deployments_on_same_encryption_boundary(
+            healthy_deployments=typed_healthy_deployments,
+            model_id=model_id,
+        )
+        if boundary_matches:
+            verbose_router_logger.debug(
+                "EncryptedContentAffinityCheck: model_id=%s not in healthy_deployments; "
+                "pinning to %d deployment(s) on same encryption boundary",
+                model_id,
+                len(boundary_matches),
+            )
+            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            return boundary_matches
+
         verbose_router_logger.error(
-            "EncryptedContentAffinityCheck: decoded deployment=%s not found in healthy_deployments",
+            "EncryptedContentAffinityCheck: decoded deployment=%s not found in "
+            "healthy_deployments and no boundary match available; falling back to "
+            "full deployment pool (encrypted_content may be rejected upstream)",
             model_id,
         )
         return typed_healthy_deployments
