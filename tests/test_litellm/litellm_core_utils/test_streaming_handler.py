@@ -1647,6 +1647,154 @@ async def test_custom_stream_wrapper_aclose_none_stream():
     await wrapper.aclose()
 
 
+@pytest.mark.asyncio
+async def test_aclose_persists_partial_args_when_deferred_closure_registered():
+    """AAr6bXKP follow-up: when a deferred-streaming closure is registered
+    (proxy + post-call guardrails) but ``__anext__`` hasn't reached
+    StopAsyncIteration yet (client disconnect mid-stream), ``aclose()``
+    must build a partial assembled response from the chunks accumulated
+    so far and set ``_deferred_stream_complete_args`` on logging_obj.
+    Otherwise the outer ``ProxyLogging.async_post_call_streaming_iterator_hook``
+    finally fires ``_fire_deferred_stream_logging`` with no args and spend
+    tracking is silently skipped."""
+    logging_obj = MagicMock()
+    logging_obj._on_deferred_stream_complete = MagicMock()
+    logging_obj._deferred_stream_complete_args = None
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.messages = [{"role": "user", "content": "hi"}]
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-test",
+            created=1742056047,
+            model="gpt-3.5-turbo",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="partial response so far",
+                        role="assistant",
+                    ),
+                    logprobs=None,
+                )
+            ],
+        )
+    ]
+
+    await wrapper.aclose()
+
+    assert logging_obj._deferred_stream_complete_args is not None, (
+        "_deferred_stream_complete_args must be populated from accumulated "
+        "chunks on disconnect so the deferred logging hook fires"
+    )
+    partial, cache_hit = logging_obj._deferred_stream_complete_args
+    assert partial is not None
+    assert cache_hit is False
+
+
+@pytest.mark.asyncio
+async def test_aclose_does_not_persist_args_when_already_set():
+    """If __anext__ reached StopAsyncIteration normally, it already set
+    args. aclose() must not overwrite them."""
+    logging_obj = MagicMock()
+    logging_obj._on_deferred_stream_complete = MagicMock()
+    sentinel = ("already-set", True)
+    logging_obj._deferred_stream_complete_args = sentinel
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="x",
+            created=1,
+            model="gpt-3.5-turbo",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="x", role="assistant"),
+                )
+            ],
+        )
+    ]
+
+    await wrapper.aclose()
+
+    assert logging_obj._deferred_stream_complete_args is sentinel
+
+
+@pytest.mark.asyncio
+async def test_aclose_skips_partial_persist_when_no_deferred_closure():
+    """No deferred closure registered → don't set args (non-proxy SDK
+    path uses CSW.__anext__'s own create_task call instead)."""
+    logging_obj = MagicMock()
+    logging_obj._on_deferred_stream_complete = None
+    logging_obj._deferred_stream_complete_args = None
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="x",
+            created=1,
+            model="gpt-3.5-turbo",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="x", role="assistant"),
+                )
+            ],
+        )
+    ]
+
+    await wrapper.aclose()
+
+    assert logging_obj._deferred_stream_complete_args is None
+
+
+@pytest.mark.asyncio
+async def test_aclose_swallows_stream_chunk_builder_errors():
+    """If stream_chunk_builder raises while building from partial chunks,
+    aclose() must not propagate the error — HTTP connection cleanup is
+    more important than logging."""
+    logging_obj = MagicMock()
+    logging_obj._on_deferred_stream_complete = MagicMock()
+    logging_obj._deferred_stream_complete_args = None
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-3.5-turbo",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = ["not-a-real-chunk"]  # builder will choke on this
+
+    with patch(
+        "litellm.stream_chunk_builder", side_effect=RuntimeError("builder boom")
+    ):
+        await wrapper.aclose()  # must not raise
+
+    assert logging_obj._deferred_stream_complete_args is None
+
+
 def test_content_not_dropped_when_finish_reason_already_set(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -2036,23 +2184,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
