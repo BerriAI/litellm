@@ -1294,14 +1294,15 @@ class LiteLLMCompletionResponsesConfig:
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_list.append(
-                            {
-                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                    item.get("type") or "text"
-                                ),
-                                "text": text_value,
-                            }
-                        )
+                        content_block: Dict[str, Any] = {
+                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                item.get("type") or "text"
+                            ),
+                            "text": text_value,
+                        }
+                        if "cache_control" in item:
+                            content_block["cache_control"] = item["cache_control"]
+                        content_list.append(content_block)
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
