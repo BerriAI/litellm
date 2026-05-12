@@ -353,6 +353,37 @@ class LiteLLMCompletionTransformationHandler:
                     "[DomesticFilter] Validated tool_calls arguments in messages"
                 )
 
+                # 打印 tools 和 messages 用于调试
+                tools_debug = acompletion_args.get("tools")
+                messages_debug = acompletion_args.get("messages")
+                logger.info(
+                    f"[DomesticFilter] tools count: {len(tools_debug) if tools_debug else 0}"
+                )
+                if tools_debug:
+                    for i, tool in enumerate(tools_debug[:3]):  # 只打印前3个
+                        tool_name = (
+                            tool.get("function", {}).get("name", "unknown")
+                            if isinstance(tool, dict)
+                            else "unknown"
+                        )
+                        logger.info(f"[DomesticFilter] tool[{i}] name: {tool_name}")
+                logger.info(
+                    f"[DomesticFilter] messages count: {len(messages_debug) if messages_debug else 0}"
+                )
+                if messages_debug:
+                    for i, msg in enumerate(messages_debug[:5]):  # 只打印前5条
+                        role = (
+                            msg.get("role", "unknown")
+                            if isinstance(msg, dict)
+                            else "unknown"
+                        )
+                        has_tools = (
+                            "tool_calls" in msg if isinstance(msg, dict) else False
+                        )
+                        logger.info(
+                            f"[DomesticFilter] msg[{i}] role={role}, has_tool_calls={has_tools}"
+                        )
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
