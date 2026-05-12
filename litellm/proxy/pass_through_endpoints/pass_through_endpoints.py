@@ -2576,12 +2576,16 @@ async def _filter_endpoints_by_team_allowed_routes(
     if not isinstance(team_access_group_ids, list):
         team_access_group_ids = []
     if team_access_group_ids:
-        has_passthrough_route_constraints = True
-        allowed_passthrough_routes.extend(
-            await _get_pass_through_routes_from_access_groups(
-                access_group_ids=team_access_group_ids,
-            )
+        routes_from_access_groups = await _get_pass_through_routes_from_access_groups(
+            access_group_ids=team_access_group_ids,
         )
+        # Only flip the constraint flag when the AG actually contributes
+        # pass-through routes. Otherwise an AG that only scopes model names
+        # would incorrectly filter every endpoint out (regression observed in
+        # production: team with model-only AG saw 0 of 3 endpoints).
+        if routes_from_access_groups:
+            has_passthrough_route_constraints = True
+            allowed_passthrough_routes.extend(routes_from_access_groups)
 
     if has_passthrough_route_constraints:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
