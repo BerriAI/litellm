@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import os
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
@@ -60,7 +61,26 @@ from litellm.types.utils import (
 )
 
 ########### Initialize Classes used for Responses API  ###########
-TOOL_CALLS_CACHE = InMemoryCache()
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+TOOL_CALLS_CACHE = InMemoryCache(
+    max_size_in_memory=_positive_int_env(
+        "LITELLM_RESPONSES_TOOL_CALL_CACHE_MAX_ITEMS", 128
+    ),
+    default_ttl=_positive_int_env("LITELLM_RESPONSES_TOOL_CALL_CACHE_TTL_SECONDS", 300),
+    max_size_per_item=_positive_int_env(
+        "LITELLM_RESPONSES_TOOL_CALL_CACHE_MAX_ITEM_KB", 256
+    ),
+)
 
 
 class ChatCompletionSession(TypedDict, total=False):

@@ -165,6 +165,90 @@ class TestManagedWebSocketHandlerIntegration:
         assert handler.timeout == 30.0
         assert handler.custom_llm_provider == "test_provider"
 
+    def test_managed_handler_drops_superseded_turn_history(self):
+        """New response history supersedes the previous response key."""
+        from unittest.mock import MagicMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=MagicMock(),
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+        )
+        handler._store_history(
+            "first-response",
+            [{"type": "message", "role": "user", "content": "hello"}],
+        )
+
+        handler._save_turn_history(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "second-response",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "done"}],
+                        }
+                    ],
+                },
+            },
+            "first-response",
+            handler._get_history_messages("first-response"),
+            [{"type": "message", "role": "user", "content": "next"}],
+        )
+
+        assert "first-response" not in handler._session_history
+        assert "second-response" in handler._session_history
+
+    @pytest.mark.asyncio
+    async def test_managed_handler_clears_history_on_disconnect(self):
+        """Per-connection response history is released when the WS run ends."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        mock_websocket = MagicMock()
+        mock_websocket.receive_text = AsyncMock(side_effect=Exception("disconnect"))
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+        )
+        handler._store_history(
+            "first-response",
+            [{"type": "message", "role": "user", "content": "hello"}],
+        )
+
+        await handler.run()
+
+        assert handler._session_history == {}
+        assert handler._session_history_touched == {}
+
 
 class TestChunkTransformation:
     """Test chunk serialization and transformation for WebSocket streaming"""
