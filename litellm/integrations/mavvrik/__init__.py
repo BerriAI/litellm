@@ -17,7 +17,11 @@ from datetime import timezone as _tz
 from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
+from litellm.constants import (
+    MAVVRIK_EXPORT_INTERVAL_MINUTES,
+    MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+    MAVVRIK_MAX_FETCHED_DATA_RECORDS,
+)
 from litellm.integrations.mavvrik.client import Client
 from litellm.integrations.mavvrik.exporter import Exporter
 from litellm.integrations.mavvrik.logger import Logger
@@ -46,6 +50,28 @@ def _build_client(data: dict) -> Client:
         connection_id=str(
             data.get("connection_id") or os.getenv("MAVVRIK_CONNECTION_ID", "")
         ),
+    )
+
+
+def _schedule_job(
+    scheduler: object, api_key: str, api_endpoint: str, connection_id: str
+) -> None:
+    """Register (or replace) the Mavvrik background export job on the given scheduler."""
+    client = Client(
+        api_key=api_key, api_endpoint=api_endpoint, connection_id=connection_id
+    )
+    uploader = Uploader(client=client)
+    orchestrator = Orchestrator(client=client, uploader=uploader)
+    scheduler.add_job(  # type: ignore[union-attr]
+        orchestrator.run,
+        "interval",
+        minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+        id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        replace_existing=True,
+    )
+    verbose_proxy_logger.info(
+        "mavvrik: background export job scheduled every %d min",
+        MAVVRIK_EXPORT_INTERVAL_MINUTES,
     )
 
 
@@ -105,11 +131,6 @@ class Service:
         )
 
         # Step 2 — schedule the background export job.
-        from litellm.constants import (
-            MAVVRIK_EXPORT_INTERVAL_MINUTES,
-            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-        )
-
         import litellm.proxy.proxy_server as _pserver
 
         _scheduler = getattr(_pserver, "scheduler", None)
@@ -122,24 +143,11 @@ class Service:
                 "status": "success",
             }
 
-        client = Client(
+        _schedule_job(
+            _scheduler,
             api_key=api_key,
             api_endpoint=api_endpoint,
             connection_id=connection_id,
-        )
-        uploader = Uploader(client=client)
-        orchestrator = Orchestrator(client=client, uploader=uploader)
-        # replace_existing=True ensures repeated /mavvrik/init calls are safe.
-        _scheduler.add_job(
-            orchestrator.run,
-            "interval",
-            minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-            id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-            replace_existing=True,
-        )
-        verbose_proxy_logger.info(
-            "mavvrik background export job scheduled every %d min",
-            MAVVRIK_EXPORT_INTERVAL_MINUTES,
         )
 
         return {
@@ -237,28 +245,15 @@ class Service:
         # Reschedule the background job with the new credentials so the
         # running Orchestrator uses the merged values immediately —
         # without this, the in-memory Client keeps old credentials until restart.
-        from litellm.constants import (
-            MAVVRIK_EXPORT_INTERVAL_MINUTES,
-            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-        )
-
         import litellm.proxy.proxy_server as _pserver
 
         _scheduler = getattr(_pserver, "scheduler", None)
         if _scheduler is not None:
-            client = Client(
+            _schedule_job(
+                _scheduler,
                 api_key=merged["api_key"],
                 api_endpoint=merged["api_endpoint"],
                 connection_id=merged["connection_id"],
-            )
-            uploader = Uploader(client=client)
-            orchestrator = Orchestrator(client=client, uploader=uploader)
-            _scheduler.add_job(
-                orchestrator.run,
-                "interval",
-                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-                replace_existing=True,
             )
             verbose_proxy_logger.info(
                 "mavvrik: background job rescheduled with updated credentials"
@@ -281,8 +276,6 @@ class Service:
         Raises:
             LookupError: only when DB is connected and no settings row exists.
         """
-        from litellm.constants import MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
-
         import litellm.proxy.proxy_server as _pserver
 
         # Deregister scheduler first — independent of whether creds are in DB or env vars.
@@ -293,12 +286,18 @@ class Service:
             except Exception:
                 pass  # job may not exist if scheduler was restarted
 
-        # Always attempt DB deletion; silently ignore if no row exists or no DB connected
-        # (env-var-only deployments without a database have no row to remove).
+        # Attempt DB deletion; skip gracefully when no row exists or DB not connected
+        # (env-var-only deployments have no row to remove).
         try:
             await self._settings.delete()
-        except Exception:
-            pass
+        except LookupError:
+            verbose_proxy_logger.info(
+                "mavvrik: no DB settings row found — scheduler deregistered only"
+            )
+        except Exception as exc:
+            verbose_proxy_logger.warning(
+                "mavvrik: could not delete DB settings row: %s", exc
+            )
 
         verbose_proxy_logger.info("mavvrik settings deleted")
         return {"message": "Mavvrik settings deleted successfully", "status": "success"}

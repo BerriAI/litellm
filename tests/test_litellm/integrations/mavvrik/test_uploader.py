@@ -389,7 +389,7 @@ class TestStreamUpload:
                     yield "2026-01-01,gpt-4o,0.01\n" * 5000  # page 1
                     yield "2026-01-01,gpt-4o,0.01\n" * 5000  # page 2
 
-                count = await u._stream_upload(pages(), date_str="2026-01-01")
+                count = await u.stream_upload(pages(), date_str="2026-01-01")
 
         assert count > 0
         assert len(put_calls) >= 1
@@ -417,7 +417,7 @@ class TestStreamUpload:
                 return
                 yield  # make it a generator
 
-            count = await u._stream_upload(empty_pages(), date_str="2026-01-01")
+            count = await u.stream_upload(empty_pages(), date_str="2026-01-01")
 
         assert count == 0
         mock_url.assert_not_called()
@@ -508,7 +508,7 @@ class TestStreamUploadEdgeCases:
             ),
             patch.object(u, "_put_chunk", new_callable=AsyncMock),
         ):
-            result = await u._stream_upload(pages_with_empty(), date_str="2026-04-01")
+            result = await u.stream_upload(pages_with_empty(), date_str="2026-04-01")
 
         assert result > 0  # data was uploaded despite the empty first chunk
 
@@ -551,7 +551,7 @@ class TestStreamUploadEdgeCases:
             ),
             patch.object(u, "_put_chunk", side_effect=fake_put),
         ):
-            await u._stream_upload(large_pages(), date_str="2026-04-01")
+            await u.stream_upload(large_pages(), date_str="2026-04-01")
 
         # At least one intermediate 256KB chunk must have been sent
         intermediate = [c for c in put_calls if not c["final"]]

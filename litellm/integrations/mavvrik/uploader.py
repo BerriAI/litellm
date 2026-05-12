@@ -167,7 +167,7 @@ class Uploader:
     # Streaming upload
     # ------------------------------------------------------------------
 
-    async def _stream_upload(
+    async def stream_upload(
         self,
         pages: AsyncIterator[str],
         date_str: str,

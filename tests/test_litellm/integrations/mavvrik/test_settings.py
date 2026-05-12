@@ -71,10 +71,13 @@ class TestIsSetup:
                 "MAVVRIK_CONNECTION_ID",
             )
         }
-        with patch.dict("os.environ", env), patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
+        with (
+            patch.dict("os.environ", env),
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
         ):
             result = await s.is_setup()
 
@@ -94,10 +97,13 @@ class TestIsSetup:
                 "MAVVRIK_CONNECTION_ID",
             )
         }
-        with patch.dict("os.environ", env), patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
+        with (
+            patch.dict("os.environ", env),
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
         ):
             result = await s.is_setup()
 
@@ -115,8 +121,13 @@ class TestIsSetup:
                 "MAVVRIK_CONNECTION_ID",
             )
         }
-        with patch.dict("os.environ", env), patch.object(
-            type(s), "_prisma_client", new_callable=lambda: property(lambda self: None)
+        with (
+            patch.dict("os.environ", env),
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: None),
+            ),
         ):
             result = await s.is_setup()
 
@@ -135,13 +146,16 @@ class TestSave:
         s = Settings()
         mock_client = _mock_prisma()
 
-        with patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
-        ), patch.object(
-            s, "encrypt_value_helper", return_value="encrypted_key"
-        ) as mock_enc:
+        with (
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
+            patch.object(
+                s, "encrypt_value_helper", return_value="encrypted_key"
+            ) as mock_enc,
+        ):
             await s.save(
                 api_key="plaintext_key",
                 api_endpoint="https://api.mavvrik.dev/acme",
@@ -177,11 +191,14 @@ class TestLoad:
         )
         mock_client = _mock_prisma(row=row)
 
-        with patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
-        ), patch.object(s, "decrypt_value_helper", return_value="plaintext_key"):
+        with (
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
+            patch.object(s, "decrypt_value_helper", return_value="plaintext_key"),
+        ):
             result = await s.load()
 
         assert result["api_key"] == "plaintext_key"
@@ -312,10 +329,13 @@ class TestIsSetupDbException:
                 "MAVVRIK_CONNECTION_ID",
             )
         }
-        with patch.dict("os.environ", env), patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
+        with (
+            patch.dict("os.environ", env),
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
         ):
             result = await s.is_setup()
         assert result is False
@@ -380,11 +400,14 @@ class TestLoadEdgeCases:
             {"api_key": "bad_enc", "api_endpoint": "https://e", "connection_id": "c"}
         )
         mock_client = _mock_prisma(row=row)
-        with patch.object(
-            type(s),
-            "_prisma_client",
-            new_callable=lambda: property(lambda self: mock_client),
-        ), patch.object(s, "decrypt_value_helper", return_value=None):
+        with (
+            patch.object(
+                type(s),
+                "_prisma_client",
+                new_callable=lambda: property(lambda self: mock_client),
+            ),
+            patch.object(s, "decrypt_value_helper", return_value=None),
+        ):
             with pytest.raises(ValueError, match="decrypt"):
                 await s.load()
 

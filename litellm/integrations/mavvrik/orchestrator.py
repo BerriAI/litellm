@@ -134,17 +134,17 @@ class Orchestrator:
     async def _export(self, export_date: date) -> int:
         """Stream spend data from DB to GCS for one date.
 
-        Uses Exporter._stream_pages() → Uploader._stream_upload() so only
+        Uses Exporter.stream_pages() → Uploader.stream_upload() so only
         one page of rows is in memory at a time. No row limit or overflow check.
 
         Returns total compressed bytes uploaded (0 when no data for the date).
         """
         date_str = export_date.isoformat()
-        pages = self._exporter._stream_pages(
+        pages = self._exporter.stream_pages(
             date_str=date_str,
             connection_id=self._client.connection_id,
         )
-        total_bytes = await self._uploader._stream_upload(pages, date_str=date_str)
+        total_bytes = await self._uploader.stream_upload(pages, date_str=date_str)
         if total_bytes > 0:
             verbose_logger.info(
                 "Orchestrator: %s → streamed %d bytes to GCS ✓", date_str, total_bytes

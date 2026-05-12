@@ -658,14 +658,14 @@ class TestResolveFirstRunInvalidDate:
 class TestStreamingExport:
     @pytest.mark.asyncio
     async def test_export_calls_stream_pages_and_stream_upload(self):
-        """_export() wires exporter._stream_pages() into uploader._stream_upload()."""
+        """_export() wires exporter.stream_pages() into uploader.stream_upload()."""
         orc = _make_orchestrator()
 
         async def fake_stream_pages(**kwargs):
             yield "date,model\n"
             yield "2026-04-09,gpt-4o\n"
 
-        orc._exporter._stream_pages = fake_stream_pages
+        orc._exporter.stream_pages = fake_stream_pages
 
         stream_upload_called_with = []
 
@@ -676,7 +676,7 @@ class TestStreamingExport:
                 pass
             return 1024
 
-        orc._uploader._stream_upload = fake_stream_upload
+        orc._uploader.stream_upload = fake_stream_upload
 
         result = await orc._export(date(2026, 4, 9))
 
@@ -692,12 +692,12 @@ class TestStreamingExport:
             return
             yield
 
-        orc._exporter._stream_pages = empty_pages
+        orc._exporter.stream_pages = empty_pages
 
         async def fake_stream_upload(pages, date_str):
             return 0
 
-        orc._uploader._stream_upload = fake_stream_upload
+        orc._uploader.stream_upload = fake_stream_upload
 
         result = await orc._export(date(2026, 4, 9))
         assert result == 0
@@ -1497,9 +1497,7 @@ class TestStreamPages:
             new_callable=lambda: property(lambda self: mock_client),
         ):
             chunks = []
-            async for chunk in exporter._stream_pages(
-                "2026-04-10", connection_id="c-1"
-            ):
+            async for chunk in exporter.stream_pages("2026-04-10", connection_id="c-1"):
                 chunks.append(chunk)
 
         assert len(chunks) >= 1
@@ -1520,9 +1518,7 @@ class TestStreamPages:
             new_callable=lambda: property(lambda self: mock_client),
         ):
             chunks = []
-            async for chunk in exporter._stream_pages(
-                "2026-04-10", connection_id="c-1"
-            ):
+            async for chunk in exporter.stream_pages("2026-04-10", connection_id="c-1"):
                 chunks.append(chunk)
 
         assert chunks == []
@@ -1554,7 +1550,7 @@ class TestStreamPages:
             "_prisma_client",
             new_callable=lambda: property(lambda self: mock_client),
         ):
-            async for _ in exporter._stream_pages(
+            async for _ in exporter.stream_pages(
                 "2026-04-10", connection_id="c", page_size=3
             ):
                 pass
@@ -1609,7 +1605,7 @@ class TestExporterNoDb:
             new_callable=lambda: property(lambda self: None),
         ):
             with pytest.raises(RuntimeError, match="database not connected"):
-                async for _ in exporter._stream_pages("2026-04-10", connection_id="c"):
+                async for _ in exporter.stream_pages("2026-04-10", connection_id="c"):
                     pass
 
     @pytest.mark.asyncio
@@ -1624,6 +1620,6 @@ class TestExporterNoDb:
             new_callable=lambda: property(lambda self: mock_client),
         ):
             chunks = []
-            async for chunk in exporter._stream_pages("2026-04-10", connection_id="c"):
+            async for chunk in exporter.stream_pages("2026-04-10", connection_id="c"):
                 chunks.append(chunk)
         assert chunks == []

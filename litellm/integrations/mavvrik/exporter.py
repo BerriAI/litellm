@@ -10,13 +10,13 @@ Public interface:
       Returns MIN(date) for first-run start date resolution.
 
 Internal methods:
-  _stream_pages(date_str, connection_id, page_size) → AsyncGenerator[str, None]
+  stream_pages(date_str, connection_id, page_size) → AsyncGenerator[str, None]
   _get_usage_data(date_str, limit) → DataFrame
   _to_csv(df, connection_id) → str
 
 DB not connected:
   _get_usage_data / _to_csv — log warning and return empty/None (scheduler path).
-  _stream_pages              — raises RuntimeError (propagates to Orchestrator try/except).
+  stream_pages              — raises RuntimeError (propagates to Orchestrator try/except).
   Service.export / dry_run   — call Settings._ensure_prisma_client() before reaching here,
                                so they raise before the exporter is called.
 
@@ -104,7 +104,7 @@ class Exporter:
         csv = self._to_csv(df, connection_id=connection_id)
         return df, csv
 
-    async def _stream_pages(
+    async def stream_pages(
         self,
         date_str: str,
         connection_id: Optional[str] = None,
