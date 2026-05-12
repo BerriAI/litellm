@@ -171,6 +171,9 @@ class BaseLLMHTTPHandler:
         )
 
         response: Optional[httpx.Response] = None
+        # httpx requires header values to be str or bytes; coerce any non-string
+        # values (e.g. float from YAML-parsed extra_headers) to avoid TypeError.
+        headers = {k: str(v) for k, v in headers.items()}
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
                 response = await async_httpx_client.post(
@@ -230,6 +233,9 @@ class BaseLLMHTTPHandler:
         )
 
         response: Optional[httpx.Response] = None
+        # httpx requires header values to be str or bytes; coerce any non-string
+        # values (e.g. float from YAML-parsed extra_headers) to avoid TypeError.
+        headers = {k: str(v) for k, v in headers.items()}
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
