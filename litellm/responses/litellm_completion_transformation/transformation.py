@@ -541,6 +541,26 @@ class LiteLLMCompletionResponsesConfig:
                     if not chat_completion_messages:
                         continue
 
+                    # Skip orphan tool outputs: tool output without corresponding tool call
+                    # This happens when previous_response_id chain loses tool call history
+                    # Models like Volcengine/Aliyun reject "No tool calls but found tool output"
+                    if len(chat_completion_messages) == 1:
+                        first_msg = chat_completion_messages[0]
+                        first_role = (
+                            first_msg.get("role")
+                            if isinstance(first_msg, dict)
+                            else getattr(first_msg, "role", None)
+                        )
+                        if first_role == "tool":
+                            first_tool_call_id = (
+                                first_msg.get("tool_call_id")
+                                if isinstance(first_msg, dict)
+                                else getattr(first_msg, "tool_call_id", None)
+                            )
+                            if first_tool_call_id and str(first_tool_call_id) not in existing_tool_call_ids:
+                                # Orphan tool output: no corresponding tool call in history
+                                continue
+
                     deduped_in_place: List[Any] = []
                     for m in chat_completion_messages:
                         role = ""
