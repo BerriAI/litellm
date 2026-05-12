@@ -1528,19 +1528,21 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
     data["proxy_server_request"]["body"] = _body_snapshot
 
-    # Snapshot the (now-cleaned) requester-supplied metadata for downstream
-    # consumers. Taking the deepcopy AFTER the strip prevents attacker-
-    # injected admin slots (user_api_key_*, tags without opt-in,
-    # _pipeline_managed_guardrails) from surviving in requester_metadata
-    # where guardrails and audit paths may read from it.
+    # Snapshot the requester-supplied metadata for downstream consumers.
+    # Taking the deepcopy after the user_api_key_* / _pipeline_managed_guardrails
+    # strip above prevents those proxy-internal slots — if a caller forged
+    # them — from leaking into requester_metadata where guardrails and audit
+    # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
         )
 
-    # Now merge litellm_metadata into the metadata variable (preserving existing
-    # values) — runs AFTER the strip so attacker injections in litellm_metadata
-    # cannot cross-contaminate the admin-authoritative metadata dict.
+    # Merge litellm_metadata into the metadata variable (preserving existing
+    # values). Runs after the user_api_key_* / _pipeline_managed_guardrails
+    # strip above so those proxy-internal slots — if a caller forged them
+    # into litellm_metadata — cannot cross-contaminate the admin-authoritative
+    # metadata dict.
     if "litellm_metadata" in data and isinstance(data["litellm_metadata"], dict):
         for key, value in data["litellm_metadata"].items():
             if key not in data[_metadata_variable_name]:
