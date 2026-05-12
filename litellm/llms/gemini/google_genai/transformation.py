@@ -2,6 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -10,6 +11,11 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
+)
+from litellm.llms.vertex_ai.common_utils import (
+    _build_json_schema,
+    _build_vertex_schema,
+    supports_response_json_schema,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.router import GenericLiteLLMParams
@@ -302,6 +308,66 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             litellm_params=litellm_params,
         )
 
+    @staticmethod
+    def _normalize_response_schema(
+        generate_content_config_dict: Dict, model: str
+    ) -> None:
+        """
+        Normalize ``responseSchema`` / ``responseJsonSchema`` in-place so the
+        native ``generateContent`` passthrough mirrors the chat/completions
+        path. Without this, schemas containing ``$defs``/``$ref``, ``anyOf``
+        with ``null``, ``default``, ``title``, etc. are forwarded verbatim and
+        Gemini rejects them.
+
+        - Gemini 2.0+ supports ``responseJsonSchema`` natively (preserves
+          ``$defs``/``$ref``). Promote ``responseSchema`` to
+          ``responseJsonSchema`` for those models.
+        - Older models keep ``responseSchema`` but the schema is flattened to
+          the OpenAPI subset via ``_build_vertex_schema``.
+        """
+        schema_key = next(
+            (
+                k
+                for k in ("responseSchema", "response_schema")
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+        json_schema_key = next(
+            (
+                k
+                for k in ("responseJsonSchema", "response_json_schema")
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+
+        use_json_schema = supports_response_json_schema(model)
+
+        if json_schema_key is not None:
+            value = generate_content_config_dict[json_schema_key]
+            if isinstance(value, dict):
+                generate_content_config_dict[json_schema_key] = _build_json_schema(
+                    deepcopy(value)
+                )
+
+        if schema_key is None:
+            return
+
+        value = generate_content_config_dict[schema_key]
+        if not isinstance(value, dict):
+            return
+
+        if use_json_schema:
+            generate_content_config_dict.pop(schema_key)
+            generate_content_config_dict["responseJsonSchema"] = _build_json_schema(
+                deepcopy(value)
+            )
+        else:
+            generate_content_config_dict[schema_key] = _build_vertex_schema(
+                parameters=deepcopy(value), add_property_ordering=True
+            )
+
     def transform_generate_content_request(
         self,
         model: str,
@@ -314,6 +380,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             GenerateContentConfigDict,
             GenerateContentRequestDict,
         )
+
+        self._normalize_response_schema(generate_content_config_dict, model)
 
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,

@@ -335,6 +335,140 @@ def test_transform_generate_content_request_system_instruction_with_tools():
     assert result["model"] == "gemini-3-flash-preview"
 
 
+def test_transform_generate_content_request_normalizes_response_schema_2_5():
+    """For Gemini 2.0+, ``response_schema`` with ``$defs``/``$ref`` should be
+    promoted to ``responseJsonSchema`` (which Gemini 2.0+ accepts natively),
+    not forwarded as ``responseSchema`` (which rejects ``$defs``)."""
+    config = GoogleGenAIConfig()
+
+    schema = {
+        "$defs": {
+            "Highlight": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["title"],
+            }
+        },
+        "type": "object",
+        "properties": {
+            "park_name": {"type": "string"},
+            "highlights": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Highlight"},
+            },
+        },
+        "required": ["park_name", "highlights"],
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+        },
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseSchema" not in gen_config
+    assert "responseJsonSchema" in gen_config
+    normalized = gen_config["responseJsonSchema"]
+    # _build_json_schema preserves $defs/$ref for 2.0+ models
+    assert "$defs" in normalized
+    assert normalized["properties"]["highlights"]["items"] == {
+        "$ref": "#/$defs/Highlight"
+    }
+
+
+def test_transform_generate_content_request_flattens_response_schema_1_5():
+    """For Gemini 1.5, ``responseSchema`` is kept but flattened via
+    ``_build_vertex_schema`` so ``$defs``/``$ref`` are unpacked."""
+    config = GoogleGenAIConfig()
+
+    schema = {
+        "$defs": {
+            "Highlight": {
+                "type": "object",
+                "properties": {"title": {"type": "string"}},
+                "required": ["title"],
+            }
+        },
+        "type": "object",
+        "properties": {
+            "highlights": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Highlight"},
+            }
+        },
+        "required": ["highlights"],
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-1.5-pro",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={"responseSchema": schema},
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseSchema" in gen_config
+    assert "responseJsonSchema" not in gen_config
+    normalized = gen_config["responseSchema"]
+    # $defs should be stripped, $ref expanded inline
+    assert "$defs" not in normalized
+    items = normalized["properties"]["highlights"]["items"]
+    assert "$ref" not in items
+    assert "title" in items["properties"]
+    assert items["properties"]["title"]["type"].lower() == "string"
+
+
+def test_transform_generate_content_request_passes_through_response_json_schema():
+    """If the caller already used ``responseJsonSchema``, it should be
+    preserved (Gemini 2.0+ accepts standard JSON Schema as-is)."""
+    config = GoogleGenAIConfig()
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={"responseJsonSchema": schema},
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert gen_config["responseJsonSchema"] == schema
+    assert "responseSchema" not in gen_config
+
+
+def test_transform_generate_content_request_without_schema_unchanged():
+    """No schema in config → no normalization side effects."""
+    config = GoogleGenAIConfig()
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={"temperature": 0.7},
+        system_instruction=None,
+    )
+
+    assert result["generationConfig"]["temperature"] == 0.7
+    assert "responseSchema" not in result["generationConfig"]
+    assert "responseJsonSchema" not in result["generationConfig"]
+
+
 def test_validate_environment_with_dict_api_key():
     """
     Test that validate_environment correctly handles api_key as a dict.
