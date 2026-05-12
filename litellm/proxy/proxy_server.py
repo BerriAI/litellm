@@ -7747,7 +7747,15 @@ class ProxyStartupEvent:
             is_mavvrik_setup,
         )
 
-        if await is_mavvrik_setup():
+        try:
+            _mavvrik_ready = await is_mavvrik_setup()
+        except Exception as _e:
+            verbose_proxy_logger.warning(
+                "mavvrik: skipping startup — is_mavvrik_setup() failed: %s", _e
+            )
+            _mavvrik_ready = False
+
+        if _mavvrik_ready:
             from litellm.constants import (  # noqa: PLC0415
                 MAVVRIK_EXPORT_INTERVAL_MINUTES,
                 MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,

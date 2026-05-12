@@ -85,7 +85,11 @@ async def _mavvrik_errors() -> AsyncIterator[None]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+        # Use only the exception type name to avoid leaking internal details
+        # (e.g. Postgres DSNs, hostnames) into API responses.
+        raise HTTPException(
+            status_code=500, detail={"error": type(exc).__name__}
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
