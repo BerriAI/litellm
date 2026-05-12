@@ -17,7 +17,7 @@ import os
 import dotenv as _dotenv
 
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv()
+    _dotenv.load_dotenv(dotenv_path=_dotenv.find_dotenv(usecwd=True))
 
 from typing import (
     Callable,
