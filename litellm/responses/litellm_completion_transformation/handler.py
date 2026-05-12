@@ -238,6 +238,28 @@ class LiteLLMCompletionTransformationHandler:
             f"[DEBUG handler.py async] acompletion_args keys: {list(acompletion_args.keys())}",
             file=sys.stderr,
         )
+        # 详细日志：查看 tools 和 tool_choice
+        if "tools" in acompletion_args:
+            tools_data = acompletion_args.get("tools", [])
+            print(
+                f"[DEBUG handler.py async] tools count: {len(tools_data)}",
+                file=sys.stderr,
+            )
+            for i, tool in enumerate(tools_data[:3]):  # 只打印前3个
+                tool_type = (
+                    tool.get("type", "unknown")
+                    if isinstance(tool, dict)
+                    else "not_dict"
+                )
+                print(
+                    f"[DEBUG handler.py async] tool[{i}] type: {tool_type}",
+                    file=sys.stderr,
+                )
+        if "tool_choice" in acompletion_args:
+            print(
+                f"[DEBUG handler.py async] tool_choice: {acompletion_args.get('tool_choice')}",
+                file=sys.stderr,
+            )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
