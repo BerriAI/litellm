@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -386,6 +386,102 @@ class TestProxyInitializationHelpers:
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "timeout_config,expected_timeout",
+        [
+            ({"database_connection_timeout": 30}, 30),
+            ({"database_connection_pool_timeout": 45}, 45),
+            (
+                {
+                    "database_connection_timeout": 30,
+                    "database_connection_pool_timeout": 45,
+                },
+                30,
+            ),
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_db_timeout_settings_are_forwarded_to_pool_timeout(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+        timeout_config,
+        expected_timeout,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={
+                "general_settings": {
+                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_connection_pool_limit": 5,
+                    **timeout_config,
+                }
+            }
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: (
+                    f"{url}?connection_limit={params['connection_limit']}&pool_timeout={params['pool_timeout']}"
+                ),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_append_query_params.assert_called()
+            appended_params = mock_append_query_params.call_args.args[1]
+            assert appended_params["connection_limit"] == 5
+            assert appended_params["pool_timeout"] == expected_timeout
 
     @patch("uvicorn.run")
     @patch("atexit.register")

@@ -119,6 +119,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
+    def _normalize_tool_choice_for_responses_api(self, tool_choice: Any) -> Any:
+        """Chat tool_choice uses function.name; Responses API expects top-level name."""
+        if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
+            return tool_choice
+        if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
+            # Return only Responses shape so stray chat ``function`` key is not sent upstream.
+            return {"type": "function", "name": tool_choice["name"]}
+        fn = tool_choice.get("function")
+        if isinstance(fn, dict):
+            fn_name = fn.get("name")
+            if isinstance(fn_name, str) and fn_name:
+                return {"type": "function", "name": fn_name}
+        return tool_choice
+
     def _handle_raw_dict_response_item(
         self, item: Dict[str, Any], index: int
     ) -> Tuple[Optional[Any], int]:
@@ -309,6 +323,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
                     responses_api_request["text"] = text_format  # type: ignore
+            elif key == "tool_choice":
+                responses_api_request["tool_choice"] = (  # type: ignore[assignment]
+                    self._normalize_tool_choice_for_responses_api(value)
+                )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "previous_response_id":

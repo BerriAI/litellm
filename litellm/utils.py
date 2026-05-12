@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
@@ -4405,6 +4407,10 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+            if bedrock_route == "claude_platform":
+                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
+                    passed_params=passed_params, optional_params=optional_params
+                )
     elif custom_llm_provider == "cloudflare":
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
@@ -9488,6 +9494,49 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     }  # model-specific params - pass them straight to the model/provider
 
     return non_default_params
+
+
+def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
+
+
+def strip_reasoning_summary_aliases_from_optional_params(
+    optional_params: dict,
+) -> Tuple[dict, Optional[Any]]:
+    """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
+    op = dict(optional_params)
+    rs_val = op.pop("reasoningSummary", None)
+    snake_rs_val = op.pop("reasoning_summary", None)
+    if rs_val is None:
+        rs_val = snake_rs_val
+    eb = op.get("extra_body")
+    if isinstance(eb, dict):
+        eb = dict(eb)
+        eb_rs_val = eb.pop("reasoningSummary", None)
+        eb_snake_rs_val = eb.pop("reasoning_summary", None)
+        if rs_val is None:
+            rs_val = eb_rs_val
+            if rs_val is None:
+                rs_val = eb_snake_rs_val
+        if eb:
+            op["extra_body"] = eb
+        else:
+            op.pop("extra_body", None)
+    return op, rs_val
 
 
 def get_non_default_transcription_params(kwargs: dict) -> dict:

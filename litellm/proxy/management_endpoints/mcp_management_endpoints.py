@@ -142,6 +142,7 @@ if MCP_AVAILABLE:
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
+        MCPTransport,
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
@@ -1067,6 +1068,24 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error": "Registration requires an API key associated with a team. Use a team-scoped key."
+                },
+            )
+
+        # stdio servers spawn a local subprocess on the proxy host with the
+        # configured command + args, so accepting them from non-admin callers
+        # would let a team member propose a server config that an admin could
+        # rubber-stamp into local code execution. Restrict stdio submission to
+        # the admin POST /v1/mcp/server path or to config.yaml.
+        if payload.transport == MCPTransport.stdio:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "stdio MCP servers cannot be submitted via the user "
+                        "registration workflow. Ask a proxy admin to add this "
+                        "server via POST /v1/mcp/server or to declare it in "
+                        "config.yaml."
+                    )
                 },
             )
 

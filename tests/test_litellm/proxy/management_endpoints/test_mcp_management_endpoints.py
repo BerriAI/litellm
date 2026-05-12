@@ -2492,6 +2492,32 @@ class TestMCPApprovalWorkflow:
         assert "team" in str(exc_info.value.detail).lower()
 
     @pytest.mark.asyncio
+    async def test_register_mcp_server_rejects_stdio_transport(self):
+        # stdio servers spawn a local subprocess on the proxy host. Accepting
+        # them from the non-admin submission endpoint would let a team member
+        # propose a config that an admin could rubber-stamp into local code
+        # execution. Admins use POST /v1/mcp/server or config.yaml instead.
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            register_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="local",
+            transport=MCPTransport.stdio,
+            command="python3",
+            args=["-m", "mcp_server_filesystem", "/tmp"],
+        )
+        user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            team_id="team-123",
+            user_id="user-abc",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await register_mcp_server(payload=payload, user_api_key_dict=user_auth)
+        assert exc_info.value.status_code == 400
+        assert "stdio" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
     async def test_register_mcp_server_sets_pending_review(self):
         from litellm.proxy._types import MCPApprovalStatus
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
