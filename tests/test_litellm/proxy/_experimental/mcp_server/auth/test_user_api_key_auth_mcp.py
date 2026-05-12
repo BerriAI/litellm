@@ -1842,8 +1842,9 @@ async def test_get_allowed_mcp_servers_for_team_uses_unified_access_groups_witho
             new_callable=AsyncMock,
             return_value=None,
         ) as mock_get_team_perm,
-        patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_server_ids_from_team_access_groups",
             new_callable=AsyncMock,
             return_value=["mcp-from-team-group"],
         ) as mock_get_access_group_servers,
@@ -1855,7 +1856,121 @@ async def test_get_allowed_mcp_servers_for_team_uses_unified_access_groups_witho
     assert result == ["mcp-from-team-group"]
     mock_get_team_access_groups.assert_awaited_once_with(mock_user_auth)
     mock_get_team_perm.assert_awaited_once_with(mock_user_auth)
-    mock_get_access_group_servers.assert_awaited_once_with(["ag-team"])
+    mock_get_access_group_servers.assert_awaited_once_with(
+        user_api_key_auth=mock_user_auth,
+        team_access_group_ids=["ag-team"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_server_ids_from_team_access_groups_requires_assigned_team():
+    """Team access_group_ids only grant MCP servers when the group assigns the team."""
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="authorized-team",
+    )
+    authorized_group = MagicMock(
+        assigned_team_ids=["authorized-team"],
+        access_mcp_server_ids=["mcp-allowed", "mcp-shared"],
+    )
+    other_team_group = MagicMock(
+        assigned_team_ids=["other-team"],
+        access_mcp_server_ids=["mcp-denied"],
+    )
+    duplicate_group = MagicMock(
+        assigned_team_ids=["authorized-team"],
+        access_mcp_server_ids=["mcp-shared"],
+    )
+
+    async def mock_get_access_object(access_group_id, **kwargs):
+        return {
+            "ag-authorized": authorized_group,
+            "ag-other-team": other_team_group,
+            "ag-duplicate": duplicate_group,
+        }[access_group_id]
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=mock_get_access_object,
+        ) as mock_get_access_group,
+    ):
+        result = await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+            user_api_key_auth=mock_user_auth,
+            team_access_group_ids=["ag-authorized", "ag-other-team", "ag-duplicate"],
+        )
+
+    assert sorted(result) == ["mcp-allowed", "mcp-shared"]
+    assert mock_get_access_group.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_server_ids_from_team_access_groups_fails_closed():
+    """Missing auth context, DB cache, or access-group rows do not grant MCP servers."""
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="authorized-team",
+    )
+
+    assert (
+        await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+            user_api_key_auth=None,
+            team_access_group_ids=["ag-authorized"],
+        )
+        == []
+    )
+    assert (
+        await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+            user_api_key_auth=mock_user_auth,
+            team_access_group_ids=[],
+        )
+        == []
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+    ):
+        assert (
+            await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+                user_api_key_auth=mock_user_auth,
+                team_access_group_ids=["ag-authorized"],
+            )
+            == []
+        )
+
+    authorized_group = MagicMock(
+        assigned_team_ids=["authorized-team"],
+        access_mcp_server_ids=["mcp-allowed"],
+    )
+
+    async def mock_get_access_object(access_group_id, **kwargs):
+        if access_group_id == "ag-missing":
+            raise Exception("not found")
+        return authorized_group
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=mock_get_access_object,
+        ),
+    ):
+        assert await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+            user_api_key_auth=mock_user_auth,
+            team_access_group_ids=["ag-missing", "ag-authorized"],
+        ) == ["mcp-allowed"]
 
 
 @pytest.mark.asyncio

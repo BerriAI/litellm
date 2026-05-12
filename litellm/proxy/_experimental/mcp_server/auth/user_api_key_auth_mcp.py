@@ -825,10 +825,6 @@ class MCPRequestHandler:
             if user_api_key_auth is None or user_api_key_auth.team_id is None:
                 return []
 
-            from litellm.proxy.auth.auth_checks import (
-                _get_mcp_server_ids_from_access_groups,
-            )
-
             try:
                 team_access_group_ids = (
                     await MCPRequestHandler._get_team_access_group_ids(
@@ -836,7 +832,10 @@ class MCPRequestHandler:
                     )
                 )
                 team_access_group_servers = (
-                    await _get_mcp_server_ids_from_access_groups(team_access_group_ids)
+                    await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+                        user_api_key_auth=user_api_key_auth,
+                        team_access_group_ids=team_access_group_ids,
+                    )
                 )
             except Exception as e:
                 verbose_logger.debug(
@@ -886,6 +885,67 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_mcp_server_ids_from_team_access_groups(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        team_access_group_ids: List[str],
+    ) -> List[str]:
+        """
+        Collect MCP server IDs from unified team access groups.
+
+        A team only receives MCP servers from an access group if the access
+        group row also assigns itself back to the team. This keeps a mutable
+        team.access_group_ids value from granting another team's access group.
+        """
+        if (
+            user_api_key_auth is None
+            or not user_api_key_auth.team_id
+            or not team_access_group_ids
+        ):
+            return []
+
+        try:
+            from litellm.proxy.auth.auth_checks import get_access_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if prisma_client is None or user_api_key_cache is None:
+                return []
+
+            mcp_server_ids: List[str] = []
+            for access_group_id in team_access_group_ids:
+                try:
+                    access_group = await get_access_object(
+                        access_group_id=access_group_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except Exception as e:
+                    verbose_logger.debug(
+                        "Failed to load team access group %s for MCP servers: %s",
+                        access_group_id,
+                        str(e),
+                    )
+                    continue
+
+                if user_api_key_auth.team_id not in (
+                    access_group.assigned_team_ids or []
+                ):
+                    continue
+
+                mcp_server_ids.extend(access_group.access_mcp_server_ids or [])
+
+            return list(set(mcp_server_ids))
+        except Exception as e:
+            verbose_logger.debug(
+                f"Failed to get MCP servers from team access groups: {str(e)}"
             )
             return []
 
