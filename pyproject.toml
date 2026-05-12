@@ -22,7 +22,7 @@ dependencies = [
     "importlib-metadata>=8.0.0,<9.0",
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
-    "jinja2>=3.1.0,<4.0",
+    "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.10,<4.0",
     "pydantic>=2.10.0,<3.0.0",
     "jsonschema>=4.0.0,<5.0",
@@ -273,6 +273,33 @@ filterwarnings = [
     "ignore::UserWarning:pydantic.main",
     # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
     "ignore::DeprecationWarning:pytest_asyncio.plugin",
+]
+
+[tool.mutmut]
+# Mutation-testing scope. Driven by the manually-triggered workflow at
+# .github/workflows/mutation-test.yml. mutmut is not part of the project's
+# default install; it is pulled in via `uv run --with mutmut==<version>` in CI.
+# `also_copy = ["litellm/"]` is required because mutmut runs in a `mutants/`
+# sandbox and the test conftest imports from across the litellm package.
+paths_to_mutate = [
+    "litellm/proxy/management_endpoints/",
+]
+tests_dir = [
+    "tests/test_litellm/proxy/management_endpoints/",
+]
+also_copy = [
+    "litellm/",
+]
+# Disable rerun/parallel plugins for mutation runs:
+# - pytest-retry triggers an `INTERNALERROR: no option named 'filtered_exceptions'`
+#   when invoked via mutmut's in-process `pytest.main()` call.
+# - rerunning a "failed" test on a mutant would mask which mutants are killed
+#   vs. survive, so reruns are wrong for mutation testing regardless.
+# - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+pytest_add_cli_args = [
+    "-p", "no:retry",
+    "-p", "no:rerunfailures",
+    "-p", "no:xdist",
 ]
 
 [tool.coverage.run]

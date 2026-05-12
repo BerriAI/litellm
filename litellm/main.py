@@ -1,3 +1,5 @@
+# LiteLLM main module: public completion, embedding, streaming, and moderation entrypoints.
+#
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -59,7 +61,13 @@ import litellm
 from litellm import client
 
 # Other utils are imported directly to avoid circular imports
-from litellm.utils import exception_type, get_litellm_params, get_optional_params
+from litellm.utils import (
+    exception_type,
+    get_litellm_params,
+    get_optional_params,
+    peek_reasoning_summary_aliases,
+    strip_reasoning_summary_aliases_from_optional_params,
+)
 
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
@@ -946,6 +954,7 @@ def responses_api_bridge_check(
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     tools: Optional[List[Any]] = None,
     reasoning_effort: Optional[Any] = None,
+    reasoning_summary: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
 
@@ -982,14 +991,23 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    # OpenAI/Azure gpt-5.4+ chat-completions calls with both tools + reasoning_effort
-    # must be bridged to Responses API.
+    # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
+    # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
+    # those keys.
+    #
+    # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
+    # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
+    #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     if (
         custom_llm_provider in ("openai", "azure")
-        and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-        and tools
-        and reasoning_effort is not None
         and model_info.get("mode") != "responses"
+        and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and reasoning_effort is not None
+        and (
+            reasoning_summary is not None
+            or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools)
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
@@ -1510,7 +1528,11 @@ def completion(  # type: ignore # noqa: PLR0915
             "logit_bias": logit_bias,
             "user": user,
             # params to identify the model
-            "model": model,
+            "model": (
+                model_info.get("base_model")
+                if isinstance(model_info, dict) and model_info.get("base_model")
+                else model
+            ),
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
@@ -1634,8 +1656,10 @@ def completion(  # type: ignore # noqa: PLR0915
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         # Only run the second bridge check if the first one didn't already
         # detect responses mode (e.g. via the "responses/" prefix).  The second
-        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
-        # the first (early) check doesn't cover.
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort or
+        # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
+        # (early) check doesn't cover.
+        _reasoning_summary_for_bridge = peek_reasoning_summary_aliases(optional_params)
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -1643,14 +1667,29 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 tools=tools,
                 reasoning_effort=reasoning_effort,
+                reasoning_summary=_reasoning_summary_for_bridge,
             )
 
         if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
+            optional_params, rs_val = (
+                strip_reasoning_summary_aliases_from_optional_params(optional_params)
+            )
+
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
-                optional_params = dict(optional_params)
                 optional_params["reasoning_effort"] = reasoning_effort
+            elif rs_val is not None:
+                eff = optional_params.get("reasoning_effort", reasoning_effort)
+                if isinstance(eff, dict):
+                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
+                elif eff is not None:
+                    optional_params["reasoning_effort"] = {
+                        "effort": eff,
+                        "summary": rs_val,
+                    }
+                else:
+                    optional_params["reasoning_effort"] = {"summary": rs_val}
 
             return responses_api_bridge.completion(
                 model=model,
@@ -1668,6 +1707,16 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
                 stream=stream,
+            )
+        elif (
+            custom_llm_provider == "openai"
+            and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        ) or (
+            custom_llm_provider == "azure"
+            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+        ):
+            optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(
+                optional_params
             )
 
         if custom_llm_provider == "azure":
@@ -3813,7 +3862,33 @@ def completion(  # type: ignore # noqa: PLR0915
                     )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-            if bedrock_route == "converse":
+            if bedrock_route == "claude_platform":
+                provider_config = ProviderConfigManager.get_provider_chat_config(
+                    model=model,
+                    provider=LlmProviders.BEDROCK,
+                )
+                model = BedrockModelInfo.get_claude_platform_model(model)
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    custom_llm_provider="bedrock",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=_get_encoding(),
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
+                    provider_config=provider_config,
+                )
+                return response
+            elif bedrock_route == "converse":
                 model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
