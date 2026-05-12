@@ -10,7 +10,6 @@ from litellm import token_counter
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -304,13 +303,19 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Update usage
             # ------------
             # update cache
-            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
-            await self.router_cache.async_increment_cache(
+            # Route TPM increments through the queue-based sync mechanism so per-pod
+            # in-memory counters get the cross-pod sum merged in by the periodic
+            # `_sync_in_memory_spend_with_redis` task. Without this, each replica's
+            # in-memory TPM counter only reflects its locally-processed responses,
+            # and the prefilter in `_return_potential_deployments` compares that local
+            # value against the limit — effectively allowing `tpm_limit * N_replica`.
+            # RPM was migrated to the queue-based path by #9357; this completes the
+            # migration for TPM. See #27736 for full root-cause analysis.
+            await self._increment_value_in_current_window(
                 key=tpm_key,
                 value=total_tokens,
                 ttl=self.routing_args.ttl,
-                parent_otel_span=parent_otel_span,
             )
 
             ### TESTING ###
