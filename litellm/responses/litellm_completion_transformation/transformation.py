@@ -557,7 +557,11 @@ class LiteLLMCompletionResponsesConfig:
                                 if isinstance(first_msg, dict)
                                 else getattr(first_msg, "tool_call_id", None)
                             )
-                            if first_tool_call_id and str(first_tool_call_id) not in existing_tool_call_ids:
+                            if (
+                                first_tool_call_id
+                                and str(first_tool_call_id)
+                                not in existing_tool_call_ids
+                            ):
                                 # Orphan tool output: no corresponding tool call in history
                                 continue
 
