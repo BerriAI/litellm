@@ -7,12 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.vertex_ai.common_utils import (
+    VertexAIError,
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.llms.vertex_ai.vertex_model_garden.main import (
+    VertexAIModelGardenModels,
     _vertex_model_garden_model_id_in_json_body,
     create_vertex_url,
 )
@@ -86,13 +89,24 @@ def test_vertex_grok_models_route_to_model_garden(model: str) -> None:
 
 
 @pytest.mark.parametrize("model", GROK_MODELS)
-def test_vertex_grok_models_resolve_global_region(model: str) -> None:
-    vertex_base = VertexBase()
-    assert vertex_base.get_vertex_region(vertex_region=None, model=model) == "global"
+def test_vertex_grok_models_default_to_global_region(model: str) -> None:
+    model_garden = VertexAIModelGardenModels()
     assert (
-        vertex_base.get_vertex_region(vertex_region="us-central1", model=model)
+        model_garden._resolve_vertex_location(model=model, vertex_location=None)
         == "global"
     )
+    assert (
+        model_garden._resolve_vertex_location(model=model, vertex_location="global")
+        == "global"
+    )
+
+
+def test_vertex_grok_explicit_unsupported_region_raises() -> None:
+    with pytest.raises(VertexAIError, match="not available in location 'us-central1'"):
+        VertexAIModelGardenModels()._resolve_vertex_location(
+            model="xai/grok-4.1-fast-reasoning",
+            vertex_location="us-central1",
+        )
 
 
 @pytest.mark.parametrize("model", GROK_MODELS)
@@ -167,6 +181,7 @@ def test_vertex_grok_model_metadata(
     assert model_info["max_input_tokens"] == expected_context
     assert model_info["max_output_tokens"] == expected_context
     assert model_info["max_tokens"] == expected_context
+    assert "Vertex AI model card lists" in litellm.model_cost[model]["notes"]
     assert model_info["input_cost_per_token"] == expected_input_cost
     assert model_info["output_cost_per_token"] == expected_output_cost
     assert model_info["cache_read_input_token_cost"] == expected_cache_read_cost
@@ -177,6 +192,34 @@ def test_vertex_grok_model_metadata(
     assert model_info.get("supports_reasoning") is expected_reasoning
     assert model_info.get("supports_web_search") is None
     assert model_info.get("supports_low_reasoning_effort") is None
+
+
+def test_vertex_grok_cost_calculation_with_cached_tokens() -> None:
+    model = "vertex_ai/xai/grok-4.1-fast-non-reasoning"
+    response = ModelResponse(
+        id="vertex-grok-cost-test",
+        model=model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=100,
+            total_tokens=1100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=250,
+                text_tokens=750,
+            ),
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert pytest.approx(cost, rel=1e-6) == (750 * 2e-07) + (250 * 5e-08) + (
+        100 * 5e-07
+    )
 
 
 def _mock_vertexai_module() -> MagicMock:

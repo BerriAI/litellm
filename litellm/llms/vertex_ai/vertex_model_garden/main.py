@@ -20,6 +20,7 @@ from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
+import litellm
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
@@ -58,6 +59,31 @@ def create_vertex_url(
 class VertexAIModelGardenModels(VertexBase):
     def __init__(self) -> None:
         pass
+
+    def _resolve_vertex_location(
+        self, model: str, vertex_location: Optional[str]
+    ) -> str:
+        model_key = (
+            f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        )
+        supported_regions = litellm.model_cost.get(model_key, {}).get(
+            "supported_regions"
+        )
+
+        if supported_regions:
+            if vertex_location is None:
+                return supported_regions[0]
+            if vertex_location not in supported_regions:
+                raise VertexAIError(
+                    status_code=400,
+                    message=(
+                        f"Vertex AI model '{model}' is not available in location "
+                        f"'{vertex_location}'. Supported regions: {supported_regions}."
+                    ),
+                )
+            return vertex_location
+
+        return vertex_location or self.get_default_vertex_location()
 
     def completion(
         self,
@@ -120,7 +146,7 @@ class VertexAIModelGardenModels(VertexBase):
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
-            resolved_location = self.get_vertex_region(vertex_location, model)
+            resolved_location = self._resolve_vertex_location(model, vertex_location)
             default_api_base = create_vertex_url(
                 vertex_location=resolved_location,
                 vertex_project=vertex_project or project_id,
@@ -169,5 +195,7 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
+        except VertexAIError:
+            raise
         except Exception as e:
             raise VertexAIError(status_code=500, message=str(e))
