@@ -139,6 +139,9 @@ class LiteLLMCompletionTransformationHandler:
             actual_model = litellm_params_model
 
         if is_domestic_model_or_endpoint(actual_model, api_base):
+            # DEBUG logger（先定义，后面使用）
+            logger = logging.getLogger("LiteLLM.DomesticFilter")
+
             # Codex CLI 特有参数
             completion_args.pop("client_metadata", None)
             # OpenAI 扩展参数（国内模型不支持）
@@ -187,11 +190,12 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("max_retries", None)
             # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
             tool_choice = completion_args.get("tool_choice")
+            logger.info(f"[DomesticFilter] tool_choice before fix: {tool_choice}")
             if tool_choice == "required":
                 completion_args["tool_choice"] = "auto"
+                logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证（使用 logging 绕过 lint T201）
-            logger = logging.getLogger("LiteLLM.DomesticFilter")
+            # DEBUG: 国内模型参数过滤验证
             logger.info(
                 f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
                 f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
@@ -278,6 +282,9 @@ class LiteLLMCompletionTransformationHandler:
             actual_model = litellm_params_model
 
         if is_domestic_model_or_endpoint(actual_model, api_base):
+            # DEBUG logger（先定义，后面使用）
+            logger = logging.getLogger("LiteLLM.DomesticFilter")
+
             # Codex CLI 特有参数
             acompletion_args.pop("client_metadata", None)
             # OpenAI 扩展参数（国内模型不支持）
@@ -326,11 +333,12 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("max_retries", None)
             # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
             tool_choice = acompletion_args.get("tool_choice")
+            logger.info(f"[DomesticFilter] tool_choice before fix: {tool_choice}")
             if tool_choice == "required":
                 acompletion_args["tool_choice"] = "auto"
+                logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证（使用 logging 绕过 lint T201）
-            logger = logging.getLogger("LiteLLM.DomesticFilter")
+            # DEBUG: 国内模型参数过滤验证
             logger.info(
                 f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
                 f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
