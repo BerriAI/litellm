@@ -1338,7 +1338,7 @@ def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
     )
 
 
-def test_real_file_id_without_extension_resolves_to_metadata_mime_type():
+def test_file_id_without_extension_resolves_to_metadata_mime_type():
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -1351,7 +1351,7 @@ def test_real_file_id_without_extension_resolves_to_metadata_mime_type():
                 {
                     "type": "file",
                     "file": {
-                        "file_id": "gs://cdn.pagepop.top/gcs/input/source/18/1851d730e543cb91643835612508d7dd0e8d8c52015fe08b7429a7307c62076c",
+                        "file_id": "gs://test-bucket/objects/no-extension-object-abcdef1234567890",
                     },
                 }
             ],
@@ -1368,7 +1368,7 @@ def test_real_file_id_without_extension_resolves_to_metadata_mime_type():
 
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="image/jpeg",
-        file_uri="gs://cdn.pagepop.top/gcs/input/source/18/1851d730e543cb91643835612508d7dd0e8d8c52015fe08b7429a7307c62076c",
+        file_uri="gs://test-bucket/objects/no-extension-object-abcdef1234567890",
     )
 
 
