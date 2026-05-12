@@ -104,7 +104,8 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
     Send a text message containing the blocked phrase.
     Guardrail must:
       - Send error event (guardrail_violation) to client.
-      - Send response.audio_transcript.delta with the block message to client.
+      - Send response.output_audio_transcript.delta (or beta-protocol
+        response.audio_transcript.delta) with the block message to client.
       - NOT forward response.create to OpenAI (no AI response).
     """
     import websockets
@@ -177,10 +178,7 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             len(guardrail_errors) >= 1
         ), f"Expected at least one guardrail_violation error but got: {[e.get('error', {}).get('type') for e in error_events]}"
 
-        # 2. Must have the guardrail message surfaced as an AI transcript delta.
-        # The connection uses GA realtime protocol (no OpenAI-Beta header) so
-        # OpenAI emits ``response.output_audio_transcript.delta``; older
-        # ``response.audio_transcript.delta`` is the beta-protocol name.
+        # 2. Must have the guardrail message surfaced as an AI transcript delta
         transcript_deltas = [
             e
             for e in client_events
