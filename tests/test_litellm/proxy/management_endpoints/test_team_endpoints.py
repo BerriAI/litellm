@@ -3141,6 +3141,121 @@ async def test_list_team_v2_with_invalid_status():
 
 
 @pytest.mark.asyncio
+async def test_list_team_v2_search_builds_or_clause():
+    """
+    `search` should be passed as a Prisma OR across team_id (exact) and
+    team_alias (case-insensitive contains), so the UI can hit a single
+    backend filter with either a UUID or a name fragment.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            search="platform",
+            user_api_key_dict=mock_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
+        assert find_many_kwargs["where"] == {
+            "OR": [
+                {"team_id": "platform"},
+                {"team_alias": {"contains": "platform", "mode": "insensitive"}},
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_search_composes_with_user_id_filter():
+    """
+    For non-admin users, `search` must compose with the membership filter:
+    the resulting where clause should AND `team_id IN <user's teams>` with
+    the search OR clause, so users still only see their own teams.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="member_user"
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="member_user",
+        teams=["team_a", "team_b"],
+        organization_memberships=[],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new=AsyncMock(return_value=mock_user),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._get_org_admin_org_ids",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id="member_user",
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            search="team_a",
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        find_many_kwargs = mock_db.litellm_teamtable.find_many.call_args.kwargs
+        where = find_many_kwargs["where"]
+        assert where["OR"] == [
+            {"team_id": "team_a"},
+            {"team_alias": {"contains": "team_a", "mode": "insensitive"}},
+        ]
+        assert where["team_id"] == {"in": ["team_a", "team_b"]}
+
+
+@pytest.mark.asyncio
 async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_auth):
     """
     Verify that /team/member_delete removes the corresponding LiteLLM_TeamMembership row
