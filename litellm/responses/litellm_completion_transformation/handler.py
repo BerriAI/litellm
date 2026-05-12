@@ -35,7 +35,9 @@ class LiteLLMCompletionTransformationHandler:
     ) -> Union[
         ResponsesAPIResponse,
         BaseResponsesAPIStreamingIterator,
-        Coroutine[Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]],
+        Coroutine[
+            Any, Any, Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
+        ],
     ]:
         litellm_completion_request: dict = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
@@ -68,7 +70,9 @@ class LiteLLMCompletionTransformationHandler:
         actual_model = completion_args.get("model", model)
         api_base = completion_args.get("api_base", "")
         # 从 litellm_params 提取实际模型名（如果是 openai/qwen3.6-plus 格式）
-        litellm_params_model = completion_args.get("litellm_params", {}).get("model", "")
+        litellm_params_model = completion_args.get("litellm_params", {}).get(
+            "model", ""
+        )
         if litellm_params_model and litellm_params_model.startswith("openai/"):
             actual_model = litellm_params_model
 
@@ -89,7 +93,9 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
 
-        litellm_completion_response: Union[ModelResponse, litellm.CustomStreamWrapper] = litellm.completion(
+        litellm_completion_response: Union[
+            ModelResponse, litellm.CustomStreamWrapper
+        ] = litellm.completion(
             **completion_args,
         )
 
@@ -113,7 +119,9 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
+        raise ValueError(
+            f"Unexpected response type: {type(litellm_completion_response)}"
+        )
 
     async def async_response_api_handler(
         self,
@@ -122,7 +130,9 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
-        previous_response_id: Optional[str] = responses_api_request.get("previous_response_id")
+        previous_response_id: Optional[str] = responses_api_request.get(
+            "previous_response_id"
+        )
         if previous_response_id:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
@@ -140,7 +150,9 @@ class LiteLLMCompletionTransformationHandler:
         actual_model = acompletion_args.get("model", "")
         api_base = acompletion_args.get("api_base", "")
         # 从 litellm_params 提取实际模型名（如果是 openai/qwen3.6-plus 格式）
-        litellm_params_model = acompletion_args.get("litellm_params", {}).get("model", "")
+        litellm_params_model = acompletion_args.get("litellm_params", {}).get(
+            "model", ""
+        )
         if litellm_params_model and litellm_params_model.startswith("openai/"):
             actual_model = litellm_params_model
 
@@ -161,7 +173,9 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
 
-        litellm_completion_response: Union[ModelResponse, litellm.CustomStreamWrapper] = await litellm.acompletion(
+        litellm_completion_response: Union[
+            ModelResponse, litellm.CustomStreamWrapper
+        ] = await litellm.acompletion(
             **acompletion_args,
         )
 
@@ -182,7 +196,11 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
-                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                custom_llm_provider=litellm_completion_request.get(
+                    "custom_llm_provider"
+                ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
+        raise ValueError(
+            f"Unexpected response type: {type(litellm_completion_response)}"
+        )
