@@ -2,8 +2,9 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
+import json
 import logging
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, List, Optional, Union
 
 import litellm
 from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
@@ -23,6 +24,66 @@ from litellm.types.utils import ModelResponse
 
 
 class LiteLLMCompletionTransformationHandler:
+    @staticmethod
+    def _ensure_all_tool_calls_have_valid_json_arguments(
+        messages: List[Any],
+    ) -> List[Any]:
+        """
+        Ensure all tool_calls in messages have valid JSON arguments.
+
+        国内模型（火山引擎、阿里云）要求 function.arguments 必须是严格的 JSON 格式。
+        如果 arguments 不是有效的 JSON，将其替换为 "{}"。
+
+        Args:
+            messages: List of chat completion messages
+
+        Returns:
+            List of messages with corrected tool_calls arguments
+        """
+        import copy
+
+        fixed_messages = []
+        for msg in messages:
+            # Deep copy to avoid modifying original
+            fixed_msg = copy.deepcopy(msg) if isinstance(msg, dict) else msg
+
+            # Check for tool_calls in assistant messages
+            if isinstance(fixed_msg, dict):
+                role = fixed_msg.get("role")
+                if role == "assistant":
+                    tool_calls = fixed_msg.get("tool_calls")
+                    if tool_calls and isinstance(tool_calls, list):
+                        for tc in tool_calls:
+                            if isinstance(tc, dict):
+                                func = tc.get("function")
+                                if isinstance(func, dict):
+                                    args = func.get("arguments")
+                                    # Ensure arguments is valid JSON
+                                    if args is None:
+                                        func["arguments"] = "{}"
+                                    elif isinstance(args, str):
+                                        if not args.strip():
+                                            func["arguments"] = "{}"
+                                        else:
+                                            try:
+                                                json.loads(args)
+                                            except (json.JSONDecodeError, ValueError):
+                                                func["arguments"] = "{}"
+                                    elif isinstance(args, dict):
+                                        func["arguments"] = json.dumps(args)
+                                    else:
+                                        # Other types, try to convert
+                                        try:
+                                            args_str = str(args)
+                                            json.loads(args_str)
+                                            func["arguments"] = args_str
+                                        except (json.JSONDecodeError, ValueError):
+                                            func["arguments"] = "{}"
+
+            fixed_messages.append(fixed_msg)
+
+        return fixed_messages
+
     def response_api_handler(
         self,
         model: str,
@@ -129,6 +190,19 @@ class LiteLLMCompletionTransformationHandler:
                 f"[DomesticFilter] completion_args keys after filter: "
                 f"{list(completion_args.keys())}"
             )
+
+            # 确保所有历史消息中的 tool_calls arguments 是有效 JSON 格式
+            # 国内模型要求 function.arguments 必须是严格 JSON
+            messages = completion_args.get("messages")
+            if messages:
+                completion_args["messages"] = (
+                    LiteLLMCompletionTransformationHandler._ensure_all_tool_calls_have_valid_json_arguments(
+                        messages
+                    )
+                )
+                logger.info(
+                    "[DomesticFilter] Validated tool_calls arguments in messages"
+                )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -245,6 +319,19 @@ class LiteLLMCompletionTransformationHandler:
                 f"[DomesticFilter] acompletion_args keys after filter: "
                 f"{list(acompletion_args.keys())}"
             )
+
+            # 确保所有历史消息中的 tool_calls arguments 是有效 JSON 格式
+            # 国内模型要求 function.arguments 必须是严格 JSON
+            messages = acompletion_args.get("messages")
+            if messages:
+                acompletion_args["messages"] = (
+                    LiteLLMCompletionTransformationHandler._ensure_all_tool_calls_have_valid_json_arguments(
+                        messages
+                    )
+                )
+                logger.info(
+                    "[DomesticFilter] Validated tool_calls arguments in messages"
+                )
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
