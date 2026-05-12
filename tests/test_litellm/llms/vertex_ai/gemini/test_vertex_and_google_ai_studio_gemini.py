@@ -4466,7 +4466,7 @@ def test_chunk_parser_raises_on_string_error_code():
         ModelResponseIterator,
     )
 
-    # code 字段为字符串类型 "429" 而非 int
+    # code field is a string "429" rather than an int
     error_chunk = {
         "error": {
             "code": "429",
@@ -4575,7 +4575,9 @@ def test_mid_stream_429_error_raises_during_iteration():
                 results.append(chunk)
 
     # Verify: received normal chunks before the error
-    assert len(results) >= 1, "Should have received at least 1 normal chunk before the error"
+    assert (
+        len(results) >= 1
+    ), "Should have received at least 1 normal chunk before the error"
 
     # Verify: 429 error is properly raised
     assert exc_info.value.status_code == 429

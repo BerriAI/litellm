@@ -3141,7 +3141,7 @@ class ModelResponseIterator:
 
     @staticmethod
     def _check_streaming_error(chunk: dict) -> None:
-        """检测流式响应中内嵌的错误（如 429 RESOURCE_EXHAUSTED），有错误时抛出 VertexAIError。"""
+        """Detect embedded errors (e.g. 429 RESOURCE_EXHAUSTED) in streaming chunks and raise VertexAIError."""
         if "error" not in chunk:
             return
         error_data = chunk["error"]
@@ -3276,8 +3276,8 @@ class ModelResponseIterator:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
 
-            # 检测流式响应中内嵌的错误（如 429 RESOURCE_EXHAUSTED）。
-            # 这类错误以 HTTP 200 返回，但 SSE body 中包含 error JSON。
+            # Detect mid-stream error chunks (e.g. 429 RESOURCE_EXHAUSTED).
+            # Vertex AI can return errors as HTTP 200 but with an "error" field in the SSE body.
             self._check_streaming_error(chunk)
 
             from litellm.types.utils import ModelResponseStream
