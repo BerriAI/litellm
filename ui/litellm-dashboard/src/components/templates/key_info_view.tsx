@@ -403,7 +403,11 @@ export default function KeyInfoView({
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
-          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          createdBy:
+            currentKeyData.created_by_user?.user_alias ||
+            currentKeyData.created_by_user?.user_email ||
+            currentKeyData.created_by ||
+            "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
