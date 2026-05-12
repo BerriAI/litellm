@@ -1142,7 +1142,7 @@ _ADMIN_ONLY_METADATA_KEYS: frozenset = frozenset({"max_budget_alert_emails"})
 
 
 def _strip_admin_only_fields_for_non_admin(
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: Union[GenerateKeyRequest, UpdateKeyRequest, "RegenerateKeyRequest"],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Mutate ``data`` in place to remove fields that only PROXY_ADMIN may
@@ -1189,7 +1189,7 @@ def _strip_admin_only_fields_for_non_admin(
 
 async def _check_project_key_limits(
     project_id: str,
-    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    data: Union[GenerateKeyRequest, UpdateKeyRequest, "RegenerateKeyRequest"],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
@@ -4334,7 +4334,7 @@ async def _execute_virtual_key_regeneration(
     # ``/key/generate`` and ``/key/update`` close above re-opens here.
     if data is not None:
         _strip_admin_only_fields_for_non_admin(
-            data=data,  # type: ignore[arg-type]
+            data=data,
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -4401,6 +4401,35 @@ async def _execute_virtual_key_regeneration(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
+
+    # ``RegenerateKeyRequest`` inherits ``project_id`` from
+    # ``GenerateKeyRequest``; ``prepare_key_update_data`` persists every set
+    # field — including ``project_id`` — into the DB row. Without this gate
+    # a non-admin caller could re-target their key at an arbitrary project
+    # they aren't a member of, exactly the same IDOR
+    # ``_check_project_key_limits`` closes on ``/key/generate`` and
+    # ``/key/update``. Use the new project_id if set, otherwise validate
+    # against the existing one when the caller changes ``models`` /
+    # ``max_budget`` (those are the fields the helper bounds).
+    _project_id_for_regen = (
+        getattr(data, "project_id", None) if data is not None else None
+    ) or getattr(key_in_db, "project_id", None)
+    if (
+        _project_id_for_regen is not None
+        and data is not None
+        and (
+            data.project_id is not None
+            or data.models is not None
+            or data.max_budget is not None
+        )
+    ):
+        await _check_project_key_limits(
+            project_id=_project_id_for_regen,
+            data=data,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
