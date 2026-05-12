@@ -15,6 +15,7 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 """
 
 import asyncio
+import contextlib
 import os
 import sys
 from typing import Any
@@ -1096,220 +1097,154 @@ class TestFireDeferredStreamLogging:
         assert info[0]["guardrail_name"] == "info-writer"
 
 
-class TestStreamingDisconnectFiresDeferredLogging:
-    """
-    AAr6bXKP regression: ``async_post_call_streaming_iterator_hook`` is the
-    outer generator bound to the client's network connection. A mid-stream
-    disconnect raises ``CancelledError`` / ``GeneratorExit`` inside the
-    ``async for`` loop. Without ``try/finally``,
-    ``_fire_deferred_stream_logging`` is skipped — no SpendLogs row, no
-    post-call guardrails, no token reconciliation. A caller can drop the
-    TCP connection right before the final chunk and consume LLM provider
-    quota without it being attributed to their key, also bypassing
-    PII / moderation / policy guardrails.
+class _FakeCSW:
+    """Stands in for CustomStreamWrapper. ``aclose()`` mirrors real CSW: if
+    a deferred-streaming closure is registered and no args have been set yet,
+    persist partial args from accumulated chunks so the outer hook can fire."""
 
-    The fix wraps the iteration in ``try/finally`` so the deferred logging
-    fires on every termination path: normal completion, exception, and
-    client disconnect.
-    """
-
-    @pytest.mark.asyncio
-    async def test_deferred_logging_fires_on_client_disconnect(self):
-        """Simulate a client disconnect mid-stream: GeneratorExit inside the
-        ``async for`` must still trigger ``_fire_deferred_stream_logging``."""
-        fired_with: list = []
-
-        def _capture_fire(request_data: dict) -> None:
-            fired_with.append(request_data)
-
-        async def _two_chunks_then_exit():
-            yield "chunk-1"
-            yield "chunk-2"
-            yield "chunk-3"  # consumer disconnects before this
-
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        request_data = {"litellm_logging_obj": MagicMock()}
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
-
-        with (
-            patch.object(
-                ProxyLogging,
-                "_fire_deferred_stream_logging",
-                staticmethod(_capture_fire),
-            ),
-            patch("litellm.callbacks", []),
-        ):
-            gen = proxy_logging.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=_two_chunks_then_exit(),
-                request_data=request_data,
-            )
-
-            # Pull two chunks then close the generator — this is what FastAPI /
-            # uvicorn do when the client TCP-disconnects: aclose() on the
-            # generator raises GeneratorExit inside the async for loop.
-            chunks_seen = []
-            async for chunk in gen:
-                chunks_seen.append(chunk)
-                if len(chunks_seen) == 2:
-                    await gen.aclose()
-                    break
-
-        assert len(fired_with) == 1, (
-            "_fire_deferred_stream_logging must fire exactly once even when "
-            "the client disconnects mid-stream"
+    def __init__(self, chunks, logging_obj, raise_after=None):
+        self._chunks, self._logging_obj, self._raise_after = (
+            list(chunks),
+            logging_obj,
+            raise_after,
         )
-        assert fired_with[0] is request_data
+        self._idx, self._closed = 0, False
+        self.aclose_calls: list = []
 
-    @pytest.mark.asyncio
-    async def test_deferred_logging_fires_on_normal_completion(self):
-        """Sanity: deferred logging still fires on the normal happy path."""
-        fired_with: list = []
+    def __aiter__(self):
+        return self
 
-        def _capture_fire(request_data: dict) -> None:
-            fired_with.append(request_data)
+    async def __anext__(self):
+        if self._closed:
+            raise StopAsyncIteration
+        if self._raise_after is not None and self._idx >= self._raise_after:
+            raise RuntimeError("inner stream blew up")
+        if self._idx >= len(self._chunks):
+            raise StopAsyncIteration
+        v = self._chunks[self._idx]
+        self._idx += 1
+        return v
 
-        async def _gen():
-            yield "only-chunk"
-
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        request_data = {"litellm_logging_obj": MagicMock()}
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
-
-        with (
-            patch.object(
-                ProxyLogging,
-                "_fire_deferred_stream_logging",
-                staticmethod(_capture_fire),
-            ),
-            patch("litellm.callbacks", []),
+    async def aclose(self):
+        self.aclose_calls.append(self._idx)
+        self._closed = True
+        lo = self._logging_obj
+        if (
+            getattr(lo, "_on_deferred_stream_complete", None) is not None
+            and getattr(lo, "_deferred_stream_complete_args", None) is None
         ):
-            gen = proxy_logging.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=_gen(),
-                request_data=request_data,
-            )
-            async for _ in gen:
-                pass
+            lo._deferred_stream_complete_args = (f"partial_after_{self._idx}", False)
 
-        assert len(fired_with) == 1
-        assert fired_with[0] is request_data
 
+async def _exception_wrapper(inner):
+    """Mimics _wrap_streaming_iterator_with_enrichment. ``except: raise`` is
+    what marks the wrapper's generator frame completed when an exception
+    propagates — making any aclose() on the wrapper a no-op."""
+    try:
+        async for c in inner:
+            yield c
+    except Exception:
+        raise
+
+
+@contextlib.contextmanager
+def _hook_under_test(capture_fire):
+    """Patches stay alive for the lifetime of the generator (the generator's
+    finally runs ``_fire_deferred_stream_logging`` so the patch must outlive
+    iteration)."""
+    with (
+        patch.object(
+            ProxyLogging, "_fire_deferred_stream_logging", staticmethod(capture_fire)
+        ),
+        patch("litellm.callbacks", []),
+    ):
+        yield ProxyLogging(user_api_key_cache=DualCache())
+
+
+class TestStreamingDisconnectFiresDeferredLogging:
+    """AAr6bXKP regression suite for ``async_post_call_streaming_iterator_hook``.
+
+    The hook is bound to the client connection. Without ``try/finally`` +
+    aclose-on-inner, deferred logging is skipped on disconnect / exception
+    paths — the caller consumes LLM tokens unbilled, bypassing budgets and
+    PII / moderation / policy guardrails. The fix:
+      (1) wraps iteration in try/finally;
+      (2) snapshots the inner ``response`` BEFORE the wrap chain and drives
+          ``aclose()`` on the snapshot directly (the wrapper's aclose is a
+          no-op after an exception completes its generator frame);
+      (3) ``CSW.aclose()`` persists partial args from accumulated chunks.
+    """
+
+    @pytest.mark.parametrize(
+        "termination",
+        ["normal_completion", "client_disconnect", "exception_mid_stream"],
+    )
     @pytest.mark.asyncio
-    async def test_deferred_logging_fires_on_exception_mid_stream(self):
-        """If the inner stream raises mid-iteration, deferred logging must
-        still fire — the bug class covers any abrupt termination, not just
-        client disconnects."""
+    async def test_deferred_logging_fires_on_every_termination_path(self, termination):
         fired_with: list = []
 
-        def _capture_fire(request_data: dict) -> None:
-            fired_with.append(request_data)
+        async def _normal():
+            yield "only"
 
-        async def _gen_raises():
-            yield "chunk-1"
+        async def _raises():
+            yield "c1"
             raise RuntimeError("upstream blew up")
 
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        request_data = {"litellm_logging_obj": MagicMock()}
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        async def _three():
+            yield "c1"
+            yield "c2"
+            yield "c3"
 
-        with (
-            patch.object(
-                ProxyLogging,
-                "_fire_deferred_stream_logging",
-                staticmethod(_capture_fire),
-            ),
-            patch("litellm.callbacks", []),
-        ):
-            gen = proxy_logging.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=_gen_raises(),
+        response = {
+            "normal_completion": _normal(),
+            "client_disconnect": _three(),
+            "exception_mid_stream": _raises(),
+        }[termination]
+        request_data = {"litellm_logging_obj": MagicMock()}
+
+        with _hook_under_test(lambda r: fired_with.append(r)) as pl:
+            gen = pl.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                response=response,
                 request_data=request_data,
             )
-            with pytest.raises(RuntimeError, match="upstream blew up"):
+            if termination == "client_disconnect":
+                chunks_seen = []
+                async for chunk in gen:
+                    chunks_seen.append(chunk)
+                    if len(chunks_seen) == 2:
+                        await gen.aclose()
+                        break
+            elif termination == "exception_mid_stream":
+                with pytest.raises(RuntimeError, match="upstream blew up"):
+                    async for _ in gen:
+                        pass
+            else:
                 async for _ in gen:
                     pass
 
-        assert len(fired_with) == 1
-        assert fired_with[0] is request_data
+        assert fired_with == [request_data]
 
     @pytest.mark.asyncio
     async def test_disconnect_persists_partial_usage_via_csw_aclose(self):
-        """Veria-AI follow-up: the ``try/finally`` only guarantees the hook
-        FIRES on disconnect — but ``_fire_deferred_stream_logging`` is a
-        no-op when ``_deferred_stream_complete_args`` is unset, which is
-        exactly the case on early disconnect (CSW hasn't reached
-        StopAsyncIteration). The fix drives ``current_response.aclose()``
-        so ``CustomStreamWrapper.aclose()`` can persist partial usage from
-        the chunks it accumulated before exiting via aclose."""
-        aclose_calls: list = []
-        fired_with: list = []
+        """``_fire_deferred_stream_logging`` no-ops when args unset (early
+        disconnect). Fix drives ``aclose()`` so CSW persists partial args."""
+        fired: list = []
+        lo = MagicMock(
+            _on_deferred_stream_complete=MagicMock(),
+            _deferred_stream_complete_args=None,
+        )
+        csw = _FakeCSW(["c1", "c2", "c3"], lo)
 
-        def _capture_fire(request_data: dict) -> None:
-            fired_with.append(
-                {
-                    "args_set": getattr(
-                        request_data["litellm_logging_obj"],
-                        "_deferred_stream_complete_args",
-                        None,
-                    )
-                    is not None,
-                }
+        with _hook_under_test(
+            lambda r: fired.append(
+                r["litellm_logging_obj"]._deferred_stream_complete_args is not None
             )
-
-        class _FakeCSWChain:
-            """Mimics chained iterator + aclose-cascade. aclose() simulates
-            CSW.aclose() persisting partial usage from accumulated chunks."""
-
-            def __init__(self, chunks_to_yield, logging_obj):
-                self._chunks = list(chunks_to_yield)
-                self._logging_obj = logging_obj
-                self._closed = False
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                if self._closed or not self._chunks:
-                    raise StopAsyncIteration
-                return self._chunks.pop(0)
-
-            async def aclose(self):
-                aclose_calls.append("aclose")
-                self._closed = True
-                if (
-                    getattr(self._logging_obj, "_on_deferred_stream_complete", None)
-                    is not None
-                    and getattr(
-                        self._logging_obj, "_deferred_stream_complete_args", None
-                    )
-                    is None
-                ):
-                    self._logging_obj._deferred_stream_complete_args = (
-                        "partial_assembled_response",
-                        False,
-                    )
-
-        logging_obj = MagicMock()
-        logging_obj._on_deferred_stream_complete = MagicMock()
-        logging_obj._deferred_stream_complete_args = None
-
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        request_data = {"litellm_logging_obj": logging_obj}
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
-
-        with (
-            patch.object(
-                ProxyLogging,
-                "_fire_deferred_stream_logging",
-                staticmethod(_capture_fire),
-            ),
-            patch("litellm.callbacks", []),
-        ):
-            gen = proxy_logging.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=_FakeCSWChain(["c1", "c2", "c3"], logging_obj),
-                request_data=request_data,
+        ) as pl:
+            gen = pl.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                response=csw,
+                request_data={"litellm_logging_obj": lo},
             )
             chunks_seen = []
             async for chunk in gen:
@@ -1318,148 +1253,35 @@ class TestStreamingDisconnectFiresDeferredLogging:
                     await gen.aclose()
                     break
 
-        assert aclose_calls == ["aclose"], (
-            "aclose() must be driven down the wrapper chain before firing "
-            "deferred logging, so CSW can persist partial usage"
-        )
-        assert len(fired_with) == 1
-        assert fired_with[0]["args_set"] is True, (
-            "_deferred_stream_complete_args must be set by the time "
-            "_fire_deferred_stream_logging runs on the disconnect path — "
-            "otherwise the deferred callback is a silent no-op"
-        )
+        assert csw.aclose_calls, "CSW.aclose() must be driven before fire"
+        assert fired == [True], "args must be set when fire runs"
 
     @pytest.mark.asyncio
-    async def test_aclose_reaches_inner_when_wrapper_chain_closed_by_exception(self):
-        """Greptile P1 follow-up:
-        ``_wrap_streaming_iterator_with_enrichment`` is an async generator. When
-        an exception propagates through its body, Python marks the wrapper's
-        generator frame as completed — any subsequent ``aclose()`` on the
-        wrapper is a no-op per Python's async generator semantics. So
-        cascading aclose through the wrapper chain would silently fail to
-        reach the inner CustomStreamWrapper on the exception path, and
-        partial usage would not be persisted.
+    async def test_aclose_reaches_inner_when_wrapper_closed_by_exception(self):
+        """Greptile P1: wrapper.aclose() is a no-op after exception completes
+        its generator frame. The snapshot-before-wrap fix closes the inner
+        CSW directly. Here we pass the raw CSW as ``response`` so the hook
+        stores it as inner_response and drives aclose() on it."""
+        fired: list = []
+        lo = MagicMock(
+            _on_deferred_stream_complete=MagicMock(),
+            _deferred_stream_complete_args=None,
+        )
+        csw = _FakeCSW(["a", "b", "c"], lo, raise_after=2)
 
-        Fix: snapshot the INNER iterator (unwrapped CSW) before wrapping
-        and drive aclose() on that snapshot directly. Verify the inner
-        aclose actually runs in the wrapped + exception scenario."""
-        inner_aclose_calls: list = []
-
-        class _FakeInnerCSW:
-            """Stands in for CustomStreamWrapper. Persists partial args on
-            aclose() — what real CSW.aclose() does."""
-
-            def __init__(self, chunks_to_yield, raise_after, logging_obj):
-                self._chunks = list(chunks_to_yield)
-                self._raise_after = raise_after
-                self._idx = 0
-                self._logging_obj = logging_obj
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                if self._idx >= self._raise_after:
-                    raise RuntimeError("inner stream blew up")
-                if self._idx >= len(self._chunks):
-                    raise StopAsyncIteration
-                v = self._chunks[self._idx]
-                self._idx += 1
-                return v
-
-            async def aclose(self):
-                inner_aclose_calls.append(self._idx)
-                if (
-                    getattr(self._logging_obj, "_on_deferred_stream_complete", None)
-                    is not None
-                    and getattr(
-                        self._logging_obj, "_deferred_stream_complete_args", None
-                    )
-                    is None
-                ):
-                    # Real CSW.aclose builds from accumulated chunks; here we
-                    # just stash a sentinel marking that we ran in time.
-                    self._logging_obj._deferred_stream_complete_args = (
-                        f"partial_after_{self._idx}_chunks",
-                        False,
-                    )
-
-        async def _wrapper(inner):
-            """Mimics ``_wrap_streaming_iterator_with_enrichment``. The
-            ``except: raise`` is what marks the wrapper generator's frame
-            completed when an exception propagates — making the outer
-            aclose a no-op."""
-            try:
-                async for chunk in inner:
-                    yield chunk
-            except Exception:
-                raise
-
-        logging_obj = MagicMock()
-        logging_obj._on_deferred_stream_complete = MagicMock()
-        logging_obj._deferred_stream_complete_args = None
-
-        inner = _FakeInnerCSW(["a", "b", "c"], raise_after=2, logging_obj=logging_obj)
-        wrapped = _wrapper(inner)
-
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        request_data = {"litellm_logging_obj": logging_obj}
-        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
-
-        fired_with: list = []
-
-        def _capture_fire(req: dict) -> None:
-            fired_with.append(
-                getattr(
-                    req["litellm_logging_obj"], "_deferred_stream_complete_args", None
-                )
+        with _hook_under_test(
+            lambda r: fired.append(
+                r["litellm_logging_obj"]._deferred_stream_complete_args
             )
-
-        # Patch the inner-response snapshot: simulate that `response` IS the
-        # raw inner CSW (proxy_logging's hook will take inner_response =
-        # response BEFORE the wrap chain), and that callbacks installed a
-        # wrapper around it. We test by directly running the hook with the
-        # wrapped iterator pre-built; the hook's inner_response = response
-        # gives us the raw CSW.
-        with (
-            patch.object(
-                ProxyLogging,
-                "_fire_deferred_stream_logging",
-                staticmethod(_capture_fire),
-            ),
-            patch("litellm.callbacks", []),
-        ):
-            # Pre-wrap manually to mimic the post-callback shape; pass the
-            # WRAPPER as `response` and patch the hook's inner_response by
-            # injecting via the chain. We accept the fact that with
-            # callbacks=[] no wrap happens, so we run the wrap externally
-            # and feed the wrapper in — the hook will set inner_response =
-            # wrapper, NOT the inner CSW. That's the very bug. To exercise
-            # the fix as it lives in production, we drive the wrapped chain
-            # through but expect the hook's `inner_response` snapshot to be
-            # the FIRST `response` passed in. Production flow: caller hands
-            # raw CSW, hook wraps it. Here we pass raw CSW and let the hook
-            # see it as inner_response, while the loop iterates over the
-            # external wrapper. That mismatch makes this test a bit
-            # awkward, so we instead exercise the hook's snapshot logic by
-            # passing the raw inner.
-            gen = proxy_logging.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=inner,  # raw CSW — hook snapshots this as inner_response
-                request_data=request_data,
+        ) as pl:
+            gen = pl.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                response=csw,
+                request_data={"litellm_logging_obj": lo},
             )
-            collected = []
             with pytest.raises(RuntimeError, match="inner stream blew up"):
-                async for chunk in gen:
-                    collected.append(chunk)
+                async for _ in gen:
+                    pass
 
-        assert inner_aclose_calls, (
-            "inner CSW.aclose() must run via the snapshot path even when "
-            "the surrounding wrapper chain has been marked completed by "
-            "the propagating exception"
-        )
-        assert len(fired_with) == 1
-        assert fired_with[0] is not None, (
-            "_deferred_stream_complete_args must be populated by the time "
-            "_fire_deferred_stream_logging runs, even on the exception path"
-        )
+        assert csw.aclose_calls, "inner CSW.aclose() must run on exception path"
+        assert fired == [(f"partial_after_{csw._idx}", False)]
