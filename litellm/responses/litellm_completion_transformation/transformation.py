@@ -290,6 +290,10 @@ class LiteLLMCompletionResponsesConfig:
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
 
+        # 国内模型不支持 reasoning_effort、parallel_tool_calls 等参数
+        # 在生成阶段就不添加，而不是在后面过滤
+        is_domestic = is_domestic_model_or_endpoint(model_name, api_base)
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -303,22 +307,28 @@ class LiteLLMCompletionResponsesConfig:
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
-            "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
-            "reasoning_effort": reasoning_effort,
             "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
         }
 
+        # 只对非国内模型添加 reasoning_effort 和 parallel_tool_calls
+        if not is_domestic:
+            litellm_completion_request["parallel_tool_calls"] = (
+                responses_api_request.get("parallel_tool_calls")
+            )
+            litellm_completion_request["reasoning_effort"] = reasoning_effort
+
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
-        if stream is True:
+        # 国内模型不支持 stream_options，跳过
+        if stream is True and not is_domestic:
             stream_options = {
                 "include_usage": True,
             }
