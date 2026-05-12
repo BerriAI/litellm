@@ -1380,6 +1380,7 @@ def create_pass_through_route(
                 if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
 
+    setattr(endpoint_func, "_litellm_pass_through_route", True)
     return endpoint_func
 
 
@@ -1938,9 +1939,11 @@ class SafeRouteAdder:
     """
 
     @staticmethod
-    def _is_path_registered(app: FastAPI, path: str, methods: List[str]) -> bool:
+    def _get_matching_routes_by_method(
+        app: FastAPI, path: str, methods: List[str]
+    ) -> Dict[str, Any]:
         """
-        Check if a path with any of the specified methods is already registered on the app.
+        Get the first existing FastAPI route for each path/method pair.
 
         Args:
             app: The FastAPI application instance
@@ -1948,18 +1951,49 @@ class SafeRouteAdder:
             methods: List of HTTP methods to check (e.g., ["GET", "POST"])
 
         Returns:
-            True if the path is already registered with any of the methods, False otherwise
+            Mapping of method to the route that would receive that method.
         """
-        for route in app.routes:
-            # Use getattr to safely access route attributes
-            route_path = getattr(route, "path", None)
-            route_methods = getattr(route, "methods", None)
+        routes_by_method: Dict[str, Any] = {}
+        for method in {method.upper() for method in methods}:
+            for route in app.routes:
+                route_path = getattr(route, "path", None)
+                route_methods = getattr(route, "methods", None)
+                if route_path == path and route_methods is not None:
+                    if method in route_methods:
+                        routes_by_method[method] = route
+                        break
+        return routes_by_method
 
-            if route_path == path and route_methods is not None:
-                # Check if any of the methods overlap
-                if any(method in route_methods for method in methods):
-                    return True
-        return False
+    @staticmethod
+    def _is_path_registered(app: FastAPI, path: str, methods: List[str]) -> bool:
+        """
+        Check if a path with any of the specified methods is already registered on the app.
+        """
+        return bool(
+            SafeRouteAdder._get_matching_routes_by_method(
+                app=app, path=path, methods=methods
+            )
+        )
+
+    @staticmethod
+    def _is_pass_through_route(route: Any) -> bool:
+        route_endpoint = getattr(route, "endpoint", None)
+        return bool(getattr(route_endpoint, "_litellm_pass_through_route", False))
+
+    @staticmethod
+    def is_registered_route_pass_through(
+        app: FastAPI, path: str, methods: List[str]
+    ) -> bool:
+        """
+        Check whether the existing FastAPI route was created by the pass-through router.
+        """
+        routes_by_method = SafeRouteAdder._get_matching_routes_by_method(
+            app=app, path=path, methods=methods
+        )
+        return bool(routes_by_method) and all(
+            SafeRouteAdder._is_pass_through_route(route)
+            for route in routes_by_method.values()
+        )
 
     @staticmethod
     def add_api_route_if_not_exists(
@@ -2019,7 +2053,7 @@ class InitPassThroughEndpointHelpers:
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
-    ):
+    ) -> bool:
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
         if methods is None or len(methods) == 0:
@@ -2045,7 +2079,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        route_added = SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -2063,7 +2097,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Always register/update the route metadata (headers, target) even if FastAPI route exists
+        if (
+            route_added is False
+            and not SafeRouteAdder.is_registered_route_pass_through(
+                app=app, path=path, methods=methods
+            )
+        ):
+            _registered_pass_through_routes.pop(route_key, None)
+            verbose_proxy_logger.warning(
+                "Skipping pass-through metadata registration for %s with methods %s because the path is already registered by another route",
+                path,
+                methods,
+            )
+            return False
+
+        # Register/update metadata only when the path is backed by a pass-through handler.
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
@@ -2080,6 +2128,7 @@ class InitPassThroughEndpointHelpers:
                 "guardrails": guardrails,
             },
         }
+        return True
 
     @staticmethod
     def add_subpath_route(
@@ -2095,7 +2144,7 @@ class InitPassThroughEndpointHelpers:
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
-    ):
+    ) -> bool:
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
         if methods is None or len(methods) == 0:
@@ -2121,7 +2170,7 @@ class InitPassThroughEndpointHelpers:
         )
 
         # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        SafeRouteAdder.add_api_route_if_not_exists(
+        route_added = SafeRouteAdder.add_api_route_if_not_exists(
             app=app,
             path=wildcard_path,
             endpoint=create_pass_through_route(  # type: ignore
@@ -2140,7 +2189,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates only if it was added
+        if (
+            route_added is False
+            and not SafeRouteAdder.is_registered_route_pass_through(
+                app=app, path=wildcard_path, methods=methods
+            )
+        ):
+            _registered_pass_through_routes.pop(route_key, None)
+            verbose_proxy_logger.warning(
+                "Skipping pass-through metadata registration for %s with methods %s because the path is already registered by another route",
+                wildcard_path,
+                methods,
+            )
+            return False
+
+        # Register/update metadata only when the path is backed by a pass-through handler.
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
@@ -2157,6 +2220,7 @@ class InitPassThroughEndpointHelpers:
                 "guardrails": guardrails,
             },
         }
+        return True
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
@@ -2323,14 +2387,13 @@ async def _register_pass_through_endpoint(
     auth = endpoint_data.get("auth")
     dependencies = None
 
-    if auth is not None and str(auth).lower() == "true":
+    auth_enabled = auth is not None and str(auth).lower() == "true"
+    if auth_enabled:
         # Authentication on a pass-through endpoint used to be enterprise-only.
         # That left OSS with no safe configuration: auth=True raised at startup
         # unless the operator had a license. The safe option must always be free,
         # and unauthenticated forwarding should require explicit opt-in.
         dependencies = [Depends(user_api_key_auth)]
-        if path not in LiteLLMRoutes.openai_routes.value:
-            LiteLLMRoutes.openai_routes.value.append(path)
 
     if target is None:
         return
@@ -2342,7 +2405,7 @@ async def _register_pass_through_endpoint(
     verbose_proxy_logger.debug(
         "Initializing pass through endpoint: %s (ID: %s)", path, endpoint_id
     )
-    InitPassThroughEndpointHelpers.add_exact_path_route(
+    exact_route_registered = InitPassThroughEndpointHelpers.add_exact_path_route(
         app=app,
         path=path,
         target=target,
@@ -2356,17 +2419,20 @@ async def _register_pass_through_endpoint(
         methods=methods,
         default_query_params=default_query_params,
     )
+    if (
+        auth_enabled
+        and exact_route_registered
+        and path not in LiteLLMRoutes.openai_routes.value
+    ):
+        LiteLLMRoutes.openai_routes.value.append(path)
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
     methods_str = ",".join(sorted(methods_for_key))
-    visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
+    if exact_route_registered:
+        visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
 
     if endpoint_data.get("include_subpath", False) is True:
-        if auth is not None and str(auth).lower() == "true":
-            wildcard_path = path.rstrip("/") + "/*"
-            if wildcard_path not in LiteLLMRoutes.openai_routes.value:
-                LiteLLMRoutes.openai_routes.value.append(wildcard_path)
-        InitPassThroughEndpointHelpers.add_subpath_route(
+        subpath_route_registered = InitPassThroughEndpointHelpers.add_subpath_route(
             app=app,
             path=path,
             target=target,
@@ -2380,7 +2446,12 @@ async def _register_pass_through_endpoint(
             methods=methods,
             default_query_params=default_query_params,
         )
-        visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
+        if auth_enabled and subpath_route_registered:
+            wildcard_path = path.rstrip("/") + "/*"
+            if wildcard_path not in LiteLLMRoutes.openai_routes.value:
+                LiteLLMRoutes.openai_routes.value.append(wildcard_path)
+        if subpath_route_registered:
+            visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
     verbose_proxy_logger.debug(
         "Added new pass through endpoint: %s (ID: %s)", path, endpoint_id
