@@ -31,12 +31,38 @@ class MockLiteLLMTeamMembership:
 class MockLiteLLMVerificationToken:
     def __init__(self):
         self.update_many_calls: List[Dict[str, Any]] = []
+        self.update_calls: List[Dict[str, Any]] = []
 
     async def update_many(
         self, where: Dict[str, Any], data: Dict[str, Any]
     ) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
         return {"count": 1}
+
+    def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> None:
+        self.update_calls.append({"where": where, "data": data})
+
+
+class MockLiteLLMTeamTable:
+    def __init__(self):
+        self.update_calls: List[Dict[str, Any]] = []
+
+    def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> None:
+        self.update_calls.append({"where": where, "data": data})
+
+
+class MockBatcher:
+    def __init__(
+        self,
+        verificationtoken: MockLiteLLMVerificationToken,
+        teamtable: MockLiteLLMTeamTable,
+    ):
+        self.litellm_verificationtoken = verificationtoken
+        self.litellm_teamtable = teamtable
+        self.commit_calls = 0
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
 
 
 class MockLiteLLMEndUserTable:
@@ -56,7 +82,17 @@ class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
+        self.litellm_teamtable = MockLiteLLMTeamTable()
         self.litellm_endusertable = MockLiteLLMEndUserTable()
+        self.batchers: List[MockBatcher] = []
+
+    def batch_(self) -> MockBatcher:
+        batcher = MockBatcher(
+            verificationtoken=self.litellm_verificationtoken,
+            teamtable=self.litellm_teamtable,
+        )
+        self.batchers.append(batcher)
+        return batcher
 
 
 class MockPrismaClient:
@@ -159,9 +195,12 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
         "LiteLLM_VerificationToken",
         (),
         {
+            "token": "hashed-key-token",
             "spend": 100.0,
             "budget_duration": "30d",
             "budget_reset_at": now,
+            "budget_limits": [{"budget_duration": "1d", "budget_limit": 10.0}],
+            "object_permission_id": "obj-perm-123",
             "id": "test-key-1",
         },
     )
@@ -172,10 +211,14 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
     # Verify results
-    assert len(mock_prisma_client.updated_data["key"]) == 1
-    updated_key = mock_prisma_client.updated_data["key"][0]
-    assert updated_key.spend == 0.0
-    assert updated_key.budget_reset_at > now
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+    assert len(calls) == 1
+    assert len(mock_prisma_client.db.batchers) == 1
+    assert mock_prisma_client.db.batchers[0].commit_calls == 1
+    assert calls[0]["where"] == {"token": "hashed-key-token"}
+    assert calls[0]["data"]["spend"] == 0.0
+    assert calls[0]["data"]["budget_reset_at"] > now
+    assert set(calls[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
@@ -211,9 +254,12 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
         "LiteLLM_TeamTable",
         (),
         {
+            "team_id": "test-team-id",
             "spend": 500.0,
             "budget_duration": "1mo",
             "budget_reset_at": now,
+            "budget_limits": [{"budget_duration": "7d", "budget_limit": 50.0}],
+            "object_permission_id": "team-obj-perm-123",
             "id": "test-team-1",
         },
     )
@@ -224,10 +270,14 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
 
     # Verify results
-    assert len(mock_prisma_client.updated_data["team"]) == 1
-    updated_team = mock_prisma_client.updated_data["team"][0]
-    assert updated_team.spend == 0.0
-    assert updated_team.budget_reset_at > now
+    calls = mock_prisma_client.db.litellm_teamtable.update_calls
+    assert len(calls) == 1
+    assert len(mock_prisma_client.db.batchers) == 1
+    assert mock_prisma_client.db.batchers[0].commit_calls == 1
+    assert calls[0]["where"] == {"team_id": "test-team-id"}
+    assert calls[0]["data"]["spend"] == 0.0
+    assert calls[0]["data"]["budget_reset_at"] > now
+    assert set(calls[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
@@ -278,6 +328,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         "LiteLLM_VerificationToken",
         (),
         {
+            "token": "test-key-token",
             "spend": 100.0,
             "budget_duration": "30d",
             "budget_reset_at": now,
@@ -300,6 +351,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         "LiteLLM_TeamTable",
         (),
         {
+            "team_id": "test-team-id",
             "spend": 500.0,
             "budget_duration": "1mo",
             "budget_reset_at": now,
@@ -338,17 +390,21 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     asyncio.run(reset_budget_job.reset_budget())
 
     # Verify results
-    assert len(mock_prisma_client.updated_data["key"]) == 1
     assert len(mock_prisma_client.updated_data["user"]) == 1
-    assert len(mock_prisma_client.updated_data["team"]) == 1
     assert len(mock_prisma_client.updated_data["enduser"]) == 1
     assert len(mock_prisma_client.updated_data["budget"]) == 1
+    assert len(mock_prisma_client.db.litellm_verificationtoken.update_calls) == 1
+    assert len(mock_prisma_client.db.litellm_teamtable.update_calls) == 1
 
     # Check that all spends were reset to 0
-    assert mock_prisma_client.updated_data["key"][0].spend == 0.0
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
-    assert mock_prisma_client.updated_data["team"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
+    assert mock_prisma_client.db.litellm_verificationtoken.update_calls[0]["data"][
+        "spend"
+    ] == 0.0
+    assert mock_prisma_client.db.litellm_teamtable.update_calls[0]["data"][
+        "spend"
+    ] == 0.0
 
 
 def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_client):

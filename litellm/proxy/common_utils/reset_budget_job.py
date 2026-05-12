@@ -394,11 +394,16 @@ class ResetBudgetJob:
                 )
 
                 if updated_keys:
-                    await self.prisma_client.update_data(
-                        query_type="update_many",
-                        data_list=updated_keys,
-                        table_name="key",
-                    )
+                    batcher = self.prisma_client.db.batch_()
+                    for key in updated_keys:
+                        batcher.litellm_verificationtoken.update(
+                            where={"token": key.token},
+                            data={
+                                "spend": key.spend,
+                                "budget_reset_at": key.budget_reset_at,
+                            },
+                        )
+                    await batcher.commit()
                     for k in updated_keys:
                         token = getattr(k, "token", None)
                         if token:
@@ -580,11 +585,16 @@ class ResetBudgetJob:
                     "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
                 )
                 if updated_teams:
-                    await self.prisma_client.update_data(
-                        query_type="update_many",
-                        data_list=updated_teams,
-                        table_name="team",
-                    )
+                    batcher = self.prisma_client.db.batch_()
+                    for team in updated_teams:
+                        batcher.litellm_teamtable.update(
+                            where={"team_id": team.team_id},
+                            data={
+                                "spend": team.spend,
+                                "budget_reset_at": team.budget_reset_at,
+                            },
+                        )
+                    await batcher.commit()
                     for t in updated_teams:
                         team_id = getattr(t, "team_id", None)
                         if team_id:
