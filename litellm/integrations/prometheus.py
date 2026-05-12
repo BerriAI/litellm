@@ -2249,7 +2249,7 @@ class PrometheusLogger(CustomLogger):
 
             try:
                 from litellm.proxy.proxy_server import llm_router
-            except Exception:
+            except ImportError:
                 llm_router = None
 
             if llm_router is None:
@@ -2260,7 +2260,7 @@ class PrometheusLogger(CustomLogger):
                     model_group
                 )
             except Exception as e:
-                verbose_logger.debug(
+                verbose_logger.exception(
                     "Prometheus: get_remaining_model_group_usage failed for "
                     "model_group=%s: %s",
                     model_group,
