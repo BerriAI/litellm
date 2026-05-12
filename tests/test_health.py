@@ -31,7 +31,7 @@ async def generate_key(session):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
-        "models": ["gpt-4", "text-embedding-ada-002", "dall-e-2"],
+        "models": ["gpt-4", "text-embedding-ada-002", "gpt-image-1"],
         "duration": None,
     }
 
