@@ -643,7 +643,7 @@ async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without
     delegated_server = MagicMock()
     delegated_server.auth_type = MCPAuth.oauth2
     delegated_server.delegate_auth_to_upstream = True
-    delegated_server.needs_user_oauth_token = False
+    delegated_server.needs_user_oauth_token = True
 
     with (
         patch(
