@@ -598,6 +598,26 @@ class AsyncHTTPHandler:
         )
         return response
 
+    async def head(
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        follow_redirects: Optional[bool] = None,
+    ):
+        # Set follow_redirects to UseClientDefault if None
+        _follow_redirects = (
+            follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        )
+
+        params = params or {}
+        params.update(HTTPHandler.extract_query_params(url))
+
+        response = await self.client.head(
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+        )
+        return response
+
     @track_llm_api_timing()
     async def post(
         self,
