@@ -2754,6 +2754,51 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    def _get_forwarded_auth_from_scope(scope: dict) -> Optional[str]:
+        """Return the raw Authorization header value from the ASGI scope, or None."""
+        for key, value in scope.get("headers", []):
+            if key.lower() == b"authorization":
+                return value.decode("latin-1")
+        return None
+
+    async def _probe_upstream_auth(
+        url: str,
+        auth_header: str,
+        timeout: float = 5.0,
+    ) -> tuple:
+        """Send a minimal probe request to the upstream MCP server to verify the token.
+
+        Returns a (status_code, www_authenticate) tuple.  If the probe itself
+        fails (connection error, timeout, …) we return (200, None) so the caller
+        proceeds normally — better to let the session try and fail gracefully than
+        to block on a networking hiccup.
+        """
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": auth_header},
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "litellm-probe", "version": "0"},
+                        },
+                    },
+                    timeout=timeout,
+                )
+                return resp.status_code, resp.headers.get("www-authenticate")
+        except Exception as exc:
+            verbose_logger.debug(
+                f"_probe_upstream_auth: probe to {url} failed ({exc}), allowing request through"
+            )
+            return 200, None
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2811,6 +2856,34 @@ if MCP_AVAILABLE:
                         detail="Unauthorized",
                         headers={"www-authenticate": authorization_uri},
                     )
+
+            # Pre-flight auth check for pass-through servers: probe upstream before the session begins to allow HTTP 401. The MCP SDK sends 200 OK before handlers, so 401 can't be returned mid-stream.
+            for server_name in mcp_servers or []:
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=_client_ip
+                )
+                if (
+                    server
+                    and server.extra_headers
+                    and any(h.lower() == "authorization" for h in server.extra_headers)
+                ):
+                    forwarded_auth = _get_forwarded_auth_from_scope(scope)
+                    if forwarded_auth:
+                        probe_status, _probe_www_auth = await _probe_upstream_auth(
+                            server.url or "", forwarded_auth
+                        )
+                        if probe_status in (401, 403):
+                            request = StarletteRequest(scope)
+                            base_url = get_request_base_url(request)
+                            authorization_uri = (
+                                f"Bearer authorization_uri="
+                                f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                            )
+                            raise HTTPException(
+                                status_code=401,
+                                detail="Unauthorized",
+                                headers={"WWW-Authenticate": authorization_uri},
+                            )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [

@@ -3256,3 +3256,75 @@ async def test_call_tool_empty_extra_headers_returns_none():
     ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
         captured_extra_headers
     )
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight upstream auth check tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_returns_upstream_status():
+    """_probe_upstream_auth forwards the status code from the upstream server."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_fails_open_on_network_error():
+    """_probe_upstream_auth returns (200, None) when the network call fails."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client_cls.return_value = mock_client
+
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 200
+    assert www_auth is None
+
+
+def test_get_forwarded_auth_from_scope_extracts_header():
+    """_get_forwarded_auth_from_scope returns the Authorization value."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer my-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) == "Bearer my-token"
+
+
+def test_get_forwarded_auth_from_scope_returns_none_when_missing():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    assert _get_forwarded_auth_from_scope({"headers": []}) is None
