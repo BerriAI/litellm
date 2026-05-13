@@ -50,6 +50,22 @@ def test_has_during_call_guardrails_detects_guardrail_callbacks(monkeypatch):
     assert ProxyLogging.has_during_call_guardrails() is True
 
 
+def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    assert ProxyLogging.has_post_call_response_headers_callbacks() is False
+
+
+def test_has_post_call_response_headers_callbacks_detects_custom_loggers(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
+
+    assert ProxyLogging.has_post_call_response_headers_callbacks() is True
+
+
 @pytest.fixture
 def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)

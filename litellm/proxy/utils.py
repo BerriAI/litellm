@@ -1511,6 +1511,20 @@ class ProxyLogging:
             isinstance(callback, CustomGuardrail) for callback in litellm.callbacks
         )
 
+    @staticmethod
+    def has_post_call_response_headers_callbacks() -> bool:
+        for callback in litellm.callbacks:
+            if isinstance(callback, str):
+                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
+                )
+            else:
+                _callback = callback
+
+            if isinstance(_callback, CustomLogger):
+                return True
+        return False
+
     async def during_call_hook(
         self,
         data: dict,
@@ -2128,6 +2142,9 @@ class ProxyLogging:
             Dict[str, str]: Merged headers from all callbacks.
         """
         merged_headers: Dict[str, str] = {}
+        if self.has_post_call_response_headers_callbacks() is False:
+            return merged_headers
+
         try:
             # Build litellm_call_info — normalized routing metadata for callbacks
             litellm_call_info = self._build_litellm_call_info(

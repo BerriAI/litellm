@@ -718,14 +718,15 @@ class ProxyBaseLLMRequestProcessing:
             **additional_headers,
         )
 
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-            data=request_data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
-        if callback_headers:
-            custom_headers.update(callback_headers)
+        if proxy_logging_obj.has_post_call_response_headers_callbacks():
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                custom_headers.update(callback_headers)
 
         return custom_headers
 
@@ -1235,16 +1236,17 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 # Call response headers hook for streaming success
-                callback_headers = (
-                    await proxy_logging_obj.post_call_response_headers_hook(
-                        data=self.data,
-                        user_api_key_dict=user_api_key_dict,
-                        response=response,
-                        request_headers=dict(request.headers),
+                if proxy_logging_obj.has_post_call_response_headers_callbacks():
+                    callback_headers = (
+                        await proxy_logging_obj.post_call_response_headers_hook(
+                            data=self.data,
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_headers=dict(request.headers),
+                        )
                     )
-                )
-                if callback_headers:
-                    custom_headers.update(callback_headers)
+                    if callback_headers:
+                        custom_headers.update(callback_headers)
 
                 # Preserve the original client-requested model (pre-alias mapping) for downstream
                 # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
@@ -1443,14 +1445,15 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         # Call response headers hook for non-streaming success
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-            data=self.data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
-        if callback_headers:
-            fastapi_response.headers.update(callback_headers)
+        if proxy_logging_obj.has_post_call_response_headers_callbacks():
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                fastapi_response.headers.update(callback_headers)
 
         await check_response_size_is_safe(response=response)
 
@@ -1781,19 +1784,22 @@ class ProxyBaseLLMRequestProcessing:
         headers.update(custom_headers)
 
         # Call response headers hook for failure
-        try:
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                response=None,
-                request_headers=(self.data.get("proxy_server_request") or {}).get(
-                    "headers", {}
-                ),
-            )
-            if callback_headers:
-                headers.update(callback_headers)
-        except Exception:
-            pass
+        if proxy_logging_obj.has_post_call_response_headers_callbacks():
+            try:
+                callback_headers = (
+                    await proxy_logging_obj.post_call_response_headers_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=None,
+                        request_headers=(
+                            self.data.get("proxy_server_request") or {}
+                        ).get("headers", {}),
+                    )
+                )
+                if callback_headers:
+                    headers.update(callback_headers)
+            except Exception:
+                pass
 
         if isinstance(e, HTTPException):
             raw_detail = getattr(e, "detail", str(e))
