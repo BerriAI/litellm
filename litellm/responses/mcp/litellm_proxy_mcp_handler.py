@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.utils import INVALID_MCP_CLIENT_IP_SENTINEL
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -463,7 +464,7 @@ class LiteLLM_Proxy_MCP_Handler:
             )
 
         standard_client_ip = (
-            None if client_ip == "__invalid_mcp_client_ip__" else client_ip
+            None if client_ip == INVALID_MCP_CLIENT_IP_SENTINEL else client_ip
         )
         return await LiteLLM_Proxy_MCP_Handler._get_standard_mcp_tools(
             user_api_key_auth=user_api_key_auth,
