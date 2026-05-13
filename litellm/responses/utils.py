@@ -32,6 +32,8 @@ from litellm.types.utils import (
     Usage,
 )
 
+INVALID_MCP_CLIENT_IP_SENTINEL = "__invalid_mcp_client_ip__"
+
 
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
@@ -900,7 +902,7 @@ class ResponsesAPIRequestUtils:
             client_ip = secret_fields.get("mcp_client_ip")
             if isinstance(client_ip, str) and client_ip.strip():
                 return client_ip.strip()
-        return "__invalid_mcp_client_ip__"
+        return INVALID_MCP_CLIENT_IP_SENTINEL
 
 
 class ResponseAPILoggingUtils:

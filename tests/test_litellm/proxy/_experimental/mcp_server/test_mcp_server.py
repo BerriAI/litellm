@@ -21,7 +21,10 @@ from litellm.proxy._types import (
     MCPTransport,
     UserAPIKeyAuth,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import (
+    INVALID_MCP_CLIENT_IP_SENTINEL,
+    ResponsesAPIRequestUtils,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -967,7 +970,7 @@ def test_verified_mcp_client_ip_returns_value_or_fail_closed():
     )
     assert (
         ResponsesAPIRequestUtils.get_verified_mcp_client_ip({})
-        == "__invalid_mcp_client_ip__"
+        == INVALID_MCP_CLIENT_IP_SENTINEL
     )
 
 

@@ -10,6 +10,7 @@ import importlib
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
+from litellm.responses.utils import INVALID_MCP_CLIENT_IP_SENTINEL
 from typing import Any, cast
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
@@ -354,7 +355,7 @@ async def test_lazymcp_catalog_uses_fail_closed_client_ip(monkeypatch):
         client_ip=ResponsesAPIRequestUtils.get_verified_mcp_client_ip(None),
     )
 
-    assert captured["client_ip"] == "__invalid_mcp_client_ip__"
+    assert captured["client_ip"] == INVALID_MCP_CLIENT_IP_SENTINEL
 
 
 @pytest.mark.asyncio
@@ -950,7 +951,7 @@ async def test_standard_mcp_preserves_missing_client_ip_behavior(monkeypatch):
         mcp_tools_with_litellm_proxy=[
             {"type": "mcp", "server_url": "litellm_proxy/mcp/standard"}
         ],
-        client_ip="__invalid_mcp_client_ip__",
+        client_ip=INVALID_MCP_CLIENT_IP_SENTINEL,
     )
 
     assert captured["client_ip"] is None
