@@ -490,6 +490,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "compactifai"
         elif model.startswith("ovhcloud/"):
             custom_llm_provider = "ovhcloud"
+        elif model.startswith("huawei_cloud/"):
+            custom_llm_provider = "huawei_cloud"
         elif model.startswith("lemonade/"):
             custom_llm_provider = "lemonade"
         elif model.startswith("clarifai/"):

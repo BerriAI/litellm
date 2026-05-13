@@ -265,6 +265,7 @@ wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
+huawei_cloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
@@ -621,6 +622,7 @@ volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
+huawei_cloud_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
@@ -878,6 +880,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
             ovhcloud_embedding_models.add(key)
+        elif value.get("litellm_provider") == "huawei_cloud":
+            huawei_cloud_models.add(key)
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
@@ -1007,6 +1011,7 @@ model_list = list(
     | volcengine_models
     | wandb_models
     | ovhcloud_models
+    | huawei_cloud_models
     | lemonade_models
     | docker_model_runner_models
     | bedrock_mantle_models
@@ -1105,6 +1110,7 @@ models_by_provider: dict = {
     "volcengine": volcengine_models,
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
+    "huawei_cloud": huawei_cloud_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
     "amazon_nova": amazon_nova_models,
@@ -1902,6 +1908,9 @@ if TYPE_CHECKING:
     )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,
+    )
+    from .llms.huawei_cloud.chat.transformation import (
+        HuaweiCloudChatConfig as HuaweiCloudChatConfig,
     )
     from .llms.ovhcloud.embedding.transformation import (
         OVHCloudEmbeddingConfig as OVHCloudEmbeddingConfig,

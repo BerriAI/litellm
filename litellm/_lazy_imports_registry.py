@@ -313,6 +313,7 @@ LLM_CONFIG_NAMES = (
     "VercelAIGatewayConfig",
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
+    "HuaweiCloudChatConfig",
     "CometAPIEmbeddingConfig",
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
@@ -1162,6 +1163,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OVHCloudEmbeddingConfig": (
         ".llms.ovhcloud.embedding.transformation",
         "OVHCloudEmbeddingConfig",
+    ),
+    "HuaweiCloudChatConfig": (
+        ".llms.huawei_cloud.chat.transformation",
+        "HuaweiCloudChatConfig",
     ),
     "CometAPIEmbeddingConfig": (
         ".llms.cometapi.embed.transformation",

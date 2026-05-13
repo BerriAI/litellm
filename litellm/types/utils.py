@@ -1777,6 +1777,9 @@ class ModelResponseBase(OpenAIObject):
     object: str
     """The object type, which is always "text_completion" """
 
+    usage: Optional[Usage] = None
+    """Usage statistics for the completion request."""
+
     system_fingerprint: Optional[str] = None
     """This fingerprint represents the backend configuration that the model runs with.
 
@@ -3319,6 +3322,7 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    HUAWEI_CLOUD = "huawei_cloud"
     SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"

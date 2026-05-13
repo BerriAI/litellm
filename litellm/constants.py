@@ -623,6 +623,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
+    "huawei_cloud",
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
@@ -1597,6 +1598,7 @@ SENTRY_DENYLIST = [
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
     "OVHCLOUD_API_KEY",
+    "HUAWEI_CLOUD_API_KEY",
     "CLARIFAI_API_KEY",
     # Database and Connection Strings
     "database_url",

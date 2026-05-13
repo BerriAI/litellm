@@ -229,6 +229,7 @@ from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
+from .llms.huawei_cloud.chat.transformation import HuaweiCloudChatConfig
 from .llms.petals.completion import handler as petals_handler
 from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
@@ -320,6 +321,7 @@ bytez_transformation = BytezChatConfig()
 heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
+huawei_cloud_transformation = HuaweiCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
@@ -4346,6 +4348,45 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=_get_encoding(),
                 stream=stream,
                 provider_config=ovhcloud_transformation,
+            )
+
+            pass
+
+        elif (
+            custom_llm_provider == "huawei_cloud"
+            or model in litellm.huawei_cloud_models
+        ):
+            api_key = (
+                api_key
+                or litellm.huawei_cloud_key
+                or get_secret_str("HUAWEI_CLOUD_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("HUAWEI_CLOUD_API_BASE")
+                or "https://api-ap-southeast-1.modelarts-maas.com/openai/v1"
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=_get_encoding(),
+                stream=stream,
+                provider_config=huawei_cloud_transformation,
             )
 
             pass
