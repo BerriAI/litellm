@@ -989,7 +989,8 @@ class MCPServerManager:
                 delegate_server_ids = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if getattr(server, "delegate_auth_to_upstream", False) is True
+                    if getattr(server, "auth_type", None) == MCPAuth.oauth2
+                    and getattr(server, "delegate_auth_to_upstream", False) is True
                 ]
                 combined_servers.update(delegate_server_ids)
 

@@ -163,7 +163,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPCredentials
+    from litellm.types.mcp import MCPAuth, MCPCredentials
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -1567,7 +1567,11 @@ if MCP_AVAILABLE:
                 _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
                 if not _s:
                     _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-                if _s and getattr(_s, "delegate_auth_to_upstream", False) is True:
+                if (
+                    _s
+                    and getattr(_s, "auth_type", None) == MCPAuth.oauth2
+                    and getattr(_s, "delegate_auth_to_upstream", False) is True
+                ):
                     return UserAPIKeyAuth()
 
         request_data = await _read_request_body(request=request)
