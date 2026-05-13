@@ -449,9 +449,7 @@ async def test_failed_delete_preserves_stateful_session_tracking():
         assert mock_handle_request.await_count == 1
         assert _stateful_session_auth_contexts[session_id] is auth_context
         assert _stateful_session_auth_context_last_seen[session_id] == 1.0
-        assert _stateful_session_owners[session_id] == _owner_fingerprint_for(
-            user_auth
-        )
+        assert _stateful_session_owners[session_id] == _owner_fingerprint_for(user_auth)
         assert _stateful_session_locks[session_id] is session_lock
         assert session_id in mock_instances
     finally:
