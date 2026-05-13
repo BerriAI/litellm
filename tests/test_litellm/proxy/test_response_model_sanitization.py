@@ -66,6 +66,10 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
+def _decode_sse_chunk(chunk) -> str:
+    return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+
+
 def test_restamp_streaming_chunk_skips_matching_model():
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
@@ -191,6 +195,11 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -206,7 +215,7 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(
 
     # First chunk is expected to be JSON, last chunk is [DONE]
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -249,6 +258,11 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -266,7 +280,7 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -306,6 +320,11 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -323,7 +342,7 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
@@ -364,6 +383,11 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
         "async_post_call_streaming_hook",
         AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -382,7 +406,7 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
         chunks.append(item)
 
     assert len(chunks) >= 2
-    first = chunks[0]
+    first = _decode_sse_chunk(chunks[0])
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
