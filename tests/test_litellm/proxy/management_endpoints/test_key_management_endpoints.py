@@ -10644,7 +10644,7 @@ def _patch_regenerate_side_effects():
     "incoming_user_id,expected_status,expected_substring",
     [
         # Cross-user rebind: the privesc primitive.
-        ("default_user_id", 403, "not allowed to update the key"),
+        ("default_user_id", 403, "not allowed to rebind the key"),
         # Empty-string removal: companion guard.
         ("", 403, "remove the user_id"),
         # No-op rebind (caller sends their own user_id): must succeed.

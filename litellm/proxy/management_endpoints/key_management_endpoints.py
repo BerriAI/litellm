@@ -496,8 +496,8 @@ def _validate_caller_can_change_key_ownership(
         raise HTTPException(
             status_code=403,
             detail=(
-                f"User={incoming_user_id} is not allowed to update the key "
-                f"to belong to user={existing_user_id}"
+                f"Non-admin caller is not allowed to rebind the key from "
+                f"user={existing_user_id} to user={incoming_user_id}"
             ),
         )
 
