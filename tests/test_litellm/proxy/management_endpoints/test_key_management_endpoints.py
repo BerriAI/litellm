@@ -10596,3 +10596,149 @@ async def test_bulk_update_team_keys_blocks_metadata_allowed_passthrough_routes(
     assert exc.value.status_code == 403
     assert "allowed_passthrough_routes" in str(exc.value.detail)
     mock.update_data.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# /key/regenerate ownership-rebind guard + premium-gate identity check
+# ---------------------------------------------------------------------------
+
+import contextlib  # noqa: E402
+
+
+def _non_admin_user_api_key_dict():
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+    )
+
+
+@contextlib.contextmanager
+def _patch_regenerate_side_effects():
+    """Mock out token creation + DB write + cache + rotation hook so
+    ``_execute_virtual_key_regeneration`` runs to completion under test."""
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "incoming_user_id,expected_status,expected_substring",
+    [
+        # Cross-user rebind: the privesc primitive.
+        ("default_user_id", 403, "not allowed to update the key"),
+        # Empty-string removal: companion guard.
+        ("", 403, "remove the user_id"),
+        # No-op rebind (caller sends their own user_id): must succeed.
+        ("user-1", None, None),
+    ],
+    ids=["rebind_blocked", "empty_blocked", "same_user_id_allowed"],
+)
+async def test_regenerate_user_id_rebind_guard(
+    incoming_user_id, expected_status, expected_substring
+):
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    data = RegenerateKeyRequest(user_id=incoming_user_id)
+
+    async def _run():
+        await _execute_virtual_key_regeneration(
+            prisma_client=_make_regenerate_mock_prisma(),
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=data,
+            user_api_key_dict=_non_admin_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    if expected_status is None:
+        with _patch_regenerate_side_effects():
+            await _run()
+        return
+
+    with pytest.raises(HTTPException) as exc:
+        await _run()
+    assert exc.value.status_code == expected_status
+    assert expected_substring in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_premium_gate_requires_actual_master_key():
+    # ``regenerate_key_fn``'s decorator wraps the underlying ValueError
+    # into a ProxyException with empty ``message``. The exception type
+    # alone confirms the premium gate fired.
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    data = RegenerateKeyRequest(key="sk-not-master", new_master_key="anything")
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.master_key", "sk-the-real-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        pytest.raises((ValueError, HTTPException, ProxyException)),
+    ):
+        await regenerate_key_fn(
+            key="sk-not-master",
+            data=data,
+            user_api_key_dict=_non_admin_user_api_key_dict(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_premium_gate_allows_actual_master_key_holder():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    master = "sk-the-real-master-key"
+    data = RegenerateKeyRequest(key=master, new_master_key="sk-new-master")
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.master_key", master),
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
+            new_callable=AsyncMock,
+        ),
+    ):
+        result = await regenerate_key_fn(
+            key=master,
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key=master,
+                user_id="admin",
+            ),
+        )
+
+    assert result.token == "sk-new-master"
