@@ -340,7 +340,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
                 generate_content_config_dict.pop(schema_key)
                 return
             generate_content_config_dict.pop(schema_key)
-            generate_content_config_dict["responseJsonSchema"] = value
+            new_json_schema_key = (
+                "response_json_schema"
+                if schema_key == "response_schema"
+                else "responseJsonSchema"
+            )
+            generate_content_config_dict[new_json_schema_key] = value
         else:
             if json_schema_key is not None:
                 generate_content_config_dict.pop(json_schema_key)
