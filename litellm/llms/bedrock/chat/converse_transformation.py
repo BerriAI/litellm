@@ -1203,12 +1203,13 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
+        inference_params.pop("output_config", None)
         if not _supports_factory(
             model=strip_bedrock_routing_prefix(model),
             custom_llm_provider="bedrock",
             key="supports_output_config",
         ):
-            inference_params.pop("output_config", None)
+            output_config = None
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {

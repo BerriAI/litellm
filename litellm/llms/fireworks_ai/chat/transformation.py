@@ -254,6 +254,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if not model.startswith("fireworks_ai/"):
             candidate_keys.append(f"fireworks_ai/{model}")
 
+        stripped = model.removeprefix("fireworks_ai/")
+        if not stripped.startswith("accounts/"):
+            candidate_keys.append(f"fireworks_ai/accounts/fireworks/models/{stripped}")
+
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
             if model_info is not None and model_info.get(capability) is not None:
