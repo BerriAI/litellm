@@ -1991,13 +1991,25 @@ class SafeRouteAdder:
         """
         prefix = path.rstrip("/") + "/"
         wildcard_self = path.rstrip("/") + "/{subpath:path}"
+        # Only skip a wildcard route at our own address if the runtime
+        # registry already has a subpath entry for this path — i.e. the
+        # wildcard was added by a prior pass-through cycle and we're
+        # re-registering it. A built-in handler that happens to live at
+        # ``{path}/{subpath:path}`` must NOT be exempted, since allowing
+        # it through this guard combined with the path-registration
+        # helper's regex (which doesn't match the bare base path) would
+        # let the wildcard glob into ``LiteLLMRoutes.openai_routes`` and
+        # misclassify admin-only built-in children as llm_api_routes.
+        own_subpath_entry_exists = any(
+            entry.get("type") == "subpath" and entry.get("path") == path
+            for entry in _registered_pass_through_routes.values()
+        )
         for route in app.routes:
             route_path = getattr(route, "path", None)
             route_methods = getattr(route, "methods", None)
             if not isinstance(route_path, str) or route_methods is None:
                 continue
-            # Don't count the wildcard we may be re-registering ourselves.
-            if route_path == wildcard_self:
+            if route_path == wildcard_self and own_subpath_entry_exists:
                 continue
             if not route_path.startswith(prefix):
                 continue

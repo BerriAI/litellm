@@ -159,6 +159,38 @@ def test_subpath_route_with_builtin_child_skips_metadata():
     assert _registered_pass_through_routes == {}
 
 
+def test_subpath_route_builtin_at_wildcard_address_blocks_registration():
+    # Greptile follow-up: the wildcard_self skip must only apply when
+    # the runtime registry already holds a subpath entry for this path
+    # (i.e. it's a self-rereg). If a built-in handler happens to live
+    # at ``{path}/{subpath:path}`` and the registry is empty, the
+    # wildcard skip must NOT exempt it — otherwise the wildcard glob
+    # could leak into ``openai_routes`` and downgrade RBAC on any
+    # built-in children.
+    app = FastAPI()
+
+    async def _builtin_at_wildcard(subpath: str):
+        return {}
+
+    # Built-in handler at the literal {subpath:path} address — no prior
+    # pass-through subpath entry for ``/v1/chat`` exists in the registry.
+    app.add_api_route(
+        path="/v1/chat/{subpath:path}",
+        endpoint=_builtin_at_wildcard,
+        methods=["POST"],
+    )
+
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=app,
+        path="/v1/chat",
+        **{**_HELPER_KWARGS, "endpoint_id": "ep-shadow-builtin-wildcard"},
+    )
+
+    # Without the conditional skip, the wildcard_self exemption would
+    # bypass the child-route guard and let the registration land.
+    assert _registered_pass_through_routes == {}
+
+
 def test_subpath_route_self_rereg_preserves_metadata_with_child_passthrough():
     # Greptile follow-up: ``_registered_pass_through_routes`` is not
     # cleared between config reloads. A subpath re-registration (same
