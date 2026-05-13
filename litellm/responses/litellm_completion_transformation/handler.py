@@ -211,6 +211,15 @@ class LiteLLMCompletionTransformationHandler:
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
 
+        # Responses API 专用参数清理（不应传递给 chat completion endpoint）
+        # 这些参数在 transformation.py 中已转换为对应的 chat completion 参数
+        # 例如：text → response_format, reasoning → reasoning_effort
+        completion_args.pop("text", None)  # 已转换为 response_format
+        completion_args.pop("instructions", None)  # Responses API 专用
+        completion_args.pop("background", None)  # Responses API 专用
+        completion_args.pop("truncation", None)  # Responses API 专用
+        completion_args.pop("max_output_tokens", None)  # 已转换为 max_tokens
+
         # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
         # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
@@ -246,7 +255,6 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("store", None)  # 存储参数
             completion_args.pop("include", None)  # 包含参数
             completion_args.pop("prompt_cache_key", None)  # 缓存键
-            completion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
             # OpenAI 高级参数（国内模型可能不支持）
             completion_args.pop("frequency_penalty", None)  # 频率惩罚
             completion_args.pop("presence_penalty", None)  # 存在惩罚
@@ -368,6 +376,15 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
 
+        # Responses API 专用参数清理（不应传递给 chat completion endpoint）
+        # 这些参数在 transformation.py 中已转换为对应的 chat completion 参数
+        # 例如：text → response_format, reasoning → reasoning_effort
+        acompletion_args.pop("text", None)  # 已转换为 response_format
+        acompletion_args.pop("instructions", None)  # Responses API 专用
+        acompletion_args.pop("background", None)  # Responses API 专用
+        acompletion_args.pop("truncation", None)  # Responses API 专用
+        acompletion_args.pop("max_output_tokens", None)  # 已转换为 max_tokens
+
         # 国内模型兼容过滤 (Codex CLI 0.130.0 + 国内模型扩展参数)
         # 国内模型不支持 Codex CLI / OpenAI 特有的参数，需要过滤
         # 注意：必须在合并 kwargs 和 litellm_completion_request 之后过滤
@@ -403,7 +420,6 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("store", None)  # 存储参数
             acompletion_args.pop("include", None)  # 包含参数
             acompletion_args.pop("prompt_cache_key", None)  # 缓存键
-            acompletion_args.pop("text", None)  # text format 参数 (Codex 0.130.0+)
             # OpenAI 高级参数（国内模型可能不支持）
             acompletion_args.pop("frequency_penalty", None)  # 频率惩罚
             acompletion_args.pop("presence_penalty", None)  # 存在惩罚
