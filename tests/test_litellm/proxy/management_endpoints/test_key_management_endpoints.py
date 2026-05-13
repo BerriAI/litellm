@@ -10647,10 +10647,18 @@ def _patch_regenerate_side_effects():
         ("default_user_id", 403, "not allowed to rebind the key"),
         # Empty-string removal: companion guard.
         ("", 403, "remove the user_id"),
+        # Explicit null: same effect as empty-string removal — survives
+        # model_dump(exclude_unset=True) and writes NULL to the token row.
+        (None, 403, "remove the user_id"),
         # No-op rebind (caller sends their own user_id): must succeed.
         ("user-1", None, None),
     ],
-    ids=["rebind_blocked", "empty_blocked", "same_user_id_allowed"],
+    ids=[
+        "rebind_blocked",
+        "empty_blocked",
+        "explicit_null_blocked",
+        "same_user_id_allowed",
+    ],
 )
 async def test_regenerate_user_id_rebind_guard(
     incoming_user_id, expected_status, expected_substring

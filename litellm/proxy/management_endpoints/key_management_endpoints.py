@@ -483,10 +483,17 @@ def _validate_caller_can_change_key_ownership(
         return
     if data is None:
         return
-    incoming_user_id = getattr(data, "user_id", None)
-    if incoming_user_id is None:
+    # Distinguish "user_id omitted" from "user_id explicitly set to None".
+    # Both leave ``getattr(data, 'user_id', None)`` at None, but only the
+    # explicit-null variant survives ``model_dump(exclude_unset=True)`` in
+    # ``prepare_key_update_data`` and writes NULL to the token row —
+    # detaching the key from its user and bypassing the user-row
+    # role check on subsequent requests.
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    if "user_id" not in fields_set:
         return
-    if incoming_user_id == "":
+    incoming_user_id = getattr(data, "user_id", None)
+    if incoming_user_id is None or incoming_user_id == "":
         raise HTTPException(
             status_code=403,
             detail="Non-admin users cannot remove the user_id from a key.",
