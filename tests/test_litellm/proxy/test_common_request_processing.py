@@ -312,6 +312,128 @@ class TestProxyBaseLLMRequestProcessing:
         proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_skips_absent_header_hooks(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-no-hooks"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        class _FakeResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "additional_headers": {"llm_provider-ratelimit-requests": "1000"},
+            }
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.has_post_call_response_headers_callbacks.return_value = False
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-should-not-run": "1"}
+        )
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["llm_provider-ratelimit-requests"] == "1000"
+        assert "x-should-not-run" not in headers
+        proxy_logging_obj.post_call_response_headers_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("has_guardrails", "has_header_hooks"),
+        [(False, False), (True, True)],
+    )
+    async def test_base_process_llm_request_guards_noop_hooks(
+        self,
+        monkeypatch,
+        has_guardrails,
+        has_header_hooks,
+    ):
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-guarded-hooks"
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_logging_obj": logging_obj,
+            }
+        )
+
+        async def fake_route_request(**kwargs):
+            async def fake_llm_call():
+                return {"model": "test-model", "choices": []}
+
+            return fake_llm_call()
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "route_request",
+            fake_route_request,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        fastapi_response = Response()
+        mock_user = MagicMock(spec=UserAPIKeyAuth)
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.has_during_call_guardrails.return_value = has_guardrails
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs["response"]
+        )
+        proxy_logging_obj.has_post_call_response_headers_callbacks.return_value = (
+            has_header_hooks
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-test-callback-header": "1"}
+        )
+
+        result = await processing_obj.base_process_llm_request(
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=mock_user,
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            skip_pre_call_logic=True,
+        )
+
+        assert result["model"] == "test-model"
+        if has_guardrails:
+            proxy_logging_obj.during_call_hook.assert_awaited_once()
+        else:
+            proxy_logging_obj.during_call_hook.assert_not_awaited()
+
+        if has_header_hooks:
+            proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+            assert fastapi_response.headers["x-test-callback-header"] == "1"
+        else:
+            proxy_logging_obj.post_call_response_headers_hook.assert_not_awaited()
+            assert "x-test-callback-header" not in fastapi_response.headers
+
+    @pytest.mark.asyncio
     async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
         """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
 
