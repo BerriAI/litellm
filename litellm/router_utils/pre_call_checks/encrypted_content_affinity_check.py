@@ -162,27 +162,31 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         healthy_deployments: List[dict],
         model_id: str,
-    ) -> List[dict]:
+    ) -> tuple[List[dict], Any]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
-        deployment's ``(api_base, api_key)``. Returns ``[]`` if router isn't
-        wired in, the originating deployment was removed, or no boundary match.
+        deployment's ``(api_base, api_key)``, alongside the originating
+        deployment object (or ``None`` if it was removed / router unavailable).
+        Returns ``([], originating_or_None)`` when no boundary match exists,
+        so the caller can reuse the looked-up ``originating`` rather than
+        re-querying the router.
         """
         if self.router is None:
-            return []
+            return [], None
         originating = self.router.get_deployment(model_id=model_id)
         if originating is None:
-            return []
+            return [], None
         boundary = self._encryption_boundary_key(
             originating.litellm_params.model_dump(exclude_none=True)
         )
         if boundary is None:
-            return []
-        return [
+            return [], originating
+        matches = [
             d
             for d in healthy_deployments
             if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
         ]
+        return matches, originating
 
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
@@ -245,9 +249,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
-        boundary_matches = self._find_deployments_on_same_encryption_boundary(
-            healthy_deployments=typed_healthy_deployments,
-            model_id=model_id,
+        boundary_matches, originating = (
+            self._find_deployments_on_same_encryption_boundary(
+                healthy_deployments=typed_healthy_deployments,
+                model_id=model_id,
+            )
         )
         if boundary_matches:
             verbose_router_logger.debug(
@@ -264,6 +270,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         raise await self._unavailable_origin_error(
             model=model,
             model_id=model_id,
+            originating=originating,
             parent_otel_span=parent_otel_span,
         )
 
@@ -271,20 +278,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         model: str,
         model_id: str,
+        originating: Any,
         parent_otel_span: Optional[Span],
     ) -> Exception:
-        originating = (
-            self.router.get_deployment(model_id=model_id)
-            if self.router is not None
-            else None
-        )
+        # Public error messages intentionally omit the originating ``model_id`` so
+        # an authenticated caller forging encrypted-content markers cannot use the
+        # error surface to enumerate which deployment IDs exist on this router.
         if originating is None:
             return BadRequestError(
                 message=(
-                    f"Deployment id={model_id} that produced this encrypted_content is "
-                    "no longer configured on this router, and no deployment on the same "
-                    "encryption boundary is available. Re-issue the request without the "
-                    "stale encrypted_content items, or restore the originating deployment."
+                    "The deployment that produced this encrypted_content is no "
+                    "longer configured on this router, and no deployment on the "
+                    "same encryption boundary is available. Re-issue the request "
+                    "without the stale encrypted_content items, or restore the "
+                    "originating deployment."
                 ),
                 model=model,
                 llm_provider="",
@@ -298,11 +305,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
             retry_after = self._cooldown_seconds_remaining(cooldown)
             return RateLimitError(
                 message=(
-                    f"Deployment id={model_id} that produced this encrypted_content is "
-                    f"rate-limited (cooling down for ~{retry_after}s), and no deployment "
-                    "on the same encryption boundary is configured. Retry after the "
-                    "Retry-After window or configure a deployment with the same "
-                    "(api_base, api_key)."
+                    "The deployment that produced this encrypted_content is "
+                    f"rate-limited (cooling down for ~{retry_after}s), and no "
+                    "deployment on the same encryption boundary is configured. "
+                    "Retry after the Retry-After window or configure a deployment "
+                    "with the same (api_base, api_key)."
                 ),
                 llm_provider="",
                 model=model,
@@ -315,8 +322,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         return ServiceUnavailableError(
             message=(
-                f"Deployment id={model_id} that produced this encrypted_content "
-                "is currently unavailable (likely cooled down), and no deployment "
+                "The deployment that produced this encrypted_content is "
+                "currently unavailable (likely cooled down), and no deployment "
                 "on the same encryption boundary is configured. Retry later or "
                 "configure a deployment with the same (api_base, api_key)."
             ),

@@ -1069,11 +1069,12 @@ def test_boundary_fallback_no_router_ref_returns_empty():
             "litellm_params": {"api_base": "https://x", "api_key": "k"},
         }
     ]
-    matches = check._find_deployments_on_same_encryption_boundary(
+    matches, originating = check._find_deployments_on_same_encryption_boundary(
         healthy_deployments=healthy,
         model_id="dep-2",
     )
     assert matches == []
+    assert originating is None
 
 
 def test_boundary_fallback_originating_deployment_removed_returns_empty():
@@ -1098,11 +1099,12 @@ def test_boundary_fallback_originating_deployment_removed_returns_empty():
             "litellm_params": {"api_base": "https://x", "api_key": "k"},
         }
     ]
-    matches = check._find_deployments_on_same_encryption_boundary(
+    matches, originating = check._find_deployments_on_same_encryption_boundary(
         healthy_deployments=healthy,
         model_id="dep-removed",
     )
     assert matches == []
+    assert originating is None
     mock_router.get_deployment.assert_called_once_with(model_id="dep-removed")
 
 
@@ -1264,7 +1266,9 @@ async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_42
             request_kwargs=request_kwargs,
         )
 
-    assert "deployment-a-cooled" in str(excinfo.value)
+    # Public error message intentionally omits the originating model_id to
+    # avoid an authenticated-caller probing oracle.
+    assert "deployment-a-cooled" not in str(excinfo.value)
     assert excinfo.value.status_code == 503
 
 
@@ -1324,7 +1328,7 @@ async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_fo
             request_kwargs=request_kwargs,
         )
 
-    assert "deployment-a-cooled-429" in str(excinfo.value)
+    assert "deployment-a-cooled-429" not in str(excinfo.value)
     assert excinfo.value.status_code == 429
     retry_after = excinfo.value.response.headers.get("retry-after")
     assert retry_after is not None
@@ -1418,7 +1422,7 @@ async def test_affinity_raises_bad_request_when_origin_removed():
             request_kwargs=request_kwargs,
         )
 
-    assert "deployment-removed" in str(excinfo.value)
+    assert "deployment-removed" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio

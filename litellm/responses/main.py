@@ -1138,7 +1138,11 @@ def responses(
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
-                "metadata": kwargs.get("litellm_metadata") or kwargs.get("metadata"),
+                "metadata": (
+                    kwargs["litellm_metadata"]
+                    if "litellm_metadata" in kwargs
+                    else kwargs.get("metadata")
+                ),
             },
             custom_llm_provider=custom_llm_provider,
         )
