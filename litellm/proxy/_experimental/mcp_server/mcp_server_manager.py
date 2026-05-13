@@ -599,16 +599,57 @@ class MCPServerManager:
             )
             raise e
 
+    def _cleanup_server_tool_routing_artifacts(self, server: MCPServer) -> None:
+        """Drop OpenAPI global tools and name-mapping rows owned by ``server``.
+
+        When a server leaves ``self.registry`` (eviction, ``remove_server``, etc.),
+        OpenAPI tools remain in ``global_mcp_tool_registry`` and
+        ``tool_name_to_mcp_server_name_mapping`` unless removed here. Stale
+        mappings make ``_get_mcp_server_from_tool_name`` resolve to a prefix that
+        no longer exists in the live registry.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        prefix_root = normalize_server_name(get_server_prefix(server))
+        if server.spec_path and prefix_root:
+            openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
+            global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
+
+        owned_raw: Set[str] = set()
+        for p in iter_known_server_prefixes(server):
+            if p:
+                owned_raw.add(p)
+        if server.name:
+            owned_raw.add(server.name)
+
+        owned_normalized = {normalize_server_name(x) for x in owned_raw}
+
+        stale_mapping_keys: List[str] = []
+        for tool_name, mapped_server in list(
+            self.tool_name_to_mcp_server_name_mapping.items()
+        ):
+            if mapped_server in owned_raw:
+                stale_mapping_keys.append(tool_name)
+            elif normalize_server_name(str(mapped_server)) in owned_normalized:
+                stale_mapping_keys.append(tool_name)
+
+        for key in stale_mapping_keys:
+            del self.tool_name_to_mcp_server_name_mapping[key]
+
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
         Remove a server from the registry
         """
-        if mcp_server.server_name in self.get_registry():
-            del self.registry[mcp_server.server_name]
-            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_name}")
-        elif mcp_server.server_id in self.get_registry():
-            del self.registry[mcp_server.server_id]
-            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_id}")
+        evicted: Optional[MCPServer] = self.registry.pop(mcp_server.server_id, None)
+        if evicted is None and mcp_server.server_name:
+            evicted = self.registry.pop(mcp_server.server_name, None)
+        if evicted is not None:
+            verbose_logger.debug(
+                "Removed MCP Server: %s", mcp_server.server_id or mcp_server.server_name
+            )
+            self._cleanup_server_tool_routing_artifacts(evicted)
         else:
             verbose_logger.warning(
                 f"Server ID {mcp_server.server_id} not found in registry"
@@ -806,6 +847,13 @@ class MCPServerManager:
                 self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # The runtime registry is the allowlist for tool calls and health
+        # probes (which spawn the underlying transport, including stdio
+        # subprocesses). Match the eligibility set used by the bulk DB
+        # filter in reload_servers_from_database() — NULL is legacy and
+        # "approved" is a legacy alias for "active".
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            return
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
@@ -819,6 +867,16 @@ class MCPServerManager:
             raise e
 
     async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # If a previously-active server has been moved out of the active
+        # state, evict any stale registry entry so subsequent tool calls and
+        # health probes can't reach it.
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            evicted = self.registry.pop(mcp_server.server_id, None)
+            if evicted is None and mcp_server.server_name:
+                evicted = self.registry.pop(mcp_server.server_name, None)
+            if evicted is not None:
+                self._cleanup_server_tool_routing_artifacts(evicted)
+            return
         try:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)

@@ -100,6 +100,7 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_auth_checks.py
               tests/proxy_unit_tests/test_user_api_key_auth.py
+              tests/proxy_unit_tests/test_deprecated_key_grace_period.py
             workers: 4
             dist: loadscope
             timeout: 15

@@ -23,7 +23,7 @@ async def generate_key(
     models=[
         "gpt-4",
         "text-embedding-ada-002",
-        "dall-e-2",
+        "gpt-image-1",
         "fake-openai-endpoint-2",
         "mistral-embed",
     ],
@@ -56,7 +56,7 @@ async def new_user(session):
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
-        "models": ["gpt-4", "text-embedding-ada-002", "dall-e-2"],
+        "models": ["gpt-4", "text-embedding-ada-002", "gpt-image-1"],
         "duration": None,
     }
 
@@ -264,7 +264,7 @@ async def image_generation(session, key):
         "Content-Type": "application/json",
     }
     data = {
-        "model": "dall-e-2",
+        "model": "gpt-image-1",
         "prompt": "A cute baby sea otter",
     }
 
