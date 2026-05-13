@@ -97,15 +97,28 @@ def test_slash_is_still_a_public_route():
 @pytest.fixture(scope="module")
 def proxy_client():
     """One TestClient per module — TestClient construction triggers
-    FastAPI route-tree build + lifespan startup, both expensive."""
-    os.environ.setdefault("DATABASE_URL", "")
-    os.environ.setdefault("DISABLE_SCHEMA_UPDATE", "True")
-    os.environ.setdefault("LITELLM_MASTER_KEY", "sk-1234")
+    FastAPI route-tree build + lifespan startup, both expensive. Env
+    vars are restored after the fixture exits so they don't bleed into
+    other test modules in the same worker."""
+    overrides = {
+        "DATABASE_URL": "",
+        "DISABLE_SCHEMA_UPDATE": "True",
+        "LITELLM_MASTER_KEY": "sk-1234",
+    }
+    saved = {k: os.environ.get(k) for k in overrides}
+    for k, v in overrides.items():
+        os.environ[k] = v
+    try:
+        import litellm.proxy.proxy_server as ps
 
-    import litellm.proxy.proxy_server as ps
-
-    with patch.object(ps, "master_key", "sk-1234"):
-        yield TestClient(ps.app)
+        with patch.object(ps, "master_key", "sk-1234"):
+            yield TestClient(ps.app)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.mark.parametrize("host_header", _BYPASS_HOST_HEADERS)
