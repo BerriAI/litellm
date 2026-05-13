@@ -41,7 +41,7 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    include_args = [
+    include_args = {
         "url",
         "redis_connect_func",
         "gcp_service_account",
@@ -50,9 +50,9 @@ def _get_redis_kwargs():
         "azure_client_id",
         "azure_tenant_id",
         "azure_client_secret",
-    ]
+    }
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    available_args = {x for x in arg_spec.args if x not in exclude_args} | include_args
 
     return available_args
 
