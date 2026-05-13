@@ -718,6 +718,47 @@ class TestOllamaReasoningContentStreaming:
         assert result.choices[0].delta.reasoning_content == "Let me reason first."
         assert result.choices[0].delta.content == "Final answer."
 
+    def test_streaming_chunks_ignore_inactive_empty_reasoning_fields(self):
+        """
+        Test that Ollama chunks with inactive empty fields stay in the active delta.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "Let me reason first.",
+                "content": "",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk)
+
+        assert result.choices[0].delta.reasoning_content == "Let me reason first."
+        assert result.choices[0].delta.content is None
+        assert iterator.finished_reasoning_content is False
+
+        content_chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "",
+                "content": "Final answer.",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(content_chunk)
+
+        assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+        assert result.choices[0].delta.content == "Final answer."
+        assert iterator.finished_reasoning_content is True
+
     def test_think_tags_in_content(self):
         """
         Test that <think> tags embedded in content are properly parsed.
