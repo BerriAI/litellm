@@ -320,6 +320,13 @@ if MCP_AVAILABLE:
                 expired_session_ids.append(session_id)
 
         for session_id in expired_session_ids:
+            # Re-check the active-request count immediately before tearing
+            # the session down. ``await transport.terminate()`` yields to
+            # the event loop, so a request that started after the first
+            # collection pass could otherwise observe its transport being
+            # ripped out from under it mid-flight.
+            if _stateful_session_active_request_counts.get(session_id, 0) > 0:
+                continue
             _remove_stateful_session_tracking(session_id)
             transport = server_instances.pop(session_id, None)
             if transport is not None:
@@ -2837,8 +2844,16 @@ if MCP_AVAILABLE:
 
             body = message.get("body", b"") or b""
             if body:
-                body_chunks.append(body)
-                peeked_bytes += len(body)
+                # Only retain up to the remaining peek budget for sniffing.
+                # The full ``message`` is already in memory (delivered by
+                # the ASGI server) and must round-trip to the downstream
+                # handler via ``consumed_messages``, but ``body_chunks`` is
+                # purely for the JSON-RPC method check — there is no reason
+                # to copy a large body frame into a second buffer.
+                remaining = _MCP_ROUTING_PEEK_MAX_BYTES - peeked_bytes
+                if remaining > 0:
+                    body_chunks.append(body[:remaining])
+                    peeked_bytes += min(len(body), remaining)
 
             if not message.get("more_body", False):
                 break
