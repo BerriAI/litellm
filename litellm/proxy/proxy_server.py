@@ -15155,10 +15155,12 @@ async def _resolve_mcp_csv_tokens(
 
     For each token, check (in order) whether it is a registered MCP server
     alias / name or an MCP access group tag (cached). Tokens are stripped,
-    deduped (case-insensitive, keeping first occurrence in original order),
-    and capped at ``DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS`` to bound the
+    deduped (exact-match, keeping first occurrence in original order), and
+    capped at ``DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS`` to bound the
     per-request DB / cache fan-out an authenticated caller can trigger by
-    stuffing the path with tokens.
+    stuffing the path with tokens. Dedup is case-sensitive on purpose:
+    downstream resolvers may treat names case-sensitively, so collapsing
+    ``MyGroup`` and ``mygroup`` would risk dropping a valid distinct token.
 
     Toolset names are intentionally NOT resolved here — toolsets bind a single
     toolset id into request scope and have no defined semantics inside a
@@ -15175,16 +15177,13 @@ async def _resolve_mcp_csv_tokens(
         global_mcp_server_manager,
     )
 
-    seen_lower: set = set()
+    seen: set = set()
     deduped: List[str] = []
     for raw in csv_segment.split(","):
         token = raw.strip()
-        if not token:
+        if not token or token in seen:
             continue
-        lower = token.lower()
-        if lower in seen_lower:
-            continue
-        seen_lower.add(lower)
+        seen.add(token)
         deduped.append(token)
         if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
             break

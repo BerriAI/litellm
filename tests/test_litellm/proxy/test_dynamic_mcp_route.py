@@ -199,7 +199,8 @@ async def test_dynamic_mcp_route_comma_list_forwards_only_resolved_subset():
 
 @pytest.mark.asyncio
 async def test_resolve_mcp_csv_tokens_dedupes_and_caps():
-    """_resolve_mcp_csv_tokens dedupes tokens case-insensitively, drops empty
+    """_resolve_mcp_csv_tokens dedupes tokens exact-match (so distinct casings
+    are preserved — downstream resolution may be case-sensitive), drops empty
     fragments, and stops looking up after DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
     unique tokens to bound DB / cache fan-out."""
     from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
@@ -208,7 +209,10 @@ async def test_resolve_mcp_csv_tokens_dedupes_and_caps():
     fake_mgr = MagicMock()
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=_fake_server())
 
-    csv = ",,github_mcp, GITHUB_MCP," + ",".join(
+    # "github_mcp" appears twice (once with surrounding whitespace) — must be
+    # collapsed to a single entry. "GITHUB_MCP" is a distinct exact token and
+    # is kept (downstream resolution may be case-sensitive).
+    csv = ",,github_mcp, github_mcp ,GITHUB_MCP," + ",".join(
         f"srv_{i}" for i in range(DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS + 5)
     )
 
@@ -220,8 +224,8 @@ async def test_resolve_mcp_csv_tokens_dedupes_and_caps():
 
     assert len(resolved) == DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
     assert resolved[0] == "github_mcp"
-    # Case-insensitive dedupe: the second "GITHUB_MCP" must NOT appear.
-    assert "GITHUB_MCP" not in resolved
+    assert "GITHUB_MCP" in resolved
+    assert resolved.count("github_mcp") == 1
 
 
 @pytest.mark.asyncio
