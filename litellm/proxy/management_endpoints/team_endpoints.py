@@ -3805,6 +3805,7 @@ async def _build_team_list_where_conditions(
     organization_id: Optional[str],
     user_id: Optional[str],
     use_deleted_table: bool,
+    search: Optional[str] = None,
     org_admin_org_ids: Optional[List[str]] = None,
     user_api_key_cache: Optional[Any] = None,
     proxy_logging_obj: Optional[Any] = None,
@@ -3825,6 +3826,12 @@ async def _build_team_list_where_conditions(
             "contains": team_alias,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if search:
+        where_conditions["OR"] = [
+            {"team_id": search},
+            {"team_alias": {"contains": search, "mode": "insensitive"}},
+        ]
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
@@ -4019,6 +4026,10 @@ async def list_team_v2(
         default=None,
         description="Only return teams which this 'team_alias' belongs to. Supports partial matching.",
     ),
+    search: Optional[str] = fastapi.Query(
+        default=None,
+        description="Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive).",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -4104,6 +4115,7 @@ async def list_team_v2(
         organization_id=organization_id,
         user_id=user_id,
         use_deleted_table=use_deleted_table,
+        search=search,
         org_admin_org_ids=org_admin_org_ids,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

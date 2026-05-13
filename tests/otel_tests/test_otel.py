@@ -13,7 +13,7 @@ async def generate_key(
     models=[
         "gpt-4",
         "text-embedding-ada-002",
-        "dall-e-2",
+        "gpt-image-1",
         "fake-openai-endpoint",
         "mistral-embed",
     ],

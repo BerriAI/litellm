@@ -78,7 +78,6 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   return "default";
 };
 
-
 export function KeyEditView({
   keyData,
   onCancel,
@@ -106,7 +105,7 @@ export function KeyEditView({
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
-    Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
+    Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
   );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
@@ -116,9 +115,7 @@ export function KeyEditView({
   const projectDisplay = (() => {
     if (!keyData.project_id) return null;
     const project = projects?.find((p) => p.project_id === keyData.project_id);
-    return project?.project_alias
-      ? `${project.project_alias} (${keyData.project_id})`
-      : keyData.project_id;
+    return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
   })();
 
   useEffect(() => {
@@ -198,9 +195,10 @@ export function KeyEditView({
     access_group_ids: keyData.access_group_ids || [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-    allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
-      ? keyData.allowed_routes.join(", ")
-      : "",
+    allowed_routes:
+      Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+        ? keyData.allowed_routes.join(", ")
+        : "",
   };
 
   useEffect(() => {
@@ -226,9 +224,10 @@ export function KeyEditView({
       access_group_ids: keyData.access_group_ids || [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-      allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
-        ? keyData.allowed_routes.join(", ")
-        : "",
+      allowed_routes:
+        Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
+          ? keyData.allowed_routes.join(", ")
+          : "",
     });
   }, [keyData, form]);
 
@@ -275,12 +274,25 @@ export function KeyEditView({
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
 
+      // Backend rejects non-empty allowed_routes from non-admins, so re-sending
+      // an unchanged value 403s a team admin. Set compare tolerates reorder.
+      const originalRoutesSet = new Set<string>(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
+      const submittedRoutesSet = new Set<string>(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
+      const allowedRoutesUnchanged =
+        originalRoutesSet.size === submittedRoutesSet.size &&
+        [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
+      if (allowedRoutesUnchanged) {
+        delete values.allowed_routes;
+      }
+
       if (neverExpire) {
         values.duration = null;
       }
 
       // Include multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
       values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
 
       await onSubmit(values);
@@ -305,9 +317,13 @@ export function KeyEditView({
           {({ getFieldValue, setFieldValue }) => {
             const allowedRoutesValue = getFieldValue("allowed_routes") || "";
             // Convert string to array for checking
-            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
-              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
-              : [];
+            const allowedRoutes =
+              typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+                ? allowedRoutesValue
+                    .split(",")
+                    .map((r: string) => r.trim())
+                    .filter((r: string) => r.length > 0)
+                : [];
             const isDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
             const models = getFieldValue("models") || [];
 
@@ -348,9 +364,13 @@ export function KeyEditView({
           {({ getFieldValue, setFieldValue }) => {
             const allowedRoutesValue = getFieldValue("allowed_routes") || "";
             // Convert string to array for getKeyTypeFromRoutes
-            const allowedRoutes = typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
-              ? allowedRoutesValue.split(",").map((r: string) => r.trim()).filter((r: string) => r.length > 0)
-              : [];
+            const allowedRoutes =
+              typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
+                ? allowedRoutesValue
+                    .split(",")
+                    .map((r: string) => r.trim())
+                    .filter((r: string) => r.length > 0)
+                : [];
             const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
 
             return (
@@ -415,9 +435,7 @@ export function KeyEditView({
         }
         name="allowed_routes"
       >
-        <Input
-          placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes"
-        />
+        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -442,10 +460,7 @@ export function KeyEditView({
           </span>
         }
       >
-        <BudgetWindowsEditor
-          value={budgetLimits}
-          onChange={setBudgetLimits}
-        />
+        <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
@@ -579,7 +594,7 @@ export function KeyEditView({
               !premiumUser
                 ? "Premium feature - Upgrade to set allowed pass through routes by key"
                 : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
-                  keyData.metadata.allowed_passthrough_routes.length > 0
+                    keyData.metadata.allowed_passthrough_routes.length > 0
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
@@ -690,14 +705,13 @@ export function KeyEditView({
             return team.team_alias?.toLowerCase().includes(input.toLowerCase()) ?? false;
           }}
         >
-          {(selectedOrganizationId
-            ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
-            : teams
-          )?.map((team) => (
-            <Select.Option key={team.team_id} value={team.team_id}>
-              {`${team.team_alias} (${team.team_id})`}
-            </Select.Option>
-          ))}
+          {(selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams)?.map(
+            (team) => (
+              <Select.Option key={team.team_id} value={team.team_id}>
+                {`${team.team_alias} (${team.team_id})`}
+              </Select.Option>
+            ),
+          )}
         </Select>
       </Form.Item>
       {enableProjectsUI && hasProject && (

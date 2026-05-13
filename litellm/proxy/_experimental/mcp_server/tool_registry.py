@@ -59,6 +59,22 @@ class MCPToolRegistry:
             ]
         return list(self.tools.values())
 
+    def unregister_tools_with_prefix(self, prefix: str) -> int:
+        """Remove tools whose registered name starts with ``prefix``.
+
+        Used when an OpenAPI-backed MCP server leaves the runtime registry so
+        stale tool handlers cannot be invoked after eviction.
+        """
+        if not prefix:
+            return 0
+        removed = 0
+        for name in list(self.tools.keys()):
+            if name.startswith(prefix):
+                del self.tools[name]
+                removed += 1
+                verbose_logger.debug("Unregistered MCP tool %s", name)
+        return removed
+
     def convert_tools_to_mcp_sdk_tool_type(
         self, tools: List[MCPTool]
     ) -> List["MCPToolSDKTool"]:

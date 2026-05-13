@@ -237,7 +237,14 @@ class OpenTelemetry(CustomLogger):
             not isinstance(cb, OpenTelemetry) for cb in litellm.service_callback
         ):
             litellm.service_callback.append(self)
-        setattr(proxy_server, "open_telemetry_logger", self)
+        # avoid proxy logger ownership being overwritten by later
+        # handlers. Multiple integrations (default OTEL, Langfuse OTEL,
+        # Arize OTEL, etc.) may initialize in sequence; without this guard,
+        # the last one silently replaces the first and breaks expected
+        # routing for proxy_server.open_telemetry_logger consumers.
+        # Behavior: first-registered wins.
+        if getattr(proxy_server, "open_telemetry_logger", None) is None:
+            setattr(proxy_server, "open_telemetry_logger", self)
 
     def _get_or_create_provider(
         self,
@@ -794,12 +801,100 @@ class OpenTelemetry(CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
+    def _emit_once(self, kwargs: dict, *scope: object) -> bool:
+        """Return True the first time this handler is asked to emit a span
+        for the given (handler, scope) on this kwargs; False on repeats.
+
+        Used to suppress duplicate span emission for two distinct patterns:
+
+        1. **Handler-level dual-fire**: streaming code paths trigger both
+           the sync and async callback for one request, so ``_handle_success``
+           / ``_handle_failure`` would otherwise produce two
+           ``litellm_request`` spans. Scope: ``("success",)`` / ``("failure",)``.
+        2. **Payload-driven multi-entrypoint emission**: a span loop that
+           reads entries from ``standard_logging_payload`` (currently only
+           guardrails) is invoked from multiple lifecycle points
+           (post-call hooks, success callback, failure callback). The list
+           can be re-read with mutated entries between calls, so dedupe
+           must be at entry granularity. Scope: the entry's stable identity.
+
+        ``scope`` parts can be any hashable identity. The marker is stored
+        in ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it
+        is request-local (kwargs is shared across the sync/async callbacks
+        and lifecycle hooks for one request).
+        """
+        litellm_params = kwargs.get("litellm_params")
+        if not isinstance(litellm_params, dict):
+            litellm_params = {}
+            kwargs["litellm_params"] = litellm_params
+
+        _metadata = litellm_params.get("metadata")
+        if not isinstance(_metadata, dict):
+            _metadata = {}
+            litellm_params["metadata"] = _metadata
+
+        _otel_internal = _metadata.get("_otel_internal")
+        if not isinstance(_otel_internal, dict):
+            _otel_internal = {}
+            _metadata["_otel_internal"] = _otel_internal
+
+        spans_logged = _otel_internal.get("spans_logged")
+        if not isinstance(spans_logged, dict):
+            spans_logged = {}
+            _otel_internal["spans_logged"] = spans_logged
+
+        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        if spans_logged.get(dedupe_key) is True:
+            return False
+
+        spans_logged[dedupe_key] = True
+        return True
+
+    def _end_proxy_span_from_kwargs(self, kwargs: dict, end_time) -> None:
+        """Close the proxy-level parent span if it is still recording.
+
+        This helper retrieves the proxy span directly from kwargs metadata
+        and closes it after all child spans have been recorded.
+
+        Only called from the success path. The failure path deliberately
+        leaves the proxy span open so ``async_post_call_failure_hook`` can
+        append the ``"Failed Proxy Server Request"`` child span before
+        closing it.
+
+        Only spans named ``LITELLM_PROXY_REQUEST_SPAN_NAME`` are closed —
+        externally provided spans must not be closed by LiteLLM.
+        """
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        _metadata = litellm_params.get("metadata", {}) or {}
+        proxy_span = _metadata.get("litellm_parent_otel_span", None)
+        if (
+            proxy_span is not None
+            and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
+            and hasattr(proxy_span, "is_recording")
+            and proxy_span.is_recording()
+        ):
+            proxy_span.end(end_time=self._to_ns(end_time))
+
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
+        """Create the litellm_request span then close the proxy span."""
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,
             self.config,
         )
+
+        # sync + async success handlers can both fire for one
+        # request (notably in streaming code paths). Guard against duplicate
+        # span writes — but still close the proxy span on the skip path so
+        # the trace doesn't leak an open root span.
+        if not self._emit_once(kwargs, "success"):
+            verbose_logger.debug(
+                "OpenTelemetry: skipping duplicate success span for handler=%s",
+                self.__class__.__name__,
+            )
+            self._end_proxy_span_from_kwargs(kwargs, end_time)
+            return
+
         ctx, parent_span = self._get_span_context(kwargs)
 
         if self.config.ignore_context_propagation:
@@ -859,13 +954,18 @@ class OpenTelemetry(CustomLogger):
 
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # However, proxy-created spans should be closed here
+        # However, proxy-created spans should be closed here.
         if (
             parent_span is not None
             and hasattr(parent_span, "name")
             and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_span.end(end_time=self._to_ns(end_time))
+
+        # close the proxy span explicitly from kwargs metadata
+        # after all child spans (litellm_request, guardrail, raw_request)
+        # have been fully recorded and exported.
+        self._end_proxy_span_from_kwargs(kwargs, end_time)
 
     def _start_primary_span(
         self,
@@ -1296,6 +1396,21 @@ class OpenTelemetry(CustomLogger):
         for guardrail_information in guardrail_information_list:
             start_time_float = guardrail_information.get("start_time")
             end_time_float = guardrail_information.get("end_time")
+
+            # ``_create_guardrail_span`` is called from three lifecycle
+            # points (``async_post_call_success_hook``, ``_handle_success``,
+            # ``_handle_failure``) and re-reads the (mutating) entry list
+            # each time. Dedupe at entry granularity so a single real
+            # guardrail invocation produces exactly one span per handler.
+            if not self._emit_once(
+                kwargs,
+                "guardrail",
+                guardrail_information.get("guardrail_name"),
+                start_time_float,
+                guardrail_information.get("guardrail_mode"),
+            ):
+                continue
+
             start_time_datetime = datetime.now()
             if start_time_float is not None:
                 start_time_datetime = datetime.fromtimestamp(start_time_float)
@@ -1349,6 +1464,21 @@ class OpenTelemetry(CustomLogger):
             kwargs,
             self.config,
         )
+
+        # sync + async failure handlers can both fire for one
+        # request (notably in streaming code paths), producing two
+        # semantically identical ERROR spans. Unlike the success path, the
+        # proxy span is intentionally left open here so that
+        # ``async_post_call_failure_hook`` can append the
+        # "Failed Proxy Server Request" child span before closing it —
+        # there is no proxy-span side-effect to preserve on the skip path.
+        if not self._emit_once(kwargs, "failure"):
+            verbose_logger.debug(
+                "OpenTelemetry: skipping duplicate failure span for handler=%s",
+                self.__class__.__name__,
+            )
+            return
+
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
         if self.config.ignore_context_propagation:
@@ -1771,17 +1901,41 @@ class OpenTelemetry(CustomLogger):
                     value=safe_dumps(transformed_messages),
                 )
 
-            if kwargs.get("system_instructions"):
-                transformed_system_instructions = (
-                    self._transform_messages_to_otel_semantic_conventions(
-                        kwargs.get("system_instructions")
+            # Coalesce the different kwarg names that carry the system
+            # prompt depending on the call path:
+            #   - "system_instructions" — Vertex AI Gemini chat-completion
+            #   - "instructions"        — OpenAI Responses API
+            #   - "system"              — Anthropic Messages API
+            # Use `is not None` rather than truthiness to avoid falsy
+            # values (e.g. []) falling through to the wrong kwarg.
+            system_instructions = (
+                kwargs.get("system_instructions")
+                if kwargs.get("system_instructions") is not None
+                else (
+                    kwargs.get("instructions")
+                    if kwargs.get("instructions") is not None
+                    else kwargs.get("system")
+                )
+            )
+            if system_instructions:
+                if isinstance(system_instructions, str):
+                    # Plain text system prompt — no transformation needed
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                        value=system_instructions,
                     )
-                )
-                self.safe_set_attribute(
-                    span=span,
-                    key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
-                    value=safe_dumps(transformed_system_instructions),
-                )
+                else:
+                    transformed_system_instructions = (
+                        self._transform_messages_to_otel_semantic_conventions(
+                            system_instructions
+                        )
+                    )
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                        value=safe_dumps(transformed_system_instructions),
+                    )
 
             self.safe_set_attribute(
                 span=span,
@@ -1839,6 +1993,57 @@ class OpenTelemetry(CustomLogger):
                                         key=key,
                                         value=value,
                                     )
+
+                elif response_obj.get("output"):
+                    # Responses API: ResponsesAPIResponse has an "output"
+                    # list instead of "choices".  Each item with
+                    # type="message" contains a "content" list of
+                    # OutputText objects (type="output_text").
+                    output_items = response_obj.get("output")
+                    output_messages = self._transform_responses_api_output_to_otel(
+                        output_items
+                    )
+                    if output_messages:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                            value=safe_dumps(output_messages),
+                        )
+
+                    # Emit per-tool-call span attributes (parity with
+                    # the choices branch that calls _tool_calls_kv_pair).
+                    # Convert Responses API function_call items to the
+                    # ChatCompletionMessageToolCall format expected by
+                    # _tool_calls_kv_pair.
+                    tool_calls = []
+                    for out_item in output_items:
+                        item_d = self._to_dict(out_item)
+                        if item_d and item_d.get("type") == "function_call":
+                            tool_calls.append(
+                                {
+                                    "function": {
+                                        "name": item_d.get("name", ""),
+                                        "arguments": item_d.get("arguments", ""),
+                                    }
+                                }
+                            )
+                    if tool_calls:
+                        kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                        for key, value in kv_pairs.items():
+                            self.safe_set_attribute(
+                                span=span,
+                                key=key,
+                                value=value,
+                            )
+
+                    # Extract finish reason from ResponsesAPIResponse.status
+                    status = response_obj.get("status")
+                    if status:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps([status]),
+                        )
 
         except Exception as e:
             self.handle_callback_failure(
@@ -1933,6 +2138,78 @@ class OpenTelemetry(CustomLogger):
                 transformed_msg["finish_reason"] = finish_reason
 
             transformed.append(transformed_msg)
+        return transformed
+
+    @staticmethod
+    def _to_dict(obj) -> Optional[dict]:
+        """Normalize an object to a plain dict.
+
+        Handles three forms that appear in practice:
+
+        1. Plain ``dict`` — returned as-is.
+        2. LiteLLM's ``BaseLiteLLMOpenAIResponseObject`` — exposes a
+           ``.get()`` method that delegates to ``__dict__``.
+        3. Raw Pydantic v2 models from the ``openai`` SDK (e.g.
+           ``ResponseOutputMessage``, ``ResponseOutputText``) — these do
+           **not** have ``.get()`` but do have ``.model_dump()``.
+
+        Returns ``None`` for anything else so callers can skip it.
+        """
+        if isinstance(obj, dict):
+            return obj
+        if hasattr(obj, "get"):
+            # BaseLiteLLMOpenAIResponseObject duck-type
+            return obj  # type: ignore[return-value]
+        if hasattr(obj, "model_dump"):
+            # Raw Pydantic v2 model (e.g. openai SDK types)
+            return obj.model_dump()  # type: ignore[union-attr]
+        return None
+
+    def _transform_responses_api_output_to_otel(self, output: List) -> List[dict]:
+        """
+        Transform Responses API output items into OTEL GenAI 1.38 format.
+
+        The Responses API returns output as a list of items, each with a
+        ``type`` field.  Message items (``type="message"``) contain a
+        ``content`` list of ``OutputText`` objects with ``type="output_text"``
+        and ``text`` fields.
+
+        Items may be plain dicts, LiteLLM wrapper objects (with ``.get()``),
+        or raw Pydantic v2 models from the ``openai`` SDK (with
+        ``.model_dump()``).  We normalize each item to a dict via
+        ``_to_dict`` before processing.
+
+        This method converts them to the same ``{"role": ..., "parts": [...]}``
+        format used by ``_transform_choices_to_otel_semantic_conventions``.
+        """
+        transformed = []
+        for raw_item in output:
+            item = self._to_dict(raw_item)
+            if item is None:
+                continue
+            if item.get("type") == "message":
+                role = item.get("role", "assistant")
+                parts = []
+                for raw_content in item.get("content", []):
+                    content = self._to_dict(raw_content)
+                    if content is None:
+                        continue
+                    if content.get("type") == "output_text":
+                        text = content.get("text", "")
+                        if text:
+                            parts.append({"type": "text", "content": text})
+                if parts:
+                    transformed.append({"role": role, "parts": parts})
+            elif item.get("type") == "function_call":
+                # Surface tool calls from Responses API output
+                part: dict = {
+                    "type": "tool_call",
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
+                }
+                if item.get("call_id"):
+                    part["id"] = item["call_id"]
+                transformed.append({"role": "assistant", "parts": [part]})
         return transformed
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
@@ -2041,7 +2318,7 @@ class OpenTelemetry(CustomLogger):
             verbose_logger.debug(
                 "OpenTelemetry: Using explicit parent span from metadata"
             )
-            return trace.set_span_in_context(parent_otel_span), parent_otel_span
+            return trace.set_span_in_context(parent_otel_span), None
 
         # Priority 2: HTTP traceparent header
         if traceparent is not None:

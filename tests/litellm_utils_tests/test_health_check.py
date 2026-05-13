@@ -68,7 +68,7 @@ async def test_azure_embedding_health_check():
 async def test_openai_img_gen_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "dall-e-3",
+            "model": "gpt-image-1",
             "api_key": os.getenv("OPENAI_API_KEY"),
         },
         mode="image_generation",

@@ -2135,6 +2135,53 @@ def test_validate_effort_for_model_centralises_per_model_gating(
         assert err is None
 
 
+def test_transform_request_injects_dummy_tool_without_tools_param():
+    """
+    Anthropic rejects messages that contain tool turns when ``tools`` is omitted.
+    LiteLLM must inject a dummy tool without ``litellm.modify_params``.
+    """
+    config = AnthropicConfig()
+    prev_modify_params = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {
+                        "id": "toolu_test_dummy",
+                        "type": "function",
+                        "function": {"name": "get_x", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_test_dummy",
+                "content": "{}",
+            },
+        ]
+        result = config.transform_request(
+            model="claude-3-5-haiku-20241022",
+            messages=messages,
+            optional_params={"max_tokens": 256},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.modify_params = prev_modify_params
+
+    assert "tools" in result
+    names = [
+        t.get("name")
+        for t in result["tools"]
+        if isinstance(t, dict) and t.get("name") is not None
+    ]
+    assert "dummy_tool" in names
+
+
 def test_transform_request_uses_dynamic_max_tokens():
     """
     Test that transform_request uses dynamic max_tokens based on model

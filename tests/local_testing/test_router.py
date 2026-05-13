@@ -995,15 +995,15 @@ async def test_aimg_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0
@@ -1030,15 +1030,15 @@ def test_img_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list)
         response = router.image_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0

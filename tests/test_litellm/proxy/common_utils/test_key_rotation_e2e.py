@@ -13,7 +13,9 @@ Covers the critical gaps:
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -24,6 +26,11 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
 )
 from litellm.proxy.common_utils.key_rotation_manager import KeyRotationManager
+from litellm.proxy.utils import (
+    PrismaClient,
+    _deprecated_key_cache,
+    _lookup_deprecated_key,
+)
 
 
 class TestMultiPodKeyRotation:
@@ -557,3 +564,85 @@ class TestKeyRotationInitialization:
 
         assert acquire_call.kwargs.get("cronjob_id") == KEY_ROTATION_JOB_NAME
         assert release_call.kwargs.get("cronjob_id") == KEY_ROTATION_JOB_NAME
+
+
+class TestDeprecatedKeyLookupDbE2E:
+    """DB-backed integration tests for deprecated key lookup behavior."""
+
+    @pytest.mark.asyncio
+    async def test_deprecated_key_grace_period_cache_hit_path(self):
+        """
+        End-to-end validation against a real Prisma-backed DB:
+        - old key hash resolves through LiteLLM_DeprecatedVerificationToken
+        - repeated lookups hit the in-memory deprecated-key cache
+        - no ValueError/401 regression on subsequent requests
+        """
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            pytest.skip("DATABASE_URL not set; skipping DB-backed key-rotation E2E test.")
+        db_url = cast(str, database_url)
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.failure_handler = AsyncMock()
+        prisma_client = PrismaClient(
+            database_url=db_url, proxy_logging_obj=proxy_logging_obj
+        )
+
+        old_token_hash = f"old-{uuid4().hex}"
+        active_token_hash = f"active-{uuid4().hex}"
+        _deprecated_key_cache.clear()
+
+        await prisma_client.connect()
+        try:
+            await prisma_client.db.litellm_verificationtoken.create(
+                data={
+                    "token": active_token_hash,
+                    "models": [],
+                }
+            )
+
+            await prisma_client.db.litellm_deprecatedverificationtoken.create(
+                data={
+                    "token": old_token_hash,
+                    "active_token_id": active_token_hash,
+                    "revoke_at": datetime.now(timezone.utc) + timedelta(minutes=5),
+                }
+            )
+
+            # Request 1 (DB path) + Request 2/3 (cache-hit path)
+            r1 = await _lookup_deprecated_key(
+                db=prisma_client.db,
+                hashed_token=old_token_hash,
+            )
+            r2 = await _lookup_deprecated_key(
+                db=prisma_client.db,
+                hashed_token=old_token_hash,
+            )
+            r3 = await _lookup_deprecated_key(
+                db=prisma_client.db,
+                hashed_token=old_token_hash,
+            )
+
+            assert r1 == active_token_hash
+            assert r2 == active_token_hash
+            assert r3 == active_token_hash
+
+            cached = _deprecated_key_cache.get(old_token_hash)
+            assert isinstance(cached, tuple)
+            assert len(cached) == 3
+        finally:
+            # Best-effort cleanup for idempotent reruns.
+            try:
+                await prisma_client.db.litellm_deprecatedverificationtoken.delete_many(
+                    where={"token": old_token_hash}
+                )
+            except Exception:
+                pass
+            try:
+                await prisma_client.db.litellm_verificationtoken.delete_many(
+                    where={"token": active_token_hash}
+                )
+            except Exception:
+                pass
+            _deprecated_key_cache.clear()
+            await prisma_client.disconnect()

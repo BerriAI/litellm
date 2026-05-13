@@ -1742,29 +1742,54 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
-        if model_name and llm_router is not None:
+        if llm_router is not None:
+            # Prefer disambiguation by deployment id (`model_info.id`) when
+            # the caller supplies it. This is required when multiple
+            # deployments share a `model_name` (e.g. wildcard `openai/*`
+            # with multiple `api_base` values for failover): the UI's
+            # "Test Connection" button targets a specific row, and that
+            # row's id is the only thing that uniquely identifies which
+            # deployment to probe. Without this, all duplicates collapse
+            # onto `deployments[0]`.
+            request_model_info = model_info or {}
+            request_model_id = request_model_info.get("id")
             try:
-                # First try to find by proxy model_name (e.g., "gpt-4o")
-                deployments = llm_router.get_model_list(model_name=model_name)
-
-                # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
-                if not deployments or len(deployments) == 0:
-                    all_deployments = llm_router.get_model_list(model_name=None)
-                    if all_deployments:
-                        for deployment in all_deployments:
-                            if (
-                                deployment.get("litellm_params", {}).get("model")
-                                == model_name
-                            ):
-                                deployments = [deployment]
-                                break
-
-                if deployments and len(deployments) > 0:
-                    # Use the first deployment's litellm_params as base config
-                    # These already have resolved environment variables from proxy config
-                    config_litellm_params = dict(
-                        deployments[0].get("litellm_params", {})
+                deployment_by_id = None
+                if request_model_id:
+                    deployment_by_id = llm_router.get_deployment(
+                        model_id=request_model_id
                     )
+
+                if deployment_by_id is not None:
+                    config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                elif model_name:
+                    # Fall back to model_name lookup for callers (e.g. the
+                    # "Add Model" wizard, or curl) that don't supply an id.
+                    # First try to find by proxy model_name (e.g., "gpt-4o")
+                    deployments = llm_router.get_model_list(model_name=model_name)
+
+                    # If not found, try to find by litellm model name
+                    # (e.g., "azure/gpt-4o")
+                    if not deployments or len(deployments) == 0:
+                        all_deployments = llm_router.get_model_list(model_name=None)
+                        if all_deployments:
+                            for deployment in all_deployments:
+                                if (
+                                    deployment.get("litellm_params", {}).get("model")
+                                    == model_name
+                                ):
+                                    deployments = [deployment]
+                                    break
+
+                    if deployments and len(deployments) > 0:
+                        # Use the first deployment's litellm_params as base
+                        # config. These already have resolved environment
+                        # variables from proxy config.
+                        config_litellm_params = dict(
+                            deployments[0].get("litellm_params", {})
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
