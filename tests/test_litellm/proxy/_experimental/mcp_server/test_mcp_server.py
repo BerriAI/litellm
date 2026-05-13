@@ -3272,8 +3272,8 @@ async def test_probe_upstream_auth_returns_upstream_status():
     mock_response.status_code = 401
     mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
 
-    mock_client = AsyncMock()
-    mock_client.client.post = AsyncMock(return_value=mock_response)
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
 
     with patch(
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
@@ -3285,8 +3285,8 @@ async def test_probe_upstream_auth_returns_upstream_status():
 
     assert status == 401
     assert www_auth == 'Bearer realm="test"'
-    mock_client.client.post.assert_awaited_once()
-    _, kwargs = mock_client.client.post.call_args
+    mock_client.post.assert_awaited_once()
+    _, kwargs = mock_client.post.call_args
     assert kwargs["headers"]["Authorization"] == "Bearer some-token"
     assert kwargs["json"]["method"] == "initialize"
 
@@ -3296,8 +3296,8 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
     """_probe_upstream_auth returns (200, None) when the network call fails."""
     from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
 
-    mock_client = AsyncMock()
-    mock_client.client.post = AsyncMock(side_effect=Exception("connection refused"))
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
 
     with patch(
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
