@@ -1098,9 +1098,11 @@ class TestFireDeferredStreamLogging:
 
 
 class _FakeCSW:
-    """Stands in for CustomStreamWrapper. ``aclose()`` mirrors real CSW: if
-    a deferred-streaming closure is registered and no args have been set yet,
-    persist partial args from accumulated chunks so the outer hook can fire."""
+    """Stands in for CustomStreamWrapper. ``aclose()`` mirrors real CSW
+    after this PR: it closes the inner stream but does NOT populate
+    ``_deferred_stream_complete_args`` from accumulated chunks — that
+    behavior was deliberately removed to avoid persisting partial
+    pre-guardrail content to SpendLogs on disconnect."""
 
     def __init__(self, chunks, logging_obj, raise_after=None):
         self._chunks, self._logging_obj, self._raise_after = (
@@ -1128,23 +1130,6 @@ class _FakeCSW:
     async def aclose(self):
         self.aclose_calls.append(self._idx)
         self._closed = True
-        lo = self._logging_obj
-        if (
-            getattr(lo, "_on_deferred_stream_complete", None) is not None
-            and getattr(lo, "_deferred_stream_complete_args", None) is None
-        ):
-            lo._deferred_stream_complete_args = (f"partial_after_{self._idx}", False)
-
-
-async def _exception_wrapper(inner):
-    """Mimics _wrap_streaming_iterator_with_enrichment. ``except: raise`` is
-    what marks the wrapper's generator frame completed when an exception
-    propagates — making any aclose() on the wrapper a no-op."""
-    try:
-        async for c in inner:
-            yield c
-    except Exception:
-        raise
 
 
 @contextlib.contextmanager

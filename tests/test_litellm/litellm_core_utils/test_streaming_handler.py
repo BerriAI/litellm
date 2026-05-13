@@ -1662,25 +1662,6 @@ _REAL_CHUNK = ModelResponseStream(
 )
 
 
-def _csw_for_aclose(closure, prior_args, chunks):
-    """Build a real CSW pre-populated with chunks for aclose() partial-args
-    coverage. AAr6bXKP follow-up: aclose() must build a partial assembled
-    response from accumulated chunks on disconnect so the outer
-    ProxyLogging hook's deferred logging fires."""
-    lo = MagicMock()
-    lo._on_deferred_stream_complete = closure
-    lo._deferred_stream_complete_args = prior_args
-    w = CustomStreamWrapper(
-        completion_stream=None,
-        model="gpt-3.5-turbo",
-        logging_obj=lo,
-        custom_llm_provider="openai",
-    )
-    w.messages = [{"role": "user", "content": "hi"}]
-    w.chunks = chunks
-    return w, lo
-
-
 @pytest.mark.asyncio
 async def test_aclose_does_not_populate_deferred_args_on_disconnect():
     """aclose() intentionally does NOT populate
