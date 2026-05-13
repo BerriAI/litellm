@@ -36,6 +36,31 @@ ADMIN_ONLY_HEALTH_DISPLAY_PARAMS = ("api_base", "api_version")
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 
+# Modes whose health-check probe is a chat-style completion call and
+# therefore accept `max_tokens`. Other modes (embedding, image_generation,
+# audio_*, rerank, video_generation, ocr, search, moderation, ...) hit
+# endpoints that reject unknown fields with 400 "Unknown parameter:
+# 'max_tokens'". Allow-list so new modes are safe by default.
+# Per-deployment override: `model_info.health_check_supports_max_tokens`.
+_MAX_TOKEN_SUPPORT_MODES: frozenset = frozenset({"chat", "completion", "responses"})
+
+
+def _should_inject_health_check_max_tokens(model_info: dict) -> bool:
+    """
+    Whether the health-check probe should include `max_tokens`.
+
+    Order:
+      1. `model_info.health_check_supports_max_tokens` (operator override).
+      2. `_MAX_TOKEN_SUPPORT_MODES`. Missing `mode` is treated as `chat`
+         for backward compatibility.
+    """
+    explicit = model_info.get("health_check_supports_max_tokens")
+    if explicit is not None:
+        return bool(explicit)
+    mode = model_info.get("mode") or "chat"
+    return mode in _MAX_TOKEN_SUPPORT_MODES
+
+
 # Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
 _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset(
     (None, "chat", "completion")
@@ -389,14 +414,22 @@ def _update_litellm_params_for_health_check(
     Update the litellm params for health check.
 
     - gets a short `messages` param for health check
+    - adds a bounded `max_tokens` when the deployment is a chat-style mode
+      (`chat`, `completion`, `responses`) or the operator explicitly opts in
+      via `model_info.health_check_supports_max_tokens`. Non-chat endpoints
+      (image, embedding, audio_*, rerank, video, ocr, search, moderation, ...)
+      reject unknown fields with 400 "Unknown parameter: 'max_tokens'".
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
-    _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
-    if _resolved_max_tokens is not None:
-        litellm_params["max_tokens"] = _resolved_max_tokens
+    if _should_inject_health_check_max_tokens(model_info):
+        _resolved_max_tokens = _resolve_health_check_max_tokens(
+            model_info, litellm_params
+        )
+        if _resolved_max_tokens is not None:
+            litellm_params["max_tokens"] = _resolved_max_tokens
 
     # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
     if model_info.get("mode", None) in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
