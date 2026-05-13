@@ -2758,7 +2758,7 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
-    def _get_forwarded_auth_from_scope(scope: dict) -> Optional[str]:
+    def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
         """Return the raw Authorization header value from the ASGI scope, or None."""
         for key, value in scope.get("headers", []):
             if key.lower() == b"authorization":
