@@ -4378,6 +4378,74 @@ async def _insert_deprecated_key(
         )
 
 
+async def _enforce_regenerate_team_change_membership(
+    data: Optional["RegenerateKeyRequest"],
+    key_in_db: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Optional[Any],
+) -> None:
+    """Run /key/update's validate_key_team_change for /key/regenerate
+    when a non-admin caller changes ``team_id``. Without this, a caller
+    could re-assign their key to a victim team (inheriting its models /
+    budget / rate limits) by hitting regenerate instead of update."""
+    if data is None or data.team_id is None:
+        return
+    if data.team_id == getattr(key_in_db, "team_id", None):
+        return
+    if _is_proxy_admin_role(user_api_key_dict):
+        return
+    if llm_router is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "LLM router not initialised — required to "
+                    "validate team-change on /key/regenerate."
+                )
+            },
+        )
+    try:
+        team_obj_for_change = await get_team_object(
+            team_id=data.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            check_db_only=True,
+        )
+    except HTTPException:
+        # Genuine 404 from get_team_object passes through.
+        raise
+    except Exception as exc:
+        verbose_proxy_logger.exception(
+            "Failed to fetch team_id=%s during /key/regenerate "
+            "team-change validation: %s",
+            data.team_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": (
+                    f"Unable to verify team membership for "
+                    f"team_id={data.team_id}. Please retry."
+                )
+            },
+        ) from exc
+    if team_obj_for_change is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found for team_id={data.team_id}"},
+        )
+    await validate_key_team_change(
+        key=key_in_db,
+        team=cast(LiteLLM_TeamTable, team_obj_for_change),
+        change_initiated_by=user_api_key_dict,
+        llm_router=llm_router,
+    )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -4432,63 +4500,14 @@ async def _execute_virtual_key_regeneration(
     # re-assign their key's ``team_id`` (and inherit the victim team's
     # models / budget / rate limits) by hitting regenerate instead of
     # update. Mirror the ``/key/update`` flow here.
-    if data is not None and data.team_id is not None:
-        _existing_team_id = getattr(key_in_db, "team_id", None)
-        if data.team_id != _existing_team_id and not _is_proxy_admin_role(
-            user_api_key_dict
-        ):
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": (
-                            "LLM router not initialised — required to "
-                            "validate team-change on /key/regenerate."
-                        )
-                    },
-                )
-            try:
-                team_obj_for_change = await get_team_object(
-                    team_id=data.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                    check_db_only=True,
-                )
-            except HTTPException:
-                # ``get_team_object`` raises ``HTTPException(404)`` when
-                # the team genuinely doesn't exist. Pass-through.
-                raise
-            except Exception as exc:
-                # Don't mask infrastructure errors as 404 "Team not
-                # found" — operators need the real signal and the
-                # caller gets a retryable 5xx.
-                verbose_proxy_logger.exception(
-                    "Failed to fetch team_id=%s during /key/regenerate "
-                    "team-change validation: %s",
-                    data.team_id,
-                    exc,
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": (
-                            f"Unable to verify team membership for "
-                            f"team_id={data.team_id}. Please retry."
-                        )
-                    },
-                ) from exc
-            if team_obj_for_change is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail={"error": f"Team not found for team_id={data.team_id}"},
-                )
-            await validate_key_team_change(
-                key=key_in_db,
-                team=cast(LiteLLM_TeamTable, team_obj_for_change),
-                change_initiated_by=user_api_key_dict,
-                llm_router=llm_router,
-            )
+    await _enforce_regenerate_team_change_membership(
+        data=data,
+        key_in_db=key_in_db,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
 
     # ``RegenerateKeyRequest`` inherits ``project_id`` from
     # ``GenerateKeyRequest``; ``prepare_key_update_data`` persists every set
