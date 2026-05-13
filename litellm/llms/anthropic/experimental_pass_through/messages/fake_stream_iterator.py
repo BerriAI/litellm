@@ -8,9 +8,11 @@ Used when WebSearch interception converts stream=True to stream=False but
 the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
+import asyncio
 import json
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -33,10 +35,18 @@ class FakeAnthropicMessagesStreamIterator:
     - message_stop
     """
 
-    def __init__(self, response: AnthropicMessagesResponse):
+    def __init__(
+        self,
+        response: AnthropicMessagesResponse,
+        logging_obj: Optional[Any] = None,
+        cache_hit: bool = False,
+    ):
         self.response = response
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
+        self._logging_obj = logging_obj
+        self._cache_hit = cache_hit
+        self._logging_done = False
 
     def _create_content_block_chunks(
         self, block_dict: Dict[str, Any], index: int
@@ -214,11 +224,30 @@ class FakeAnthropicMessagesStreamIterator:
 
     async def __anext__(self):
         if self.current_index >= len(self.chunks):
+            self._log_stream_completion()
             raise StopAsyncIteration
 
         chunk = self.chunks[self.current_index]
         self.current_index += 1
         return chunk
+
+    def _log_stream_completion(self) -> None:
+        """Log the cache hit to the success handler when stream is exhausted."""
+        if self._logging_done or self._logging_obj is None or not self._cache_hit:
+            return
+        self._logging_done = True
+
+        try:
+            asyncio.create_task(
+                self._logging_obj.async_success_handler(
+                    self.response, None, None, self._cache_hit
+                )
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "FakeAnthropicMessagesStreamIterator: Failed to log cache hit: %s",
+                str(e),
+            )
 
     def __iter__(self):
         return self

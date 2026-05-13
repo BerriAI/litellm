@@ -74,12 +74,17 @@ class ModelParamHelper:
         )
         exclude_kwargs = ModelParamHelper._get_exclude_kwargs()
 
+        anthropic_messages_kwargs = (
+            ModelParamHelper._get_litellm_supported_anthropic_messages_kwargs()
+        )
+
         combined_kwargs = chat_completion_kwargs.union(
             text_completion_kwargs,
             embedding_kwargs,
             transcription_kwargs,
             rerank_kwargs,
             responses_api_kwargs,
+            anthropic_messages_kwargs,
         )
         combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
@@ -189,6 +194,28 @@ class ModelParamHelper:
             getattr(ResponseCreateParamsStreaming, "__annotations__", {}).keys()
         )
         return non_streaming_params.union(streaming_params)
+
+    @staticmethod
+    def _get_litellm_supported_anthropic_messages_kwargs() -> Set[str]:
+        """
+        Get the Anthropic Messages API-specific kwargs that should be included
+        in cache key generation.
+
+        These params are not part of the OpenAI API spec but are critical for
+        cache key uniqueness when using the Anthropic Messages API directly.
+        """
+        return {
+            "system",
+            "stop_sequences",
+            "top_k",
+            "betas",
+            "context_management",
+            "output_format",
+            "output_config",
+            "inference_geo",
+            "speed",
+            "reasoning_effort",
+        }
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:

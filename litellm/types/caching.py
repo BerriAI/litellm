@@ -29,6 +29,7 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
+    "anthropic_messages",
 ]
 
 

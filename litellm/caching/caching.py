@@ -80,6 +80,7 @@ class Cache:
             "rerank",
             "responses",
             "aresponses",
+            "anthropic_messages",
         ],
         # s3 Bucket, boto3 configuration
         azure_account_url: Optional[str] = None,
