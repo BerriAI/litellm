@@ -89,24 +89,58 @@ def _parse_model_id_from_affinity_cache_value(cache_result: Any) -> Optional[str
     return None
 
 
-def _healthy_deployments_include_openai(healthy_deployments: List[dict]) -> bool:
+def _model_supports_prompt_cache_key_param(
+    model: str,
+    custom_llm_provider: Optional[str],
+) -> bool:
+    """
+    True when the provider's chat config lists ``prompt_cache_key`` (declared under
+    ``litellm/llms/``, not hardcoded here).
+    """
+    # Import locally to avoid circular import: litellm/__init__ -> Router -> this module.
+    from litellm.litellm_core_utils.get_supported_openai_params import (
+        get_supported_openai_params,
+    )
+
+    try:
+        params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:
+        return False
+    return bool(params and "prompt_cache_key" in params)
+
+
+def _healthy_deployments_include_prompt_cache_key_support(
+    healthy_deployments: List[dict],
+) -> bool:
     for deployment in healthy_deployments:
         lp = deployment.get("litellm_params")
-        if isinstance(lp, dict) and lp.get("custom_llm_provider") == "openai":
+        if not isinstance(lp, dict):
+            continue
+        dep_model = lp.get("model")
+        if dep_model is None:
+            continue
+        if _model_supports_prompt_cache_key_param(
+            str(dep_model),
+            lp.get("custom_llm_provider"),
+        ):
             return True
     return False
 
 
-def _should_apply_openai_prompt_cache_affinity(
+def _should_apply_prompt_cache_key_affinity(
     model: str,
     request_kwargs: dict,
     healthy_deployments: List[dict],
 ) -> bool:
-    if model.startswith("openai/"):
+    if _model_supports_prompt_cache_key_param(
+        model,
+        request_kwargs.get("custom_llm_provider"),
+    ):
         return True
-    if request_kwargs.get("custom_llm_provider") == "openai":
-        return True
-    return _healthy_deployments_include_openai(healthy_deployments)
+    return _healthy_deployments_include_prompt_cache_key_support(healthy_deployments)
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
@@ -148,7 +182,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         if prompt_cache_key is None:
             return typed_healthy_deployments
 
-        if not _should_apply_openai_prompt_cache_affinity(
+        if not _should_apply_prompt_cache_key_affinity(
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=typed_healthy_deployments,
@@ -221,13 +255,13 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
 
         prompt_cache_key = _extract_prompt_cache_key(kwargs)
-        custom_llm_provider = standard_logging_object.get("custom_llm_provider")
-        if custom_llm_provider is None:
-            custom_llm_provider = kwargs.get("custom_llm_provider")
+        resolved_provider = standard_logging_object.get("custom_llm_provider")
+        if resolved_provider is None:
+            resolved_provider = kwargs.get("custom_llm_provider")
 
         if (
             prompt_cache_key is not None
-            and custom_llm_provider == "openai"
+            and _model_supports_prompt_cache_key_param(model, resolved_provider)
             and is_prompt_caching_valid_prompt(
                 model=model,
                 messages=cast(List[AllMessageValues], messages),
