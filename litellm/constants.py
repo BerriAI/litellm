@@ -1574,6 +1574,10 @@ DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL",
 # staleness so a transient DB error (which surfaces as an empty list) cannot
 # hide a real group for long.
 DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL = 10
+# Maximum number of comma-separated MCP server / access-group tokens accepted
+# in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
+# fan-out an authenticated caller can trigger by stuffing the path with tokens.
+DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS = 16
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [

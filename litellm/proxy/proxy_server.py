@@ -15148,6 +15148,57 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     )
 
 
+async def _resolve_mcp_csv_tokens(
+    csv_segment: str, client_ip: Optional[str]
+) -> List[str]:
+    """Validate a comma-separated ``/{name1,name2,...}/mcp`` segment.
+
+    For each token, check (in order) whether it is a registered MCP server
+    alias / name or an MCP access group tag (cached). Tokens are stripped,
+    deduped (case-insensitive, keeping first occurrence in original order),
+    and capped at ``DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS`` to bound the
+    per-request DB / cache fan-out an authenticated caller can trigger by
+    stuffing the path with tokens.
+
+    Toolset names are intentionally NOT resolved here — toolsets bind a single
+    toolset id into request scope and have no defined semantics inside a
+    comma-separated server list.
+
+    Returns the subset of resolved tokens in original order. An empty list
+    means the segment did not resolve to any known server / group; the caller
+    should treat that as a 404 instead of forwarding it downstream (where an
+    all-unmatched server filter falls back to the full ``allowed_mcp_servers``
+    list and silently broadens the request scope).
+    """
+    from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    seen_lower: set = set()
+    deduped: List[str] = []
+    for raw in csv_segment.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        lower = token.lower()
+        if lower in seen_lower:
+            continue
+        seen_lower.add(lower)
+        deduped.append(token)
+        if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
+            break
+
+    resolved: List[str] = []
+    for token in deduped:
+        if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
+            resolved.append(token)
+            continue
+        if await _is_mcp_access_group_cached(token):
+            resolved.append(token)
+    return resolved
+
+
 async def _is_mcp_access_group_cached(name: str) -> bool:
     """Return True if *name* is a known MCP access group tag.
 
@@ -15211,9 +15262,21 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         ):
             return await _mcp_forward_as_path(mcp_server_name, request)
 
-        # 2. Comma-separated list — forward directly before any DB call.
+        # 2. Comma-separated list — validate every token resolves to a known
+        # server alias or access group before forwarding. Bounds DB / cache
+        # fan-out and prevents the downstream filter from silently falling back
+        # to the full allowed_mcp_servers list when no token matches.
         if "," in mcp_server_name:
-            return await _mcp_forward_as_path(mcp_server_name, request)
+            resolved_tokens = await _resolve_mcp_csv_tokens(mcp_server_name, client_ip)
+            if not resolved_tokens:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No MCP server, toolset, or access group in "
+                        f"'{mcp_server_name}' resolved to a known target"
+                    ),
+                )
+            return await _mcp_forward_as_path(",".join(resolved_tokens), request)
 
         # 3. Toolset name (cached)
         if prisma_client is not None:

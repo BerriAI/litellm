@@ -37,6 +37,7 @@ _GET_ACCESS_GROUP_SERVERS = (
     "MCPRequestHandler._get_mcp_servers_from_access_groups"
 )
 _FORWARD = "litellm.proxy.proxy_server._mcp_forward_as_path"
+_RESOLVE_CSV = "litellm.proxy.proxy_server._resolve_mcp_csv_tokens"
 
 
 def _make_request(path: str = "/test/mcp"):
@@ -114,9 +115,11 @@ async def test_dynamic_mcp_route_resolves_registered_server():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_mcp_route_comma_list_forwarded():
-    """A comma-separated segment is forwarded directly without hitting
-    the toolset or access-group DB lookups."""
+async def test_dynamic_mcp_route_comma_list_forwarded_when_tokens_resolve():
+    """A comma-separated segment is forwarded after every token is resolved as
+    a known server / access group. Forwarding uses the deduped, validated
+    token list (so unknown / duplicate tokens cannot leak through). The
+    toolset DB lookup is bypassed entirely for comma names."""
     from starlette.responses import Response
 
     from litellm.proxy.proxy_server import dynamic_mcp_route
@@ -128,17 +131,132 @@ async def test_dynamic_mcp_route_comma_list_forwarded():
     fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
 
     fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
+    fake_resolve = AsyncMock(return_value=["github_mcp", "zapier"])
 
     with (
         patch(_MCP_MANAGER, fake_mgr),
+        patch(_RESOLVE_CSV, new=fake_resolve),
         patch(_FORWARD, new=fake_forward),
     ):
         response = await dynamic_mcp_route(segment, request)
 
     assert response.status_code == 200
-    fake_forward.assert_awaited_once_with(segment, request)
-    # Toolset lookup must NOT be called for comma names
+    fake_forward.assert_awaited_once_with("github_mcp,zapier", request)
     fake_mgr.get_toolset_by_name_cached.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_comma_list_returns_404_when_no_tokens_resolve():
+    """A comma-separated segment with zero resolved tokens must 404 instead of
+    forwarding (downstream filter falls back to full allowed_mcp_servers when
+    no token matches, which would silently broaden scope)."""
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+
+    segment = "ghost1,ghost2"
+    request = _make_request(f"/{segment}/mcp")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_RESOLVE_CSV, new=AsyncMock(return_value=[])),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await dynamic_mcp_route(segment, request)
+
+    assert exc_info.value.status_code == 404
+    assert segment in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_comma_list_forwards_only_resolved_subset():
+    """If only a subset of CSV tokens resolve, the request is forwarded with
+    just that subset (so unknown tokens cannot ride along into the downstream
+    server filter)."""
+    from starlette.responses import Response
+
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+
+    segment = "github_mcp,ghost,zapier"
+    request = _make_request(f"/{segment}/mcp")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+
+    fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
+    fake_resolve = AsyncMock(return_value=["github_mcp", "zapier"])
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_RESOLVE_CSV, new=fake_resolve),
+        patch(_FORWARD, new=fake_forward),
+    ):
+        await dynamic_mcp_route(segment, request)
+
+    fake_forward.assert_awaited_once_with("github_mcp,zapier", request)
+
+
+@pytest.mark.asyncio
+async def test_resolve_mcp_csv_tokens_dedupes_and_caps():
+    """_resolve_mcp_csv_tokens dedupes tokens case-insensitively, drops empty
+    fragments, and stops looking up after DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+    unique tokens to bound DB / cache fan-out."""
+    from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+    from litellm.proxy.proxy_server import _resolve_mcp_csv_tokens
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=_fake_server())
+
+    csv = ",,github_mcp, GITHUB_MCP," + ",".join(
+        f"srv_{i}" for i in range(DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS + 5)
+    )
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
+    ):
+        resolved = await _resolve_mcp_csv_tokens(csv, client_ip=None)
+
+    assert len(resolved) == DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+    assert resolved[0] == "github_mcp"
+    # Case-insensitive dedupe: the second "GITHUB_MCP" must NOT appear.
+    assert "GITHUB_MCP" not in resolved
+
+
+@pytest.mark.asyncio
+async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups():
+    """Unknown tokens are dropped; access-group tokens are accepted via the
+    cached existence helper (no per-call uncached DB hit)."""
+    from litellm.proxy.proxy_server import _resolve_mcp_csv_tokens
+
+    fake_mgr = MagicMock()
+    # Only "registered_srv" is a known server alias.
+    fake_mgr.get_mcp_server_by_name = MagicMock(
+        side_effect=lambda name, client_ip=None: (
+            _fake_server(name) if name == "registered_srv" else None
+        )
+    )
+
+    # "dev_group" is a real access group; "ghost" is not.
+    is_group = AsyncMock(side_effect=lambda name: name == "dev_group")
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_IS_ACCESS_GROUP, new=is_group),
+    ):
+        resolved = await _resolve_mcp_csv_tokens(
+            "registered_srv,dev_group,ghost", client_ip=None
+        )
+
+    assert resolved == ["registered_srv", "dev_group"]
+    # Access-group lookup must NOT be called for "registered_srv" (already
+    # matched as a server alias) but MUST be called for "dev_group" and
+    # "ghost" (the only tokens that fall through to the access-group check).
+    assert {call.args[0] for call in is_group.await_args_list} == {
+        "dev_group",
+        "ghost",
+    }
 
 
 # ---------------------------------------------------------------------------
