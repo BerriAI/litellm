@@ -1085,6 +1085,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
+        # Tracks which output indices have already emitted at least one
+        # function_call_arguments.delta chunk so the .done handler knows
+        # whether to emit the full arguments or skip (to avoid duplication).
+        self._seen_arg_delta_idxs: set = set()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1408,6 +1412,51 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         verbose_logger.debug(
             f"Chat provider: transform_streaming_response called with chunk: {chunk}"
         )
+
+        event_type = chunk.get("type", "")
+
+        # Track which output indices have received at least one delta chunk so
+        # we can decide whether the .done event carries new information.
+        if event_type == "response.function_call_arguments.delta":
+            self._seen_arg_delta_idxs.add(chunk.get("output_index", 0))
+
+        # Some models (e.g. gpt-5.3-codex-spark via the Responses API) never
+        # emit delta events and deliver the full function arguments only in the
+        # .done event.  When no delta was seen for this output index we emit
+        # the arguments here; when deltas were already streamed we skip to
+        # avoid duplicating content in the reconstructed response.
+        if event_type == "response.function_call_arguments.done":
+            output_index = chunk.get("output_index", 0)
+            if output_index not in self._seen_arg_delta_idxs:
+                from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
+                from litellm.types.utils import (
+                    ChatCompletionToolCallChunk,
+                    Delta,
+                    StreamingChoices,
+                )
+
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(
+                                tool_calls=[
+                                    ChatCompletionToolCallChunk(
+                                        id=None,
+                                        index=output_index,
+                                        type="function",
+                                        function=ChatCompletionToolCallFunctionChunk(
+                                            name=None,
+                                            arguments=chunk.get("arguments", ""),
+                                        ),
+                                    )
+                                ]
+                            ),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+
         return OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
             chunk
         )
