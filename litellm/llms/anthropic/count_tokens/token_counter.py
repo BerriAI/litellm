@@ -54,8 +54,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params = deployment.get("litellm_params", {})
 
-        # Get Anthropic API key from deployment config or environment
+        # Get Anthropic API key and api_base from deployment config or environment
         api_key = litellm_params.get("api_key")
+        api_base = litellm_params.get("api_base")
         if not api_key:
             api_key = os.getenv("ANTHROPIC_API_KEY")
 
@@ -63,11 +64,19 @@ class AnthropicTokenCounter(BaseTokenCounter):
             verbose_logger.warning("No Anthropic API key found for token counting")
             return None
 
+        # Build count_tokens endpoint from api_base if available
+        count_tokens_api_base: Optional[str] = None
+        if api_base:
+            # e.g. https://api.lkeap.cloud.tencent.com/plan/anthropic -> https://api.lkeap.cloud.tencent.com/plan/anthropic/v1/messages/count_tokens
+            base = api_base.rstrip("/")
+            count_tokens_api_base = f"{base}/v1/messages/count_tokens"
+
         try:
             result = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                api_base=count_tokens_api_base,
                 tools=tools,
                 system=system,
             )

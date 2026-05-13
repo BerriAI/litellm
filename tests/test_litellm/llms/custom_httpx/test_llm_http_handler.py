@@ -1,7 +1,8 @@
 import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -422,3 +423,153 @@ def test_sync_delete_responses_omits_body_for_azure():
     assert captured["url"].endswith(
         "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
     )
+
+
+class TestExecuteAnthropicAgenticPlan:
+    """Verify _execute_anthropic_agentic_plan forwards api_key/api_base
+    from agentic_loop_params to the follow-up anthropic_messages.acreate call."""
+
+    @pytest.mark.asyncio
+    async def test_api_key_and_api_base_forwarded_to_followup(self):
+        handler = BaseLLMHTTPHandler()
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        plan = AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model=None,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1024,
+            ),
+        )
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "agentic_loop_params": {
+                "model": "custom/model-name",
+                "api_key": "sk-agentic-test-key",
+                "api_base": "https://custom.provider.host/v1",
+            }
+        }
+
+        with patch(
+            "litellm.anthropic_interface.messages.acreate",
+            side_effect=_fake_acreate,
+        ):
+            await handler._execute_anthropic_agentic_plan(
+                plan=plan,
+                model="claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "test"}],
+                anthropic_messages_optional_request_params={},
+                kwargs={},
+                logging_obj=logging_obj,
+                depth=0,
+                max_loops=1,
+                fingerprints=[],
+                fingerprint="fp-test",
+            )
+
+        assert captured_kwargs.get("api_key") == "sk-agentic-test-key"
+        assert captured_kwargs.get("api_base") == "https://custom.provider.host/v1"
+        assert captured_kwargs.get("model") == "custom/model-name"
+
+    @pytest.mark.asyncio
+    async def test_no_credentials_when_agentic_loop_params_empty(self):
+        handler = BaseLLMHTTPHandler()
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        plan = AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model=None,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1024,
+            ),
+        )
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "agentic_loop_params": {"model": "custom/model-name"}
+        }
+
+        with patch(
+            "litellm.anthropic_interface.messages.acreate",
+            side_effect=_fake_acreate,
+        ):
+            await handler._execute_anthropic_agentic_plan(
+                plan=plan,
+                model="claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "test"}],
+                anthropic_messages_optional_request_params={},
+                kwargs={},
+                logging_obj=logging_obj,
+                depth=0,
+                max_loops=1,
+                fingerprints=[],
+                fingerprint="fp-test",
+            )
+
+        assert "api_key" not in captured_kwargs
+        assert "api_base" not in captured_kwargs
+
+    @pytest.mark.asyncio
+    async def test_no_logging_obj_uses_original_model(self):
+        handler = BaseLLMHTTPHandler()
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        from litellm.types.integrations.custom_logger import (
+            AgenticLoopPlan,
+            AgenticLoopRequestPatch,
+        )
+
+        plan = AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model=None,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1024,
+            ),
+        )
+
+        with patch(
+            "litellm.anthropic_interface.messages.acreate",
+            side_effect=_fake_acreate,
+        ):
+            await handler._execute_anthropic_agentic_plan(
+                plan=plan,
+                model="original-model-name",
+                messages=[{"role": "user", "content": "test"}],
+                anthropic_messages_optional_request_params={},
+                kwargs={},
+                logging_obj=None,
+                depth=0,
+                max_loops=1,
+                fingerprints=[],
+                fingerprint="fp-test",
+            )
+
+        assert captured_kwargs.get("model") == "original-model-name"
+        assert "api_key" not in captured_kwargs
+        assert "api_base" not in captured_kwargs

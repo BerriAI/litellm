@@ -755,12 +755,33 @@ class WebSearchInterceptionLogger(CustomLogger):
         if max_tokens is None:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
+        # Pass api_key/api_base from agentic_loop_params so follow-up requests
+        # route to the same backend instead of falling back to api.anthropic.com
+        _followup_api_key: Optional[str] = None
+        _followup_api_base: Optional[str] = None
+        if logging_obj is not None:
+            agentic_params = logging_obj.model_call_details.get(
+                "agentic_loop_params", {}
+            )
+            _followup_api_key = agentic_params.get("api_key")
+            _followup_api_base = agentic_params.get("api_base")
+
+        # Avoid duplicate keyword arguments if request_patch.kwargs already
+        # contains api_key or api_base.
+        followup_kwargs = dict(request_patch.kwargs)
+        if _followup_api_key is not None:
+            followup_kwargs.pop("api_key", None)
+            followup_kwargs["api_key"] = _followup_api_key
+        if _followup_api_base is not None:
+            followup_kwargs.pop("api_base", None)
+            followup_kwargs["api_base"] = _followup_api_base
+
         return await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
             **optional_params,
-            **request_patch.kwargs,
+            **followup_kwargs,
         )
 
     async def _build_anthropic_request_patch(
