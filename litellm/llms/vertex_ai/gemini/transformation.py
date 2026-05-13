@@ -241,6 +241,104 @@ def _is_valid_gcs_bucket_name(bucket: str) -> bool:
     return True
 
 
+def _gs_uri_requires_content_type_metadata(url: str) -> bool:
+    """
+    True when _process_gemini_media would call _get_gcs_object_content_type
+    (extension-less gs:// and no explicit format passed into that helper).
+    """
+    if "gs://" not in url:
+        return False
+    extension_with_dot = os.path.splitext(url)[-1]
+    extension = extension_with_dot[1:] if extension_with_dot else ""
+    return len(extension) == 0
+
+
+def _image_url_payload_may_need_sync_gcs_metadata_fetch(
+    raw_image_url: Any,
+) -> bool:
+    """
+    True when this image_url value (content-part image_url or assistant ``images[]``
+    entry) can trigger a blocking GCS metadata read for MIME resolution.
+    """
+    fmt: Optional[str] = None
+    url: Optional[str] = None
+    if isinstance(raw_image_url, dict):
+        url = raw_image_url.get("url")  # type: ignore[assignment]
+        if not isinstance(url, str):
+            return False
+        fmt = (
+            raw_image_url.get("format")
+            or raw_image_url.get("mime_type")
+            or raw_image_url.get("content_type")
+        )
+    elif isinstance(raw_image_url, str):
+        url = raw_image_url
+    else:
+        return False
+    if "gs://" not in url or fmt:
+        return False
+    return _gs_uri_requires_content_type_metadata(url)
+
+
+def _openai_messages_may_need_sync_gcs_metadata_fetch(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Heuristic: True if any message part can trigger a blocking GCS JSON
+    metadata read inside _transform_request_body (extension-less gs:// without
+    explicit MIME hints). Covers user/system ``content`` parts and assistant
+    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
+    to decide whether ``async_transform_request_body`` should offload the sync
+    transform via ``asyncify``.
+    """
+    for raw in messages:
+        msg: Any = raw
+        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=False)
+        if not isinstance(msg, dict):
+            continue
+        images_field = msg.get("images")
+        if isinstance(images_field, list):
+            for image_item in images_field:
+                if not isinstance(image_item, dict):
+                    continue
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(
+                    image_item.get("image_url")
+                ):
+                    return True
+
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            itype = item.get("type")
+            if itype == "image_url":
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(
+                    item.get("image_url")
+                ):
+                    return True
+            elif itype == "file":
+                file_obj = item.get("file")
+                if not isinstance(file_obj, dict):
+                    continue
+                fmt = (
+                    file_obj.get("format")
+                    or file_obj.get("mime_type")
+                    or file_obj.get("content_type")
+                )
+                passed = file_obj.get("file_id") or file_obj.get("file_data")
+                if (
+                    isinstance(passed, str)
+                    and "gs://" in passed
+                    and not fmt
+                    and _gs_uri_requires_content_type_metadata(passed)
+                ):
+                    return True
+    return False
+
+
 def _get_gcs_object_content_type(
     image_url: str,
     vertex_project: Optional[str] = None,
@@ -856,7 +954,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             image_url_obj = image_item.get("image_url")
                             if isinstance(image_url_obj, dict):
                                 assistant_image_url = image_url_obj.get("url")
-                                format = image_url_obj.get("format")
+                                format = (
+                                    image_url_obj.get("format")
+                                    or image_url_obj.get("mime_type")
+                                    or image_url_obj.get("content_type")
+                                )
                                 detail = image_url_obj.get("detail")
                                 media_resolution_enum = (
                                     _convert_detail_to_media_resolution_enum(detail)
@@ -1223,11 +1325,21 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
-    # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
-    # whole sync transformation on a worker thread so it does not block the
-    # async event loop.
-    return await asyncify(_transform_request_body)(
+    if _openai_messages_may_need_sync_gcs_metadata_fetch(messages):
+        # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
+        # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
+        # whole sync transformation on a worker thread so it does not block the
+        # async event loop.
+        return await asyncify(_transform_request_body)(
+            messages=messages,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            cached_content=cached_content,
+            optional_params=optional_params,
+        )
+
+    return _transform_request_body(
         messages=messages,
         model=model,
         custom_llm_provider=custom_llm_provider,

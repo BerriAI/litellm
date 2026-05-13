@@ -1734,6 +1734,178 @@ def test_async_transform_request_body_does_not_block_event_loop():
     )
 
 
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_false_for_plain_text():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    assert (
+        _openai_messages_may_need_sync_gcs_metadata_fetch(
+            [{"role": "user", "content": "hello"}]
+        )
+        is False
+    )
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_true_for_extensionless_gs_image_url():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "gs://bucket/image-without-extension"},
+                }
+            ],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is True
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_false_when_gs_has_file_extension():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "gs://bucket/image.png"},
+                }
+            ],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is False
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_false_when_extensionless_gs_has_mime_hint():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "gs://bucket/image-without-extension",
+                        "mime_type": "image/png",
+                    },
+                }
+            ],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is False
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_true_for_assistant_images_extensionless_gs():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [],
+            "images": [
+                {"image_url": {"url": "gs://bucket/gen-without-extension"}},
+            ],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is True
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_false_for_assistant_images_gs_with_extension():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [],
+            "images": [{"image_url": {"url": "gs://bucket/gen.png"}}],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is False
+
+
+def test_openai_messages_may_need_sync_gcs_metadata_fetch_false_for_assistant_images_with_mime_hint():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _openai_messages_may_need_sync_gcs_metadata_fetch,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [],
+            "images": [
+                {
+                    "image_url": {
+                        "url": "gs://bucket/gen-no-ext",
+                        "mime_type": "image/png",
+                    },
+                }
+            ],
+        }
+    ]
+    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is False
+
+
+def test_async_transform_request_body_skips_asyncify_for_text_only_requests():
+    """Hot path: no extension-less gs:// metadata fetch → run sync transform in-loop."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    async def fake_check_and_create_cache(self, **kwargs):
+        return kwargs["messages"], kwargs["optional_params"], None
+
+    async def run():
+        with patch(
+            "litellm.llms.vertex_ai.gemini.transformation.asyncify",
+            side_effect=AssertionError(
+                "asyncify must not run when no extensionless GCS metadata fetch is needed"
+            ),
+        ):
+            return await gemini_transformation.async_transform_request_body(
+                gemini_api_key=None,
+                messages=[{"role": "user", "content": "hello"}],
+                api_base=None,
+                model="gemini-2.5-flash",
+                client=None,
+                timeout=None,
+                extra_headers=None,
+                optional_params={},
+                logging_obj=MagicMock(),
+                custom_llm_provider="vertex_ai",
+                litellm_params={},
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+            )
+
+    with patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
+        "ContextCachingEndpoints.async_check_and_create_cache",
+        new=fake_check_and_create_cache,
+    ):
+        body = asyncio.run(run())
+
+    assert body is not None
+    assert "contents" in body
+
+
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
