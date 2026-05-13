@@ -991,6 +991,13 @@ class MCPServerManager:
                     for server in self.get_registry().values()
                     if getattr(server, "auth_type", None) == MCPAuth.oauth2
                     and getattr(server, "delegate_auth_to_upstream", False) is True
+                    # M2M servers must not be exposed anonymously: an
+                    # unauthenticated caller would get LiteLLM to proxy tool
+                    # calls using its stored client_credentials.
+                    and not server.has_client_credentials
+                    # Internal-only servers must not be reachable from public
+                    # internet callers who happen to carry an upstream token.
+                    and getattr(server, "available_on_public_internet", True)
                 ]
                 combined_servers.update(delegate_server_ids)
 

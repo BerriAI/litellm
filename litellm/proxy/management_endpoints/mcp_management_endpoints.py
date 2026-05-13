@@ -1571,6 +1571,9 @@ if MCP_AVAILABLE:
                     _s
                     and getattr(_s, "auth_type", None) == MCPAuth.oauth2
                     and getattr(_s, "delegate_auth_to_upstream", False) is True
+                    # M2M servers fetch tokens with stored credentials; never
+                    # expose their /authorize or /token endpoints anonymously.
+                    and not _s.has_client_credentials
                 ):
                     return UserAPIKeyAuth()
 

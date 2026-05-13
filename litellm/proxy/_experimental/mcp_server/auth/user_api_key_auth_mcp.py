@@ -290,6 +290,12 @@ class MCPRequestHandler:
             # non-bool must not silently enable the bypass.
             if getattr(server, "delegate_auth_to_upstream", False) is not True:
                 return False
+            # Never delegate for M2M (client_credentials) servers: LiteLLM
+            # fetches the upstream token automatically using stored credentials,
+            # so allowing anonymous bypass would let any external caller invoke
+            # tools authenticated as LiteLLM's service account.
+            if server.has_client_credentials:
+                return False
         return True
 
     @staticmethod

@@ -1413,6 +1413,144 @@ class TestMCPDelegateAuthToUpstream:
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
 
+    async def test_delegate_ignored_for_client_credentials_server(self):
+        """
+        oauth2 + delegate_auth_to_upstream=True but oauth2_flow=client_credentials
+        → bypass must NOT fire; normal LiteLLM auth must be attempted.
+
+        M2M servers fetch the upstream token automatically using stored
+        credentials, so allowing anonymous bypass would let any external
+        caller invoke tools as LiteLLM's service account.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/m2m_server",
+            "headers": [],
+        }
+
+        m2m_server = MCPServer(
+            server_id="m2m-server-id",
+            name="m2m_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow="client_credentials",
+        )
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = m2m_server
+            # No delegate bypass → normal auth is attempted → 401 raised
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            mock_auth.assert_called_once()
+
+    async def test_get_allowed_servers_excludes_client_credentials_delegate(self):
+        """
+        get_allowed_mcp_servers must not surface M2M (client_credentials) delegate
+        servers to anonymous callers even if delegate_auth_to_upstream=True.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        pkce_server = MCPServer(
+            server_id="pkce-server",
+            name="pkce_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        m2m_server = MCPServer(
+            server_id="m2m-server",
+            name="m2m_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            oauth2_flow="client_credentials",
+            available_on_public_internet=True,
+        )
+        manager.registry = {
+            pkce_server.server_id: pkce_server,
+            m2m_server.server_id: m2m_server,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert "pkce-server" in result
+        assert "m2m-server" not in result
+
+    async def test_get_allowed_servers_excludes_non_public_delegate(self):
+        """
+        Internal-only (available_on_public_internet=False) delegate servers
+        must not appear in the anonymous allow-list.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        public_server = MCPServer(
+            server_id="public-server",
+            name="public_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        internal_server = MCPServer(
+            server_id="internal-server",
+            name="internal_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=False,
+        )
+        manager.registry = {
+            public_server.server_id: public_server,
+            internal_server.server_id: internal_server,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert "public-server" in result
+        assert "internal-server" not in result
+
 
 class TestMCPCustomHeaderName:
     """Test suite for custom MCP authentication header name functionality"""
