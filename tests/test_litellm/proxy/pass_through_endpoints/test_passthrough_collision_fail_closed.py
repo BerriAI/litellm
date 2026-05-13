@@ -159,6 +159,46 @@ def test_subpath_route_with_builtin_child_skips_metadata():
     assert _registered_pass_through_routes == {}
 
 
+def test_subpath_route_self_rereg_preserves_metadata_with_child_passthrough():
+    # Greptile follow-up: ``_registered_pass_through_routes`` is not
+    # cleared between config reloads. A subpath re-registration (same
+    # endpoint_id, same path) must NOT be silently dropped when there's
+    # a child exact pass-through route already on the app from the
+    # previous reload — otherwise operator config changes (e.g. new
+    # target URL) silently fail to apply.
+    app = FastAPI()
+
+    # First reload: pretend a sibling pass-through child route was
+    # registered (this would normally be added via add_exact_path_route).
+    async def _child_passthrough_endpoint():
+        return {}
+
+    app.add_api_route(
+        path="/v1/chat/completions",
+        endpoint=_child_passthrough_endpoint,
+        methods=["POST"],
+    )
+
+    # Also pre-populate the registry with the subpath entry that this
+    # reload re-registers.
+    _registered_pass_through_routes["ep-subpath:subpath:/v1/chat:POST"] = {
+        "endpoint_id": "ep-subpath",
+        "path": "/v1/chat",
+        "type": "subpath",
+        "methods": ["POST"],
+        "passthrough_params": {"target": "http://old.example/sink"},
+    }
+
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=app,
+        path="/v1/chat",
+        **{**_HELPER_KWARGS, "endpoint_id": "ep-subpath"},
+    )
+
+    # Metadata must remain — the self-rereg should not be dropped.
+    assert "ep-subpath:subpath:/v1/chat:POST" in _registered_pass_through_routes
+
+
 def test_parameterized_route_collision_skips_metadata():
     # A built-in such as ``/credentials/{credential_name:path}`` consumes
     # ``/credentials/foo`` via FastAPI's first-match dispatch. The pass-through

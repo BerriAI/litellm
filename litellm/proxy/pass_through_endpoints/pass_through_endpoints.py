@@ -2253,8 +2253,15 @@ class InitPassThroughEndpointHelpers:
         # FastAPI dispatches the request to the built-in but the auth
         # gate would honor the pass-through ``auth`` flag for that
         # request — an unauthenticated bypass on the child. Refuse.
-        if SafeRouteAdder._has_builtin_child_routes(
-            app=app, path=path, methods=methods
+        # Exempt the self-rereg path: ``_registered_pass_through_routes``
+        # isn't cleared between config reloads, so a re-registration of
+        # this same subpath with a child exact pass-through already on
+        # the app would otherwise silently drop the metadata update.
+        if (
+            not all_methods_are_self_reregistration
+            and SafeRouteAdder._has_builtin_child_routes(
+                app=app, path=path, methods=methods
+            )
         ):
             verbose_proxy_logger.warning(
                 "Pass-through subpath path %r (methods %s) would classify "
