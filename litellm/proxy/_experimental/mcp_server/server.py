@@ -2552,6 +2552,10 @@ if MCP_AVAILABLE:
         import re
 
         mcp_servers_from_path: Optional[List[str]] = None
+        segments = [s for s in path.split("/") if s]
+        if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
+            return [segments[0]]
+
         # Match /mcp/<servers_and_maybe_path>
         # Where servers can be comma-separated list of server names
         # Server names can contain slashes (e.g., "custom_solutions/user_123")

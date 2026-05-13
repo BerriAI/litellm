@@ -1607,6 +1607,10 @@ class TestMCPDelegateAuthToUpstream:
         allow-list which can include ``allow_all_keys`` servers that normally
         require a LiteLLM key.
         """
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_mcp_servers_in_path,
+        )
+
         cases = [
             # Single server, single segment.
             ("/mcp/foo", ["foo"]),
@@ -1618,11 +1622,11 @@ class TestMCPDelegateAuthToUpstream:
             ("/mcp/foo,bar", ["foo", "bar"]),
             # Comma-separated servers with trailing path.
             ("/mcp/foo,bar/tools", ["foo", "bar"]),
-            # ``/<server>/mcp`` form is rewritten to ``/mcp/<server>`` by
-            # ``dynamic_mcp_route`` before reaching the MCP handler, so the
-            # auth parser correctly does NOT recognise it here.
-            ("/foo/mcp", []),
-            ("/foo/mcp/tools", []),
+            # Alternative form ``/<server>/mcp`` is also parsed (both auth
+            # parser and routing parser handle it for defense-in-depth — some
+            # entry points may not be rewritten by ``dynamic_mcp_route``).
+            ("/foo/mcp", ["foo"]),
+            ("/foo/mcp/tools", ["foo"]),
             # Non-MCP paths → empty (fail closed).
             ("/.well-known/oauth-authorization-server", []),
             ("/v1/keys", []),
@@ -1633,6 +1637,9 @@ class TestMCPDelegateAuthToUpstream:
                 MCPRequestHandler._extract_target_server_names_from_path(path_input)
                 == expected
             ), f"path={path_input!r} → expected {expected!r}"
+            assert (
+                _get_mcp_servers_in_path(path_input) or []
+            ) == expected, f"path={path_input!r} → routing expected {expected!r}"
 
     async def test_delegate_does_not_bypass_on_extra_path_segment(self):
         """
@@ -1763,6 +1770,9 @@ class TestMCPDelegateAuthToUpstream:
         assert MCPRequestHandler._resolve_target_server_names(
             path="/mcp/foo,bar", mcp_servers_header=["evil"]
         ) == ["foo", "bar"]
+        assert MCPRequestHandler._resolve_target_server_names(
+            path="/foo/mcp", mcp_servers_header=["evil"]
+        ) == ["foo"]
         # Path does not match — header is trusted.
         assert MCPRequestHandler._resolve_target_server_names(
             path="/.well-known/oauth-authorization-server",

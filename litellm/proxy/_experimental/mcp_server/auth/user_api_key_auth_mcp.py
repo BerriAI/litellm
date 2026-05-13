@@ -217,19 +217,22 @@ class MCPRequestHandler:
         (``/{server_name}/authorize``, ``/token`` etc.), and ``.well-known``
         discovery routes intentionally fall through — those flows do not need
         OAuth2 token passthrough. Clients aggregating multiple servers should
-        use ``x-mcp-servers``, which takes precedence over path parsing.
+        use ``x-mcp-servers`` on a path that does not encode a target.
         """
+        # ``/{server_name}/mcp[/...]`` form — single server. The literal
+        # ``mcp`` must be the second segment (not the first, which would be
+        # the ``/mcp/...`` form handled below). This branch must stay in sync
+        # with ``server.py::_get_mcp_servers_in_path``, which also accepts the
+        # un-rewritten form (some entry points may skip the
+        # ``dynamic_mcp_route`` rewrite).
+        segments = [s for s in path.split("/") if s]
+        if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
+            return [segments[0]]
+
         # ``/mcp/...`` form — server name(s) may contain a slash (e.g.
         # ``custom_solutions/user_123``) and may be a comma-separated list.
         # Use the same parsing logic as ``_get_mcp_servers_in_path`` so the
         # parsed names match downstream routing.
-        #
-        # Note: ``/{server_name}/mcp`` requests are rewritten to
-        # ``/mcp/{server_name}`` by ``dynamic_mcp_route`` in ``proxy_server``
-        # before reaching the MCP handler, so we only need to parse the
-        # canonical form here. Parsing the un-rewritten form would risk a
-        # header/path TOCTOU vs. the downstream parser, which only handles
-        # ``/mcp/...``.
         mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
         if not mcp_path_match:
             return []
