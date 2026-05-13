@@ -42,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
+    _mcp_request_allowed_servers_cache,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -877,6 +878,18 @@ if MCP_AVAILABLE:
                     "IP filtering will be skipped. This is expected for internal calls."
                 )
 
+        # Per-request memoization: the streamable-HTTP handler primes this
+        # cache so that the pass-through auth probe and the downstream
+        # list_tools / call_tool dispatch share a single permission resolution
+        # instead of each repeating the full key/team/end_user/agent/org chain.
+        request_cache = _mcp_request_allowed_servers_cache.get()
+        cache_key = (
+            tuple(mcp_servers) if mcp_servers is not None else None,
+            client_ip,
+        )
+        if request_cache is not None and cache_key in request_cache:
+            return request_cache[cache_key]
+
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
@@ -929,6 +942,8 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers=allowed_mcp_servers,
             )
 
+        if request_cache is not None:
+            request_cache[cache_key] = allowed_mcp_servers
         return allowed_mcp_servers
 
     async def _get_user_oauth_extra_headers_from_db(
@@ -2914,6 +2929,10 @@ if MCP_AVAILABLE:
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
+        # Prime the per-request allowed-servers memo so the pass-through auth
+        # probe and the SDK-dispatched handlers (list_tools, call_tool, etc.)
+        # share a single permission resolution within this request task.
+        _mcp_request_allowed_servers_cache.set({})
         try:
             path = scope.get("path", "")
             (

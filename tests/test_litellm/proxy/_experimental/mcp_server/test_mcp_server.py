@@ -3390,3 +3390,73 @@ def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
         ]
     }
     assert _get_forwarded_auth_from_scope(scope) is None
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_request_cache_dedupes_permission_chain():
+    """Within an MCP HTTP request the permission chain runs once, not per call.
+
+    The pass-through auth probe and the SDK-dispatched handlers both call
+    _get_allowed_mcp_servers with the same (mcp_servers, client_ip). The
+    per-request ContextVar cache must serve the second (and subsequent) calls
+    without re-running global_mcp_server_manager.get_allowed_mcp_servers.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_context import (
+        _mcp_request_allowed_servers_cache,
+    )
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers
+
+    manager_mock = MagicMock()
+    manager_mock.get_allowed_mcp_servers = AsyncMock(return_value=["srv-id"])
+    manager_mock.filter_server_ids_by_ip_with_info = MagicMock(
+        return_value=(["srv-id"], 0)
+    )
+    fake_server = MagicMock()
+    fake_server.auth_type = None
+    fake_server.oauth2_flow = None
+    manager_mock.get_mcp_server_by_id = MagicMock(return_value=fake_server)
+
+    token = _mcp_request_allowed_servers_cache.set({})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            manager_mock,
+        ):
+            first = await _get_allowed_mcp_servers(
+                user_api_key_auth=None,
+                mcp_servers=None,
+                client_ip="1.2.3.4",
+            )
+            second = await _get_allowed_mcp_servers(
+                user_api_key_auth=None,
+                mcp_servers=None,
+                client_ip="1.2.3.4",
+            )
+    finally:
+        _mcp_request_allowed_servers_cache.reset(token)
+
+    assert first is second
+    assert manager_mock.get_allowed_mcp_servers.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_no_cache_when_not_primed():
+    """Outside an MCP HTTP request scope the function runs the chain each call."""
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers
+
+    manager_mock = MagicMock()
+    manager_mock.get_allowed_mcp_servers = AsyncMock(return_value=[])
+    manager_mock.filter_server_ids_by_ip_with_info = MagicMock(return_value=([], 0))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        manager_mock,
+    ):
+        await _get_allowed_mcp_servers(
+            user_api_key_auth=None, mcp_servers=None, client_ip="1.2.3.4"
+        )
+        await _get_allowed_mcp_servers(
+            user_api_key_auth=None, mcp_servers=None, client_ip="1.2.3.4"
+        )
+
+    assert manager_mock.get_allowed_mcp_servers.await_count == 2
