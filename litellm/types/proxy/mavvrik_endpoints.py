@@ -37,7 +37,7 @@ class MavvrikInitRequest(BaseModel):
     def must_be_https_mavvrik_host(cls, v: str) -> str:
         if not v.startswith("https://"):
             raise ValueError("api_endpoint must be an HTTPS URL")
-        netloc = urlparse(v).netloc.split(":")[0]  # strip port if present
+        netloc = (urlparse(v).hostname or "").lower()  # strip userinfo/port
         if not any(netloc.endswith(suffix) for suffix in _MAVVRIK_ALLOWED_SUFFIXES):
             raise ValueError(
                 f"api_endpoint host must be a Mavvrik domain "
@@ -152,7 +152,7 @@ class MavvrikSettingsUpdate(BaseModel):
             return v
         if not v.startswith("https://"):
             raise ValueError("api_endpoint must be an HTTPS URL")
-        netloc = urlparse(v).netloc.split(":")[0]
+        netloc = (urlparse(v).hostname or "").lower()  # strip userinfo/port
         if not any(netloc.endswith(suffix) for suffix in _MAVVRIK_ALLOWED_SUFFIXES):
             raise ValueError(
                 f"api_endpoint host must be a Mavvrik domain "
