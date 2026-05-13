@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: T201
 """
 Minimal LiteLLM proxy performance runner for Cloud-agent verification.
 

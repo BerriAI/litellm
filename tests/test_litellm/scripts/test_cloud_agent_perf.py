@@ -9,6 +9,7 @@ from scripts.cloud_agent_perf import (
     EndpointConfig,
     build_payload,
     compare_overhead,
+    main,
     run_load_test,
 )
 
@@ -100,3 +101,44 @@ def test_should_calculate_proxy_overhead_from_latency_summaries() -> None:
     assert overhead["mean_overhead_pct"] == 50.0
     assert overhead["p95_overhead_ms"] == 5.0
     assert overhead["p99_overhead_pct"] == 25.0
+
+
+def test_should_run_cli_against_mock_chat_endpoint(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    server, url, requests = _start_mock_chat_server()
+    output_path = tmp_path / "perf.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cloud_agent_perf.py",
+            "--proxy-url",
+            url,
+            "--proxy-api-key",
+            "sk-test",
+            "--model",
+            "fake-openai-endpoint",
+            "--requests",
+            "2",
+            "--concurrency",
+            "1",
+            "--warmup-requests",
+            "0",
+            "--output-json",
+            str(output_path),
+        ],
+    )
+    try:
+        exit_code = main()
+    finally:
+        server.shutdown()
+        server.server_close()
+        server.thread.join(timeout=5)  # type: ignore[attr-defined]
+
+    output = capsys.readouterr().out
+    data = json.loads(output_path.read_text())
+    assert exit_code == 0
+    assert "rps:" in output
+    assert "Wrote JSON results" in output
+    assert data["proxy"]["successful_requests"] == 2
+    assert len(requests) == 2
