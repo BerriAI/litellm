@@ -68,7 +68,7 @@ async def test_azure_embedding_health_check():
 async def test_openai_img_gen_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "dall-e-3",
+            "model": "gpt-image-1",
             "api_key": os.getenv("OPENAI_API_KEY"),
         },
         mode="image_generation",
@@ -493,6 +493,45 @@ async def test_perform_health_check_filters_by_model_id():
     assert (captured_list[0][0].get("model_info") or {}).get("id") == "deployment-id-2"
     assert len(healthy_endpoints) == 1
     assert healthy_endpoints[0]["api_key"] == "fake-key-2"
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_skip_disabled_background_models():
+    from litellm.proxy.health_check import perform_health_check
+
+    model_list = [
+        {
+            "model_name": "a",
+            "model_info": {"id": "id-a"},
+            "litellm_params": {"model": "m-a", "api_key": "k1"},
+        },
+        {
+            "model_name": "b",
+            "model_info": {
+                "id": "id-b",
+                "disable_background_health_check": True,
+            },
+            "litellm_params": {"model": "m-b", "api_key": "k2"},
+        },
+    ]
+    captured = []
+
+    async def mock_inner(m_list, details=True, **kwargs):
+        captured.append(list(m_list))
+        return [], [], {}
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_inner,
+    ):
+        await perform_health_check(
+            model_list=model_list,
+            health_check_skip_disabled_background_models=True,
+        )
+
+    assert len(captured) == 1
+    assert len(captured[0]) == 1
+    assert captured[0][0]["model_name"] == "a"
 
 
 @pytest.mark.asyncio

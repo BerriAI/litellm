@@ -4977,8 +4977,9 @@ class BedrockConverseMessagesProcessor:
             )
             if reasoning_text and not reasoning_text.get("signature"):
                 reasoning_text_text = reasoning_text["text"]
-                assistants_part = BedrockContentBlock(text=reasoning_text_text)
-                assistant_parts.append(assistants_part)
+                if reasoning_text_text.strip():
+                    assistants_part = BedrockContentBlock(text=reasoning_text_text)
+                    assistant_parts.append(assistants_part)
             else:
                 filtered_thinking_blocks.append(block)
         if len(filtered_thinking_blocks) > 0:

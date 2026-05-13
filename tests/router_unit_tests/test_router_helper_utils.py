@@ -40,9 +40,9 @@ def model_list():
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -207,12 +207,12 @@ async def test_image_generation(model_list, sync_mode):
     router = Router(model_list=model_list)
     if sync_mode:
         response = router._image_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
     else:
         response = await router._aimage_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
 
@@ -382,7 +382,7 @@ async def test_router_make_call(model_list):
     ## AIMAGE_GENERATION
     response = await router.make_call(
         original_function=router._aimage_generation,
-        model="dall-e-3",
+        model="gpt-image-1",
         prompt="A cute baby sea otter",
         mock_response="https://example.com/image.png",
     )

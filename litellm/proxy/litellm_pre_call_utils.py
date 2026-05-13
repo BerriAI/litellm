@@ -25,6 +25,9 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_utils import (
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -1186,6 +1189,71 @@ class LiteLLMProxyRequestSetup:
             tags = data["tags"]
 
         return tags
+
+    @staticmethod
+    def apply_client_tag_policy_pre_auth(
+        request: Request,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Merge ``x-litellm-tags`` header tags into ``request_data`` BEFORE
+        auth budget gates run, so ``_tag_max_budget_check`` (which only
+        inspects ``request_data``) sees them. Without this, header-tagged
+        requests silently bypass per-tag budget enforcement.
+
+        Why: ``add_litellm_data_to_request`` runs the equivalent merge
+        post-auth, after ``_tag_max_budget_check`` has already executed.
+        Header-supplied tags merged there are invisible to that check.
+        Running the merge here closes that gap; the post-auth merge in
+        ``add_litellm_data_to_request`` remains as defense-in-depth.
+
+        How to apply: invoked from the auth chain just before
+        ``common_checks``. Mutates ``request_data`` in place; idempotent
+        when followed by ``add_litellm_data_to_request``.
+        """
+        # No allow_client_tags opt-in: caller-supplied tags always flow
+        # into metadata.tags (see add_litellm_data_to_request). The pre-auth
+        # merge mirrors that so _tag_max_budget_check sees the same tags.
+        headers = _safe_get_request_headers(request=request)
+        raw_header_tags = headers.get("x-litellm-tags")
+        if not raw_header_tags:
+            return
+
+        if isinstance(raw_header_tags, str):
+            header_tags: List[str] = [
+                t.strip() for t in raw_header_tags.split(",") if t.strip()
+            ]
+        elif isinstance(raw_header_tags, list):
+            header_tags = [t for t in raw_header_tags if isinstance(t, str) and t]
+        else:
+            return
+
+        if not header_tags:
+            return
+
+        # Match the metadata key that get_tags_from_request_body will read
+        # from (litellm_metadata vs metadata) so the merged tags are visible
+        # to _tag_max_budget_check.
+        _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        metadata = request_data.get(_metadata_variable_name)
+        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
+        # Parse it so existing tags survive the merge — overwriting the string
+        # with {} would let a caller bypass _tag_max_budget_check on an
+        # over-budget body tag by also sending a within-budget header tag.
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
+            metadata = {}
+            request_data[_metadata_variable_name] = metadata
+
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=header_tags,
+        )
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
