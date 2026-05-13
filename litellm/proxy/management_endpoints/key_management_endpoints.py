@@ -2429,15 +2429,24 @@ async def _validate_update_key_data(
                 prisma_client=prisma_client,
             )
 
-    # Validate key against project limits if project_id is being set
+    # Validate key against project limits if project_id is being set.
+    # ``UpdateKeyRequest`` doesn't declare ``project_id`` as a field but
+    # ``LiteLLMPydanticObjectBase`` is configured with ``extra="allow"``,
+    # so an inbound ``project_id`` lands in ``model_extra`` and survives
+    # ``model_dump(exclude_unset=True)`` in ``prepare_key_update_data``.
+    # Read both surfaces so the membership gate fires on an explicit
+    # reassignment whether the field is declared on the request schema
+    # or only present as an extra.
     _explicit_project_id = getattr(data, "project_id", None)
+    if _explicit_project_id is None:
+        _model_extra = getattr(data, "model_extra", None)
+        if isinstance(_model_extra, dict):
+            _explicit_project_id = _model_extra.get("project_id")
     _project_id_to_check = _explicit_project_id or getattr(
         existing_key_row, "project_id", None
     )
     # An explicit project_id reassignment must always go through the
-    # membership gate even when models/max_budget aren't changing —
-    # ``prepare_key_update_data`` persists project_id alone otherwise,
-    # letting a non-admin attach their key to an arbitrary project.
+    # membership gate even when models/max_budget aren't changing.
     if _project_id_to_check is not None and (
         _explicit_project_id is not None
         or data.models is not None

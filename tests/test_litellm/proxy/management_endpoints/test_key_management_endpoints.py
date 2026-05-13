@@ -11140,30 +11140,47 @@ class TestUpdateProjectOnlyChangeRunsMembershipGate:
     fields changed. An explicit project_id reassignment must always
     enforce the gate."""
 
-    def test_explicit_project_id_only_triggers_membership_check(self):
-        """Unit-level: a project_id-only ``UpdateKeyRequest`` (no models,
-        no max_budget) must still satisfy the condition that calls
-        ``_check_project_key_limits``. The Veria HIGH was that the
-        condition only fired when models/max_budget were also set, so
-        a project-only update bypassed the gate."""
+    def test_project_id_lands_in_model_extra(self):
+        """``UpdateKeyRequest`` doesn't declare ``project_id`` as a
+        field but the base config allows extra keys. Sending the field
+        therefore lands in ``model_extra`` and survives
+        ``model_dump(exclude_unset=True)`` in ``prepare_key_update_data``
+        — which is what made the bypass exploitable. The gate now reads
+        both the declared field and ``model_extra``."""
         from litellm.proxy._types import UpdateKeyRequest
 
         data = UpdateKeyRequest(key="sk-x", project_id="proj-victim")
-        _explicit_project_id = getattr(data, "project_id", None)
-        _project_id_to_check = _explicit_project_id  # existing_key.project_id=None
+        # Not on the declared schema:
+        assert getattr(data, "project_id", None) is None
+        # But Pydantic preserves it as an extra:
+        assert data.model_extra is not None
+        assert data.model_extra.get("project_id") == "proj-victim"
+        # And it survives the dump that prepare_key_update_data uses:
+        dumped = data.model_dump(exclude_unset=True)
+        assert dumped.get("project_id") == "proj-victim"
 
-        # Mirror the production condition: this must be True so the
-        # membership gate runs even on project-only updates.
+    def test_explicit_project_id_only_triggers_membership_check(self):
+        """Mirrors the production condition: an explicit project_id —
+        whether on the schema or in model_extra — must trigger
+        ``_check_project_key_limits`` even when no other field is being
+        changed."""
+        from litellm.proxy._types import UpdateKeyRequest
+
+        data = UpdateKeyRequest(key="sk-x", project_id="proj-victim")
+        # Resolve project_id the same way the production code does.
+        _explicit_project_id = getattr(data, "project_id", None)
+        if _explicit_project_id is None:
+            _model_extra = getattr(data, "model_extra", None)
+            if isinstance(_model_extra, dict):
+                _explicit_project_id = _model_extra.get("project_id")
+        _project_id_to_check = _explicit_project_id
+
         condition = _project_id_to_check is not None and (
             _explicit_project_id is not None
             or data.models is not None
             or data.max_budget is not None
         )
-        assert condition is True, (
-            "Project-only updates must trigger _check_project_key_limits — "
-            "without the explicit-project-id check the gate is skipped and "
-            "a non-admin can reassign the key to an arbitrary project."
-        )
+        assert condition is True
 
 
 class TestProjectKeyLimitsDbErrorReturns5xx:
