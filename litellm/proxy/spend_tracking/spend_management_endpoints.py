@@ -3454,19 +3454,28 @@ async def _build_ui_spend_logs_response(
                 if r.get("session_id")
             }
 
-    if enrich_session_counts:
-        enriched: List[dict] = []
-        for row in data:
-            row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
+    enriched: List[dict] = []
+    for row in data:
+        row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
+
+        # 1. Normalize session counts (existing v1/UI logic)
+        if enrich_session_counts:
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-            enriched.append(row_dict)
-        response_data: list = enriched
-    else:
-        # v2 path: return raw Prisma model instances so FastAPI applies its
-        # own Pydantic-aware serialisation (preserves alias handling, custom
-        # serializers, etc.).
-        response_data = data  # type: ignore[assignment]
+
+        # 2. Normalize error fields for failed requests
+        if row_dict.get("status") == "failure":
+            metadata = row_dict.get("metadata")
+            if isinstance(metadata, dict):
+                error_info = metadata.get("error_information")
+                if isinstance(error_info, dict):
+                    for field in ["error_code", "error_class", "error_message"]:
+                        if not row_dict.get(field):
+                            row_dict[field] = error_info.get(field)
+
+        enriched.append(row_dict)
+
+    response_data: list = enriched
 
     return {
         "data": response_data,

@@ -3185,3 +3185,64 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         assert where["api_key"] == "hashed::sk-raw-admin-token"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_normalization_failure():
+    """
+    Regression test: _build_ui_spend_logs_response must normalize error_code,
+    error_class, and error_message from metadata.error_information when status is 'failure'.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    error_info = {
+        "error_code": "401",
+        "error_class": "AuthenticationError",
+        "error_message": "Invalid API Key",
+    }
+
+    dict_rows = [
+        {
+            "request_id": "req-failure",
+            "status": "failure",
+            "spend": 0.0,
+            "total_tokens": 0,
+            "metadata": {"error_information": error_info},
+        },
+        {
+            "request_id": "req-success",
+            "status": "success",
+            "spend": 0.05,
+            "total_tokens": 100,
+            "metadata": {},
+        },
+    ]
+
+    mock_prisma = MagicMock()
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=False,
+    )
+
+    rows = result["data"]
+    assert len(rows) == 2
+
+    # Failure row should be normalized
+    fail_row = rows[0]
+    assert fail_row["request_id"] == "req-failure"
+    assert fail_row["error_code"] == "401"
+    assert fail_row["error_class"] == "AuthenticationError"
+    assert fail_row["error_message"] == "Invalid API Key"
+
+    # Success row should remain unchanged
+    success_row = rows[1]
+    assert success_row["request_id"] == "req-success"
+    assert "error_code" not in success_row
