@@ -15640,6 +15640,57 @@ async def _stream_mcp_asgi_response(
 # Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
 # Must be declared BEFORE /{mcp_server_name}/mcp to avoid being swallowed by the catchall.
 @app.api_route(
+    "/toolset/{toolset_name}/lazymcp/",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+@app.api_route(
+    "/toolset/{toolset_name}/lazymcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def toolset_lazymcp_route(toolset_name: str, request: Request):
+    """Namespace a toolset as its own LazyMCP endpoint."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_active_toolset_id,
+            handle_streamable_http_lazymcp,
+        )
+
+        if prisma_client is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+            prisma_client, toolset_name
+        )
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+
+        scope = dict(request.scope)
+        scope["path"] = "/lazymcp"
+
+        token = _mcp_active_toolset_id.set(toolset.toolset_id)
+        try:
+            return await _stream_mcp_asgi_response(
+                handle_streamable_http_lazymcp, scope, request.receive
+            )
+        finally:
+            _mcp_active_toolset_id.reset(token)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling toolset LazyMCP route for {toolset_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.api_route(
     "/toolset/{toolset_name}/mcp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
@@ -15789,6 +15840,88 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
         ),
     )
     return result
+
+
+@app.api_route(
+    "/lazymcp/",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+@app.api_route(
+    "/lazymcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def root_lazymcp_route(request: Request):
+    """Handle root LazyMCP route like /lazymcp."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_lazymcp,
+        )
+
+        scope = dict(request.scope)
+        scope["path"] = "/lazymcp"
+        return await _stream_mcp_asgi_response(
+            handle_streamable_http_lazymcp, scope, request.receive
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error handling root LazyMCP route: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.api_route(
+    "/lazymcp/{mcp_server_name}/",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+@app.api_route(
+    "/lazymcp/{mcp_server_name}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def dynamic_lazymcp_route(mcp_server_name: str, request: Request):
+    """Handle dynamic LazyMCP server routes like /lazymcp/github_mcp."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_active_toolset_id,
+            handle_streamable_http_lazymcp,
+        )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
+        scope = dict(request.scope)
+        scope["path"] = f"/lazymcp/{mcp_server_name}"
+
+        if mcp_server is None and prisma_client is not None:
+            toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+                prisma_client, mcp_server_name
+            )
+            if toolset is not None:
+                scope["path"] = "/lazymcp"
+                token = _mcp_active_toolset_id.set(toolset.toolset_id)
+                try:
+                    return await _stream_mcp_asgi_response(
+                        handle_streamable_http_lazymcp, scope, request.receive
+                    )
+                finally:
+                    _mcp_active_toolset_id.reset(token)
+
+        # Defer all remaining names (server, access-group, or invalid target) to
+        # the LazyMCP handler, which applies the existing group/permission resolver.
+        return await _stream_mcp_asgi_response(
+            handle_streamable_http_lazymcp, scope, request.receive
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling dynamic LazyMCP route for {mcp_server_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 # Dynamic MCP server routes - handle /{mcp_server_name}/mcp

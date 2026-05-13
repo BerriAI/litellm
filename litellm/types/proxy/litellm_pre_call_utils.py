@@ -1,3 +1,5 @@
+from typing import Optional
+
 from typing_extensions import TypedDict
 
 
@@ -22,3 +24,4 @@ class SecretFields(TypedDict):
     """
 
     raw_headers: dict
+    mcp_client_ip: Optional[str]

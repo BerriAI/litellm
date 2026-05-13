@@ -129,6 +129,37 @@ describe("MCPServers", () => {
     expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
   });
 
+  it("should show LazyMCP Connect tab with lazymcp examples and keep Connect tab MCP URLs", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Connect" })).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Connect" }));
+    });
+
+    expect(screen.getAllByText("http://localhost:4000/mcp").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "LazyMCP Connect" }));
+    });
+
+    expect(screen.getByText("Connect to your MCP client with LazyMCP")).toBeInTheDocument();
+    expect(screen.getByText(/mcp_describe, mcp_call, and mcp_status/)).toBeInTheDocument();
+    expect(screen.getAllByText("http://localhost:4000/lazymcp").length).toBeGreaterThan(0);
+    expect(screen.getByText(/litellm_proxy\/lazymcp/)).toBeInTheDocument();
+  });
+
   it("should fetch and merge health status for servers", async () => {
     // Mock MCP servers data without health status
     const mockServers = [
