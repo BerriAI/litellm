@@ -134,3 +134,47 @@ def test_e2e_protected_admin_route_remains_401(proxy_client, host_header):
         f"Malformed Host={host_header!r} bypassed auth: returned "
         f"{r.status_code} (body: {r.text[:200]})"
     )
+
+
+def test_websocket_synthetic_request_carries_scope_path():
+    """``user_api_key_auth_websocket`` builds a synthetic HTTP Request
+    from the WebSocket scope. It must propagate ``path`` (and the
+    related routing fields) so the auth helpers downstream see the
+    real route — otherwise an empty path would be classified as the
+    public root and skip auth."""
+    from starlette.datastructures import URL
+    from unittest.mock import MagicMock
+    from fastapi import WebSocket
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    captured: dict = {}
+
+    async def fake_user_api_key_auth(request, api_key):
+        captured["scope"] = dict(request.scope)
+        captured["route"] = get_request_route(request)
+        return None  # short-circuit downstream
+
+    ws = MagicMock(spec=WebSocket)
+    ws.scope = {
+        "type": "websocket",
+        "path": "/v1/realtime",
+        "raw_path": b"/v1/realtime",
+        "root_path": "",
+        "query_string": b"model=gpt-4o",
+        "headers": [(b"authorization", b"Bearer sk-x")],
+    }
+    ws.url = URL("ws://localhost/v1/realtime")
+    ws.query_params = {"model": "gpt-4o"}
+    ws.headers = {"authorization": "Bearer sk-x"}
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        new=fake_user_api_key_auth,
+    ):
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(user_api_key_auth_websocket(ws))
+
+    assert captured["scope"]["path"] == "/v1/realtime"
+    assert captured["route"] == "/v1/realtime"

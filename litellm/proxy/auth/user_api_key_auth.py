@@ -332,8 +332,21 @@ def _apply_budget_limits_to_end_user_params(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    scope_headers = list(websocket.scope.get("headers") or [])
-    request = Request(scope={"type": "http", "headers": scope_headers})
+    ws_scope = websocket.scope or {}
+    # Carry the routing fields from the WebSocket scope into the
+    # synthetic HTTP request. ``get_request_route`` reads ``scope["path"]``;
+    # without these the auth gate would see an empty path and treat the
+    # connection as the public ``/`` route.
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": list(ws_scope.get("headers") or []),
+            "path": ws_scope.get("path") or "/",
+            "raw_path": ws_scope.get("raw_path") or b"",
+            "root_path": ws_scope.get("root_path") or "",
+            "query_string": ws_scope.get("query_string") or b"",
+        }
+    )
 
     request._url = websocket.url
 
