@@ -1880,6 +1880,12 @@ if TYPE_CHECKING:
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,
     )
+    from .llms.dashscope.embed.transformation import (
+        DashScopeEmbeddingConfig as DashScopeEmbeddingConfig,
+    )
+    from .llms.dashscope.rerank.transformation import (
+        DashScopeRerankConfig as DashScopeRerankConfig,
+    )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,
     )
