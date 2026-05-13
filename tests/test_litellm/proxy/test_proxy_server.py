@@ -6036,9 +6036,16 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
+    async def redis_set_cache(key, value, nx=False, **_):
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = float(value)
+        return True
+
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
