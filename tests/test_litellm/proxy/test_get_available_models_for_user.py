@@ -256,12 +256,112 @@ async def test_sentinel_only_team_without_access_groups_returns_empty():
     A team with ``models=["no-default-models"]`` and no access groups must
     return an empty list — never the literal sentinel string, which OpenWebUI
     would otherwise render as a selectable model id.
+
+    Regression guard: this test now configures a populated ``llm_router``.
+    Without the sentinel-aware short-circuit in
+    ``get_available_models_for_user``, stripping the sentinel would leave
+    ``team_models=[]`` and ``get_complete_model_list`` would fall through to
+    ``proxy_model_list``, silently granting every proxy model to a team
+    that explicitly opted out.
     """
     team = _make_team_cached_obj(models=["no-default-models"], access_group_ids=None)
     prisma = _make_prisma_client_with_ag_rows([])
 
     user_api_key_dict = _make_user_api_key_dict(
         team_id=team.team_id, team_models=["no-default-models"]
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = [
+        "gpt-4o",
+        "claude-opus-4-5",
+        "mistral-large",
+    ]
+    mock_router.get_model_access_groups.return_value = {}
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_object",
+        new=_patched_get_team_object(team),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=mock_router,
+            general_settings={},
+            user_model=None,
+            prisma_client=prisma,
+            proxy_logging_obj=MagicMock(),
+            team_id=None,
+            user_api_key_cache=MagicMock(),
+        )
+
+    assert SpecialModelNames.no_default_models.value not in result
+    assert result == []
+    assert (
+        "gpt-4o" not in result
+    ), "A no-default-models team must not silently see every proxy model"
+
+
+@pytest.mark.asyncio
+async def test_db_failure_in_access_group_resolution_does_not_crash():
+    """
+    ``/v1/models`` must not 500 on a transient Prisma failure. If
+    ``litellm_accessgrouptable.find_many`` raises, we degrade to "no
+    access-group contribution" — same behavior as the pre-fix state — and
+    still honor the sentinel short-circuit so a no-default-models team
+    doesn't accidentally get full access.
+    """
+    team = _make_team_cached_obj(
+        models=["no-default-models"], access_group_ids=["ag-1"]
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        side_effect=RuntimeError("simulated transient DB error")
+    )
+
+    user_api_key_dict = _make_user_api_key_dict(
+        team_id=team.team_id, team_models=["no-default-models"]
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4o", "claude-opus-4-5"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_object",
+        new=_patched_get_team_object(team),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=mock_router,
+            general_settings={},
+            user_model=None,
+            prisma_client=prisma,
+            proxy_logging_obj=MagicMock(),
+            team_id=None,
+            user_api_key_cache=MagicMock(),
+        )
+
+    assert result == []
+    assert "gpt-4o" not in result
+
+
+@pytest.mark.asyncio
+async def test_team_with_direct_models_unaffected_by_resolver_failure():
+    """
+    If ``team.models[]`` contains real model names and access-group
+    resolution fails, the team's direct models still come through. Only the
+    access-group contribution is dropped on resolver failure.
+    """
+    team = _make_team_cached_obj(models=["gpt-4o"], access_group_ids=["ag-1"])
+
+    prisma = MagicMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        side_effect=RuntimeError("simulated transient DB error")
+    )
+
+    user_api_key_dict = _make_user_api_key_dict(
+        team_id=team.team_id, team_models=["gpt-4o"]
     )
 
     with patch(
@@ -279,8 +379,7 @@ async def test_sentinel_only_team_without_access_groups_returns_empty():
             user_api_key_cache=MagicMock(),
         )
 
-    assert SpecialModelNames.no_default_models.value not in result
-    assert result == []
+    assert result == ["gpt-4o"]
 
 
 @pytest.mark.asyncio

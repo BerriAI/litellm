@@ -5971,26 +5971,59 @@ async def get_available_models_for_user(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        except Exception:
+        except Exception as e:
+            # Resolution is best-effort: a DB hiccup here must never take
+            # down /v1/models. Log so operators can diagnose unexpected
+            # skips (otherwise this silently degrades to the pre-fix
+            # behavior).
+            verbose_proxy_logger.debug(
+                "get_available_models_for_user: failed to fetch team object "
+                "for team_id=%s, skipping access-group resolution. Error: %s",
+                user_api_key_dict.team_id,
+                str(e),
+            )
             team_object = None
 
     if team_object is not None and prisma_client is not None:
-        access_group_model_names = await _resolve_team_access_group_model_names(
-            team_objects=[team_object],
-            prisma_client=prisma_client,
-        )
+        try:
+            access_group_model_names = await _resolve_team_access_group_model_names(
+                team_objects=[team_object],
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            # Same best-effort contract as the get_team_object call above:
+            # a transient Prisma error in access-group resolution must not
+            # 500 the /v1/models endpoint. Degrade to "no access-group
+            # contribution" and let the sentinel-aware logic below decide
+            # what to return.
+            verbose_proxy_logger.debug(
+                "get_available_models_for_user: access-group resolution "
+                "failed for team_id=%s, returning team.models[] only. "
+                "Error: %s",
+                getattr(team_object, "team_id", None),
+                str(e),
+            )
+            access_group_model_names = []
         for model_name in access_group_model_names:
             if model_name not in team_models:
                 team_models.append(model_name)
 
-    # Strip the ``no-default-models`` sentinel before passing to
-    # get_complete_model_list. The sentinel is an internal marker meaning
-    # "this team has no direct models"; it must never appear in the
-    # OpenAI-format response (otherwise OpenWebUI shows it as a selectable
-    # model id). Matches the user-path treatment in auth_checks.py.
-    team_models = [
-        m for m in team_models if m != SpecialModelNames.no_default_models.value
-    ]
+    # ``no-default-models`` is an internal "this team has no direct models"
+    # marker. It must never appear in the OpenAI-format response (otherwise
+    # OpenWebUI renders it as a selectable model id) and must NOT be
+    # silently dropped — ``get_complete_model_list`` interprets an empty
+    # ``team_models`` as "no preference" and falls back to the full
+    # ``proxy_model_list``, which would grant every proxy model to a team
+    # that explicitly opted out. Match the user-path treatment in
+    # ``auth_checks.py``: if the sentinel was the only thing the team had
+    # and access-group resolution didn't add anything real, return ``[]``
+    # immediately rather than letting the fallback path widen access.
+    sentinel_value = SpecialModelNames.no_default_models.value
+    had_no_default_models_sentinel = sentinel_value in team_models
+    team_models = [m for m in team_models if m != sentinel_value]
+
+    if had_no_default_models_sentinel and not team_models and not key_models:
+        return []
 
     # Get complete model list
     all_models = get_complete_model_list(
