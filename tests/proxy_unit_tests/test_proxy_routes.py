@@ -192,7 +192,6 @@ def test_get_request_route_with_base_url_not_at_start():
 
 
 def _create_request_with_host_header(path: str, host_header: str) -> Request:
-    """Create a request where the Host header differs from the actual request path."""
     return Request(
         {
             "type": "http",
@@ -201,11 +200,6 @@ def _create_request_with_host_header(path: str, host_header: str) -> Request:
             "server": ("localhost", 4000),
             "path": path,
             "query_string": b"",
-            # Inject a malformed Host header that contains path/query characters.
-            # Without the fix, Starlette reconstructs request.url as
-            # f"http://{host_header}{path}", e.g. "http://localhost/?x=1/health",
-            # which url-parses to path="/", collapsing the real route to "/" and
-            # bypassing auth (since "/" is a public route).
             "headers": [(b"host", host_header.encode())],
             "client": ("127.0.0.1", 50000),
             "root_path": "",
@@ -223,14 +217,9 @@ def _create_request_with_host_header(path: str, host_header: str) -> Request:
     ],
 )
 def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
-    """Malformed Host headers must not alter the resolved route.
-
-    CVE: Host header injection causes request.url.path to collapse to "/" which
-    is a public route, bypassing authentication on all protected endpoints.
-    """
     for protected_path in ["/health", "/user/new", "/key/generate", "/get/internal_user_settings"]:
         request = _create_request_with_host_header(path=protected_path, host_header=host_header)
         result = get_request_route(request)
         assert result == protected_path, (
-            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r} — auth bypass possible"
+            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
         )

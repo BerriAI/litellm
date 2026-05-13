@@ -489,12 +489,7 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        # Use scope["path"] — the raw path set by the ASGI server from the HTTP
-        # request line. Unlike request.url.path, this is not reconstructed from
-        # the Host header, so a malformed Host like "localhost/?x=1" cannot
-        # cause the path to collapse to "/" and bypass auth route checks.
         raw_path: str = request.scope.get("path", request.url.path)
-        # Mirror Starlette's own base_url logic: prefer app_root_path over root_path
         root_path: str = request.scope.get(
             "app_root_path", request.scope.get("root_path", "")
         )
