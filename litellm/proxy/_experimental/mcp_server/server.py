@@ -2860,7 +2860,8 @@ if MCP_AVAILABLE:
         request = StarletteRequest(scope)
         base_url = get_request_base_url(request)
         for srv, (probe_status, _) in zip(passthrough_servers, probe_results):
-            if probe_status in (401, 403):
+            if probe_status == 401:
+                # Token is missing or expired — direct the client to re-authorize.
                 authorization_uri = (
                     f"Bearer authorization_uri="
                     f"{base_url}/.well-known/oauth-authorization-server/{srv.name}"
@@ -2869,6 +2870,14 @@ if MCP_AVAILABLE:
                     status_code=401,
                     detail="Unauthorized",
                     headers={"WWW-Authenticate": authorization_uri},
+                )
+            if probe_status == 403:
+                # Token is valid but the caller lacks permission — do not hint
+                # at re-authorization (RFC 9110: a fresh token with the same
+                # scopes would just hit 403 again and loop indefinitely).
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden",
                 )
 
     async def handle_streamable_http_mcp(
