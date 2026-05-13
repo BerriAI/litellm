@@ -11046,6 +11046,223 @@ class TestRegenerateProjectMembershipGate:
             assert "not a member" in str(exc.value.detail)
 
 
+class TestProjectKeyLimitsDbErrorReturns5xx:
+    """Greptile P1 follow-up: when ``get_team_object`` fails for an
+    infrastructure reason (DB timeout, connection error) the previous
+    bare ``except Exception`` swallowed it and surfaced a 403 'not a
+    member'. Real failure must surface as a retryable 5xx."""
+
+    @pytest.mark.asyncio
+    async def test_team_lookup_failure_raises_500(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(side_effect=RuntimeError("db timeout")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _check_project_key_limits(
+                    project_id="proj-x",
+                    data=GenerateKeyRequest(models=["gpt-4o"]),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    user_api_key_dict=_internal_user_auth(),
+                )
+            assert exc.value.status_code == 500
+            assert "Unable to verify team membership" in str(exc.value.detail)
+
+
+class TestProjectKeyLimitsBackwardsCompat:
+    """Greptile P1 follow-up: existing keys may already have a
+    ``project_id`` whose owning team the caller is not a member of
+    (legacy keys, or membership changed after key creation). A non-
+    explicit assignment (i.e. the caller only changed ``models`` or
+    ``max_budget``) must NOT 403 against the inherited project — the
+    models/budget subset checks still apply but the membership gate is
+    skipped via ``enforce_membership=False``."""
+
+    @pytest.mark.asyncio
+    async def test_inherited_project_id_skips_membership_check(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+        # Caller is NOT a member.
+        team_obj = LiteLLM_TeamTableCachedObj(
+            team_id="team-victim",
+            members_with_roles=[
+                Member(role="user", user_id="someone-else", user_email=None)
+            ],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=team_obj),
+            ),
+        ):
+            # ``enforce_membership=False`` simulates the inherited-project_id
+            # call site in ``/key/update`` / ``/key/regenerate`` (caller did
+            # not pass project_id in the request body). Must not raise.
+            await _check_project_key_limits(
+                project_id="proj-x",
+                data=GenerateKeyRequest(models=["gpt-4o"]),
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                user_api_key_dict=_internal_user_auth(),
+                enforce_membership=False,
+            )
+
+
+class TestRegenerateExplicitNullScopingFields:
+    """Veria MED: ``prepare_key_update_data`` uses
+    ``model_dump(exclude_unset=True)`` so ``team_id: null`` /
+    ``project_id: null`` from a non-admin caller survives into the DB
+    write and detaches the key. The shared ownership-change helper
+    must reject the clear before that write happens."""
+
+    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    def test_non_admin_explicit_null_clear_rejected(self, field):
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_caller_can_change_key_ownership,
+        )
+
+        existing_key_row = MagicMock(
+            user_id="user-internal",
+            team_id="team-a",
+            project_id="proj-a",
+        )
+        data = RegenerateKeyRequest(key="sk-x", **{field: None})
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_caller_can_change_key_ownership(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=_internal_user_auth(),
+            )
+        assert exc.value.status_code == 403
+        assert field in str(exc.value.detail)
+
+    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    def test_admin_explicit_null_allowed(self, field):
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_caller_can_change_key_ownership,
+        )
+
+        existing_key_row = MagicMock(
+            user_id="admin", team_id="team-a", project_id="proj-a"
+        )
+        data = RegenerateKeyRequest(key="sk-x", **{field: None})
+
+        _validate_caller_can_change_key_ownership(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=_proxy_admin_auth(),
+        )
+
+    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    def test_omitted_field_no_op(self, field):
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_caller_can_change_key_ownership,
+        )
+
+        existing_key_row = MagicMock(
+            user_id="user-internal", team_id="team-a", project_id="proj-a"
+        )
+        # Caller did not include the field in the request body — must
+        # not be treated as an explicit-null clear.
+        data = RegenerateKeyRequest(key="sk-x")
+        assert field not in data.model_fields_set
+
+        _validate_caller_can_change_key_ownership(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=_internal_user_auth(),
+        )
+
+
+class TestServiceAccountProjectGate:
+    """Veria HIGH: ``/key/service-account/generate`` accepts the same
+    ``GenerateKeyRequest`` shape as ``/key/generate``. The project
+    membership gate lived on ``generate_key_fn`` only, so a team member
+    who can mint a service-account key could supply an arbitrary
+    ``project_id`` and persist the key under a project they aren't a
+    member of. Moving the gate into the shared chokepoint
+    ``_common_key_generation_helper`` closes the bypass."""
+
+    @pytest.mark.asyncio
+    async def test_service_account_helper_runs_project_gate(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _common_key_generation_helper,
+        )
+
+        # Caller is NOT a member of the owning team.
+        project_obj = MagicMock(
+            team_id="team-victim",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+        team_obj = LiteLLM_TeamTableCachedObj(
+            team_id="team-victim",
+            members_with_roles=[
+                Member(role="user", user_id="someone-else", user_email=None)
+            ],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(return_value=team_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.common_key_access_checks"
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _common_key_generation_helper(
+                    data=GenerateKeyRequest(
+                        models=["gpt-4o"], project_id="proj-victim"
+                    ),
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    team_table=None,
+                )
+            assert exc.value.status_code == 403
+            assert "not a member" in str(exc.value.detail)
+
+
 class TestServiceAccountStripVariant:
     """Variant follow-up: ``/key/service-account/generate`` accepts the
     same ``GenerateKeyRequest`` shape as ``/key/generate`` but does NOT

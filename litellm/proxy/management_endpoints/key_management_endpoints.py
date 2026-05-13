@@ -469,44 +469,66 @@ def _validate_caller_can_change_key_ownership(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Non-admin callers must not rebind a key's ``user_id`` to a different
-    user. The ``user_id`` on a verification token is what
-    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
-    to derive the request's role; a non-admin rebinding their own key's
-    ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
+    Non-admin callers must not rebind or detach a key's scoping fields.
 
-    ``/key/update`` already enforces this inline; ``/key/regenerate`` did
-    not. Sharing the check keeps both endpoints — and any future
-    regenerate-style endpoint — consistent.
+    - ``user_id``: the verification token's ``user_id`` is what
+      ``_return_user_api_key_auth_obj`` resolves against
+      ``litellm_usertable`` to derive the request's role; a non-admin
+      rebinding their own key's ``user_id`` to a ``PROXY_ADMIN`` row
+      promotes themselves.
+    - ``team_id`` / ``project_id``: an explicit ``null`` survives
+      ``model_dump(exclude_unset=True)`` in ``prepare_key_update_data``
+      and writes NULL to the token row — detaching the key from the
+      tenant whose budget / models / spend gates would otherwise scope
+      it. ``/key/update`` reaches this on every write; ``/key/regenerate``
+      now does too via the shared chokepoint.
+
+    ``/key/update`` already enforced ``user_id`` inline;
+    ``/key/regenerate`` did not. Sharing the check keeps both endpoints —
+    and any future regenerate-style endpoint — consistent.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if data is None:
         return
-    # Distinguish "user_id omitted" from "user_id explicitly set to None".
-    # Both leave ``getattr(data, 'user_id', None)`` at None, but only the
-    # explicit-null variant survives ``model_dump(exclude_unset=True)`` in
-    # ``prepare_key_update_data`` and writes NULL to the token row —
-    # detaching the key from its user and bypassing the user-row
-    # role check on subsequent requests.
     fields_set = getattr(data, "model_fields_set", None) or set()
-    if "user_id" not in fields_set:
-        return
-    incoming_user_id = getattr(data, "user_id", None)
-    if incoming_user_id is None or incoming_user_id == "":
-        raise HTTPException(
-            status_code=403,
-            detail="Non-admin users cannot remove the user_id from a key.",
-        )
-    existing_user_id = getattr(existing_key_row, "user_id", None)
-    if incoming_user_id != existing_user_id:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Non-admin caller is not allowed to rebind the key from "
-                f"user={existing_user_id} to user={incoming_user_id}"
-            ),
-        )
+
+    # ``user_id``: distinguish "omitted" from "explicit null".
+    if "user_id" in fields_set:
+        incoming_user_id = getattr(data, "user_id", None)
+        if incoming_user_id is None or incoming_user_id == "":
+            raise HTTPException(
+                status_code=403,
+                detail="Non-admin users cannot remove the user_id from a key.",
+            )
+        existing_user_id = getattr(existing_key_row, "user_id", None)
+        if incoming_user_id != existing_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Non-admin caller is not allowed to rebind the key from "
+                    f"user={existing_user_id} to user={incoming_user_id}"
+                ),
+            )
+
+    # ``team_id`` / ``project_id``: refuse explicit-null clears by
+    # non-admins. Rebinding to a different value is allowed at this
+    # layer; downstream team/project membership gates own that check.
+    for scoping_field in ("team_id", "project_id"):
+        if scoping_field not in fields_set:
+            continue
+        incoming = getattr(data, scoping_field, None)
+        if incoming is None or incoming == "":
+            existing = getattr(existing_key_row, scoping_field, None)
+            if existing is None:
+                continue
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Non-admin users cannot remove the {scoping_field} from "
+                    f"a key (existing {scoping_field}={existing})."
+                ),
+            )
 
 
 def _check_allowed_routes_caller_permission(
@@ -686,6 +708,22 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
+
+    # Project membership / limits gate — applied at the chokepoint so
+    # ``/key/service-account/generate`` is covered too. Without this,
+    # any team member who can mint a service-account key could supply
+    # an arbitrary ``project_id`` and persist a key under a project they
+    # are not a member of.
+    if data.project_id is not None and prisma_client is not None:
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await _check_project_key_limits(
+            project_id=data.project_id,
+            data=data,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     if (
         data.metadata is not None
@@ -1203,14 +1241,20 @@ async def _check_project_key_limits(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
+    enforce_membership: bool = True,
 ) -> None:
     """
     Validate that key's models and budget respect its project's limits.
 
-    - Caller must be a member of the project's team (or proxy admin) —
-      projects live under a team via ``LiteLLM_ProjectTable.team_id``;
-      without this gate any internal user could enumerate a project_id and
-      mint a key under it, inheriting the victim project's models / budget.
+    - When ``enforce_membership`` is True the caller must be a member of
+      the project's team (or proxy admin) — projects live under a team via
+      ``LiteLLM_ProjectTable.team_id``; without this gate any internal user
+      could enumerate a project_id and mint a key under it, inheriting the
+      victim project's models / budget. Update/regenerate paths that only
+      inherit ``project_id`` from the existing key row (i.e. caller did not
+      change the assignment) must pass ``enforce_membership=False`` so a
+      legacy / membership-changed-after key still validates its model and
+      budget subsets without 403-ing the owner.
     - Key models must be a subset of project models.
     - Key max_budget must be <= project max_budget.
     """
@@ -1230,7 +1274,7 @@ async def _check_project_key_limits(
     # owning team. Project rows that don't have an associated team are
     # treated as admin-only — no non-admin code path should mint keys against
     # them.
-    if not _is_proxy_admin_role(user_api_key_dict):
+    if enforce_membership and not _is_proxy_admin_role(user_api_key_dict):
         project_team_id = getattr(project_obj, "team_id", None)
         if project_team_id is None:
             raise HTTPException(
@@ -1250,15 +1294,28 @@ async def _check_project_key_limits(
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 check_db_only=True,
             )
-        except Exception:
-            team_obj = None
-        member = (
-            _get_user_in_team(
-                team_table=cast(LiteLLM_TeamTableCachedObj, team_obj),
-                user_id=user_api_key_dict.user_id,
+        except Exception as exc:
+            # Don't mask infrastructure errors as 403s — operators need
+            # the real signal and users get a retryable 5xx.
+            verbose_proxy_logger.exception(
+                "Failed to fetch team_id=%s while enforcing project membership "
+                "gate for project_id=%s: %s",
+                project_team_id,
+                project_id,
+                exc,
             )
-            if team_obj is not None
-            else None
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": (
+                        f"Unable to verify team membership for "
+                        f"project_id={project_id}. Please retry."
+                    )
+                },
+            ) from exc
+        member = _get_user_in_team(
+            team_table=cast(LiteLLM_TeamTableCachedObj, team_obj),
+            user_id=user_api_key_dict.user_id,
         )
         if member is None:
             raise HTTPException(
@@ -1631,16 +1688,6 @@ async def generate_key_fn(
                 team_table=team_table,
                 data=data,
                 prisma_client=prisma_client,
-            )
-
-        # Validate key against project limits if project_id is set
-        if data.project_id is not None:
-            await _check_project_key_limits(
-                project_id=data.project_id,
-                data=data,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_api_key_dict=user_api_key_dict,
             )
 
         return await _common_key_generation_helper(
@@ -2378,7 +2425,8 @@ async def _validate_update_key_data(
             )
 
     # Validate key against project limits if project_id is being set
-    _project_id_to_check = getattr(data, "project_id", None) or getattr(
+    _explicit_project_id = getattr(data, "project_id", None)
+    _project_id_to_check = _explicit_project_id or getattr(
         existing_key_row, "project_id", None
     )
     if _project_id_to_check is not None and (
@@ -2390,6 +2438,7 @@ async def _validate_update_key_data(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_api_key_dict=user_api_key_dict,
+            enforce_membership=_explicit_project_id is not None,
         )
 
     # When the caller asks to change the key's organization_id, require that
@@ -4424,9 +4473,12 @@ async def _execute_virtual_key_regeneration(
     # ``/key/update``. Use the new project_id if set, otherwise validate
     # against the existing one when the caller changes ``models`` /
     # ``max_budget`` (those are the fields the helper bounds).
-    _project_id_for_regen = (
+    _explicit_project_id = (
         getattr(data, "project_id", None) if data is not None else None
-    ) or getattr(key_in_db, "project_id", None)
+    )
+    _project_id_for_regen = _explicit_project_id or getattr(
+        key_in_db, "project_id", None
+    )
     if (
         _project_id_for_regen is not None
         and data is not None
@@ -4442,6 +4494,7 @@ async def _execute_virtual_key_regeneration(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_api_key_dict=user_api_key_dict,
+            enforce_membership=_explicit_project_id is not None,
         )
 
     new_token = await get_new_token(data=data)
