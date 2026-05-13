@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import inspect
+import io
 import re
 import time
 from datetime import datetime
@@ -191,6 +192,19 @@ def release_base64_from_request_data_inplace(data: dict) -> None:
     # Dict keys whose string values may be raw base64 (no data-URI wrapper).
     # e.g. Anthropic source.data, Vertex inline_data.data, OpenAI b64_json.
     _bare_base64_keys = frozenset({"data", "b64_json", "image_data"})
+    # Keys that hold file-like objects (BytesIO/BufferedReader) for image uploads.
+    _file_object_keys = frozenset({"image", "mask"})
+
+    # Close and release file-like objects stored under known keys.
+    for k in _file_object_keys:
+        v = data.get(k)
+        if v is None:
+            continue
+        items = v if isinstance(v, list) else [v]
+        for item in items:
+            if isinstance(item, io.IOBase):
+                item.close()
+        data[k] = None
 
     if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return
@@ -208,9 +222,7 @@ def release_base64_from_request_data_inplace(data: dict) -> None:
                             obj[k] = _truncate_base64_in_string(v)
                         else:
                             # Only truncate data-URI patterns, not bare strings
-                            obj[k] = _DATA_URI_RE.sub(
-                                _base64_data_uri_replacer, v
-                            )
+                            obj[k] = _DATA_URI_RE.sub(_base64_data_uri_replacer, v)
                     elif isinstance(v, (dict, list)):
                         stack.append((v, depth + 1))
             elif isinstance(obj, list):

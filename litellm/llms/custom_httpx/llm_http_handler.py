@@ -5288,11 +5288,14 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
+        try:
+            return image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        finally:
+            response.close()
 
     async def async_image_edit_handler(
         self,
@@ -5385,11 +5388,14 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
+        try:
+            return image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        finally:
+            await response.aclose()
 
     def image_generation_handler(
         self,

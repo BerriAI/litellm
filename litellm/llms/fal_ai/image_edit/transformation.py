@@ -73,9 +73,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         litellm_params: dict,
     ) -> str:
         base_url = (
-            api_base
-            or get_secret_str("FAL_AI_API_BASE")
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
         )
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/edit"):
@@ -140,9 +138,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                     )
                 )
             elif isinstance(img, str):
-                data_list.append(
-                    ImageObject(url=img, b64_json=None)
-                )
+                data_list.append(ImageObject(url=img, b64_json=None))
 
         model_response = ImageResponse()
         model_response.data = data_list  # type: ignore[assignment]
@@ -169,16 +165,18 @@ class FalAIImageEditConfig(BaseImageEditConfig):
             elif isinstance(img, BytesIO):
                 pos = img.tell()
                 img.seek(0)
-                data = img.read()
+                raw = img.read()
                 img.seek(pos)
-                b64 = base64.b64encode(data).decode("utf-8")
+                b64 = base64.b64encode(raw).decode("utf-8")
+                del raw
                 urls.append(f"data:image/png;base64,{b64}")
             elif isinstance(img, BufferedReader):
                 pos = img.tell()
                 img.seek(0)
-                data = img.read()
+                raw = img.read()
                 img.seek(pos)
-                b64 = base64.b64encode(data).decode("utf-8")
+                b64 = base64.b64encode(raw).decode("utf-8")
+                del raw
                 urls.append(f"data:image/png;base64,{b64}")
             elif isinstance(img, tuple):
                 file_bytes = img[1] if len(img) > 1 else b""
