@@ -1172,3 +1172,197 @@ def test_boundary_key_rejects_non_dict_like_inputs():
         )
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# Cooled-down originating deployment: pin instead of falling back to full pool.
+# Regression for L3Harris cascading 400 invalid_encrypted_content during an
+# Azure 429 storm.
+# ---------------------------------------------------------------------------
+
+
+def test_find_originating_deployment_in_router_returns_dict_from_model_list():
+    """
+    ``_find_originating_deployment_in_router`` reads from the router's full
+    ``model_list`` via ``model_id_to_deployment_index_map``, bypassing
+    cooldown / health filtering.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": "https://a.openai.azure.com",
+                    "api_key": "key-a",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "dep-a"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+
+    check = EncryptedContentAffinityCheck(router=router)
+    found = check._find_originating_deployment_in_router(model_id="dep-a")
+    assert found is not None
+    assert found["model_info"]["id"] == "dep-a"
+
+    assert check._find_originating_deployment_in_router(model_id="dep-missing") is None
+
+
+def test_find_originating_deployment_in_router_no_router_ref_returns_none():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    check = EncryptedContentAffinityCheck(router=None)
+    assert check._find_originating_deployment_in_router(model_id="dep-a") is None
+
+
+@pytest.mark.asyncio
+async def test_affinity_pins_to_originating_when_cooled_down_single_region():
+    """
+    L3Harris repro: originating deployment is cooled down (e.g. Azure 429
+    storm), and the model group has no peer on the same (api_base, api_key)
+    boundary. The check MUST pin to the originating deployment so the caller
+    sees the real upstream error (429), instead of falling back to a
+    different deployment that will reject with invalid_encrypted_content 400.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    ACCOUNT_A_BASE = "https://account-a.openai.azure.com/"
+    ACCOUNT_A_KEY = "key-a"
+    ACCOUNT_B_BASE = "https://account-b.openai.azure.com/"
+    ACCOUNT_B_KEY = "key-b"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": ACCOUNT_A_BASE,
+                    "api_key": ACCOUNT_A_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.4-account-a"},
+            },
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": ACCOUNT_B_BASE,
+                    "api_key": ACCOUNT_B_KEY,
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.4-account-b"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+
+    check = EncryptedContentAffinityCheck(router=router)
+
+    # Simulate cooldown by handing the affinity check a healthy_deployments
+    # list that excludes the originating deployment. The peer on a different
+    # encryption boundary is still healthy.
+    healthy_deployments = [
+        d for d in router.model_list if d["model_info"]["id"] == "gpt-5.4-account-b"
+    ]
+
+    request_kwargs: dict = {"litellm_metadata": {}}
+
+    # Build an encoded encitem_ ID pointing at account-a so
+    # _extract_model_id_from_input returns "gpt-5.4-account-a".
+    encoded_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        model_id="gpt-5.4-account-a",
+        item_id="rs_orig",
+    )
+    request_kwargs["input"] = [
+        {
+            "type": "reasoning",
+            "id": encoded_item_id,
+            "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+        }
+    ]
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    # Must pin to originating (cooled-down) deployment, NOT fall back to
+    # the boundary-mismatched account-b peer.
+    assert len(result) == 1
+    assert result[0]["model_info"]["id"] == "gpt-5.4-account-a"
+    assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+
+
+@pytest.mark.asyncio
+async def test_affinity_falls_back_to_full_pool_when_originating_removed():
+    """
+    If the originating deployment is no longer in the router (deleted via
+    /model/delete, not just cooled down), we cannot pin to it — fall back to
+    the full healthy pool so new sessions keep flowing. The encrypted_content
+    in this request will be rejected upstream, but that is the correct error
+    surface for a deployment that genuinely no longer exists.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "api_base": "https://account-b.openai.azure.com/",
+                    "api_key": "key-b",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "gpt-5.4-account-b"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+
+    check = EncryptedContentAffinityCheck(router=router)
+    healthy_deployments = list(router.model_list)
+    request_kwargs: dict = {"litellm_metadata": {}}
+
+    # Encoded ID points at a model_id that no longer exists in the router.
+    encoded_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        model_id="gpt-5.4-account-a-removed",
+        item_id="rs_orig",
+    )
+    request_kwargs["input"] = [
+        {
+            "type": "reasoning",
+            "id": encoded_item_id,
+            "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+        }
+    ]
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    # Originating deployment is genuinely gone -> fall back to full healthy pool.
+    assert result == healthy_deployments
+    assert "_encrypted_content_affinity_pinned" not in request_kwargs

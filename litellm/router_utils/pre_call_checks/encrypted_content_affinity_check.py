@@ -175,6 +175,34 @@ class EncryptedContentAffinityCheck(CustomLogger):
             if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
         ]
 
+    def _find_originating_deployment_in_router(self, model_id: str) -> Optional[dict]:
+        """
+        Return the originating deployment dict from the router's full
+        ``model_list``, bypassing cooldown / health filtering. ``None`` if the
+        router isn't wired in or the deployment was removed (e.g. via
+        ``/model/delete``).
+
+        Used as the last-resort pin target: when the originating deployment is
+        cooled down and no boundary peer exists, falling back to the full
+        healthy pool guarantees an ``invalid_encrypted_content`` 400. Pinning
+        to the originating deployment instead surfaces the real upstream error
+        (e.g. 429 from the rate-limited region) or succeeds if the cooldown
+        has cleared by request time.
+        """
+        if self.router is None:
+            return None
+        index_map = getattr(self.router, "model_id_to_deployment_index_map", None)
+        if not isinstance(index_map, dict):
+            return None
+        idx = index_map.get(model_id)
+        if idx is None:
+            return None
+        try:
+            deployment = self.router.model_list[idx]
+        except (IndexError, TypeError):
+            return None
+        return deployment if isinstance(deployment, dict) else None
+
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
@@ -243,9 +271,27 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
+        # Originating deployment is not in healthy_deployments and no boundary
+        # peer is available. The most common cause is cooldown (e.g. originating
+        # region is being rate-limited by upstream). Pin to the originating
+        # deployment regardless: the upstream error (e.g. 429) is the correct
+        # signal for the caller, whereas routing to a different deployment
+        # guarantees a misleading invalid_encrypted_content 400.
+        originating = self._find_originating_deployment_in_router(model_id=model_id)
+        if originating is not None:
+            verbose_router_logger.warning(
+                "EncryptedContentAffinityCheck: decoded model_id=%s not in "
+                "healthy_deployments (likely cooled down) and no boundary peer "
+                "available; pinning to originating deployment to surface the "
+                "real upstream error instead of invalid_encrypted_content",
+                model_id,
+            )
+            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            return [originating]
+
         verbose_router_logger.error(
             "EncryptedContentAffinityCheck: decoded deployment=%s not found in "
-            "healthy_deployments and no boundary match available; falling back to "
+            "router model_list (deployment likely removed); falling back to "
             "full deployment pool (encrypted_content may be rejected upstream)",
             model_id,
         )
