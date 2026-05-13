@@ -1683,6 +1683,106 @@ class TestMCPDelegateAuthToUpstream:
             # name does not match any registered delegate server.
             mock_auth.assert_called_once()
 
+    async def test_delegate_ignores_x_mcp_servers_header_for_mcp_paths(self):
+        """
+        Regression (header/path TOCTOU): For ``/mcp/...`` routes, downstream
+        routing overrides ``x-mcp-servers`` with the path-derived names.
+        The auth bypass must do the same — otherwise an attacker could send
+        ``x-mcp-servers: <delegated>`` while the URL path targets a
+        non-delegate server, flipping the auth gate on a server that should
+        require a LiteLLM key.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/non_delegate_server",
+            "headers": [(b"x-mcp-servers", b"delegated_server")],
+        }
+
+        delegate_server = MCPServer(
+            server_id="delegate-id",
+            name="delegated_server",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        non_delegate = MCPServer(
+            server_id="non-delegate-id",
+            name="non_delegate_server",
+            transport="http",
+            auth_type=MCPAuth.api_key,
+        )
+
+        def lookup_by_name(name):
+            return {
+                "delegated_server": delegate_server,
+                "non_delegate_server": non_delegate,
+            }.get(name)
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = lookup_by_name
+            # Bypass MUST NOT fire — path-derived target is the non-delegate
+            # server. Normal auth runs and 401s.
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            mock_auth.assert_called_once()
+
+    async def test_resolve_target_server_names_prefers_path_over_header(self):
+        """
+        ``_resolve_target_server_names`` must:
+
+        - For ``/mcp/<name>`` paths, return the path-derived list and ignore
+          the header (mirrors downstream routing).
+        - For non-MCP paths, fall back to the header (including the explicit
+          empty-list case, which fails closed).
+        """
+        # Path matches /mcp/... — header is ignored.
+        assert MCPRequestHandler._resolve_target_server_names(
+            path="/mcp/foo", mcp_servers_header=["evil"]
+        ) == ["foo"]
+        assert MCPRequestHandler._resolve_target_server_names(
+            path="/mcp/foo,bar", mcp_servers_header=["evil"]
+        ) == ["foo", "bar"]
+        # Path does not match — header is trusted.
+        assert MCPRequestHandler._resolve_target_server_names(
+            path="/.well-known/oauth-authorization-server",
+            mcp_servers_header=["foo"],
+        ) == ["foo"]
+        # Explicit empty list on a non-MCP path → empty (fail closed).
+        assert (
+            MCPRequestHandler._resolve_target_server_names(
+                path="/.well-known/oauth-authorization-server",
+                mcp_servers_header=[],
+            )
+            == []
+        )
+        # No header on a non-MCP path → empty.
+        assert (
+            MCPRequestHandler._resolve_target_server_names(
+                path="/.well-known/oauth-authorization-server",
+                mcp_servers_header=None,
+            )
+            == []
+        )
+
 
 class TestMCPCustomHeaderName:
     """Test suite for custom MCP authentication header name functionality"""

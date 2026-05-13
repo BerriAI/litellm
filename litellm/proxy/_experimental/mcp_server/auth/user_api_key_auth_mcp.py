@@ -272,13 +272,13 @@ class MCPRequestHandler:
         )
         from litellm.types.mcp import MCPAuth
 
-        # Use the x-mcp-servers header verbatim when present (including the
-        # explicitly-empty list, which means "no targets" → fail closed).
-        # Only fall back to path parsing when the header was absent entirely.
-        target_names = (
-            mcp_servers
-            if mcp_servers is not None
-            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        # Resolve the same target list downstream routing will use. For
+        # ``/mcp/...`` routes, ``extract_mcp_auth_context`` overrides the
+        # ``x-mcp-servers`` header with path-derived names, so we must mirror
+        # that here — otherwise a caller could set the header to a permissive
+        # server while the path targets a stricter one (header/path TOCTOU).
+        target_names = MCPRequestHandler._resolve_target_server_names(
+            path=path, mcp_servers_header=mcp_servers
         )
         if not target_names:
             return False
@@ -310,10 +310,12 @@ class MCPRequestHandler:
         )
         from litellm.types.mcp import MCPAuth
 
-        target_names = (
-            mcp_servers
-            if mcp_servers is not None
-            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        # See _target_servers_use_oauth2: must mirror the downstream
+        # header-vs-path override or an attacker could set
+        # ``x-mcp-servers`` to a delegate-enabled server while the URL path
+        # targets a non-delegate server, skipping LiteLLM auth for it.
+        target_names = MCPRequestHandler._resolve_target_server_names(
+            path=path, mcp_servers_header=mcp_servers
         )
         if not target_names:
             return False
@@ -336,6 +338,28 @@ class MCPRequestHandler:
             if server.has_client_credentials:
                 return False
         return True
+
+    @staticmethod
+    def _resolve_target_server_names(
+        path: str, mcp_servers_header: Optional[List[str]]
+    ) -> List[str]:
+        """
+        Resolve the target MCP server names exactly as downstream routing
+        does (``server.py::extract_mcp_auth_context``).
+
+        For ``/mcp/...`` paths, downstream routing **overrides** any
+        ``x-mcp-servers`` header value with the path-derived names. Mirror
+        that here so an attacker cannot use a permissive header value to
+        flip an auth gate while the path targets a stricter server
+        (header/path TOCTOU). For non-``/mcp/...`` paths (where the path
+        does not encode targets), fall back to the header.
+        """
+        path_targets = MCPRequestHandler._extract_target_server_names_from_path(path)
+        if path_targets:
+            return path_targets
+        # Path did not resolve to /mcp/... targets — trust the header
+        # (including an explicitly empty list, which means "no targets").
+        return mcp_servers_header if mcp_servers_header is not None else []
 
     @staticmethod
     def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:
