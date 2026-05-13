@@ -3178,6 +3178,7 @@ if MCP_AVAILABLE:
                     client_ip=_client_ip,
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
+                    copy_existing_session_auth_context=is_initialize,
                 )
                 local_send = send
                 if use_stateful and is_initialize:
@@ -3409,6 +3410,7 @@ if MCP_AVAILABLE:
         client_ip: Optional[str] = None,
         session_id: Optional[str] = None,
         touch_last_seen: bool = True,
+        copy_existing_session_auth_context: bool = False,
     ) -> MCPAuthenticatedUser:
         auth_user = (
             _stateful_session_auth_contexts.get(session_id) if session_id else None
@@ -3416,6 +3418,16 @@ if MCP_AVAILABLE:
         if auth_user is not None and session_id is not None:
             if touch_last_seen:
                 _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
+            if copy_existing_session_auth_context:
+                return set_auth_context(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                )
             _update_auth_context(
                 auth_user=auth_user,
                 user_api_key_auth=user_api_key_auth,
