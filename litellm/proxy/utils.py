@@ -1505,6 +1505,12 @@ class ProxyLogging:
             _enrich_http_exception_with_guardrail_context(e, callback)
             raise
 
+    @staticmethod
+    def has_during_call_guardrails() -> bool:
+        return any(
+            isinstance(callback, CustomGuardrail) for callback in litellm.callbacks
+        )
+
     async def during_call_hook(
         self,
         data: dict,

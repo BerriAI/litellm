@@ -10,7 +10,12 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import State
 
-from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.proxy.utils import (
+    ProxyLogging,
+    _get_docs_url,
+    _get_openapi_url,
+    _get_redoc_url,
+)
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -18,6 +23,8 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     check_complete_credentials,
@@ -29,6 +36,18 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
+
+def test_has_during_call_guardrails_ignores_non_guardrail_callbacks(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), "prometheus"])
+
+    assert ProxyLogging.has_during_call_guardrails() is False
+
+
+def test_has_during_call_guardrails_detects_guardrail_callbacks(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail()])
+
+    assert ProxyLogging.has_during_call_guardrails() is True
 
 
 @pytest.fixture
