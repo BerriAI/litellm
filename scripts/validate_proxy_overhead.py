@@ -15,15 +15,16 @@ Examples:
 """
 
 import argparse
-import asyncio
+import concurrent.futures
 import json
 import os
+import ssl
 import statistics
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
-import aiohttp
 
 DEFAULT_PAYLOAD = {
     "model": "gpt-4o-mini",
@@ -97,30 +98,58 @@ def auth_headers(api_key: Optional[str]) -> Dict[str, str]:
     return headers
 
 
-async def post_json_request(
-    session: aiohttp.ClientSession,
+def post_request(
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
+    timeout_seconds: float,
+    stream: bool,
+) -> RequestResult:
+    return (
+        post_stream_request(url, headers, payload, timeout_seconds)
+        if stream
+        else post_json_request(url, headers, payload, timeout_seconds)
+    )
+
+
+def make_request(
+    url: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+    timeout_seconds: float,
+) -> urllib.request.Request:
+    body = json.dumps(payload).encode("utf-8")
+    return urllib.request.Request(url=url, data=body, headers=headers, method="POST")
+
+
+def post_json_request(
+    url: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+    timeout_seconds: float,
 ) -> RequestResult:
     start = time.perf_counter()
     try:
-        async with session.post(url, headers=headers, json=payload) as response:
-            body = await response.read()
-            total_seconds = time.perf_counter() - start
-            if response.status >= 400:
-                return RequestResult(
-                    ok=False,
-                    total_seconds=total_seconds,
-                    error=f"HTTP {response.status}: {body[:200]!r}",
-                )
-            data = json.loads(body)
-            usage = data.get("usage") or {}
-            return RequestResult(
-                ok=True,
-                total_seconds=total_seconds,
-                total_tokens=int(usage.get("total_tokens") or 0),
-            )
+        request = make_request(url, headers, payload, timeout_seconds)
+        with urllib.request.urlopen(
+            request, timeout=timeout_seconds, context=ssl.create_default_context()
+        ) as response:
+            body = response.read()
+        total_seconds = time.perf_counter() - start
+        data = json.loads(body)
+        usage = data.get("usage") or {}
+        return RequestResult(
+            ok=True,
+            total_seconds=total_seconds,
+            total_tokens=int(usage.get("total_tokens") or 0),
+        )
+    except urllib.error.HTTPError as exc:
+        body = exc.read()[:200]
+        return RequestResult(
+            ok=False,
+            total_seconds=time.perf_counter() - start,
+            error=f"HTTP {exc.code}: {body!r}",
+        )
     except Exception as exc:
         return RequestResult(
             ok=False,
@@ -129,11 +158,11 @@ async def post_json_request(
         )
 
 
-async def post_stream_request(
-    session: aiohttp.ClientSession,
+def post_stream_request(
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
+    timeout_seconds: float,
 ) -> RequestResult:
     stream_payload = {
         **payload,
@@ -144,16 +173,11 @@ async def post_stream_request(
     ttft_seconds: Optional[float] = None
     total_tokens = 0
     try:
-        async with session.post(url, headers=headers, json=stream_payload) as response:
-            if response.status >= 400:
-                body = await response.read()
-                return RequestResult(
-                    ok=False,
-                    total_seconds=time.perf_counter() - start,
-                    error=f"HTTP {response.status}: {body[:200]!r}",
-                )
-
-            async for raw_line in response.content:
+        request = make_request(url, headers, stream_payload, timeout_seconds)
+        with urllib.request.urlopen(
+            request, timeout=timeout_seconds, context=ssl.create_default_context()
+        ) as response:
+            for raw_line in response:
                 line = raw_line.decode("utf-8", errors="ignore").strip()
                 if not line.startswith("data: "):
                     continue
@@ -170,12 +194,20 @@ async def post_stream_request(
                 if usage.get("total_tokens") is not None:
                     total_tokens = int(usage["total_tokens"])
 
-            return RequestResult(
-                ok=True,
-                total_seconds=time.perf_counter() - start,
-                ttft_seconds=ttft_seconds,
-                total_tokens=total_tokens,
-            )
+        return RequestResult(
+            ok=True,
+            total_seconds=time.perf_counter() - start,
+            ttft_seconds=ttft_seconds,
+            total_tokens=total_tokens,
+        )
+    except urllib.error.HTTPError as exc:
+        body = exc.read()[:200]
+        return RequestResult(
+            ok=False,
+            total_seconds=time.perf_counter() - start,
+            ttft_seconds=ttft_seconds,
+            error=f"HTTP {exc.code}: {body!r}",
+        )
     except Exception as exc:
         return RequestResult(
             ok=False,
@@ -185,7 +217,7 @@ async def post_stream_request(
         )
 
 
-async def run_endpoint(
+def run_endpoint(
     label: str,
     url: str,
     api_key: Optional[str],
@@ -195,24 +227,27 @@ async def run_endpoint(
     stream: bool,
     timeout_seconds: float,
 ) -> RunResult:
-    connector = aiohttp.TCPConnector(limit=max(concurrency * 2, 1))
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-    semaphore = asyncio.Semaphore(concurrency)
     headers = auth_headers(api_key)
-    request_fn = post_stream_request if stream else post_json_request
+    for _ in range(min(10, requests)):
+        post_request(url, headers, payload, timeout_seconds, stream)
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        for _ in range(min(10, requests)):
-            await request_fn(session, url, headers, payload)
-
-        async def guarded_request() -> RequestResult:
-            async with semaphore:
-                return await request_fn(session, url, headers, payload)
-
-        start = time.perf_counter()
-        results = await asyncio.gather(*[guarded_request() for _ in range(requests)])
-        wall_seconds = time.perf_counter() - start
-
+    start = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [
+            executor.submit(
+                post_request,
+                url,
+                headers,
+                payload,
+                timeout_seconds,
+                stream,
+            )
+            for _ in range(requests)
+        ]
+        results = [
+            future.result() for future in concurrent.futures.as_completed(futures)
+        ]
+    wall_seconds = time.perf_counter() - start
     return RunResult(label=label, wall_seconds=wall_seconds, results=results)
 
 
@@ -257,7 +292,7 @@ def load_payload(path: Optional[str]) -> Dict[str, Any]:
         return json.load(file)
 
 
-async def main() -> None:
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--baseline-url", default=os.getenv("BASELINE_URL") or os.getenv("PROVIDER_URL")
@@ -289,7 +324,7 @@ async def main() -> None:
         )
 
     payload = load_payload(args.payload_file)
-    baseline = await run_endpoint(
+    baseline = run_endpoint(
         label="baseline",
         url=args.baseline_url,
         api_key=args.baseline_api_key,
@@ -299,7 +334,7 @@ async def main() -> None:
         stream=args.stream,
         timeout_seconds=args.timeout,
     )
-    candidate = await run_endpoint(
+    candidate = run_endpoint(
         label="candidate",
         url=args.candidate_url,
         api_key=args.candidate_api_key,
@@ -313,4 +348,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
