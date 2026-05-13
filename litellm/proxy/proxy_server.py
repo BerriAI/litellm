@@ -6590,6 +6590,33 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> Union[str, bytes]:
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
 
 
+async def _apply_streaming_chunk_hooks(
+    *,
+    chunk: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    str_so_far: str,
+) -> Tuple[Any, str]:
+    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=chunk,
+        data=request_data,
+        str_so_far=str_so_far if str_so_far else None,
+    )
+
+    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+        response_str = litellm.get_response_string(response_obj=chunk)
+        str_so_far += response_str
+
+    return chunk, str_so_far
+
+
+def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
+    if isinstance(chunk, bytes):
+        return b"data: " + chunk + b"\n\n"
+    return f"data: {chunk}\n\n"
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -6617,16 +6644,12 @@ async def async_data_generator(
         async for chunk in stream_iterator:
             if has_streaming_callbacks:
                 ### CALL HOOKS ### - modify outgoing data
-                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                chunk, _str_so_far = await _apply_streaming_chunk_hooks(
+                    chunk=chunk,
                     user_api_key_dict=user_api_key_dict,
-                    response=chunk,
-                    data=request_data,
-                    str_so_far=_str_so_far if _str_so_far else None,
+                    request_data=request_data,
+                    str_so_far=_str_so_far,
                 )
-
-                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                    response_str = litellm.get_response_string(response_obj=chunk)
-                    _str_so_far += response_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
@@ -6642,10 +6665,7 @@ async def async_data_generator(
                 break
 
             try:
-                if isinstance(chunk, bytes):
-                    yield b"data: " + chunk + b"\n\n"
-                else:
-                    yield f"data: {chunk}\n\n"
+                yield _format_streaming_sse_chunk(chunk=chunk)
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
