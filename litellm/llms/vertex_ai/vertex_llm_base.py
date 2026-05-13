@@ -359,9 +359,11 @@ class VertexBase:
 
     def _get_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
         """Get or create an asyncio.Lock for the given credential cache key."""
-        return self._async_refresh_locks.setdefault(
-            credential_cache_key, asyncio.Lock()
-        )
+        lock = self._async_refresh_locks.get(credential_cache_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._async_refresh_locks[credential_cache_key] = lock
+        return lock
 
     def _try_get_cached_token(
         self,

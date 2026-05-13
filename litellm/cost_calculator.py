@@ -1817,6 +1817,10 @@ def ocr_cost(
 
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
+        verbose_logger.warning(
+            "ocr_cost: pages_processed is None for model=%s; returning 0 cost",
+            model,
+        )
         return 0.0, 0.0
 
     ocr_cost_per_page: float = 0.0
