@@ -57,3 +57,61 @@ async def test_post_call_response_headers_hook_returns_early_without_callbacks(
     )
 
     assert result == {}
+
+
+def test_callback_capabilities_skips_default_custom_logger(monkeypatch):
+    """
+    Internal proxy hooks (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit
+    the default ``async_post_call_streaming_iterator_hook`` body.  The
+    capability scanner must NOT report them as iterator overrides — wrapping
+    the chunk stream through every no-op layer was responsible for ~10x
+    streaming overhead on default deployments.
+    """
+
+    class _InternalNoopHook(CustomLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "callbacks", [_InternalNoopHook()])
+
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_post_call_response_headers is True
+    assert caps.iterator_overrides == ()
+    assert caps.has_iterator_override is False
+    assert caps.has_streaming_chunk_override is False
+    assert caps.has_guardrail is False
+
+
+def test_callback_capabilities_captures_iterator_override(monkeypatch):
+    class _OverridesIterator(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
+            self, user_api_key_dict, response, request_data
+        ):
+            async for item in response:
+                yield item
+
+    override = _OverridesIterator()
+    monkeypatch.setattr(litellm, "callbacks", [override])
+
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_iterator_override is True
+    assert len(caps.iterator_overrides) == 1
+    resolved, kind = caps.iterator_overrides[0]
+    assert resolved is override
+    assert kind == "override"
+
+
+def test_callback_capabilities_cache_invalidates_on_list_change(monkeypatch):
+    """The cache key includes (length, id-of-each-callback).  Mutating the
+    callback list must produce a fresh capability snapshot."""
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert ProxyLogging._callback_capabilities().resolved_callbacks == ()
+
+    class _OverridesPreCall(CustomLogger):
+        async def async_pre_call_hook(self, *args, **kwargs):
+            return kwargs.get("data")
+
+    pre = _OverridesPreCall()
+    monkeypatch.setattr(litellm, "callbacks", [pre])
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_pre_call_override is True
+    assert pre in caps.resolved_callbacks

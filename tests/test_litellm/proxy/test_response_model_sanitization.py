@@ -200,6 +200,16 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(
         "has_streaming_callbacks",
         MagicMock(return_value=True),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -261,6 +271,16 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
         MagicMock(return_value=True),
     )
 
@@ -325,6 +345,16 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
         "has_streaming_callbacks",
         MagicMock(return_value=True),
     )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
+        MagicMock(return_value=True),
+    )
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
 
@@ -386,6 +416,16 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "has_streaming_callbacks",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_iterator_wrap",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "needs_per_chunk_streaming_hook",
         MagicMock(return_value=True),
     )
 

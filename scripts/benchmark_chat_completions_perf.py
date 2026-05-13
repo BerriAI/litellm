@@ -568,6 +568,17 @@ def stats_to_dict(stats: SummaryStats) -> dict[str, Any]:
     }
 
 
+def _median_run(
+    runs: list[tuple[SummaryStats, SummaryStats, SummaryStats, Optional[SummaryStats]]],
+) -> tuple[SummaryStats, SummaryStats, SummaryStats, Optional[SummaryStats]]:
+    # Pick the run whose proxy non-stream p50 is the median across repeats.
+    # Choosing a single representative run (rather than aggregating each metric
+    # separately) keeps related metrics from the same execution context so
+    # client-overhead deltas stay internally consistent.
+    sorted_runs = sorted(runs, key=lambda r: r[1].p50_ms)
+    return sorted_runs[len(sorted_runs) // 2]
+
+
 def print_summary(
     label: str,
     revision: str,
@@ -593,6 +604,7 @@ def print_summary(
     )
     print(f"Streaming TTFT p50: {stream.p50_ms:.2f} ms")
     print(f"Streaming TTFT p95: {stream.p95_ms:.2f} ms")
+    print(f"Streaming TTFT RPS: {stream.rps:.2f}")
     if stream_full is not None:
         print(f"Streaming full response p50: {stream_full.p50_ms:.2f} ms")
         print(f"Streaming full response p95: {stream_full.p95_ms:.2f} ms")
@@ -638,18 +650,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--requests", type=int, default=500)
     parser.add_argument("--concurrency", type=int, default=100)
-    parser.add_argument("--stream-requests", type=int, default=100)
+    parser.add_argument("--stream-requests", type=int, default=200)
     parser.add_argument("--stream-concurrency", type=int, default=20)
-    parser.add_argument("--warmup", type=int, default=50)
-    parser.add_argument("--stream-warmup", type=int, default=10)
+    parser.add_argument("--warmup", type=int, default=100)
+    parser.add_argument("--stream-warmup", type=int, default=20)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--proxy-start-timeout", type=float, default=90)
     parser.add_argument("--provider-first-token-delay-ms", type=float, default=0)
-    parser.add_argument("--provider-stream-content-chunks", type=int, default=1)
+    parser.add_argument(
+        "--provider-stream-content-chunks",
+        type=int,
+        default=20,
+        help="Streaming chunks the mock provider emits. Default 20 (realistic).",
+    )
     parser.add_argument(
         "--measure-full-stream",
         action="store_true",
-        help="Also measure time to consume the complete streaming response.",
+        default=True,
+        help="Measure time to consume the complete streaming response (on by default).",
+    )
+    parser.add_argument(
+        "--no-measure-full-stream",
+        dest="measure_full_stream",
+        action="store_false",
+        help="Skip the full-stream RPS measurement.",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Run the entire suite N times against the same proxy and report the median run.",
     )
     parser.add_argument(
         "--no-start-proxy",
@@ -716,35 +746,36 @@ async def async_main() -> None:
                 )
             await wait_for_proxy(proxy_base_url, args.proxy_start_timeout)
 
-            direct = await run_non_streaming_benchmark(
-                url=f"{provider_base_url}/v1/chat/completions",
-                headers=provider_headers,
-                payload=non_stream_payload,
-                requests=args.requests,
-                concurrency=args.concurrency,
-                warmup=args.warmup,
-                timeout_s=args.timeout,
-            )
-            proxy = await run_non_streaming_benchmark(
-                url=proxy_url,
-                headers=headers,
-                payload=non_stream_payload,
-                requests=args.requests,
-                concurrency=args.concurrency,
-                warmup=args.warmup,
-                timeout_s=args.timeout,
-            )
-            stream = await run_streaming_ttft_benchmark(
-                url=proxy_url,
-                headers=headers,
-                payload=stream_payload,
-                requests=args.stream_requests,
-                concurrency=args.stream_concurrency,
-                warmup=args.stream_warmup,
-                timeout_s=args.timeout,
-            )
-            stream_full = (
-                await run_streaming_full_benchmark(
+            runs: list[
+                tuple[
+                    SummaryStats,
+                    SummaryStats,
+                    SummaryStats,
+                    Optional[SummaryStats],
+                ]
+            ] = []
+            for run_idx in range(max(1, args.repeats)):
+                if args.repeats > 1:
+                    print(f"\n--- Run {run_idx + 1}/{args.repeats} ---")
+                _direct = await run_non_streaming_benchmark(
+                    url=f"{provider_base_url}/v1/chat/completions",
+                    headers=provider_headers,
+                    payload=non_stream_payload,
+                    requests=args.requests,
+                    concurrency=args.concurrency,
+                    warmup=args.warmup,
+                    timeout_s=args.timeout,
+                )
+                _proxy = await run_non_streaming_benchmark(
+                    url=proxy_url,
+                    headers=headers,
+                    payload=non_stream_payload,
+                    requests=args.requests,
+                    concurrency=args.concurrency,
+                    warmup=args.warmup,
+                    timeout_s=args.timeout,
+                )
+                _stream = await run_streaming_ttft_benchmark(
                     url=proxy_url,
                     headers=headers,
                     payload=stream_payload,
@@ -753,9 +784,29 @@ async def async_main() -> None:
                     warmup=args.stream_warmup,
                     timeout_s=args.timeout,
                 )
-                if args.measure_full_stream
-                else None
-            )
+                _stream_full = (
+                    await run_streaming_full_benchmark(
+                        url=proxy_url,
+                        headers=headers,
+                        payload=stream_payload,
+                        requests=args.stream_requests,
+                        concurrency=args.stream_concurrency,
+                        warmup=args.stream_warmup,
+                        timeout_s=args.timeout,
+                    )
+                    if args.measure_full_stream
+                    else None
+                )
+                runs.append((_direct, _proxy, _stream, _stream_full))
+                if args.repeats > 1:
+                    print(
+                        f"  run {run_idx + 1}: non-stream p50={_proxy.p50_ms:.2f}ms "
+                        f"rps={_proxy.rps:.2f} | TTFT p50={_stream.p50_ms:.2f}ms "
+                        f"full RPS="
+                        + (f"{_stream_full.rps:.2f}" if _stream_full else "n/a")
+                    )
+
+            direct, proxy, stream, stream_full = _median_run(runs)
         finally:
             if proxy_process is not None:
                 stop_proxy_process(proxy_process)
