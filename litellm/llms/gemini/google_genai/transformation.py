@@ -328,9 +328,6 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             None,
         )
 
-        # responseJsonSchema is forwarded as-is — Gemini 2.0+ accepts standard
-        # JSON Schema natively, so no transformation (and no deepcopy) is needed.
-
         if schema_key is None:
             return
 
