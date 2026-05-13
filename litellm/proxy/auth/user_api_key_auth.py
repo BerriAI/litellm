@@ -1748,6 +1748,40 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     )
 
 
+def _is_unauthenticated_pass_through_route(
+    pass_through_endpoints: Optional[List],
+    route: str,
+    method: str,
+) -> bool:
+    """``auth: false`` pass-through entries skip common_checks — but only
+    if a forwarder is actually registered for the request's (route,
+    method). Method-aware variant of the gate in
+    ``check_api_key_for_custom_headers_or_pass_through_endpoints``."""
+    if pass_through_endpoints is None:
+        return False
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    if (
+        InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=route, method=method
+        )
+        is None
+    ):
+        return False
+
+    for endpoint in pass_through_endpoints:
+        if (
+            isinstance(endpoint, dict)
+            and endpoint.get("path", "") == route
+            and endpoint.get("auth") is not True
+        ):
+            return True
+    return False
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -1798,30 +1832,12 @@ async def _run_centralized_common_checks(
     # common_checks on the empty token would reject the request as
     # admin-only. The "auth" flag on the endpoint config is the
     # contract; honor it.
-    pass_through_endpoints = general_settings.get("pass_through_endpoints", None)
-    if pass_through_endpoints is not None:
-        # Method-aware variant of the gate in
-        # ``check_api_key_for_custom_headers_or_pass_through_endpoints``:
-        # an entry that didn't register a forwarder for the request's
-        # (route, method) must not skip common_checks against the
-        # shadowed built-in.
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-            InitPassThroughEndpointHelpers,
-        )
-
-        if (
-            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                route=route, method=request.method
-            )
-            is not None
-        ):
-            for endpoint in pass_through_endpoints:
-                if (
-                    isinstance(endpoint, dict)
-                    and endpoint.get("path", "") == route
-                    and endpoint.get("auth") is not True
-                ):
-                    return
+    if _is_unauthenticated_pass_through_route(
+        pass_through_endpoints=general_settings.get("pass_through_endpoints", None),
+        route=route,
+        method=request.method,
+    ):
+        return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
     # configured. The builder returns an INTERNAL_USER token for any

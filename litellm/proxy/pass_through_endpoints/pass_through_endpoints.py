@@ -1975,6 +1975,38 @@ class SafeRouteAdder:
         return False
 
     @staticmethod
+    def _has_builtin_child_routes(app: FastAPI, path: str, methods: List[str]) -> bool:
+        """
+        True if any non-pass-through route on the app is a CHILD of
+        ``path`` (i.e. starts with ``path + "/"``) for any of ``methods``.
+
+        ``get_registered_pass_through_route`` classifies a subpath
+        registration at ``path`` as matching every route below it via
+        ``route.startswith(registered_path + "/")``. If a built-in child
+        route already exists (e.g. ``/v1/chat/foo`` under a registered
+        subpath at ``/v1/chat``), FastAPI dispatches the request to the
+        built-in handler but the auth gate still finds the pass-through
+        metadata for that ``(route, method)`` and applies its ``auth``
+        flag — an authentication bypass on the built-in child.
+        """
+        prefix = path.rstrip("/") + "/"
+        wildcard_self = path.rstrip("/") + "/{subpath:path}"
+        for route in app.routes:
+            route_path = getattr(route, "path", None)
+            route_methods = getattr(route, "methods", None)
+            if not isinstance(route_path, str) or route_methods is None:
+                continue
+            # Don't count the wildcard we may be re-registering ourselves.
+            if route_path == wildcard_self:
+                continue
+            if not route_path.startswith(prefix):
+                continue
+            if not any(m in route_methods for m in methods):
+                continue
+            return True
+        return False
+
+    @staticmethod
     def add_api_route_if_not_exists(
         app: FastAPI,
         path: str,
@@ -2211,6 +2243,25 @@ class InitPassThroughEndpointHelpers:
                 "route already registered on the app. The pass-through entry "
                 "is ignored to prevent the auth gate from honoring its ``auth`` "
                 "flag against the built-in route.",
+                path,
+                methods,
+            )
+            return
+
+        # Subpath registrations also classify every route under
+        # ``path + "/"`` as a match. If a built-in child route exists,
+        # FastAPI dispatches the request to the built-in but the auth
+        # gate would honor the pass-through ``auth`` flag for that
+        # request — an unauthenticated bypass on the child. Refuse.
+        if SafeRouteAdder._has_builtin_child_routes(
+            app=app, path=path, methods=methods
+        ):
+            verbose_proxy_logger.warning(
+                "Pass-through subpath path %r (methods %s) would classify "
+                "existing built-in child routes; the pass-through entry is "
+                "ignored to prevent the auth gate from honoring its "
+                "``auth`` flag against routes FastAPI dispatches to the "
+                "built-in handler.",
                 path,
                 methods,
             )

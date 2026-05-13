@@ -130,6 +130,35 @@ def test_subpath_route_base_path_collision_skips_metadata():
     assert _registered_pass_through_routes == {}
 
 
+def test_subpath_route_with_builtin_child_skips_metadata():
+    # Veria HIGH (variant): a subpath registration at ``/v1/chat`` does
+    # NOT collide with the wildcard or the base path on the app — but
+    # ``get_registered_pass_through_route`` classifies every route under
+    # ``/v1/chat/...`` as a match. If a built-in child route already
+    # exists (e.g. ``/v1/chat/completions``), FastAPI dispatches the
+    # request to the built-in but the auth gate would still find the
+    # pass-through metadata for that ``(route, method)`` and honor its
+    # ``auth: false`` flag. Refuse the registration.
+    app = FastAPI()
+
+    async def _existing_child():
+        return {}
+
+    app.add_api_route(
+        path="/v1/chat/completions",
+        endpoint=_existing_child,
+        methods=["POST"],
+    )
+
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=app,
+        path="/v1/chat",
+        **{**_HELPER_KWARGS, "endpoint_id": "ep-shadowing-child"},
+    )
+
+    assert _registered_pass_through_routes == {}
+
+
 def test_parameterized_route_collision_skips_metadata():
     # A built-in such as ``/credentials/{credential_name:path}`` consumes
     # ``/credentials/foo`` via FastAPI's first-match dispatch. The pass-through
