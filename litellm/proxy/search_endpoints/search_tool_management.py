@@ -106,7 +106,10 @@ async def list_search_tools():
 
         try:
             config = await proxy_config.get_config()
-            parsed_tools = proxy_config.parse_search_tools(config)
+            # log=False: this endpoint runs per-request, so the startup-style
+            # `LiteLLM: Proxy initialized with Search Tools:` print would spam
+            # the proxy logs on every search request. See #27645.
+            parsed_tools = proxy_config.parse_search_tools(config, log=False)
             if parsed_tools:
                 config_search_tools = parsed_tools
         except Exception as e:

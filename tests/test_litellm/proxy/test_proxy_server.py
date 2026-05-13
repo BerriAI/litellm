@@ -6608,3 +6608,62 @@ def test_realtime_websocket_route_aliases_registered():
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
         )
+
+
+class TestParseSearchToolsLogging:
+    """`parse_search_tools` is called from both startup paths (where the
+    "Proxy initialized with Search Tools" banner is useful) and per-request
+    paths like `GET /search/tools` (where it's just log spam). The `log` kwarg
+    gates the print statements so per-request callers can opt out. See #27645.
+    """
+
+    _CONFIG = {
+        "search_tools": [
+            {
+                "search_tool_name": "brave-search",
+                "litellm_params": {
+                    "search_provider": "brave",
+                    "api_key": "test-key",
+                },
+            },
+        ]
+    }
+
+    def test_parse_search_tools_logs_by_default(self, capsys):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        ProxyConfig().parse_search_tools(self._CONFIG)
+        captured = capsys.readouterr().out
+        assert "Proxy initialized with Search Tools" in captured
+        assert "brave-search (brave)" in captured
+
+    def test_parse_search_tools_suppresses_log_when_log_false(self, capsys):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        ProxyConfig().parse_search_tools(self._CONFIG, log=False)
+        captured = capsys.readouterr().out
+        assert "Proxy initialized with Search Tools" not in captured
+        assert "brave-search" not in captured
+
+    def test_parse_search_tools_returns_same_tools_regardless_of_log(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        cfg_logged = {
+            "search_tools": [
+                {
+                    "search_tool_name": "brave-search",
+                    "litellm_params": {"search_provider": "brave"},
+                }
+            ]
+        }
+        cfg_silent = {
+            "search_tools": [
+                {
+                    "search_tool_name": "brave-search",
+                    "litellm_params": {"search_provider": "brave"},
+                }
+            ]
+        }
+        with_log = ProxyConfig().parse_search_tools(cfg_logged, log=True)
+        without_log = ProxyConfig().parse_search_tools(cfg_silent, log=False)
+        assert with_log == without_log
