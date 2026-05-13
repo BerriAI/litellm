@@ -1548,15 +1548,21 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
-async def _set_public_readiness_status(response: Response) -> None:
+async def _resolve_public_readiness_db(response: Response) -> str:
+    """
+    Return the db status string for the public probe and flip the response to
+    503 when a configured DB is unreachable. Mirrors the legacy values:
+    "Not connected" (no DB configured), "connected", "disconnected".
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        return
+        return "Not connected"
 
     db_health_status = await _db_health_readiness_check()
     if db_health_status["status"] != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return db_health_status["status"]
 
 
 @router.get(
@@ -1565,15 +1571,17 @@ async def _set_public_readiness_status(response: Response) -> None:
 )
 async def health_readiness(response: Response):
     """
-    Public readiness probe. Keep this low-detail for unauthenticated load
-    balancers by default. Admins can opt into the legacy detailed public
-    payload with general_settings.allow_public_health_readiness_details.
+    Public readiness probe. Returns a low-detail payload safe to expose to
+    unauthenticated load balancers — `status` plus `db` so orchestrators and
+    external probes can distinguish "healthy" from "DB unreachable" without a
+    credential. Admins can opt into the legacy detailed payload with
+    general_settings.allow_public_health_readiness_details.
     """
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
-    await _set_public_readiness_status(response=response)
-    return {"status": "healthy"}
+    db_status = await _resolve_public_readiness_db(response=response)
+    return {"status": "healthy", "db": db_status}
 
 
 @router.get(
