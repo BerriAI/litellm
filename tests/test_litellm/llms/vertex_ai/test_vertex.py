@@ -1428,6 +1428,31 @@ def test_is_valid_gcs_bucket_name_rejects_double_dot():
     assert _is_valid_gcs_bucket_name("ab..cd") is False
 
 
+def test_is_valid_gcs_bucket_name_rejects_ip_address_format():
+    """Bucket names must not look like IPv4 addresses (GCS DNS constraint)."""
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    assert _is_valid_gcs_bucket_name("1.2.3.4") is False
+    assert _is_valid_gcs_bucket_name("192.168.0.1") is False
+
+
+def test_is_valid_gcs_bucket_name_rejects_invalid_chars():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    assert _is_valid_gcs_bucket_name("Bucket-Upper") is False
+    assert _is_valid_gcs_bucket_name("bucket@name") is False
+    assert _is_valid_gcs_bucket_name("bucket name") is False
+
+
+def test_is_valid_gcs_bucket_name_rejects_leading_trailing_special():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    assert _is_valid_gcs_bucket_name("-mybucket") is False
+    assert _is_valid_gcs_bucket_name("mybucket-") is False
+    assert _is_valid_gcs_bucket_name(".mybucket") is False
+    assert _is_valid_gcs_bucket_name("mybucket.") is False
+
+
 def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
     from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 
