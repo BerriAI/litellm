@@ -3148,10 +3148,29 @@ if MCP_AVAILABLE:
                     session_id, asyncio.Lock()
                 )
 
-            track_active_stateful_request = bool(use_stateful and session_id)
-            if track_active_stateful_request and session_id:
-                _stateful_session_active_request_counts[session_id] = (
-                    _stateful_session_active_request_counts.get(session_id, 0) + 1
+            active_request_session_id = (
+                session_id if use_stateful and session_id else None
+            )
+            if active_request_session_id:
+                _stateful_session_active_request_counts[active_request_session_id] = (
+                    _stateful_session_active_request_counts.get(
+                        active_request_session_id, 0
+                    )
+                    + 1
+                )
+
+            def _track_initialized_stateful_session(
+                initialized_session_id: str,
+            ) -> None:
+                nonlocal active_request_session_id
+                if active_request_session_id is not None:
+                    return
+                active_request_session_id = initialized_session_id
+                _stateful_session_active_request_counts[initialized_session_id] = (
+                    _stateful_session_active_request_counts.get(
+                        initialized_session_id, 0
+                    )
+                    + 1
                 )
 
             async def _dispatch() -> None:
@@ -3174,6 +3193,7 @@ if MCP_AVAILABLE:
                         _owner_fingerprint_for(
                             user_api_key_auth, oauth2_headers, _client_ip
                         ),
+                        _track_initialized_stateful_session,
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -3192,32 +3212,38 @@ if MCP_AVAILABLE:
                 else:
                     await _dispatch()
             finally:
-                if track_active_stateful_request and session_id:
+                if active_request_session_id:
                     active_request_count = (
-                        _stateful_session_active_request_counts.get(session_id, 0) - 1
+                        _stateful_session_active_request_counts.get(
+                            active_request_session_id, 0
+                        )
+                        - 1
                     )
                     if active_request_count > 0:
-                        _stateful_session_active_request_counts[session_id] = (
-                            active_request_count
-                        )
+                        _stateful_session_active_request_counts[
+                            active_request_session_id
+                        ] = active_request_count
                     else:
-                        _stateful_session_active_request_counts.pop(session_id, None)
+                        _stateful_session_active_request_counts.pop(
+                            active_request_session_id, None
+                        )
 
                     if (
                         scope.get("method") != "DELETE"
-                        and session_id in _stateful_session_auth_contexts
+                        and active_request_session_id in _stateful_session_auth_contexts
                     ):
-                        _stateful_session_auth_context_last_seen[session_id] = (
-                            time.monotonic()
-                        )
+                        _stateful_session_auth_context_last_seen[
+                            active_request_session_id
+                        ] = time.monotonic()
 
                     # Periodic cleanup iterates _stateful_session_auth_context_last_seen,
                     # so locks for untracked sessions must be dropped here.
                     if (
                         active_request_count <= 0
-                        and session_id not in _stateful_session_auth_contexts
+                        and active_request_session_id
+                        not in _stateful_session_auth_contexts
                     ):
-                        _stateful_session_locks.pop(session_id, None)
+                        _stateful_session_locks.pop(active_request_session_id, None)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -3422,6 +3448,7 @@ if MCP_AVAILABLE:
         send: Send,
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
+        on_session_registered: Optional[Callable[[str], None]] = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -3431,6 +3458,8 @@ if MCP_AVAILABLE:
                         session_id = (
                             value.decode() if isinstance(value, bytes) else str(value)
                         )
+                        if on_session_registered is not None:
+                            on_session_registered(session_id)
                         auth_context_var.set(auth_user)
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = (
