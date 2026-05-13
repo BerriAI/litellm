@@ -300,12 +300,72 @@ def _get_gcs_object_content_type(
             url=str(metadata_url),
             headers=headers or None,
         )
-        response.raise_for_status()
-        content_type = response.json().get("contentType")
-        if isinstance(content_type, str) and len(content_type) > 0:
-            return content_type
-    except Exception:
+    except httpx.RequestError as e:
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to reach GCS JSON API for object metadata with provided "
+                    f"Vertex credentials. {type(e).__name__}: {e}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            ) from e
         return None
+
+    if response.is_error:
+        if explicit_vertex_auth_provided:
+            preview = (response.text or "")[:1024]
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to read GCS object metadata with provided Vertex credentials. "
+                    f"HTTP {response.status_code}. Response body (truncated): {preview!r}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError as e:
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "GCS metadata response was not valid JSON when using provided "
+                    f"Vertex credentials (HTTP {response.status_code}). Error: {e}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            ) from e
+        return None
+
+    if not isinstance(payload, dict):
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "GCS metadata response was not a JSON object when using provided "
+                    f"Vertex credentials (HTTP {response.status_code})."
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+        return None
+
+    content_type = payload.get("contentType")
+    if isinstance(content_type, str) and len(content_type) > 0:
+        return content_type
+
+    if explicit_vertex_auth_provided:
+        preview = (response.text or "")[:1024]
+        raise litellm.BadRequestError(
+            message=(
+                "GCS metadata JSON did not include a non-empty contentType field when "
+                f"using provided Vertex credentials (HTTP {response.status_code}). "
+                f"Body (truncated): {preview!r}"
+            ),
+            model=None,
+            llm_provider="vertex_ai",
+        )
     return None
 
 

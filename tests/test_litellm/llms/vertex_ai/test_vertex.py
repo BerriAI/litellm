@@ -1434,8 +1434,9 @@ def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
     mock_vertex_base = MagicMock()
     mock_vertex_base.get_access_token.return_value = ("test-token", "test-project")
     mock_http_response = MagicMock()
+    mock_http_response.is_error = False
+    mock_http_response.status_code = 200
     mock_http_response.json.return_value = {"contentType": "image/png"}
-    mock_http_response.raise_for_status.return_value = None
 
     mock_http_handler = MagicMock()
     mock_http_handler.get.return_value = mock_http_response
@@ -1509,6 +1510,69 @@ def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
             )
 
 
+def test_get_gcs_object_content_type_raises_with_http_details_when_explicit_creds():
+    """HTTP failure after successful token fetch must not be swallowed as None."""
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_vertex_base.get_access_token.return_value = ("test-token", "test-project")
+
+    mock_http_response = MagicMock()
+    mock_http_response.is_error = True
+    mock_http_response.status_code = 403
+    mock_http_response.text = '{"error":{"message":"Permission denied"}}'
+
+    mock_http_handler = MagicMock()
+    mock_http_handler.get.return_value = mock_http_response
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation._get_gcs_metadata_http_handler",
+            return_value=mock_http_handler,
+        ),
+    ):
+        with pytest.raises(litellm.BadRequestError, match="HTTP 403") as exc_info:
+            gemini_transformation._get_gcs_object_content_type(
+                image_url="gs://my-bucket/path/to/obj",
+                vertex_project="project-123",
+                vertex_credentials="credential-json",
+            )
+    assert "Permission denied" in str(exc_info.value)
+
+
+def test_get_gcs_object_content_type_returns_none_on_http_error_without_creds():
+    """Anonymous metadata: HTTP errors stay soft (no surfaced oracle for private objects)."""
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_http_response = MagicMock()
+    mock_http_response.is_error = True
+    mock_http_response.status_code = 403
+    mock_http_response.text = "Forbidden"
+
+    mock_http_handler = MagicMock()
+    mock_http_handler.get.return_value = mock_http_response
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation._get_gcs_metadata_http_handler",
+            return_value=mock_http_handler,
+        ),
+    ):
+        content_type = gemini_transformation._get_gcs_object_content_type(
+            image_url="gs://public-bucket/public-object",
+        )
+
+    assert content_type is None
+    mock_vertex_base.get_access_token.assert_not_called()
+
+
 def test_get_gcs_object_content_type_without_credentials_skips_auth():
     """Without explicit Vertex credentials, must not use the server's default
     Google credentials to access GCS.
@@ -1520,8 +1584,9 @@ def test_get_gcs_object_content_type_without_credentials_skips_auth():
 
     mock_vertex_base = MagicMock()
     mock_http_response = MagicMock()
+    mock_http_response.is_error = False
+    mock_http_response.status_code = 200
     mock_http_response.json.return_value = {"contentType": "image/jpeg"}
-    mock_http_response.raise_for_status.return_value = None
 
     mock_http_handler = MagicMock()
     mock_http_handler.get.return_value = mock_http_response
@@ -1575,6 +1640,8 @@ def test_async_transform_request_body_does_not_block_event_loop():
     def slow_http_get(*args, **kwargs):
         time.sleep(0.5)
         response = MagicMock()
+        response.is_error = False
+        response.status_code = 200
         response.raise_for_status.return_value = None
         response.json.return_value = {"contentType": "image/png"}
         return response
