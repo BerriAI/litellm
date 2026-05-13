@@ -115,6 +115,8 @@ class ValidationResults:
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
+RATE_LIMIT_CATEGORY = "rate_limit_category"
+RATE_LIMIT_TYPE = "rate_limit_type"
 STATUS_CODE = "status_code"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 LATENCY_BUCKETS = (
@@ -173,6 +175,8 @@ class UserAPIKeyLabelNames(Enum):
     API_PROVIDER = "api_provider"
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
+    RATE_LIMIT_CATEGORY = RATE_LIMIT_CATEGORY
+    RATE_LIMIT_TYPE = RATE_LIMIT_TYPE
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
@@ -334,6 +338,12 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        # Surfaced from RateLimitError.category / .rate_limit_type when the
+        # underlying exception is a rate-limit error; ``None`` otherwise. Lets
+        # dashboards split 429s into vendor vs. litellm and by exceeded
+        # dimension (RPM/TPM/concurrent/budget) without parsing error text.
+        UserAPIKeyLabelNames.RATE_LIMIT_CATEGORY.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
         UserAPIKeyLabelNames.ROUTE.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
@@ -775,6 +785,8 @@ class UserAPIKeyLabelValues:
     api_provider: Optional[str] = None
     exception_status: Optional[str] = None
     exception_class: Optional[str] = None
+    rate_limit_category: Optional[str] = None
+    rate_limit_type: Optional[str] = None
     status_code: Optional[str] = None
     fallback_model: Optional[str] = None
     route: Optional[str] = None

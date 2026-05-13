@@ -1814,14 +1814,8 @@ class PrometheusLogger(CustomLogger):
 
         Proxy level tracking - failed client side requests
 
-        labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    REQUESTED_MODEL,
-                    "team",
-                    "team_alias",
-                ] + EXCEPTION_LABELS,
+        See :attr:`PrometheusMetricLabels.litellm_proxy_failed_requests_metric`
+        for the authoritative list of labels emitted on this metric.
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
@@ -1844,6 +1838,9 @@ class PrometheusLogger(CustomLogger):
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get(
                 "model_info", {}
             ).get("id")
+            rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(
+                original_exception
+            )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -1858,6 +1855,8 @@ class PrometheusLogger(CustomLogger):
                 status_code=str(status_code),
                 exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),
+                rate_limit_category=rate_limit_category,
+                rate_limit_type=rate_limit_type,
                 tags=_tags,
                 route=user_api_key_dict.request_route,
                 client_ip=_metadata.get("requester_ip_address"),
@@ -2535,6 +2534,33 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
+        # Back-compat: ProxyRateLimitError multi-inherits from
+        # fastapi.HTTPException + litellm.RateLimitError. Before the unified
+        # rate-limit error class landed, every proxy-side 429 surfaced on this
+        # label as the literal string "HTTPException", and existing dashboards
+        # / alerts (e.g. trho's HubSpot dashboard) key off that exact value.
+        # Renaming the class would silently break those queries, so we keep
+        # emitting "HTTPException" here. Callers that need to distinguish
+        # vendor vs. litellm rate limits should use the new
+        # ``rate_limit_category`` / ``rate_limit_type`` labels instead.
+        #
+        # The import is intentionally lazy + ImportError-tolerant: this method
+        # is also called from router-side fallback events
+        # (``log_success_fallback_event`` / ``log_failure_fallback_event``)
+        # which can run in non-proxy installs where ``fastapi`` (a transitive
+        # dep of ``proxy_rate_limit_error``) is not installed.
+        try:
+            from litellm.proxy.common_utils.proxy_rate_limit_error import (
+                ProxyRateLimitError,
+            )
+        except ImportError:
+            ProxyRateLimitError = None  # type: ignore[assignment,misc]
+
+        if ProxyRateLimitError is not None and isinstance(
+            exception, ProxyRateLimitError
+        ):
+            return "HTTPException"
+
         exception_class_name = ""
         if hasattr(exception, "llm_provider"):
             exception_class_name = getattr(exception, "llm_provider") or ""
@@ -2548,6 +2574,36 @@ class PrometheusLogger(CustomLogger):
 
         exception_class_name += exception.__class__.__name__
         return exception_class_name
+
+    @staticmethod
+    def _extract_rate_limit_labels(
+        exception: Optional[Exception],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Pull the unified ``category`` / ``rate_limit_type`` fields off any
+        :class:`litellm.RateLimitError` (vendor-side or litellm-internal) so
+        Prometheus can split 429s by source + dimension without the consumer
+        parsing free-text error messages.
+
+        Returns ``(None, None)`` for non-rate-limit exceptions. Both values are
+        sanitized to plain ``str`` so str-enum subclasses don't leak their
+        repr into the label.
+        """
+        if exception is None or not isinstance(exception, litellm.RateLimitError):
+            return None, None
+
+        def _coerce(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            inner = getattr(value, "value", None)
+            if isinstance(inner, str):
+                return inner
+            return str(value)
+
+        return (
+            _coerce(getattr(exception, "category", None)),
+            _coerce(getattr(exception, "rate_limit_type", None)),
+        )
 
     async def log_success_fallback_event(
         self, original_model_group: str, kwargs: dict, original_exception: Exception
