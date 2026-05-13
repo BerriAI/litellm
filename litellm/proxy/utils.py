@@ -1506,12 +1506,6 @@ class ProxyLogging:
             raise
 
     @staticmethod
-    def has_during_call_guardrails() -> bool:
-        return any(
-            isinstance(callback, CustomGuardrail) for callback in litellm.callbacks
-        )
-
-    @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
         for callback in litellm.callbacks:
             if isinstance(callback, str):

@@ -1157,17 +1157,18 @@ class ProxyBaseLLMRequestProcessing:
         ):
             logging_obj._defer_async_logging = True  # type: ignore
 
-        during_call_task: Optional[asyncio.Task] = None
+        tasks = []
         # Start the moderation check (during_call_hook) as early as possible
         # This gives it a head start to mask/validate input while the proxy handles routing
-        if proxy_logging_obj.has_during_call_guardrails():
-            during_call_task = asyncio.create_task(
+        tasks.append(
+            asyncio.create_task(
                 proxy_logging_obj.during_call_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     call_type=route_type,  # type: ignore
                 )
             )
+        )
 
         # Pass contents if provided
         if contents:
@@ -1182,12 +1183,16 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        if during_call_task is not None:
-            # Run the moderation check in parallel to the actual LLM API call.
-            responses = await asyncio.gather(during_call_task, llm_call)
-            response = responses[1]
-        else:
-            response = await llm_call
+        tasks.append(llm_call)
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         _exception_raised = False
         try:
