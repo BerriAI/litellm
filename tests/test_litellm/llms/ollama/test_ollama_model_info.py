@@ -139,6 +139,32 @@ class TestOllamaModelInfo:
         # Default static ollama_models is ['llama2'], so expect ['ollama/llama2']
         assert models == ["ollama/llama2"]
 
+    def test_get_models_no_double_prefix(self, monkeypatch):
+        """
+        Names that already carry the 'ollama/' prefix (or are returned by an
+        Ollama server that's been configured to emit them) should not be
+        prefixed a second time.
+        """
+        sample = {
+            "models": [
+                {"name": "ollama/already-prefixed"},
+                {"name": "fresh"},
+                {"name": "hf.co/Qwen/Qwen3-14B:latest"},
+            ]
+        }
+
+        def mock_get(url, headers):
+            return DummyResponse(sample, status_code=200)
+
+        monkeypatch.setattr(httpx, "get", mock_get)
+        info = OllamaModelInfo()
+        models = info.get_models()
+        assert models == [
+            "ollama/already-prefixed",
+            "ollama/fresh",
+            "ollama/hf.co/Qwen/Qwen3-14B:latest",
+        ]
+
 
 class TestOllamaGetModelInfo:
     """Tests for OllamaConfig.get_model_info() api_base threading and graceful fallback."""
