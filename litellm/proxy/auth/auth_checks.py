@@ -1296,6 +1296,7 @@ async def _end_user_id_exists_in_db(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             check_db_only=False,
+            user_email=end_user_id if "@" in end_user_id else None,
         )
         if user_obj is not None:
             return True
@@ -1303,19 +1304,6 @@ async def _end_user_id_exists_in_db(
         verbose_proxy_logger.debug(
             f"end_user validation: get_user_object lookup failed: {e}"
         )
-
-    if "@" in end_user_id:
-        try:
-            user_obj = await _get_fuzzy_user_object(
-                prisma_client=prisma_client,
-                user_email=end_user_id,
-            )
-            if user_obj is not None:
-                return True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"end_user validation: user_email lookup failed: {e}"
-            )
 
     return False
 

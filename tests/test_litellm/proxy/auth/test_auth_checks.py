@@ -3147,10 +3147,16 @@ async def test_resolve_end_user_matches_user_table_by_user_id(
 async def test_resolve_end_user_matches_user_table_by_email(
     _validate_flag_on, monkeypatch
 ):
+    """Email-shaped ids route through get_user_object with user_email set.
+
+    The fuzzy lookup must happen inside get_user_object so it shares the
+    _should_check_db throttle and user_api_key_cache — no direct raw
+    Prisma calls on the auth path.
+    """
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
 
-    _patch_validation_helpers(monkeypatch, fuzzy=MagicMock())
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
     cache = _validation_cache()
 
     result = await resolve_and_validate_end_user_id(
@@ -3159,9 +3165,33 @@ async def test_resolve_end_user_matches_user_table_by_email(
         user_api_key_cache=cache,
     )
     assert result == "Alice@Example.com"
-    auth_checks._get_fuzzy_user_object.assert_awaited_once()
-    fuzzy_kwargs = auth_checks._get_fuzzy_user_object.await_args.kwargs
-    assert fuzzy_kwargs["user_email"] == "Alice@Example.com"
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_id"] == "Alice@Example.com"
+    assert user_kwargs["user_email"] == "Alice@Example.com"
+    # email branch must not bypass the cached helper with a raw fuzzy call
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
+    _validate_flag_on, monkeypatch
+):
+    """Non-email ids skip the email fuzzy path to avoid a pointless DB hit."""
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_email"] is None
 
 
 @pytest.mark.asyncio
@@ -3285,11 +3315,6 @@ async def test_resolve_end_user_swallows_db_errors_and_returns_none(
     monkeypatch.setattr(
         auth_checks,
         "get_user_object",
-        AsyncMock(side_effect=Exception("db down")),
-    )
-    monkeypatch.setattr(
-        auth_checks,
-        "_get_fuzzy_user_object",
         AsyncMock(side_effect=Exception("db down")),
     )
     cache = _validation_cache()
