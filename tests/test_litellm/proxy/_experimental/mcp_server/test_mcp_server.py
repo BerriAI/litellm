@@ -3273,7 +3273,7 @@ async def test_probe_upstream_auth_returns_upstream_status():
     mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
 
     mock_client = AsyncMock()
-    mock_client.head = AsyncMock(return_value=mock_response)
+    mock_client.client.post = AsyncMock(return_value=mock_response)
 
     with patch(
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
@@ -3285,6 +3285,10 @@ async def test_probe_upstream_auth_returns_upstream_status():
 
     assert status == 401
     assert www_auth == 'Bearer realm="test"'
+    mock_client.client.post.assert_awaited_once()
+    _, kwargs = mock_client.client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer some-token"
+    assert kwargs["json"]["method"] == "initialize"
 
 
 @pytest.mark.asyncio
@@ -3293,7 +3297,7 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
     from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
 
     mock_client = AsyncMock()
-    mock_client.head = AsyncMock(side_effect=Exception("connection refused"))
+    mock_client.client.post = AsyncMock(side_effect=Exception("connection refused"))
 
     with patch(
         "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",

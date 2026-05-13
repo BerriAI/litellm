@@ -61,7 +61,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -2770,10 +2770,10 @@ if MCP_AVAILABLE:
         auth_header: str,
         timeout: float = 5.0,
     ) -> tuple:
-        """HEAD-probe the upstream URL to check whether the token is accepted.
+        """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
 
-        Uses HEAD so the upstream receives no request body and allocates no
-        session or audit state. Returns (status_code, www_authenticate).
+        Uses POST so StreamableHTTP MCP servers run the same auth path as a
+        real client request. Returns (status_code, www_authenticate).
         Fails-open with (200, None) on network errors so a transient hiccup
         does not block valid requests.
         """
@@ -2782,9 +2782,26 @@ if MCP_AVAILABLE:
                 llm_provider=httpxSpecialProvider.MCP,
                 params={"timeout": timeout},
             )
-            resp = await client.head(
+            probe_payload = {
+                "jsonrpc": "2.0",
+                "id": "litellm-mcp-auth-probe",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCPSpecVersion.jun_2025.value,
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "litellm-mcp-auth-probe",
+                        "version": "1.0.0",
+                    },
+                },
+            }
+            resp = await client.client.post(  # type: ignore[attr-defined]
                 url,
-                headers={"Authorization": auth_header},
+                headers={
+                    "Authorization": auth_header,
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=probe_payload,
             )
             return resp.status_code, resp.headers.get("www-authenticate")
         except Exception as exc:
