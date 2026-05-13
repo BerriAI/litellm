@@ -4976,11 +4976,6 @@ class BedrockConverseMessagesProcessor:
                 else None
             )
             if reasoning_text and not reasoning_text.get("signature"):
-                # Fallback path for non-anthropic models that emit reasoning
-                # without a signature — convert to a plain text block. Skip
-                # whitespace-only text; Bedrock rejects blank ContentBlocks
-                # (e.g. Claude Code replays an empty thinking block when no
-                # extended thinking was produced).
                 reasoning_text_text = reasoning_text["text"]
                 if reasoning_text_text.strip():
                     assistants_part = BedrockContentBlock(text=reasoning_text_text)
