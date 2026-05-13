@@ -4322,8 +4322,8 @@ def test_chunk_parser_raises_on_429_error_chunk():
         streaming_obj.chunk_parser(error_chunk)
 
     assert exc_info.value.status_code == 429
-    assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)
-    assert "Resource exhausted" in str(exc_info.value.message)
+    assert "RESOURCE_EXHAUSTED" in exc_info.value.message
+    assert "Resource exhausted" in exc_info.value.message
 
 
 def test_chunk_parser_raises_on_500_error_chunk():
@@ -4356,7 +4356,7 @@ def test_chunk_parser_raises_on_500_error_chunk():
         streaming_obj.chunk_parser(error_chunk)
 
     assert exc_info.value.status_code == 500
-    assert "INTERNAL" in str(exc_info.value.message)
+    assert "INTERNAL" in exc_info.value.message
 
 
 def test_chunk_parser_raises_on_error_chunk_with_minimal_fields():
@@ -4454,7 +4454,7 @@ def test_chunk_parser_raises_on_non_dict_error():
         streaming_obj.chunk_parser(error_chunk)
 
     assert exc_info.value.status_code == 500
-    assert "unexpected error format" in str(exc_info.value.message)
+    assert "Unexpected error format" in exc_info.value.message
 
 
 def test_chunk_parser_raises_on_string_error_code():
@@ -4489,6 +4489,72 @@ def test_chunk_parser_raises_on_string_error_code():
 
     assert exc_info.value.status_code == 429
     assert isinstance(exc_info.value.status_code, int)
+
+
+def test_chunk_parser_error_chunk_explicit_null_code_uses_500():
+    """JSON null for code must not call int(None); status defaults to 500."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": None,
+            "message": "Something went wrong.",
+            "status": "UNKNOWN",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Something went wrong" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_numeric_code_defaults_to_500():
+    """Non-numeric code must not become ValueError -> RuntimeError in __next__."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": "NOT_A_NUMBER",
+            "message": "Malformed.",
+            "status": "INVALID",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Malformed" in exc_info.value.message
 
 
 def test_mid_stream_429_error_raises_during_iteration():
