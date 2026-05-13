@@ -3269,27 +3269,14 @@ if MCP_AVAILABLE:
             is_initialize = False
             consumed_messages: List[Message] = []
 
-            # Handle stale session IDs before choosing a target manager. Stale
-            # non-DELETE requests have their session header stripped and should
-            # be routed as no-session requests.
-            if session_id:
-                handled = await _handle_stale_mcp_session(
-                    scope, receive, send, session_manager_stateful
-                )
-                if handled:
-                    # Request was fully handled (e.g., DELETE on non-existent session)
-                    return
-                session_id = _get_session_id_from_scope(scope)
-
             # Owner-binding: a live stateful session may only be driven by the
             # caller that created it. Reject mismatches with 403 so a leaked
             # mcp-session-id cannot be hijacked by another authenticated user.
             #
-            # Run before peeking the request body so the 403 response sees a
-            # pristine ``receive`` channel — JSONResponse only calls ``send``
-            # today, but routing this through an already-drained ``receive``
-            # would silently break the moment a future response/middleware
-            # touches the body.
+            # Run before ``_handle_stale_mcp_session`` so a non-owner cannot
+            # force-clean another caller's residual tracking entries via a
+            # stale DELETE, and before peeking the request body so the 403
+            # response sees a pristine ``receive`` channel.
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(
@@ -3309,6 +3296,18 @@ if MCP_AVAILABLE:
                     )
                     await forbidden_response(scope, receive, send)
                     return
+
+            # Handle stale session IDs before choosing a target manager. Stale
+            # non-DELETE requests have their session header stripped and should
+            # be routed as no-session requests.
+            if session_id:
+                handled = await _handle_stale_mcp_session(
+                    scope, receive, send, session_manager_stateful
+                )
+                if handled:
+                    # Request was fully handled (e.g., DELETE on non-existent session)
+                    return
+                session_id = _get_session_id_from_scope(scope)
 
             if scope.get("method") == "POST":
                 consumed_messages, body = await _read_request_body_for_routing(receive)
