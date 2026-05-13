@@ -4095,7 +4095,8 @@ class ProxyConfig:
                     "pass_through_endpoints"
                 ]
                 await initialize_pass_through_endpoints(
-                    pass_through_endpoints=general_settings["pass_through_endpoints"]
+                    pass_through_endpoints=general_settings["pass_through_endpoints"],
+                    config_file_path=config_file_path,
                 )
 
             ## ADMIN UI ACCESS ##
@@ -4316,11 +4317,15 @@ class ProxyConfig:
         litellm.credential_list = credential_list_dict
 
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
-        await self._init_non_llm_configs(config=config)
+        await self._init_non_llm_configs(
+            config=config, config_file_path=config_file_path
+        )
 
         return router, router.get_model_list(), general_settings
 
-    async def _init_non_llm_configs(self, config: dict):
+    async def _init_non_llm_configs(
+        self, config: dict, config_file_path: Optional[str] = None
+    ):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
@@ -4331,7 +4336,9 @@ class ProxyConfig:
                 global_mcp_tool_registry,
             )
 
-            global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
+            global_mcp_tool_registry.load_tools_from_config(
+                mcp_tools_config, config_file_path=config_file_path
+            )
 
         ## AGENTS
         agent_config = config.get("agent_list", None)

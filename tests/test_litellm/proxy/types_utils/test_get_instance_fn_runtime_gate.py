@@ -62,3 +62,52 @@ def test_dotted_module_path_is_unaffected_by_gate():
         result = get_instance_fn(value="my_module.my_instance")
 
     assert result == "loaded"
+
+
+def test_pass_through_route_threads_config_file_path():
+    # ``create_pass_through_route`` must forward ``config_file_path`` so
+    # an operator with ``custom_handler: s3://...`` declared in
+    # ``config.yaml`` still resolves at startup. Callers that omit it
+    # (DB-overlay / runtime admin API) fall through to the gate.
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pte
+
+    # ``get_instance_fn`` is imported lazily inside the function — patch
+    # at the source so the deferred import resolves to the mock.
+    with patch(
+        "litellm.proxy.types_utils.utils.get_instance_fn", return_value=object()
+    ) as mock_get:
+        pte.create_pass_through_route(
+            endpoint="/x",
+            target="s3://bucket/mod.inst",
+            config_file_path="/etc/litellm/config.yaml",
+        )
+
+    mock_get.assert_called_once_with(
+        value="s3://bucket/mod.inst",
+        config_file_path="/etc/litellm/config.yaml",
+    )
+
+
+def test_mcp_tool_registry_threads_config_file_path():
+    # MCP tool handlers declared in ``config.yaml`` mcp_tools[].handler
+    # may legitimately be ``s3://...``; the YAML-load path must thread
+    # ``config_file_path`` so they resolve.
+    from litellm.proxy._experimental.mcp_server import tool_registry as tr
+
+    fake_handler = lambda **kwargs: None  # noqa: E731 — registry requires callable
+    with patch.object(tr, "get_instance_fn", return_value=fake_handler) as mock_get:
+        registry = tr.MCPToolRegistry()
+        registry.load_tools_from_config(
+            mcp_tools_config=[
+                {
+                    "name": "tool_a",
+                    "description": "d",
+                    "handler": "s3://bucket/mod.handler",
+                }
+            ],
+            config_file_path="/etc/litellm/config.yaml",
+        )
+
+    mock_get.assert_called_once_with(
+        "s3://bucket/mod.handler", "/etc/litellm/config.yaml"
+    )
