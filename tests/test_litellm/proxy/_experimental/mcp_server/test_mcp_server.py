@@ -1308,6 +1308,109 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
 
 
 @pytest.mark.asyncio
+async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
+    """
+    A no-session-id POST with a very large chunked body should not force
+    the proxy to buffer the entire body just to decide routing — the peek
+    should stop once ``_MCP_ROUTING_PEEK_MAX_BYTES`` worth of body has been
+    consumed, and the remaining chunks should stream through the original
+    receive into the downstream handler.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    peek_cap = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+    # First chunk fills the peek budget; subsequent chunks are oversized payload.
+    first_chunk = b"x" * peek_cap
+    oversized_tail = [b"y" * 65536 for _ in range(4)]
+
+    messages = [
+        {"type": "http.request", "body": first_chunk, "more_body": True},
+        *[
+            {"type": "http.request", "body": chunk, "more_body": True}
+            for chunk in oversized_tail
+        ],
+        {"type": "http.request", "body": b"", "more_body": False},
+    ]
+    receive_calls = {"count": 0}
+
+    async def receive():
+        idx = receive_calls["count"]
+        receive_calls["count"] += 1
+        return messages[idx]
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/progress_test",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    send = AsyncMock()
+
+    stateless_received_chunks = []
+    receive_count_at_dispatch = {"value": -1}
+
+    async def stateless_handle(s, r, se):
+        # Snapshot how many wire reads happened BEFORE dispatch — the cap
+        # check is meaningful only against pre-dispatch consumption.
+        receive_count_at_dispatch["value"] = receive_calls["count"]
+        # Drain the wrapped receive the same way the SDK would.
+        while True:
+            msg = await r()
+            if msg.get("type") != "http.request":
+                break
+            stateless_received_chunks.append(msg.get("body", b"") or b"")
+            if not msg.get("more_body", False):
+                break
+
+    async def stateful_handle(s, r, se):
+        raise AssertionError("non-initialize POST should not reach stateful manager")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateless, "handle_request", side_effect=stateless_handle
+        ),
+        patch.object(
+            session_manager_stateful, "handle_request", side_effect=stateful_handle
+        ),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.object(session_manager_stateful, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    # The routing peek must stop pulling from the wire once the cap is reached.
+    # Without the cap fix, every chunk would have been pulled before dispatch,
+    # so this assertion guards against unbounded pre-dispatch buffering.
+    assert receive_count_at_dispatch["value"] == 1, (
+        "routing should stop reading after the peek cap is filled, "
+        f"but consumed {receive_count_at_dispatch['value']} chunks before dispatching"
+    )
+    # All chunks must still reach the downstream handler via replay+stream.
+    total_streamed = sum(len(b) for b in stateless_received_chunks)
+    assert total_streamed == len(first_chunk) + sum(len(b) for b in oversized_tail)
+
+
+@pytest.mark.asyncio
 async def test_stateful_mcp_requests_refresh_session_auth_context():
     """
     Stateful MCP sessions run callbacks in the initialize task's context; the

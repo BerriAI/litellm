@@ -72,6 +72,11 @@ _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
+# Maximum bytes to peek when sniffing the JSON-RPC method on a no-session-id
+# POST. An `initialize` envelope is a few hundred bytes; capping the peek
+# prevents an authenticated client from forcing the proxy to buffer an
+# arbitrarily large body just to make a routing decision.
+_MCP_ROUTING_PEEK_MAX_BYTES = 4096
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -2782,10 +2787,21 @@ if MCP_AVAILABLE:
         receive: Receive,
     ) -> Tuple[List[Message], bytes]:
         """
-        Consume request body messages for routing, returning them for replay.
+        Read just enough of the request body to decide whether this is a
+        JSON-RPC ``initialize`` call. Returns the consumed ASGI messages so
+        the caller can replay them faithfully to the downstream handler, and
+        the peeked body bytes (capped at ``_MCP_ROUTING_PEEK_MAX_BYTES``).
+
+        Stops reading from the wire as soon as either (a) we have peeked
+        ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
+        The remainder of an oversized body is streamed lazily through
+        ``wrapped_receive`` in the caller — so an authenticated client cannot
+        force the proxy to buffer an arbitrarily large payload just to make a
+        routing decision.
         """
         consumed_messages: List[Message] = []
         body_chunks: List[bytes] = []
+        peeked_bytes = 0
 
         while True:
             message = await receive()
@@ -2797,8 +2813,14 @@ if MCP_AVAILABLE:
             body = message.get("body", b"") or b""
             if body:
                 body_chunks.append(body)
+                peeked_bytes += len(body)
 
             if not message.get("more_body", False):
+                break
+
+            if peeked_bytes >= _MCP_ROUTING_PEEK_MAX_BYTES:
+                # Stop draining; downstream replay will pull remaining chunks
+                # directly from the original `receive` via wrapped_receive.
                 break
 
         return consumed_messages, b"".join(body_chunks)
