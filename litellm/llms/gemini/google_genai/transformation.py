@@ -342,6 +342,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             generate_content_config_dict.pop(schema_key)
             generate_content_config_dict["responseJsonSchema"] = value
         else:
+            if json_schema_key is not None:
+                generate_content_config_dict.pop(json_schema_key)
             generate_content_config_dict[schema_key] = _build_vertex_schema(
                 parameters=deepcopy(value), add_property_ordering=True
             )
