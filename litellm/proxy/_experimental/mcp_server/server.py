@@ -23,6 +23,7 @@ from typing import (
     cast,
 )
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
@@ -2792,34 +2793,47 @@ if MCP_AVAILABLE:
         real client request. Returns (status_code, www_authenticate).
         Fails-open with (200, None) on network errors so a transient hiccup
         does not block valid requests.
+
+        Uses the public ``AsyncHTTPHandler.post()`` interface and catches
+        ``httpx.HTTPStatusError`` separately so the 401/403 we want to surface
+        is not swallowed by the broad fail-open ``except Exception`` below.
         """
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": timeout},
+        )
+        probe_payload = {
+            "jsonrpc": "2.0",
+            "id": "litellm-mcp-auth-probe",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCPSpecVersion.jun_2025.value,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "litellm-mcp-auth-probe",
+                    "version": "1.0.0",
+                },
+            },
+        }
+        probe_headers = {
+            "Authorization": auth_header,
+            "Accept": "application/json, text/event-stream",
+        }
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": timeout},
-            )
-            probe_payload = {
-                "jsonrpc": "2.0",
-                "id": "litellm-mcp-auth-probe",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": MCPSpecVersion.jun_2025.value,
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "litellm-mcp-auth-probe",
-                        "version": "1.0.0",
-                    },
-                },
-            }
-            resp = await client.client.post(  # type: ignore[attr-defined]
-                url,
-                headers={
-                    "Authorization": auth_header,
-                    "Accept": "application/json, text/event-stream",
-                },
+            resp = await client.post(
+                url=url,
+                headers=probe_headers,
                 json=probe_payload,
+                timeout=timeout,
             )
             return resp.status_code, resp.headers.get("www-authenticate")
+        except httpx.HTTPStatusError as exc:
+            # AsyncHTTPHandler.post() calls raise_for_status(); a 401/403 from
+            # upstream lands here. Return its status so the caller can map it
+            # to the appropriate response.
+            return exc.response.status_code, exc.response.headers.get(
+                "www-authenticate"
+            )
         except Exception as exc:
             verbose_logger.debug(
                 f"_probe_upstream_auth: probe to {url} failed ({exc}), allowing request through"
