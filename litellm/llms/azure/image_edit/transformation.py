@@ -49,6 +49,18 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         ``api-key`` header. Subscription-key-based deployments (e.g., behind
         Azure APIM) responded with ``401 "Access denied due to missing
         subscription key"``.
+
+        API-key precedence (matches ``AzureVideosConfig``):
+
+        - ``litellm_params["api_key"]`` is the source of truth.
+        - The positional ``api_key`` kwarg only fills in when
+          ``litellm_params["api_key"]`` is empty.
+        - This is a deliberate change from the old ``or`` chain (where the
+          positional ``api_key`` argument won) so behavior matches every other
+          Azure ``validate_environment`` implementation. In production the only
+          caller (``llm_http_handler.image_edit``) sources both values from
+          the same ``litellm_params.api_key``, so the precedence only matters
+          for direct callers of this method.
         """
         params = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
