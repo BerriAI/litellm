@@ -1,18 +1,21 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
-    validate_loopback_redirect_uri,
+    get_request_base_url,
+    validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -24,54 +27,46 @@ from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+
+def _validate_mcp_oauth_outbound_url(
+    url: str, role: Literal["token", "registration"]
+) -> tuple[str, str]:
+    """Validate an admin-configured OAuth URL before the proxy makes a request to
+    it. The /token, /register and similar endpoints are reachable without a
+    LiteLLM API key (they sit in the middle of an OAuth handshake), so an
+    unauthenticated caller can trigger the proxy to POST to whatever host the
+    admin configured. Resolve and validate the host before sending so an
+    operator who points an MCP server at an internal IdP doesn't unintentionally
+    expose it as an SSRF probe via the proxy."""
+    if not getattr(litellm, "user_url_validation", True):
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        host_header = f"{host}:{parsed.port}" if parsed.port else host
+        return url, host_header
+    try:
+        return validate_url(url)
+    except SSRFError as exc:
+        # The /token and /register endpoints are reachable without an API key,
+        # so the error response goes to an unauthenticated caller. The raw
+        # SSRFError message includes the resolved IP — leaking it would tell
+        # the caller exactly which internal address the operator's IdP lives at,
+        # which is the reconnaissance the SSRF guard is meant to deny. Log the
+        # real reason for operators and return a generic message to the caller.
+        verbose_logger.warning(
+            "MCP OAuth %s URL blocked by SSRF validation: %s", role, exc
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Configured MCP {role} URL is not safe to call: "
+                "the destination resolves to a blocked address."
+            ),
+        )
+
+
 router = APIRouter(
     tags=["mcp"],
 )
-
-
-def get_request_base_url(request: Request) -> str:
-    """
-    Get the base URL for the request, considering X-Forwarded-* headers.
-
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
-
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
-    """
-    base_url = str(request.base_url).rstrip("/")
-    parsed = urlparse(base_url)
-
-    if not IPAddressUtils.is_request_from_trusted_proxy(request):
-        return base_url
-
-    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
-    x_forwarded_host = request.headers.get("X-Forwarded-Host")
-    x_forwarded_port = request.headers.get("X-Forwarded-Port")
-
-    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
-
-    if x_forwarded_host:
-        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
-        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
-            netloc = x_forwarded_host
-        elif x_forwarded_port:
-            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
-        else:
-            netloc = x_forwarded_host
-    else:
-        netloc = parsed.netloc
-        if x_forwarded_port and ":" not in netloc:
-            netloc = f"{netloc}:{x_forwarded_port}"
-
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 
 def encode_state_with_base_url(
@@ -127,12 +122,14 @@ def decode_state_hash(encrypted_state: str) -> dict:
     return state_data
 
 
-def _get_validated_client_redirect_uri(state_data: Dict[str, Any]) -> str:
-    """Return a loopback client redirect URI from OAuth state."""
+def _get_validated_client_redirect_uri(
+    request: Request, state_data: Dict[str, Any]
+) -> str:
+    """Return a trusted (same-origin or loopback) client redirect URI from OAuth state."""
     redirect_uri = state_data.get("client_redirect_uri") or state_data.get("base_url")
     if not redirect_uri or not isinstance(redirect_uri, str):
         raise HTTPException(status_code=400, detail="Invalid redirect URI")
-    validate_loopback_redirect_uri(redirect_uri)
+    validate_trusted_redirect_uri(request, redirect_uri)
     return redirect_uri
 
 
@@ -338,12 +335,12 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
-    # Loopback-only redirect_uri. The URI is encrypted into the OAuth
-    # state and decoded on /callback to redirect the user back; a non-
-    # loopback URI would be an open-redirect + code-theft primitive
-    # (VERIA-57 root cause B). MCP clients are native apps — loopback is
-    # the spec-compliant callback pattern.
-    validate_loopback_redirect_uri(redirect_uri)
+    # Loopback OR same-origin redirect_uri. The URI is encrypted into the
+    # OAuth state and decoded on /callback to redirect the user back;
+    # restricting to trusted origins blocks the open-redirect +
+    # code-theft primitive (VERIA-57 root cause B). Loopback supports
+    # native MCP clients; same-origin supports the proxy's own UI callback.
+    validate_trusted_redirect_uri(request, redirect_uri)
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
@@ -435,10 +432,17 @@ async def exchange_token_with_server(
             token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    target_url, host_header = _validate_mcp_oauth_outbound_url(
+        mcp_server.token_url, role="token"
+    )
+    # Disable redirect-following so a malicious 30x from the validated host
+    # can't bounce the proxy to an internal target — validate_url only
+    # checked the initial URL.
     response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
+        target_url,
+        headers={"Accept": "application/json", "Host": host_header},
         data=token_data,
+        follow_redirects=False,
     )
 
     response.raise_for_status()
@@ -540,10 +544,17 @@ async def register_client_with_server(
     async_client = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.Oauth2Register
     )
+    target_url, host_header = _validate_mcp_oauth_outbound_url(
+        mcp_server.registration_url, role="registration"
+    )
+    # Disable redirect-following so a malicious 30x from the validated host
+    # can't bounce the proxy to an internal target — validate_url only
+    # checked the initial URL.
     response = await async_client.post(
-        mcp_server.registration_url,
-        headers=headers,
+        target_url,
+        headers={**headers, "Host": host_header},
         json=register_data,
+        follow_redirects=False,
     )
     response.raise_for_status()
 
@@ -660,17 +671,18 @@ async def token_endpoint(
 
 
 @router.get("/callback")
-async def callback(code: str, state: str):
+async def callback(request: Request, code: str, state: str):
     try:
         state_data = decode_state_hash(state)
         original_state = state_data["original_state"]
 
-        # Re-validate loopback at the sink. /authorize rejects non-loopback
+        # Re-validate at the sink. /authorize rejects untrusted
         # redirect_uri before encoding into state, but encrypted states
         # minted before that check was added have no expiry and remain
-        # valid indefinitely. Validating here blocks the open-redirect +
-        # code-theft primitive even for pre-fix states.
-        redirect_uri = _get_validated_client_redirect_uri(state_data)
+        # valid indefinitely. Validating here (same-origin OR loopback)
+        # blocks the open-redirect + code-theft primitive even for pre-fix
+        # states while allowing the UI's same-origin callback to work.
+        redirect_uri = _get_validated_client_redirect_uri(request, state_data)
 
         params = {"code": code, "state": original_state}
         complete_returned_url = _append_query_params(redirect_uri, params)

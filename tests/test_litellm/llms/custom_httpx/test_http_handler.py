@@ -798,3 +798,40 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+@pytest.mark.asyncio
+async def test_post_retry_propagates_follow_redirects():
+    """
+    AsyncHTTPHandler.post() retries connection errors via
+    single_connection_post_request(). When a caller passes
+    follow_redirects=False (e.g. the MCP OAuth SSRF guard), the retry
+    must honor it too — otherwise a transient connection error followed
+    by a 30x on retry can bypass the redirect block and hit an internal
+    address.
+    """
+    from unittest.mock import AsyncMock
+
+    handler = AsyncHTTPHandler()
+    try:
+        with (
+            patch.object(
+                handler.client,
+                "send",
+                side_effect=httpx.RemoteProtocolError("forced retry"),
+            ),
+            patch.object(
+                handler,
+                "single_connection_post_request",
+                new=AsyncMock(return_value=MagicMock(status_code=200)),
+            ) as mock_retry,
+        ):
+            await handler.post("https://example.com/token", follow_redirects=False)
+        assert mock_retry.await_count == 1
+        kwargs = mock_retry.await_args.kwargs
+        assert kwargs.get("follow_redirects") is False, (
+            "follow_redirects must reach the retry path so the SSRF "
+            "redirect block holds across reconnect"
+        )
+    finally:
+        await handler.close()

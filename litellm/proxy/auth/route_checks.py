@@ -50,6 +50,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
     ]
 )
 
@@ -671,6 +672,7 @@ class RouteChecks:
             "/key/service-account/generate",
             "/key/block",
             "/key/unblock",
+            "/team/key/bulk_update",
         ]
     )
 

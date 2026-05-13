@@ -1557,14 +1557,35 @@ if MCP_AVAILABLE:
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                INTERNAL_REQUEST,
+            )
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-            client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(
-                server_id, client_ip=client_ip
+            # Programmatic callers (no Request) bypass the IP gate explicitly.
+            # Real HTTP callers go through the normal extraction path.
+            client_ip = (
+                IPAddressUtils.get_mcp_client_ip(request)
+                if request
+                else INTERNAL_REQUEST
             )
+            # get_mcp_server_by_id alone does not apply IP gating, so an
+            # external caller hitting /server/oauth/{server_id}/{authorize,
+            # token,register} with the UUID of an internal-only server would
+            # bypass the IP restriction. Apply the gate to the id-lookup
+            # result before falling back to the name lookup (which gates).
+            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if (
+                server is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    server, client_ip
+                )
+            ):
+                server = None
+            if server is None:
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_id, client_ip=client_ip
+                )
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

@@ -166,6 +166,21 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+class _InternalRequest:
+    """Sentinel passed in place of a client IP to indicate that the call site
+    is internal (background reload, registry maintenance, admin debug) and
+    should bypass IP-based access control. External request handlers must pass
+    a real IP string instead — passing ``None`` now fails closed."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return "INTERNAL_REQUEST"
+
+
+INTERNAL_REQUEST = _InternalRequest()
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -1045,28 +1060,56 @@ class MCPServerManager:
         return toolset
 
     def filter_server_ids_by_ip(
-        self, server_ids: List[str], client_ip: Optional[str]
+        self,
+        server_ids: List[str],
+        client_ip: Union[str, "_InternalRequest", None],
     ) -> List[str]:
         """
         Filter server IDs by client IP — external callers only see public servers.
 
-        Returns server_ids unchanged when client_ip is None (no filtering).
+        See ``filter_server_ids_by_ip_with_info`` for the contract on
+        ``client_ip``: ``None`` fails closed, ``INTERNAL_REQUEST`` bypasses
+        gating, real IPs apply the existing rules.
         """
         filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
         return filtered
 
+    def _resolve_unknown_client_ip(
+        self, client_ip: Union[str, "_InternalRequest", None]
+    ) -> Union[str, "_InternalRequest", None]:
+        """Promote unknown ``client_ip=None`` to ``INTERNAL_REQUEST`` when the
+        operator has explicitly opted in via
+        ``general_settings.mcp_allow_unknown_client_ip: true``. Lets
+        deployments behind ASGI middleware where ``request.client`` is
+        legitimately ``None`` opt back to the previous fail-open behavior."""
+        if client_ip is None:
+            general_settings = self._get_general_settings()
+            if general_settings.get("mcp_allow_unknown_client_ip", False):
+                return INTERNAL_REQUEST
+        return client_ip
+
     def filter_server_ids_by_ip_with_info(
-        self, server_ids: List[str], client_ip: Optional[str]
+        self,
+        server_ids: List[str],
+        client_ip: Union[str, "_InternalRequest", None],
     ) -> Tuple[List[str], int]:
         """
         Filter server IDs by client IP — external callers only see public servers.
 
-        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the number
-        of servers that were blocked because the client IP is not allowed to access them.
-        Returns server_ids unchanged (with 0 blocked) when client_ip is None.
+        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the
+        number of servers that were blocked because the client IP is not
+        allowed to access them. ``None`` fails closed: external request
+        handlers must extract a real IP via
+        ``IPAddressUtils.get_mcp_client_ip(request)``. Internal callers
+        (admin debug, registry maintenance) should pass
+        ``INTERNAL_REQUEST`` to bypass IP gating.
         """
-        if client_ip is None:
+        client_ip = self._resolve_unknown_client_ip(client_ip)
+        if client_ip is INTERNAL_REQUEST:
             return server_ids, 0
+        # Don't short-circuit on client_ip is None — public servers should
+        # still be reachable, only internal-only servers fail closed. The
+        # per-server gate enforces both halves.
         allowed = []
         blocked = 0
         for sid in server_ids:
@@ -3066,29 +3109,59 @@ class MCPServerManager:
             return {}
 
     def _is_server_accessible_from_ip(
-        self, server: MCPServer, client_ip: Optional[str]
+        self,
+        server: MCPServer,
+        client_ip: Union[str, _InternalRequest, None],
     ) -> bool:
         """
         Check if a server is accessible from the given client IP.
 
-        - If client_ip is None, no IP filtering is applied (internal callers).
-        - If the server has available_on_public_internet=True, it's always accessible.
-        - Otherwise, only internal/private IPs can access it.
+        - ``INTERNAL_REQUEST`` bypasses IP filtering (internal callers, admin
+          debug, registry maintenance).
+        - If the server has ``available_on_public_internet=True`` (or is in
+          ``litellm.public_mcp_servers``), it's always accessible — including
+          when ``client_ip`` is ``None``. Otherwise a request to a
+          legitimately-public OAuth endpoint behind ASGI middleware that
+          nulls ``request.client`` would 404 with no actionable diagnostic.
+        - For non-public servers, ``None`` fails closed: external request
+          handlers must extract a real IP via
+          ``IPAddressUtils.get_mcp_client_ip(request)``. Earlier behaviour
+          treated ``None`` as "no filter," which let external callers reach
+          internal-only servers when IP extraction silently failed. Operators
+          behind ASGI middleware or load-balancer setups where
+          ``request.client`` is legitimately ``None`` can opt back to the
+          previous fail-open behaviour by setting
+          ``general_settings.mcp_allow_unknown_client_ip: true``.
+        - For non-public servers with a real IP, only internal/private IPs
+          can access it.
         """
-        if client_ip is None:
+        client_ip = self._resolve_unknown_client_ip(client_ip)
+        if client_ip is INTERNAL_REQUEST:
             return True
+        # Public servers are reachable regardless of caller IP — and crucially
+        # even when IP extraction failed (client_ip is None). Otherwise a
+        # request to a legitimately-public OAuth endpoint behind an ASGI
+        # middleware that nulls request.client would 404 with no actionable
+        # diagnostic for operators.
         if server.available_on_public_internet:
             return True
         # Check backwards compat: litellm.public_mcp_servers
         public_ids = set(litellm.public_mcp_servers or [])
         if server.server_id in public_ids:
             return True
-        # Non-public server: only accessible from internal IPs
+        if client_ip is None:
+            # Non-public server with unknown caller IP fails closed. Earlier
+            # behaviour treated None as "no filter," letting external callers
+            # reach internal-only servers when IP extraction silently failed.
+            return False
+        # Non-public server: only accessible from internal IPs. The two
+        # early returns above narrow client_ip to ``str`` for the type
+        # checker; cast keeps mypy happy without a runtime assert.
         general_settings = self._get_general_settings()
         internal_networks = IPAddressUtils.parse_internal_networks(
             general_settings.get("mcp_internal_ip_ranges")
         )
-        return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
+        return IPAddressUtils.is_internal_ip(cast(str, client_ip), internal_networks)
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
@@ -3179,7 +3252,9 @@ class MCPServerManager:
         return result
 
     def get_mcp_server_by_name(
-        self, server_name: str, client_ip: Optional[str] = None
+        self,
+        server_name: str,
+        client_ip: Union[str, _InternalRequest, None] = None,
     ) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server name.
@@ -3191,8 +3266,15 @@ class MCPServerManager:
 
         Args:
             server_name: The server name to look up.
-            client_ip: Optional client IP for access control. When provided,
-                       non-public servers are hidden from external IPs.
+            client_ip: External request IP for IP-based access control, or
+                       ``INTERNAL_REQUEST`` for internal callers (admin debug,
+                       registry maintenance) that intentionally bypass IP
+                       gating. ``None`` fails closed: external request handlers
+                       must extract a real IP via
+                       ``IPAddressUtils.get_mcp_client_ip(request)``. Earlier
+                       behaviour silently bypassed gating on ``None``, which
+                       let request handlers that forgot to pass an IP reach
+                       internal-only servers.
         """
         registry = self.get_registry()
         # Pass 1: Match by alias (highest priority)
@@ -3216,18 +3298,23 @@ class MCPServerManager:
         return None
 
     def get_filtered_registry(
-        self, client_ip: Optional[str] = None
+        self, client_ip: Union[str, "_InternalRequest", None] = None
     ) -> Dict[str, MCPServer]:
         """
         Get registry filtered by client IP access control.
 
         Args:
-            client_ip: Optional client IP. When provided, non-public servers
-                       are hidden from external IPs. When None, returns all servers.
+            client_ip: Real client IP (filter applied), ``INTERNAL_REQUEST``
+                       (return full registry, internal callers only), or
+                       ``None`` (fails closed: returns empty registry).
+                       External request handlers must pass a real IP.
         """
         registry = self.get_registry()
-        if client_ip is None:
+        client_ip = self._resolve_unknown_client_ip(client_ip)
+        if client_ip is INTERNAL_REQUEST:
             return registry
+        # Don't short-circuit on client_ip is None — public servers should
+        # still be reachable, only internal-only servers fail closed.
         return {
             k: v
             for k, v in registry.items()

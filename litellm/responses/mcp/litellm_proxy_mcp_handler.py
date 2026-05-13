@@ -191,6 +191,7 @@ class LiteLLM_Proxy_MCP_Handler:
             List names of allowed MCP servers
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
             global_mcp_server_manager,
         )
         from litellm.proxy._experimental.mcp_server.server import (
@@ -216,7 +217,13 @@ class LiteLLM_Proxy_MCP_Handler:
         resolved_mcp_servers: List[str] = []
         resolved_toolset_ids: List[str] = []
         for name in mcp_servers:
-            if not global_mcp_server_manager.get_mcp_server_by_name(name):
+            # Server-side disambiguation between MCP server names and toolset
+            # names. Access control is enforced downstream by
+            # _get_allowed_mcp_servers_from_mcp_server_names; this lookup is
+            # purely "is `name` a known server?", so bypass the IP gate.
+            if not global_mcp_server_manager.get_mcp_server_by_name(
+                name, client_ip=INTERNAL_REQUEST
+            ):
                 try:
                     from litellm.proxy.proxy_server import prisma_client
 

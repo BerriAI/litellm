@@ -154,6 +154,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _InternalRequest,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -850,27 +851,24 @@ if MCP_AVAILABLE:
     async def _get_allowed_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
-        client_ip: Optional[str] = None,
+        client_ip: Union[str, _InternalRequest, None] = None,
     ) -> List[MCPServer]:
         """Return allowed MCP servers for a request after applying filters.
 
         Args:
             user_api_key_auth: The authenticated user's API key info.
             mcp_servers: Optional list of server names to filter to.
-            client_ip: Client IP for IP-based access control. If None, falls back to
-                      auth context. Pass explicitly from request handlers for safety.
-        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
-              This is intentional for internal callers but may indicate a bug if called
-              from a request handler without proper context setup.
+            client_ip: Client IP for IP-based access control. Pass an explicit
+                      string from external request handlers, the
+                      ``INTERNAL_REQUEST`` sentinel from internal callers
+                      (admin debug, registry maintenance, background work),
+                      or ``None`` to fall back to the auth-context IP.
+                      ``None`` after the auth-context fallback fails closed
+                      — an external request that can't be attributed to an IP
+                      will not reach internal-only servers.
         """
-        # Use explicit client_ip if provided, otherwise try auth context
         if client_ip is None:
             client_ip = _get_client_ip_from_context()
-            if client_ip is None:
-                verbose_logger.debug(
-                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
-                    "IP filtering will be skipped. This is expected for internal calls."
-                )
 
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -887,15 +885,28 @@ if MCP_AVAILABLE:
             allowed_mcp_server_ids,
         )
         if _ip_blocked > 0:
-            verbose_logger.debug(
-                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
-                "because they are restricted to internal networks. "
-                "No tools from those servers will be returned. "
-                "To expose a server externally, set 'available_on_public_internet: true' "
-                "in its configuration.",
-                _ip_blocked,
-                client_ip,
-            )
+            if client_ip is None:
+                # IP extraction failed (no X-Forwarded-* header, missing
+                # trusted-proxy config, etc.). Fail-closed at the gate
+                # silently dropped the servers — tell the operator to fix
+                # IP forwarding, NOT to expose the server publicly.
+                verbose_logger.debug(
+                    "MCP IP filtering: %d server(s) hidden because client IP "
+                    "could not be determined for this request. Fix request-IP "
+                    "extraction (X-Forwarded-For + trusted_proxies) so the "
+                    "gate can evaluate access.",
+                    _ip_blocked,
+                )
+            else:
+                verbose_logger.debug(
+                    "MCP IP filtering: %d server(s) are not accessible from "
+                    "client IP %s because they are restricted to internal "
+                    "networks. No tools from those servers will be returned. "
+                    "To expose a server externally, set "
+                    "'available_on_public_internet: true' in its configuration.",
+                    _ip_blocked,
+                    client_ip,
+                )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
