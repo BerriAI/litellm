@@ -11091,12 +11091,54 @@ class TestRegenerateTeamChangeDbErrorReturns5xx:
             assert exc.value.status_code == 500
             assert "Unable to verify team membership" in str(exc.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_team_not_found_404_passes_through(self):
+        from litellm.proxy._types import (
+            LiteLLM_VerificationToken,
+            RegenerateKeyRequest,
+        )
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _execute_virtual_key_regeneration,
+        )
+
+        key_in_db = LiteLLM_VerificationToken(
+            token="hashed-existing", team_id="team-old", user_id="user-internal"
+        )
+
+        not_found = HTTPException(status_code=404, detail="Team not found")
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(side_effect=not_found),
+            ),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.hash_token", return_value="new-hash"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _execute_virtual_key_regeneration(
+                    prisma_client=MagicMock(),
+                    key_in_db=key_in_db,
+                    hashed_api_key="hashed-existing",
+                    key="sk-existing",
+                    data=RegenerateKeyRequest(
+                        key="sk-existing", team_id="team-missing"
+                    ),
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=MagicMock(),
+                )
+            assert exc.value.status_code == 404
+
 
 class TestProjectKeyLimitsDbErrorReturns5xx:
     """Greptile P1 follow-up: when ``get_team_object`` fails for an
     infrastructure reason (DB timeout, connection error) the previous
     bare ``except Exception`` swallowed it and surfaced a 403 'not a
-    member'. Real failure must surface as a retryable 5xx."""
+    member'. Real failure must surface as a retryable 5xx. Genuine
+    ``HTTPException`` (e.g. 404 from ``get_team_object`` when the team
+    doesn't exist) must pass through unchanged — converting it to 500
+    is misleading."""
 
     @pytest.mark.asyncio
     async def test_team_lookup_failure_raises_500(self):
@@ -11130,6 +11172,41 @@ class TestProjectKeyLimitsDbErrorReturns5xx:
                 )
             assert exc.value.status_code == 500
             assert "Unable to verify team membership" in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_team_not_found_404_passes_through(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_project_key_limits,
+        )
+
+        project_obj = MagicMock(
+            team_id="team-missing",
+            models=["gpt-4o"],
+            litellm_budget_table=MagicMock(max_budget=100.0),
+        )
+
+        # ``get_team_object`` itself raises 404 when team doesn't exist.
+        # That is a legitimate not-found and must not be converted to 500.
+        not_found = HTTPException(status_code=404, detail="Team not found")
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+                new=AsyncMock(return_value=project_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(side_effect=not_found),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _check_project_key_limits(
+                    project_id="proj-x",
+                    data=GenerateKeyRequest(models=["gpt-4o"]),
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    user_api_key_dict=_internal_user_auth(),
+                )
+            assert exc.value.status_code == 404
 
 
 class TestProjectKeyLimitsBackwardsCompat:

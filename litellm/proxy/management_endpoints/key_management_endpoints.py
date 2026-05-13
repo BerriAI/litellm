@@ -1294,6 +1294,11 @@ async def _check_project_key_limits(
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 check_db_only=True,
             )
+        except HTTPException:
+            # ``get_team_object`` raises ``HTTPException(404)`` when the
+            # team genuinely doesn't exist. Pass-through so the caller
+            # sees the correct status rather than a misleading 500.
+            raise
         except Exception as exc:
             # Don't mask infrastructure errors as 403s — operators need
             # the real signal and users get a retryable 5xx.
@@ -4450,6 +4455,10 @@ async def _execute_virtual_key_regeneration(
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     check_db_only=True,
                 )
+            except HTTPException:
+                # ``get_team_object`` raises ``HTTPException(404)`` when
+                # the team genuinely doesn't exist. Pass-through.
+                raise
             except Exception as exc:
                 # Don't mask infrastructure errors as 404 "Team not
                 # found" — operators need the real signal and the
