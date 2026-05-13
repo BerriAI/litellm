@@ -239,10 +239,13 @@ def test_should_classify_mixed_replay_and_record_as_partial():
     )
 
 
-def test_should_classify_overflow_as_miss_overflow_regardless_of_play_state():
+def test_should_classify_overflow_only_when_dirty_episodes_were_recorded():
     """Cassettes that exceed ``MAX_EPISODES_PER_CASSETTE`` (50) are
-    refused for save — they will hit live every CI run, so the verdict
-    must override HIT/PARTIAL classification."""
+    refused for save — but only when ``dirty=True`` (new episodes were
+    actually recorded that the persister would refuse). Replaying an
+    already-large cassette with no new traffic is healthy: the persister
+    never tries to save, so the cache state is stable and the next run
+    will replay too."""
     assert (
         _classify_marked_test(_cassette(played=0, dirty=True, total=51))
         == VERDICT_MISS_OVERFLOW
@@ -250,6 +253,20 @@ def test_should_classify_overflow_as_miss_overflow_regardless_of_play_state():
     assert (
         _classify_marked_test(_cassette(played=10, dirty=True, total=52))
         == VERDICT_MISS_OVERFLOW
+    )
+
+
+def test_should_classify_large_cassette_with_no_new_episodes_as_hit():
+    """``total > 50`` + ``dirty=False`` means everything was replayed
+    from cache; no save attempt happens, so this is a healthy HIT, not
+    OVERFLOW."""
+    assert (
+        _classify_marked_test(_cassette(played=51, dirty=False, total=51))
+        == VERDICT_HIT
+    )
+    assert (
+        _classify_marked_test(_cassette(played=60, dirty=False, total=60))
+        == VERDICT_HIT
     )
 
 
@@ -325,6 +342,49 @@ def test_should_tag_skip_files_with_file_opt_out_when_module_does_not_use_respx(
     item = _StubItem("dead_skip.py::test_x", p, module=mod)
     apply_vcr_auto_marker_to_items([item], skip_files={"dead_skip.py"})
     assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_FILE_OPT_OUT
+
+
+def test_should_not_flag_respx_mentioned_in_comment_or_docstring(vcr_enabled, tmp_path):
+    """Substring scans of source text false-positive on
+    ``# Previously used respx.mock`` and similar — defeats the dead
+    skip-list pruning goal. AST-based detection ignores comments and
+    string literals."""
+    src = (
+        '"""Module docstring mentions respx.mock and @pytest.mark.respx and respx_mock."""\n'
+        "# Previously tried respx.mock but switched to vcrpy\n"
+        "# Old code did `with respx.mock(): ...`\n"
+        "x = '@respx.mock'  # string literal, not a real decorator\n"
+        "def test_x():\n"
+        "    pass\n"
+    )
+    mod, p = _make_module_with_source(tmp_path, src, "comment_respx")
+    item = _StubItem("comment_respx.py::test_x", p, module=mod)
+    apply_vcr_auto_marker_to_items([item], skip_files={"comment_respx.py"})
+    assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_FILE_OPT_OUT
+
+
+def test_should_flag_real_respx_mark_decorator_via_ast(vcr_enabled, tmp_path):
+    src = "import pytest\n" "@pytest.mark.respx\n" "def test_x(respx_mock): pass\n"
+    mod, p = _make_module_with_source(tmp_path, src, "real_respx_mark")
+    item = _StubItem("real_respx_mark.py::test_x", p, module=mod)
+    apply_vcr_auto_marker_to_items([item], skip_files={"real_respx_mark.py"})
+    assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_RESPX_MODULE
+
+
+def test_should_flag_real_respx_with_block_via_ast(vcr_enabled, tmp_path):
+    src = "import respx\n" "def test_x():\n" "    with respx.mock():\n" "        pass\n"
+    mod, p = _make_module_with_source(tmp_path, src, "real_respx_with")
+    item = _StubItem("real_respx_with.py::test_x", p, module=mod)
+    apply_vcr_auto_marker_to_items([item], skip_files={"real_respx_with.py"})
+    assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_RESPX_MODULE
+
+
+def test_should_flag_respx_mock_call_at_module_scope_via_ast(vcr_enabled, tmp_path):
+    src = "import respx\nmock = respx.mock()\ndef test_x(): pass\n"
+    mod, p = _make_module_with_source(tmp_path, src, "real_respx_call")
+    item = _StubItem("real_respx_call.py::test_x", p, module=mod)
+    apply_vcr_auto_marker_to_items([item], skip_files={"real_respx_call.py"})
+    assert getattr(item, VCR_SKIP_REASON_USER_ATTR) == SKIP_REASON_RESPX_MODULE
 
 
 def test_should_tag_nodeid_suffix_skips_as_incompatible(vcr_enabled, tmp_path):

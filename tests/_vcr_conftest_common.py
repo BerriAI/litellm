@@ -5,6 +5,7 @@ See ``tests/llm_translation/Readme.md`` for the full design and
 
 from __future__ import annotations
 
+import ast
 import atexit
 import hashlib
 import json
@@ -555,18 +556,126 @@ _LIVE_CALL_LOCAL_PREFIXES = (
 )
 
 
+class _RespxUsageVisitor(ast.NodeVisitor):
+    """AST visitor that flags real respx wiring in a test module.
+
+    Substring scans of the source text are unreliable: a comment like
+    ``# Previously used respx.mock`` or a docstring referencing respx
+    would falsely flag the module. We only count:
+
+    * ``@pytest.mark.respx`` / ``@respx.mock`` decorators
+    * ``with respx.mock(): ...`` context managers
+    * ``respx.mock(...)`` / ``respx.mock`` attribute access
+    * function parameters / fixture arguments named ``respx_mock``
+    """
+
+    def __init__(self) -> None:
+        self.uses_respx = False
+
+    def _decorator_is_respx(self, dec: ast.expr) -> bool:
+        # ``@respx.mock`` (Attribute) or ``@respx.mock(...)`` (Call wrapping Attribute)
+        if isinstance(dec, ast.Call):
+            dec = dec.func
+        if isinstance(dec, ast.Attribute):
+            return (
+                isinstance(dec.value, ast.Name)
+                and dec.value.id == "respx"
+                and dec.attr == "mock"
+            )
+        return False
+
+    def _is_pytest_mark_respx(self, dec: ast.expr) -> bool:
+        # ``@pytest.mark.respx`` or ``@pytest.mark.respx(...)``.
+        if isinstance(dec, ast.Call):
+            dec = dec.func
+        if (
+            isinstance(dec, ast.Attribute)
+            and dec.attr == "respx"
+            and isinstance(dec.value, ast.Attribute)
+            and dec.value.attr == "mark"
+            and isinstance(dec.value.value, ast.Name)
+            and dec.value.value.id == "pytest"
+        ):
+            return True
+        return False
+
+    def _check_decorators(self, decs: list[ast.expr]) -> None:
+        for d in decs:
+            if self._decorator_is_respx(d) or self._is_pytest_mark_respx(d):
+                self.uses_respx = True
+
+    def _check_args(self, args: ast.arguments) -> None:
+        # ``def test_foo(respx_mock): ...`` — pytest supplies the fixture
+        # whenever the parameter name appears, regardless of marker.
+        all_args = (
+            list(args.args)
+            + list(args.kwonlyargs)
+            + (list(args.posonlyargs) if hasattr(args, "posonlyargs") else [])
+        )
+        for a in all_args:
+            if a.arg == "respx_mock":
+                self.uses_respx = True
+                return
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._check_decorators(node.decorator_list)
+        self._check_args(node.args)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._check_decorators(node.decorator_list)
+        self._check_args(node.args)
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._check_decorators(node.decorator_list)
+        self.generic_visit(node)
+
+    def _is_respx_mock_attr(self, node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "respx"
+            and node.attr == "mock"
+        )
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            ctx = item.context_expr
+            if isinstance(ctx, ast.Call):
+                ctx = ctx.func
+            if self._is_respx_mock_attr(ctx):
+                self.uses_respx = True
+        self.generic_visit(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        for item in node.items:
+            ctx = item.context_expr
+            if isinstance(ctx, ast.Call):
+                ctx = ctx.func
+            if self._is_respx_mock_attr(ctx):
+                self.uses_respx = True
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # ``respx.mock(...)`` invocation outside a ``with``/decorator —
+        # e.g. ``mock = respx.mock()`` at module scope.
+        if self._is_respx_mock_attr(node.func):
+            self.uses_respx = True
+        self.generic_visit(node)
+
+
 def _module_uses_respx(item) -> bool:
     """Return True if the test's *module* actually wires up respx.
 
-    A bare ``from respx import MockRouter`` import (with no actual usage)
-    does not patch the httpx transport, so it does not conflict with vcrpy.
-    We confirm by checking the module's source for any of:
-    - ``@pytest.mark.respx``
-    - ``@respx.mock`` / ``with respx.mock``
-    - ``respx_mock`` fixture name
+    Uses an ``ast`` walk (not substring matching) so comments and
+    docstrings that mention respx don't count as real usage. A bare
+    ``from respx import MockRouter`` import with no other respx
+    references therefore won't flag the module — that's exactly the
+    dead-import case this PR is trying to surface.
     """
     module = getattr(item, "module", None)
-    src_file = getattr(module, "__file__", None)
+    src_file = getattr(module, "__file__", None) or str(getattr(item, "path", "") or "")
     if not src_file or not os.path.isfile(src_file):
         return False
     try:
@@ -574,13 +683,16 @@ def _module_uses_respx(item) -> bool:
             src = f.read()
     except OSError:
         return False
-    if "respx_mock" in src:
-        return True
-    if "@pytest.mark.respx" in src or "@respx.mock" in src:
-        return True
-    if "respx.mock" in src or "with respx" in src:
-        return True
-    return False
+    try:
+        tree = ast.parse(src, filename=src_file)
+    except SyntaxError:
+        # If the test file itself is broken, fall back to "no respx" —
+        # the test will fail collection on its own and we don't want
+        # the auto-marker to mask that with a misleading skip reason.
+        return False
+    visitor = _RespxUsageVisitor()
+    visitor.visit(tree)
+    return visitor.uses_respx
 
 
 def _item_uses_respx(item) -> bool:
@@ -735,8 +847,13 @@ def _classify_marked_test(cassette) -> str:
     # "OVERFLOW" mirrors ``_RedisPersister.save_cassette``'s
     # ``> MAX_EPISODES_PER_CASSETTE`` guard. Cassettes that hit this
     # threshold are refused for save, so the test re-records live every
-    # run.
-    if total > MAX_EPISODES_PER_CASSETTE:
+    # run. Only flag when ``dirty=True`` — if a cassette grew past the
+    # cap historically but this run replayed it without adding new
+    # episodes, the persister never tries to save (no recording
+    # happened), so the cache state is stable and the next run will
+    # replay too. Flagging that case as OVERFLOW would tag healthy
+    # cached tests as cost leaks.
+    if total > MAX_EPISODES_PER_CASSETTE and dirty:
         return VERDICT_MISS_OVERFLOW
     if played == 0 and not dirty:
         return VERDICT_NOOP_NO_TRAFFIC
