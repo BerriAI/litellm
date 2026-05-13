@@ -1237,7 +1237,15 @@ class LiteLLMProxyRequestSetup:
         # to _tag_max_budget_check.
         _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
         metadata = request_data.get(_metadata_variable_name)
-        if not isinstance(metadata, dict):
+        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
+        # Parse it so existing tags survive the merge — overwriting the string
+        # with {} would let a caller bypass _tag_max_budget_check on an
+        # over-budget body tag by also sending a within-budget header tag.
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
             metadata = {}
             request_data[_metadata_variable_name] = metadata
 
