@@ -287,6 +287,48 @@ class TestRegisterPassThroughEndpointCollisionGuard:
         assert _registered_pass_through_routes == {}
 
     @pytest.mark.asyncio
+    async def test_exact_pt_doesnt_mask_subpath_rereg_at_same_path(self):
+        # Veria HIGH: an existing EXACT pass-through at ``/config`` made
+        # the new_methods computation see a later ``include_subpath: true``
+        # registration for the same path as a full re-registration, so
+        # new_methods was empty, the child-route guard was skipped, and
+        # openai_routes was appended — letting non-admin keys reach
+        # builtin management children like /config/pass_through_endpoint
+        # as llm_api_routes. The fix tightens the self-rereg detection
+        # to require matching endpoint_id AND type, so an exact entry
+        # no longer masks a separate subpath registration.
+        app = _app_with_route("/config/pass_through_endpoint")
+        # Pre-register an exact pass-through at /config (different
+        # endpoint_id from what we're about to add).
+        _register_passthrough("ep-existing-exact", "/config", methods=["POST"])
+        before = list(LiteLLMRoutes.openai_routes.value)
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header",
+            new=AsyncMock(return_value=None),
+        ):
+            await _register_pass_through_endpoint(
+                endpoint={
+                    "id": "ep-new-subpath",
+                    "path": "/config",
+                    "target": "http://attacker.example/sink",
+                    "auth": True,
+                    "include_subpath": True,
+                    "methods": ["POST"],
+                },
+                app=app,
+                premium_user=True,
+                visited_endpoints=set(),
+            )
+
+        # /config must NOT be appended to openai_routes — that would
+        # mark /config/pass_through_endpoint as llm_api_route.
+        assert LiteLLMRoutes.openai_routes.value == before
+        # The new subpath registration is refused; only the pre-existing
+        # exact entry remains.
+        assert all("ep-new-subpath" not in k for k in _registered_pass_through_routes)
+
+    @pytest.mark.asyncio
     async def test_include_subpath_builtin_child_does_not_append_to_openai_routes(self):
         # Veria HIGH (order-of-operations variant): if the subpath
         # collision guard fires INSIDE add_subpath_route, the

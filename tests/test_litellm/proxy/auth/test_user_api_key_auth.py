@@ -3035,6 +3035,66 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_runs_when_passthrough_omits_auth_key():
+    """Veria MED: an entry whose config omits the ``auth`` key entirely
+    must NOT be treated as ``auth: false`` — that conflicts with
+    ``check_api_key_for_custom_headers_or_pass_through_endpoints`` which
+    treats a missing ``auth`` as authenticated. The fix uses
+    ``endpoint.get("auth", True) is not True`` so common_checks still
+    runs."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+    )
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http", "method": "POST"})
+    request._url = URL(url="/some/passthrough")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    # No "auth" key at all on the entry.
+    attrs["general_settings"] = {
+        "pass_through_endpoints": [
+            {
+                "path": "/some/passthrough",
+                "target": "https://upstream.example",
+            }
+        ]
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    registry_key = "ep-no-auth-key:exact:/some/passthrough:POST"
+    _registered_pass_through_routes[registry_key] = {
+        "endpoint_id": "ep-no-auth-key",
+        "path": "/some/passthrough",
+        "type": "exact",
+        "methods": ["POST"],
+        "passthrough_params": {},
+    }
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/some/passthrough",
+            )
+            # Missing auth key must be treated as authenticated → checks run.
+            mock_checks.assert_awaited_once()
+    finally:
+        _registered_pass_through_routes.pop(registry_key, None)
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_master_key_admin_overrides_db_user_role():
     """Regression: master_key tokens have user_id=litellm_proxy_admin_name
     (default 'default_user_id') and user_role=PROXY_ADMIN. If a row with

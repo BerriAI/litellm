@@ -1781,7 +1781,9 @@ def _is_unauthenticated_pass_through_route(
         if (
             isinstance(endpoint, dict)
             and endpoint.get("path", "") == route
-            and endpoint.get("auth") is not True
+            # Match ``check_api_key_for_custom_headers_or_pass_through_endpoints``:
+            # a missing ``auth`` key defaults to authenticated, not bypass.
+            and endpoint.get("auth", True) is not True
         ):
             return True
     return False

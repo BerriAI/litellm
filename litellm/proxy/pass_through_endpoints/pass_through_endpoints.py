@@ -2491,14 +2491,33 @@ async def _register_pass_through_endpoint(
         "DELETE",
         "PATCH",
     ]
-    new_methods = [
-        m
-        for m in methods_for_collision_check
-        if InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+    # Treat a (path, method) as a self-re-registration only when the
+    # existing registry entry matches THIS endpoint_id AND the type
+    # being registered. Without the type match, an exact pass-through
+    # at ``/config`` masks a later ``include_subpath: true`` registration
+    # for the same path — ``new_methods`` becomes empty and the
+    # child-route guard is skipped before openai_routes is appended.
+    expected_type = (
+        "subpath" if endpoint_data.get("include_subpath", False) is True else "exact"
+    )
+    new_methods = []
+    for m in methods_for_collision_check:
+        existing = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
             route=path, method=m
         )
-        is None
-    ]
+        if existing is None:
+            new_methods.append(m)
+            continue
+        if (
+            existing.get("endpoint_id") == endpoint_id
+            and existing.get("type") == expected_type
+        ):
+            # Genuine self-rereg of the same entry.
+            continue
+        # Existing entry is a separate registration (different
+        # endpoint_id, or exact-vs-subpath swap) — this method is new
+        # for our (endpoint, type).
+        new_methods.append(m)
     if new_methods and SafeRouteAdder._is_path_registered(
         app=app, path=path, methods=new_methods
     ):
