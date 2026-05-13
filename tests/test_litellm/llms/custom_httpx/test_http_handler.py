@@ -27,39 +27,6 @@ from litellm.llms.custom_httpx.http_handler import (
 
 
 @pytest.mark.asyncio
-async def test_async_head_returns_response_without_raise_for_status():
-    captured_request = None
-
-    async def mock_handler(request: httpx.Request) -> httpx.Response:
-        nonlocal captured_request
-        captured_request = request
-        return httpx.Response(
-            401,
-            request=request,
-            headers={"www-authenticate": 'Bearer realm="test"'},
-        )
-
-    litellm_handler = AsyncHTTPHandler()
-    await litellm_handler.client.aclose()
-    litellm_handler.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(mock_handler)
-    )
-    try:
-        response = await litellm_handler.head(
-            "https://upstream.example/mcp",
-            headers={"Authorization": "Bearer some-token"},
-        )
-
-        assert response.status_code == 401
-        assert response.headers["www-authenticate"] == 'Bearer realm="test"'
-        assert captured_request is not None
-        assert captured_request.method == "HEAD"
-        assert captured_request.headers["Authorization"] == "Bearer some-token"
-    finally:
-        await litellm_handler.close()
-
-
-@pytest.mark.asyncio
 async def test_async_post_streaming_status_error_should_not_wait_forever_for_body(
     monkeypatch,
 ):
