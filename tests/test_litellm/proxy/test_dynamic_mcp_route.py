@@ -269,8 +269,10 @@ async def test_is_mcp_access_group_cached_caches_positive_result():
 
 
 @pytest.mark.asyncio
-async def test_is_mcp_access_group_cached_does_not_cache_negative_result():
-    """Empty access-group lookups are not cached because DB errors also return empty."""
+async def test_is_mcp_access_group_cached_caches_negative_result_briefly():
+    """Empty access-group lookups are cached with a short TTL so unauthenticated
+    callers cannot force a fresh DB lookup per request for unknown names."""
+    from litellm.constants import DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
     from litellm.proxy.proxy_server import _is_mcp_access_group_cached
 
     fake_cache = MagicMock()
@@ -286,6 +288,31 @@ async def test_is_mcp_access_group_cached_does_not_cache_negative_result():
 
     assert result is False
     get_access_group_servers.assert_awaited_once_with(["dev_group"])
+    fake_cache.async_set_cache.assert_awaited_once_with(
+        key="mcp_access_group_exists:dev_group",
+        value=False,
+        ttl=DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL,
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_mcp_access_group_cached_returns_cached_negative_without_db():
+    """A cached False entry short-circuits the DB lookup on subsequent calls."""
+    from litellm.proxy.proxy_server import _is_mcp_access_group_cached
+
+    fake_cache = MagicMock()
+    fake_cache.async_get_cache = AsyncMock(return_value=False)
+    fake_cache.async_set_cache = AsyncMock()
+    get_access_group_servers = AsyncMock(return_value=["server-id"])
+
+    with (
+        patch(_USER_API_KEY_CACHE, new=fake_cache),
+        patch(_GET_ACCESS_GROUP_SERVERS, new=get_access_group_servers),
+    ):
+        result = await _is_mcp_access_group_cached("never_existed")
+
+    assert result is False
+    get_access_group_servers.assert_not_awaited()
     fake_cache.async_set_cache.assert_not_awaited()
 
 

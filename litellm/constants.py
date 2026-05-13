@@ -1569,6 +1569,13 @@ DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
 DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+# Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
+# callers from forcing a DB query per request for unknown names, while bounding
+# staleness so a transient DB error (which surfaces as an empty list) cannot
+# hide a real group for long.
+DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL = int(
+    os.getenv("DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL", 10)
+)
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
