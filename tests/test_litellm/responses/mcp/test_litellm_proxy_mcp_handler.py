@@ -230,6 +230,79 @@ def test_parse_mcp_tools_recognizes_lazymcp_urls():
     ]
 
 
+def test_should_use_litellm_mcp_gateway_callable_as_static_method():
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+        [{"type": "mcp", "server_url": "litellm_proxy/lazymcp/github"}]
+    )
+
+
+def test_decode_lazymcp_tool_server_map_value_handles_invalid_payloads():
+    assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(None) is None
+    assert (
+        LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value("not-lazymcp")
+        is None
+    )
+    assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
+        "lazymcp:not-json"
+    ) == {"mcp_servers": [], "toolset_id": None}
+    assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
+        "lazymcp:[]"
+    ) == {"mcp_servers": [], "toolset_id": None}
+    assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
+        'lazymcp:{"mcp_servers":"github"}'
+    ) == {"mcp_servers": []}
+
+
+def test_should_use_litellm_mcp_gateway_matches_proxy_urls():
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+        [{"type": "mcp", "server_url": "https://proxy.example/mcp/github"}]
+    )
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+        [{"type": "mcp", "server_url": "https://proxy.example/lazymcp/github"}]
+    )
+    assert not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+        [{"type": "function", "server_url": "https://proxy.example/lazymcp/github"}]
+    )
+
+
+def test_get_requested_mcp_servers_handles_lazymcp_variants():
+    servers, use_lazymcp = LiteLLM_Proxy_MCP_Handler._get_requested_mcp_servers(
+        [
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/github"},
+            {"type": "mcp", "server_url": "litellm_proxy/lazymcp/slack"},
+            {"type": "mcp", "server_url": "litellm_proxy/lazymcp"},
+        ]
+    )
+
+    assert servers == ["github", "slack"]
+    assert use_lazymcp is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_lazymcp_scope_handles_server_toolset_and_errors(monkeypatch):
+    server_manager = types.SimpleNamespace(
+        get_mcp_server_by_name=MagicMock(side_effect=[object(), None, None]),
+        get_toolset_by_name_cached=AsyncMock(
+            side_effect=[
+                types.SimpleNamespace(toolset_id="toolset-1"),
+                RuntimeError("db"),
+            ]
+        ),
+    )
+    proxy_module = types.SimpleNamespace(prisma_client=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+        ["github"], server_manager
+    ) == (["github"], None)
+    assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+        ["toolset"], server_manager
+    ) == (None, "toolset-1")
+    assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+        ["broken"], server_manager
+    ) == (["broken"], None)
+
+
 @pytest.mark.asyncio
 async def test_lazymcp_catalog_uses_verified_client_ip(monkeypatch):
     captured = {}
@@ -280,6 +353,65 @@ async def test_lazymcp_catalog_uses_fail_closed_client_ip(monkeypatch):
     )
 
     assert captured["client_ip"] == "__invalid_mcp_client_ip__"
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_catalog_rejects_unauthorized_toolset(monkeypatch):
+    get_catalog_mock = AsyncMock(return_value={"description": "blocked"})
+    apply_scope_mock = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="forbidden")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_catalog",
+        get_catalog_mock,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+        apply_scope_mock,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
+            user_api_key_auth=types.SimpleNamespace(api_key="sk-test"),
+            effective_filter=None,
+            active_toolset_id="toolset-blocked",
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            client_ip="10.0.0.8",
+        )
+
+    assert exc_info.value.status_code == 403
+    apply_scope_mock.assert_awaited_once()
+    get_catalog_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_catalog_allowed_toolset_uses_scoped_auth(monkeypatch):
+    user_auth = types.SimpleNamespace(api_key="sk-test")
+    scoped_auth = types.SimpleNamespace(api_key="sk-scoped")
+    get_catalog_mock = AsyncMock(return_value={"description": "ok"})
+    apply_scope_mock = AsyncMock(return_value=scoped_auth)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_catalog",
+        get_catalog_mock,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+        apply_scope_mock,
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
+        user_api_key_auth=user_auth,
+        effective_filter=None,
+        active_toolset_id="toolset-allowed",
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        client_ip="10.0.0.8",
+    )
+
+    apply_scope_mock.assert_awaited_once_with(user_auth, "toolset-allowed")
+    assert get_catalog_mock.await_args is not None
+    assert get_catalog_mock.await_args.kwargs["user_api_key_auth"] is scoped_auth
 
 
 @pytest.mark.asyncio
@@ -429,9 +561,12 @@ async def test_execute_tool_calls_passes_lazymcp_client_ip_and_scoped_permission
     def fake_set_auth_context(**kwargs):
         captured.update(kwargs)
 
-    async def fake_apply_toolset_permissions(**kwargs):
-        captured["toolset_permissions"] = kwargs
-        return kwargs["user_api_key_auth"]
+    async def fake_apply_toolset_scope(user_api_key_auth, toolset_id):
+        captured["toolset_scope"] = {
+            "user_api_key_auth": user_api_key_auth,
+            "toolset_id": toolset_id,
+        }
+        return user_api_key_auth
 
     async def fake_lazymcp_tool_call(_name, _arguments):
         return _DummyMCPResult()
@@ -440,13 +575,9 @@ async def test_execute_tool_calls_passes_lazymcp_client_ip_and_scoped_permission
         "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         fake_set_auth_context,
     )
-    handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
-    )
     monkeypatch.setattr(
-        handler_module.LiteLLM_Proxy_MCP_Handler,
-        "_apply_toolset_permissions",
-        fake_apply_toolset_permissions,
+        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+        fake_apply_toolset_scope,
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
@@ -476,8 +607,104 @@ async def test_execute_tool_calls_passes_lazymcp_client_ip_and_scoped_permission
     )
 
     assert captured["client_ip"] == "10.0.0.8"
-    assert captured["toolset_permissions"]["resolved_toolset_ids"] == ["toolset-123"]
-    assert captured["toolset_permissions"]["user_api_key_auth"] is user_auth
+    assert captured["toolset_scope"] == {
+        "user_api_key_auth": user_auth,
+        "toolset_id": "toolset-123",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_rejects_unauthorized_lazymcp_toolset(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    apply_scope_mock = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="forbidden")
+    )
+    lazymcp_tool_call_mock = AsyncMock(side_effect=fake_lazymcp_tool_call)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+        apply_scope_mock,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        lazymcp_tool_call_mock,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            None, "toolset-blocked"
+        )
+    )
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy-blocked",
+                "function": {"name": "mcp_call", "arguments": "{}"},
+            }
+        ],
+        user_api_key_auth=types.SimpleNamespace(api_key="sk-test"),
+    )
+
+    assert results[0]["tool_call_id"] == "call-lazy-blocked"
+    assert "forbidden" in results[0]["result"]
+    apply_scope_mock.assert_awaited_once()
+    lazymcp_tool_call_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_allowed_lazymcp_toolset_uses_scoped_auth(
+    monkeypatch,
+):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    user_auth = types.SimpleNamespace(api_key="sk-test")
+    scoped_auth = types.SimpleNamespace(api_key="sk-scoped")
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    apply_scope_mock = AsyncMock(return_value=scoped_auth)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+        apply_scope_mock,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+            None, "toolset-allowed"
+        )
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy-allowed",
+                "function": {"name": "mcp_call", "arguments": "{}"},
+            }
+        ],
+        user_api_key_auth=user_auth,
+    )
+
+    apply_scope_mock.assert_awaited_once_with(user_auth, "toolset-allowed")
+    assert captured["user_api_key_auth"] is scoped_auth
 
 
 @pytest.mark.asyncio

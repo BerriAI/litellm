@@ -91,6 +91,7 @@ class LiteLLM_Proxy_MCP_Handler:
             decoded["mcp_servers"] = []
         return decoded
 
+    @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
         Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
@@ -276,6 +277,7 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> tuple[List[MCPTool], List[str]]:
         from litellm.proxy._experimental.mcp_server.server import (
             _mcp_active_toolset_id,
+            _apply_toolset_scope,
             _get_lazymcp_gateway_tools,
             _get_lazymcp_catalog,
         )
@@ -287,12 +289,8 @@ class LiteLLM_Proxy_MCP_Handler:
         )
         try:
             if active_toolset_id is not None and user_api_key_auth is not None:
-                user_api_key_auth = (
-                    await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
-                        resolved_toolset_ids=[active_toolset_id],
-                        resolved_mcp_servers=effective_filter or [],
-                        user_api_key_auth=user_api_key_auth,
-                    )
+                user_api_key_auth = await _apply_toolset_scope(
+                    user_api_key_auth, active_toolset_id
                 )
             catalog = await _get_lazymcp_catalog(
                 user_api_key_auth=user_api_key_auth,
@@ -864,6 +862,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     from litellm.proxy._experimental.mcp_server.server import (
                         _mcp_active_toolset_id,
+                        _apply_toolset_scope,
                         lazymcp_tool_call,
                         set_auth_context,
                     )
@@ -877,12 +876,8 @@ class LiteLLM_Proxy_MCP_Handler:
                         isinstance(lazy_toolset_id, str)
                         and user_api_key_auth is not None
                     ):
-                        scoped_user_api_key_auth = (
-                            await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
-                                resolved_toolset_ids=[lazy_toolset_id],
-                                resolved_mcp_servers=lazy_mcp_servers or [],
-                                user_api_key_auth=user_api_key_auth,
-                            )
+                        scoped_user_api_key_auth = await _apply_toolset_scope(
+                            user_api_key_auth, lazy_toolset_id
                         )
                     token = (
                         _mcp_active_toolset_id.set(lazy_toolset_id)
