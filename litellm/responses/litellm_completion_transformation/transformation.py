@@ -1304,8 +1304,9 @@ class LiteLLMCompletionResponsesConfig:
                         # prompt-caching markers survive the Responses→Chat hop.
                         # Mirrors the tool-level passthrough at
                         # transform_responses_api_tools_to_chat_completion_tools.
-                        if item.get("cache_control") is not None:
-                            new_content["cache_control"] = item.get("cache_control")
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            new_content["cache_control"] = cache_control
                         content_list.append(new_content)
             return content_list
         else:
