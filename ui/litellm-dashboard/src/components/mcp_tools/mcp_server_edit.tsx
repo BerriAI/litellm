@@ -384,6 +384,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         args: rawArgs,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
+        delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -552,6 +553,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
+        // ``delegate_auth_to_upstream`` is only honored server-side for
+        // ``auth_type=oauth2``. The Form.Item is conditionally rendered so the
+        // value drops out of the form on auth_type change; force false for any
+        // non-oauth2 server to avoid persisting a stale ``true`` that would
+        // silently re-activate if auth_type is later switched back to oauth2.
+        delegate_auth_to_upstream:
+          restValues.auth_type === AUTH_TYPE.OAUTH2
+            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
+            : false,
         // Include token_validation when it is set (non-null) or when clearing an existing value
         ...(tokenValidation !== null || mcpServer.token_validation
           ? { token_validation: tokenValidation }
