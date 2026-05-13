@@ -3,8 +3,11 @@ Mavvrik endpoint Pydantic models for LiteLLM Proxy admin API.
 """
 
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
+
+_MAVVRIK_ALLOWED_SUFFIXES = (".mavvrik.dev", ".mavvrik.ai", ".mavvrik.app")
 
 
 class MavvrikInitRequest(BaseModel):
@@ -31,9 +34,15 @@ class MavvrikInitRequest(BaseModel):
 
     @field_validator("api_endpoint")
     @classmethod
-    def must_be_https(cls, v: str) -> str:
+    def must_be_https_mavvrik_host(cls, v: str) -> str:
         if not v.startswith("https://"):
             raise ValueError("api_endpoint must be an HTTPS URL")
+        netloc = urlparse(v).netloc.split(":")[0]  # strip port if present
+        if not any(netloc.endswith(suffix) for suffix in _MAVVRIK_ALLOWED_SUFFIXES):
+            raise ValueError(
+                f"api_endpoint host must be a Mavvrik domain "
+                f"(e.g. https://api.mavvrik.dev/...)"
+            )
         return v
 
 
@@ -138,7 +147,15 @@ class MavvrikSettingsUpdate(BaseModel):
 
     @field_validator("api_endpoint")
     @classmethod
-    def must_be_https_if_set(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not v.startswith("https://"):
+    def must_be_https_mavvrik_host_if_set(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not v.startswith("https://"):
             raise ValueError("api_endpoint must be an HTTPS URL")
+        netloc = urlparse(v).netloc.split(":")[0]
+        if not any(netloc.endswith(suffix) for suffix in _MAVVRIK_ALLOWED_SUFFIXES):
+            raise ValueError(
+                f"api_endpoint host must be a Mavvrik domain "
+                f"(e.g. https://api.mavvrik.dev/...)"
+            )
         return v

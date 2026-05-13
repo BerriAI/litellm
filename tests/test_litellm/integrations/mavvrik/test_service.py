@@ -745,7 +745,7 @@ class TestAdminGate:
         from fastapi import HTTPException
 
         req = MavvrikInitRequest(
-            api_key="k", api_endpoint="https://e.com/t", connection_id="c"
+            api_key="k", api_endpoint="https://api.mavvrik.dev/t", connection_id="c"
         )
         with pytest.raises(HTTPException) as exc_info:
             await init_mavvrik_settings(req, user_api_key_dict=_non_admin_user())
