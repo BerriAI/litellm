@@ -2793,6 +2793,63 @@ if MCP_AVAILABLE:
             )
             return 200, None
 
+    async def _check_passthrough_upstream_auth(
+        scope: Scope,
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+    ) -> None:
+        """Probe pass-through upstream servers in parallel before the MCP session starts.
+
+        The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
+        can only be returned before that point. This function raises HTTPException(401)
+        with a WWW-Authenticate header if any upstream rejects the client token.
+        Fails-open: network errors are logged and the request is allowed through.
+        """
+        forwarded_auth = _get_forwarded_auth_from_scope(scope)
+        if not forwarded_auth or not mcp_servers:
+            return
+
+        passthrough_servers = [
+            (
+                name,
+                global_mcp_server_manager.get_mcp_server_by_name(
+                    name, client_ip=client_ip
+                ),
+            )
+            for name in mcp_servers
+        ]
+        passthrough_servers = [
+            (name, srv)
+            for name, srv in passthrough_servers
+            if srv
+            and srv.extra_headers
+            and any(h.lower() == "authorization" for h in srv.extra_headers)
+        ]
+        if not passthrough_servers:
+            return
+
+        probe_results = await asyncio.gather(
+            *[
+                _probe_upstream_auth(srv.url or "", forwarded_auth)
+                for _, srv in passthrough_servers
+            ]
+        )
+        request = StarletteRequest(scope)
+        base_url = get_request_base_url(request)
+        for (server_name, _), (probe_status, _) in zip(
+            passthrough_servers, probe_results
+        ):
+            if probe_status in (401, 403):
+                authorization_uri = (
+                    f"Bearer authorization_uri="
+                    f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"WWW-Authenticate": authorization_uri},
+                )
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2851,49 +2908,9 @@ if MCP_AVAILABLE:
                         headers={"www-authenticate": authorization_uri},
                     )
 
-            # Pre-flight auth check for pass-through servers: probe upstream before
-            # the session begins so we can still return HTTP 401 (the MCP SDK sends
-            # 200 OK before calling handlers, making mid-stream status changes impossible).
-            forwarded_auth = _get_forwarded_auth_from_scope(scope)
-            if forwarded_auth and mcp_servers:
-                passthrough_servers = [
-                    (
-                        name,
-                        global_mcp_server_manager.get_mcp_server_by_name(
-                            name, client_ip=_client_ip
-                        ),
-                    )
-                    for name in mcp_servers
-                ]
-                passthrough_servers = [
-                    (name, srv)
-                    for name, srv in passthrough_servers
-                    if srv
-                    and srv.extra_headers
-                    and any(h.lower() == "authorization" for h in srv.extra_headers)
-                ]
-                if passthrough_servers:
-                    probe_results = await asyncio.gather(
-                        *[
-                            _probe_upstream_auth(srv.url or "", forwarded_auth)
-                            for _, srv in passthrough_servers
-                        ]
-                    )
-                    request = StarletteRequest(scope)
-                    base_url = get_request_base_url(request)
-                    for (server_name, _), (probe_status, _) in zip(
-                        passthrough_servers, probe_results
-                    ):
-                        if probe_status in (401, 403):
-                            authorization_uri = (
-                                f"Bearer authorization_uri="
-                                f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                            )
-                            raise HTTPException(
-                                status_code=401,
-                                detail="Unauthorized",
-                                headers={"WWW-Authenticate": authorization_uri},
-                            )
+            # Pre-flight auth check for pass-through servers (extracted to keep
+            # statement count within linter limits; see _check_passthrough_upstream_auth).
+            await _check_passthrough_upstream_auth(scope, mcp_servers, _client_ip)
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [
