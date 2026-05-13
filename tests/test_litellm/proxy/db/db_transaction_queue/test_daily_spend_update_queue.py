@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +56,26 @@ async def test_add_single_update(daily_spend_update_queue):
     assert len(updates) == 1
     assert test_key in updates[0]
     assert updates[0][test_key] == test_transaction
+
+
+@pytest.mark.asyncio
+async def test_add_update_schedules_aggregation_check(daily_spend_update_queue):
+    test_key = "user1_2023-01-01_key123_gpt-4_openai"
+    test_transaction = {
+        "spend": 1.0,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+
+    with patch.object(
+        daily_spend_update_queue, "_schedule_queue_aggregation_if_needed"
+    ) as mock_schedule:
+        await daily_spend_update_queue.add_update({test_key: test_transaction})
+
+    mock_schedule.assert_called_once()
 
 
 @pytest.mark.asyncio

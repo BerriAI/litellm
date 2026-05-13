@@ -1141,6 +1141,151 @@ async def test_enqueue_daily_spend_updates_builds_shared_payload_once():
 
 
 @pytest.mark.asyncio
+async def test_enqueue_daily_spend_updates_skips_without_prisma():
+    writer = DBSpendUpdateWriter()
+    writer._get_base_daily_spend_transaction = MagicMock()
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    await writer._enqueue_daily_spend_updates(
+        payload={},
+        org_id="test-org",
+        prisma_client=None,
+    )
+
+    writer._get_base_daily_spend_transaction.assert_not_called()
+    writer.daily_spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_daily_spend_updates_skips_when_base_transaction_missing():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    writer._get_base_daily_spend_transaction = MagicMock(return_value=None)
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    await writer._enqueue_daily_spend_updates(
+        payload={"user": "test-user"},
+        org_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    writer._get_base_daily_spend_transaction.assert_called_once()
+    writer.daily_spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_daily_spend_updates_skips_invalid_request_tags():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+    payload = {
+        "request_id": "req-invalid-tags",
+        "user": "test-user",
+        "request_tags": {"invalid": "tag-shape"},
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "spend": 0.15,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+    writer.daily_tag_spend_update_queue.add_update = AsyncMock()
+
+    await writer._enqueue_daily_spend_updates(
+        payload=payload,
+        org_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_spend_update_queue.add_update.assert_awaited_once()
+    writer.daily_tag_spend_update_queue.add_update.assert_not_called()
+
+
+def test_get_base_daily_spend_transaction_rejects_missing_required_keys():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+
+    assert (
+        writer._get_base_daily_spend_transaction(
+            payload={"api_key": "test-key"},
+            prisma_client=mock_prisma,
+        )
+        is None
+    )
+    assert mock_prisma.get_request_status.call_count == 0
+
+
+def test_get_base_daily_spend_transaction_rejects_missing_model_fields():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+
+    assert (
+        writer._get_base_daily_spend_transaction(
+            payload={
+                "startTime": "2024-01-01T12:00:00",
+                "api_key": "test-key",
+                "model": "gpt-4",
+            },
+            prisma_client=mock_prisma,
+        )
+        is None
+    )
+    assert mock_prisma.get_request_status.call_count == 0
+
+
+def test_get_base_daily_spend_transaction_rejects_invalid_start_time():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    assert (
+        writer._get_base_daily_spend_transaction(
+            payload={
+                "startTime": object(),
+                "api_key": "test-key",
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "model_group": "gpt-4-group",
+                "metadata": '{"usage_object": {}}',
+            },
+            prisma_client=mock_prisma,
+        )
+        is None
+    )
+    mock_prisma.get_request_status.assert_called_once()
+
+
+def test_get_base_daily_spend_transaction_tracks_failed_requests():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="failure")
+
+    result = writer._get_base_daily_spend_transaction(
+        payload={
+            "startTime": datetime(2024, 1, 1, 12, 0, 0),
+            "api_key": "test-key",
+            "mcp_namespaced_tool_name": "server/tool",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "spend": 0.1,
+            "metadata": '{"usage_object": {"cache_creation_input_tokens": 2}}',
+        },
+        prisma_client=mock_prisma,
+    )
+
+    assert result is not None
+    assert result["date"] == "2024-01-01"
+    assert result["successful_requests"] == 0
+    assert result["failed_requests"] == 1
+    assert result["cache_creation_input_tokens"] == 2
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     """
     Test that when batch upsert fails, detailed error information is logged.

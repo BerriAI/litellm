@@ -31,6 +31,7 @@ DEFAULT_PAYLOAD = {
     "messages": [{"role": "user", "content": "Reply with a single short sentence."}],
     "max_tokens": 32,
 }
+SSL_CONTEXT = ssl.create_default_context()
 
 
 @dataclass
@@ -132,7 +133,7 @@ def post_json_request(
     try:
         request = make_request(url, headers, payload, timeout_seconds)
         with urllib.request.urlopen(
-            request, timeout=timeout_seconds, context=ssl.create_default_context()
+            request, timeout=timeout_seconds, context=SSL_CONTEXT
         ) as response:
             body = response.read()
         total_seconds = time.perf_counter() - start
@@ -175,7 +176,7 @@ def post_stream_request(
     try:
         request = make_request(url, headers, stream_payload, timeout_seconds)
         with urllib.request.urlopen(
-            request, timeout=timeout_seconds, context=ssl.create_default_context()
+            request, timeout=timeout_seconds, context=SSL_CONTEXT
         ) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="ignore").strip()

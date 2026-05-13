@@ -499,7 +499,10 @@ class DBSpendUpdateWriter:
         if isinstance(request_tags, str):
             request_tags = json.loads(request_tags)
         elif not isinstance(request_tags, list):
-            raise ValueError(f"Invalid request_tags: {request_tags}")
+            verbose_proxy_logger.debug(
+                "Invalid request_tags for daily tag spend update: %s", request_tags
+            )
+            return
 
         for tag in request_tags:
             daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
