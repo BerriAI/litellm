@@ -76,10 +76,15 @@ class TestAmbientProviderConfig:
 
         kimi = cost_map["ambient/moonshotai/kimi-k2.6"]
         assert kimi["litellm_provider"] == "ambient"
+        assert kimi["mode"] == "chat"
         assert kimi["max_input_tokens"] == 262144
         assert kimi["max_output_tokens"] == 262144
         assert kimi["input_cost_per_token"] == 9.5e-07
         assert kimi["output_cost_per_token"] == 4e-06
         assert kimi["cache_read_input_token_cost"] == 2e-07
-        assert kimi["supports_vision"] is True
+        assert kimi["supports_function_calling"] is True
+        assert kimi["supports_tool_choice"] is True
+        assert kimi["supports_reasoning"] is True
+        assert kimi["supports_response_schema"] is True
         assert kimi["supports_prompt_caching"] is True
+        assert kimi["supports_vision"] is True
