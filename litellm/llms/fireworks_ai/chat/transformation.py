@@ -243,8 +243,12 @@ class FireworksAIConfig(OpenAIGPTConfig):
             filter_value_from_dict(cast(dict, message), "cache_control")
             # Remove fields not permitted by FireworksAI that may cause:
             # "Not permitted, field: 'messages[n].provider_specific_fields'"
-            if isinstance(message, dict) and "provider_specific_fields" in message:
-                cast(dict, message).pop("provider_specific_fields", None)
+            if isinstance(message, dict):
+                m = cast(dict, message)
+                m.pop("provider_specific_fields", None)
+                # Strict OpenAI schema: Anthropic/Claude Code replays include thinking_blocks;
+                # Fireworks rejects them ("Extra inputs are not permitted").
+                m.pop("thinking_blocks", None)
 
         return messages
 
