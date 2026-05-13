@@ -855,6 +855,16 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return litellm.BedrockClaudePlatformMessagesConfig()
 
         #########################################################
+        # Agent route uses InvokeAgent API with Messages format
+        #########################################################
+        if BedrockModelInfo._explicit_agent_route(model):
+            from litellm.llms.bedrock.messages.invoke_agent_transformation import (
+                AmazonInvokeAgentMessagesConfig,
+            )
+
+            return AmazonInvokeAgentMessagesConfig()
+
+        #########################################################
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
