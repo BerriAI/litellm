@@ -486,21 +486,29 @@ def get_request_route(request: Request) -> str:
     """
     Helper to get the route from the request
 
-    remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
+    remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions`
+
+    Reads ``request.scope["path"]`` (the authoritative ASGI path that
+    FastAPI uses for routing) rather than ``request.url.path``. Starlette
+    constructs ``request.url`` by interpolating the ``Host`` header into
+    a URL string and re-parsing with ``urlsplit``, so a Host containing
+    ``/?`` or ``/#`` collapses ``url.path`` to ``"/"`` — which is in
+    ``LiteLLMRoutes.public_routes`` and would skip auth.
     """
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, dict):
+        path = scope.get("path") or ""
+        root_path = scope.get("root_path") or ""
+        if root_path and path.startswith(root_path):
+            path = path[len(root_path) :]
+        return path or "/"
+    # Non-dict scope only arises in unit tests that mock ``Request``
+    # without populating scope. Production ASGI scope is always a dict,
+    # so the secure path above is the one that runs in practice.
     try:
-        if hasattr(request, "base_url") and request.url.path.startswith(
-            request.base_url.path
-        ):
-            # remove base_url from path
-            return request.url.path[len(request.base_url.path) - 1 :]
-        else:
-            return request.url.path
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
-        )
         return request.url.path
+    except Exception:
+        return "/"
 
 
 @lru_cache(maxsize=256)
