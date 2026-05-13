@@ -273,7 +273,21 @@ class LazyFeatureMiddleware:
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(
             self._features
         ):
+            # Lazy import to avoid pulling proxy.utils into this module's
+            # import graph (proxy_server imports both).
+            from litellm.proxy.utils import get_server_root_path
+
             path = scope.get("path", "")
+            # Strip SERVER_ROOT_PATH so prefix matching works under a server
+            # root path. Without this, requests like /api/v1/policies/... never
+            # match the registered prefixes (/policies/...) and lazy features
+            # stay unloaded — every endpoint under them returns 404. The
+            # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
+            # against root /api). If the path doesn't start with the prefix
+            # (e.g. a reverse proxy already stripped it), we leave it alone.
+            root_path = get_server_root_path().rstrip("/")
+            if root_path and path.startswith(root_path + "/"):
+                path = path[len(root_path) :]
             for feat in self._features:
                 if feat.module_path in self._loaded:
                     continue
