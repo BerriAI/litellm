@@ -3873,14 +3873,14 @@ class TestApplyClientTagPolicyPreAuth:
     post-auth in ``add_litellm_data_to_request``.
     """
 
-    def test_merges_header_tags_into_metadata_when_opted_in(self):
+    def test_merges_header_tags_into_metadata(self):
         request_mock = _build_request_mock_with_headers(
             {"x-litellm-tags": "tenant:acme,env:prod"}
         )
         data = {"model": "gpt-3.5-turbo"}
         user_api_key_dict = UserAPIKeyAuth(
             api_key="hashed-key",
-            metadata={"allow_client_tags": True},
+            metadata={},
             team_metadata={},
         )
 
@@ -3902,7 +3902,7 @@ class TestApplyClientTagPolicyPreAuth:
         }
         user_api_key_dict = UserAPIKeyAuth(
             api_key="hashed-key",
-            metadata={"allow_client_tags": True},
+            metadata={},
             team_metadata={},
         )
 
@@ -3915,21 +3915,17 @@ class TestApplyClientTagPolicyPreAuth:
         # Existing tags first, dedupe header tags
         assert data["metadata"]["tags"] == ["env:prod", "team:platform", "tenant:acme"]
 
-    def test_preserves_body_tags_when_not_opted_in(self):
-        # Pre-auth must NOT strip body-supplied tags for non-opted-in keys.
-        # _tag_max_budget_check (inside common_checks) enforces per-tag
-        # budgets on whatever tags it sees in request_data, and pre-PR
-        # behavior was that body tags hit that check regardless of
-        # allow_client_tags. The post-auth strip in add_litellm_data_to_request
-        # cleans them up before they leave the proxy — that's covered by a
-        # separate regression test.
+    def test_preserves_body_tags(self):
+        # Pre-auth must NOT touch body-supplied tags. _tag_max_budget_check
+        # (inside common_checks) enforces per-tag budgets on whatever tags
+        # it sees in request_data, including body tags. The helper only
+        # adds header tags to metadata.tags.
         request_mock = _build_request_mock_with_headers(
             {"x-litellm-tags": "tenant:acme"}
         )
         data = {
             "model": "gpt-3.5-turbo",
             "tags": ["root-tag"],
-            "metadata": {"tags": ["meta-tag"]},
             "litellm_metadata": {"tags": ["litellm-meta-tag"]},
         }
         user_api_key_dict = UserAPIKeyAuth(
@@ -3945,48 +3941,12 @@ class TestApplyClientTagPolicyPreAuth:
         )
 
         assert data["tags"] == ["root-tag"]
-        assert data["metadata"]["tags"] == ["meta-tag"]
-        assert data["litellm_metadata"]["tags"] == ["litellm-meta-tag"]
-
-    def test_does_not_merge_header_tags_when_not_opted_in(self):
-        # Even with the header set, no opt-in means the header is ignored
-        # and metadata.tags is not created from it.
-        request_mock = _build_request_mock_with_headers(
-            {"x-litellm-tags": "tenant:acme"}
-        )
-        data = {"model": "gpt-3.5-turbo"}
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="hashed-key",
-            metadata={},
-            team_metadata={},
-        )
-
-        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
-            request=request_mock,
-            request_data=data,
-            user_api_key_dict=user_api_key_dict,
-        )
-
-        assert "tags" not in data.get("metadata", {})
-
-    def test_team_metadata_opt_in_is_honored(self):
-        request_mock = _build_request_mock_with_headers(
-            {"x-litellm-tags": "tenant:acme"}
-        )
-        data = {"model": "gpt-3.5-turbo"}
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="hashed-key",
-            metadata={},
-            team_metadata={"allow_client_tags": True},
-        )
-
-        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
-            request=request_mock,
-            request_data=data,
-            user_api_key_dict=user_api_key_dict,
-        )
-
-        assert data["metadata"]["tags"] == ["tenant:acme"]
+        # litellm_metadata is the active metadata key (it's present), so
+        # header tags merge into it and union with existing tags there.
+        assert data["litellm_metadata"]["tags"] == [
+            "litellm-meta-tag",
+            "tenant:acme",
+        ]
 
     def test_uses_litellm_metadata_when_present(self):
         request_mock = _build_request_mock_with_headers(
@@ -3998,7 +3958,7 @@ class TestApplyClientTagPolicyPreAuth:
         }
         user_api_key_dict = UserAPIKeyAuth(
             api_key="hashed-key",
-            metadata={"allow_client_tags": True},
+            metadata={},
             team_metadata={},
         )
 
@@ -4014,12 +3974,12 @@ class TestApplyClientTagPolicyPreAuth:
         assert data["litellm_metadata"]["tags"] == ["tenant:acme"]
         assert "tags" not in data.get("metadata", {})
 
-    def test_no_header_no_mutation_when_opted_in(self):
+    def test_no_header_no_mutation(self):
         request_mock = _build_request_mock_with_headers({})
         data = {"model": "gpt-3.5-turbo"}
         user_api_key_dict = UserAPIKeyAuth(
             api_key="hashed-key",
-            metadata={"allow_client_tags": True},
+            metadata={},
             team_metadata={},
         )
 
@@ -4045,7 +4005,7 @@ class TestApplyClientTagPolicyPreAuth:
         data = {"model": "gpt-3.5-turbo"}
         user_api_key_dict = UserAPIKeyAuth(
             api_key="hashed-key",
-            metadata={"allow_client_tags": True},
+            metadata={},
             team_metadata={},
         )
 

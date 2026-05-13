@@ -1197,44 +1197,24 @@ class LiteLLMProxyRequestSetup:
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """
-        Apply the client-tag policy BEFORE auth budget gates run, so
-        ``_tag_max_budget_check`` (which only inspects ``request_data``)
-        sees ``x-litellm-tags`` header tags. Without this, header-tagged
+        Merge ``x-litellm-tags`` header tags into ``request_data`` BEFORE
+        auth budget gates run, so ``_tag_max_budget_check`` (which only
+        inspects ``request_data``) sees them. Without this, header-tagged
         requests silently bypass per-tag budget enforcement.
 
-        Mirrors the strip + merge that ``add_litellm_data_to_request``
-        performs post-auth, gated on the same ``allow_client_tags`` flag.
-
-        Why: ``add_litellm_data_to_request`` runs after the auth chain has
-        completed, so any header-supplied tags it merges in are invisible
-        to ``_tag_max_budget_check``. Running the merge here closes that
-        gap. The post-auth strip + merge remains as defense-in-depth.
+        Why: ``add_litellm_data_to_request`` runs the equivalent merge
+        post-auth, after ``_tag_max_budget_check`` has already executed.
+        Header-supplied tags merged there are invisible to that check.
+        Running the merge here closes that gap; the post-auth merge in
+        ``add_litellm_data_to_request`` remains as defense-in-depth.
 
         How to apply: invoked from the auth chain just before
         ``common_checks``. Mutates ``request_data`` in place; idempotent
         when followed by ``add_litellm_data_to_request``.
         """
-        _admin_allow_client_tags = False
-        for _admin_meta in (
-            user_api_key_dict.metadata,
-            user_api_key_dict.team_metadata,
-        ):
-            if (
-                isinstance(_admin_meta, dict)
-                and _admin_meta.get("allow_client_tags") is True
-            ):
-                _admin_allow_client_tags = True
-                break
-
-        if not _admin_allow_client_tags:
-            # Don't strip body-supplied tags here — pre-PR behavior was that
-            # _tag_max_budget_check (inside common_checks) saw and enforced
-            # per-tag budgets on body tags regardless of allow_client_tags.
-            # Stripping pre-auth would silently disable that enforcement.
-            # The post-auth strip in add_litellm_data_to_request still
-            # removes unauthorized tags before they leave the proxy.
-            return
-
+        # No allow_client_tags opt-in: caller-supplied tags always flow
+        # into metadata.tags (see add_litellm_data_to_request). The pre-auth
+        # merge mirrors that so _tag_max_budget_check sees the same tags.
         headers = _safe_get_request_headers(request=request)
         raw_header_tags = headers.get("x-litellm-tags")
         if not raw_header_tags:
