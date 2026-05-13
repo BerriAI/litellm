@@ -523,7 +523,7 @@ class LiteLLMCompletionTransformationHandler:
                         )
 
                 # 打印第一个有 tool_calls 的消息详情
-                for i, msg in enumerate(messages_debug):
+                for i, msg in enumerate(messages_debug or []):
                     if isinstance(msg, dict) and msg.get("tool_calls"):
                         tc = msg.get("tool_calls", [])
                         if tc and isinstance(tc, list) and len(tc) > 0:
