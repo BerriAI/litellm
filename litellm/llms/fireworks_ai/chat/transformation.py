@@ -241,10 +241,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
-            # Remove fields not permitted by FireworksAI that may cause:
-            # "Not permitted, field: 'messages[n].provider_specific_fields'"
-            if isinstance(message, dict) and "provider_specific_fields" in message:
-                cast(dict, message).pop("provider_specific_fields", None)
+            # Remove fields not permitted by FireworksAI (additionalProperties: false
+            # on their ChatMessage schema) that may cause:
+            # "Extra inputs are not permitted, field: 'messages[n].<field>'"
+            if isinstance(message, dict):
+                m = cast(dict, message)
+                m.pop("provider_specific_fields", None)
+                m.pop("thinking_blocks", None)
 
         return messages
 
