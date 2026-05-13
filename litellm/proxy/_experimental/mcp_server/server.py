@@ -882,10 +882,16 @@ if MCP_AVAILABLE:
         # cache so that the pass-through auth probe and the downstream
         # list_tools / call_tool dispatch share a single permission resolution
         # instead of each repeating the full key/team/end_user/agent/org chain.
+        # The auth object's identity is included in the key because
+        # _merge_toolset_permissions can produce a new auth copy with an
+        # expanded object_permission.mcp_servers between calls in the same
+        # request — reusing the pre-merge result would silently drop servers
+        # that only the merged permissions grant.
         request_cache = _mcp_request_allowed_servers_cache.get()
         cache_key = (
             tuple(mcp_servers) if mcp_servers is not None else None,
             client_ip,
+            id(user_api_key_auth) if user_api_key_auth is not None else None,
         )
         if request_cache is not None and cache_key in request_cache:
             return request_cache[cache_key]
