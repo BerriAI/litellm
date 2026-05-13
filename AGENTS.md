@@ -241,10 +241,27 @@ When opening issues or pull requests, follow these templates:
 
 ### Running the proxy server
 
-Start the proxy with a config file:
+Create a minimal config file and start the proxy:
+
+```yaml
+# config.yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake-model
+      api_key: fake-key
+      api_base: https://fake-api.example.com
+
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: True
+  telemetry: False
+```
 
 ```bash
-uv run litellm --config dev_config.yaml --port 4000
+uv run litellm --config config.yaml --port 4000
 ```
 
 The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.

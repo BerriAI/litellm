@@ -253,27 +253,63 @@ class SharedHealthCheckManager:
                 # Always release the lock
                 await self.release_health_check_lock()
         else:
-            # Lock not acquired, wait briefly and try to get cached results
+            # If Redis is not configured, skip polling — there is no cache
+            # to wait for.
+            if self.redis_cache is None:
+                return await perform_health_check(
+                    model_list=model_list,
+                    details=details,
+                    max_concurrency=max_concurrency,
+                )
+
+            # Lock not acquired — poll for cached results until the lock
+            # holder finishes or the lock expires, rather than falling back
+            # to a redundant local health check after only 2 seconds.
             verbose_proxy_logger.debug(
                 "Pod %s waiting for other pod to complete health check", self.pod_id
             )
 
-            # Wait a bit for the other pod to complete
-            await asyncio.sleep(2)
+            poll_interval = 5  # seconds between cache checks
+            max_wait = self.lock_ttl  # wait at most as long as the lock can live
+            elapsed = 0
 
-            # Try to get cached results again
-            cached_results = await self.get_cached_health_check_results()
-            if cached_results is not None:
-                return (
-                    cached_results.get("healthy_endpoints", []),
-                    cached_results.get("unhealthy_endpoints", []),
-                    {},
-                )
+            while elapsed < max_wait:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
 
-            # Still no cache, fall back to local health check
+                cached_results = await self.get_cached_health_check_results()
+                if cached_results is not None:
+                    verbose_proxy_logger.info(
+                        "Pod %s using cached health check results after waiting %ds",
+                        self.pod_id,
+                        elapsed,
+                    )
+                    return (
+                        cached_results.get("healthy_endpoints", []),
+                        cached_results.get("unhealthy_endpoints", []),
+                        {},
+                    )
+
+                # Check if the lock is still held — if it was released without
+                # caching (e.g. the holder crashed), stop waiting early.
+                try:
+                    lock_key = self.get_health_check_lock_key()
+                    current_owner = await self.redis_cache.async_get_cache(lock_key)
+                    if current_owner is None:
+                        verbose_proxy_logger.debug(
+                            "Pod %s detected lock released without cache, stopping wait",
+                            self.pod_id,
+                        )
+                        break
+                except Exception:
+                    # Redis hiccup — continue polling rather than crashing out
+                    pass
+
+            # Exhausted wait — fall back to local health check
             verbose_proxy_logger.warning(
-                "Pod %s falling back to local health check (no cache available)",
+                "Pod %s falling back to local health check after waiting %ds (no cache available)",
                 self.pod_id,
+                elapsed,
             )
 
             return await perform_health_check(

@@ -18,6 +18,7 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
@@ -265,4 +266,60 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     assert info_std_2["output_cost_per_token"] == builtin_output_cost, (
         f"Order should not matter. Expected {builtin_output_cost}, "
         f"got {info_std_2['output_cost_per_token']}"
+    )
+
+
+def test_responses_prefix_stripped_alias_registered_for_model_list():
+    """
+    Register ``litellm.model_cost`` under the backend key with ``responses/`` and
+    under the stripped key (``responses_api_bridge_check`` removes that segment).
+    """
+    uid = "responses-strip-alias-test-a1b2c3d4"
+    Router(
+        model_list=[
+            {
+                "model_name": "azure-responses-strip-test",
+                "litellm_params": {
+                    "model": "responses/gpt-strip-test-a1b2c3d4",
+                    "custom_llm_provider": "azure",
+                    "api_key": "fake-key-strip",
+                },
+                "model_info": {
+                    "id": uid,
+                    "supports_native_streaming": True,
+                },
+            }
+        ],
+    )
+    assert "azure/responses/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert "azure/gpt-strip-test-a1b2c3d4" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-strip-test-a1b2c3d4"].get(
+            "supports_native_streaming"
+        )
+        is True
+    )
+
+
+def test_responses_prefix_stripped_alias_registered_for_add_deployment():
+    """Dynamic ``add_deployment`` must mirror ``_create_deployment`` registration."""
+    uid = "add-dep-responses-strip-e5f6a7b8"
+    router = Router(model_list=[])
+    deployment = Deployment(
+        model_name="dyn-responses-strip",
+        litellm_params=LiteLLM_Params(
+            model="responses/gpt-add-strip-e5f6a7b8",
+            custom_llm_provider="azure",
+            api_key="fake-key-add",
+        ),
+        model_info=ModelInfo(id=uid, supports_native_streaming=True),
+    )
+    router.add_deployment(deployment=deployment)
+    assert "azure/responses/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert "azure/gpt-add-strip-e5f6a7b8" in litellm.model_cost
+    assert (
+        litellm.model_cost["azure/gpt-add-strip-e5f6a7b8"].get(
+            "supports_native_streaming"
+        )
+        is True
     )

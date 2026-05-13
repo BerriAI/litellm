@@ -36,6 +36,19 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_post_call_serializes_dict_with_datetime(logging_obj):
+    import datetime
+
+    response = {
+        "status": "InProgress",
+        "submitTime": datetime.datetime(2026, 5, 11, 23, 49, 13, 132000),
+    }
+    logging_obj.post_call(original_response=response)
+    serialized = logging_obj.model_call_details["original_response"]
+    assert isinstance(serialized, str)
+    assert "2026-05-11" in serialized
+
+
 def test_sentry_sample_rate():
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
     try:

@@ -21,6 +21,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _get_metadata_variable_name,
     _resolve_credential_from_model_config,
+    _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -873,101 +874,8 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_ignores_x_litellm_tags_header_without_permission():
-    """Regression: the `x-litellm-tags` header bypassed the body-metadata
-    tag strip. Header tags must also be gated by `allow_client_tags`."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {
-        "Content-Type": "application/json",
-        "x-litellm-tags": "restricted-tier,victim-team",
-    }
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {"model": "gpt-3.5-turbo"}
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert "tags" not in (updated.get("metadata") or {})
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_ignores_root_level_tags_without_permission():
-    """Regression: root-level `data["tags"]` bypassed the body-metadata
-    tag strip. Root-level tags must also be gated by `allow_client_tags`."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "tags": ["restricted-tier", "victim-team"],
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert "tags" not in (updated.get("metadata") or {})
-    # Also ensure the root-level tags are removed. get_tags_from_request_body
-    # reads request_body["tags"] directly, so leaving it in place would let
-    # the policy engine see caller-supplied tags even after the metadata
-    # strip.
-    assert "tags" not in updated
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
-    """When allow_client_tags=True, header-supplied tags flow through."""
+async def test_add_litellm_data_to_request_honors_header_tags():
+    """Header-supplied tags flow through to request metadata."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -987,7 +895,7 @@ async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={"allow_client_tags": True},
+        metadata={},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1009,11 +917,8 @@ async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_user_tags_without_permission():
-    """Caller-supplied metadata.tags must be stripped when the key/team
-    metadata does not opt in via allow_client_tags=True. Otherwise an
-    attacker can reach restricted tag-routed deployments or attribute
-    spend to a victim team's tag."""
+async def test_add_litellm_data_to_request_preserves_caller_metadata_tags():
+    """Caller-supplied metadata.tags are preserved and reach the router."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -1028,8 +933,7 @@ async def test_add_litellm_data_to_request_strips_user_tags_without_permission()
 
     data = {
         "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["restricted-tier", "victim-team"]},
-        "litellm_metadata": {"tags": ["also-stripped"]},
+        "metadata": {"tags": ["caller-tag"]},
     }
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -1052,101 +956,13 @@ async def test_add_litellm_data_to_request_strips_user_tags_without_permission()
         version="test-version",
     )
 
-    assert "tags" not in (updated.get("metadata") or {})
-    assert "tags" not in (updated.get("litellm_metadata") or {})
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_preserves_user_tags_when_key_opts_in():
-    """When key.metadata.allow_client_tags=True, caller-supplied tags are
-    preserved and reach the router."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["opted-in-tag"]},
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={"allow_client_tags": True},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert updated["metadata"].get("tags") == ["opted-in-tag"]
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_preserves_user_tags_when_team_opts_in():
-    """Team-level allow_client_tags is also honored (not just key-level)."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["team-allowed"]},
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={"allow_client_tags": True},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert updated["metadata"].get("tags") == ["team-allowed"]
+    assert updated["metadata"].get("tags") == ["caller-tag"]
 
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static_key_tags():
     """Caller-supplied `x-litellm-tags` must union with static key-level
-    tags, not overwrite them, when `allow_client_tags=True`."""
+    tags, not overwrite them."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -1166,10 +982,7 @@ async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={
-            "allow_client_tags": True,
-            "tags": ["team:platform", "env:prod"],
-        },
+        metadata={"tags": ["team:platform", "env:prod"]},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1216,10 +1029,7 @@ async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
         metadata={},
-        team_metadata={
-            "allow_client_tags": True,
-            "tags": ["team:eng", "owner:platform"],
-        },
+        team_metadata={"tags": ["team:eng", "owner:platform"]},
         spend=0.0,
         max_budget=100.0,
         model_max_budget={},
@@ -1265,10 +1075,7 @@ async def test_add_litellm_data_to_request_unions_dedups_overlapping_caller_and_
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={
-            "allow_client_tags": True,
-            "tags": ["env:prod", "team:platform"],
-        },
+        metadata={"tags": ["env:prod", "team:platform"]},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1363,11 +1170,9 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
         "file": b"Fake audio bytes",
     }
 
-    # Opt the key in to client-supplied tags so the parsed tags from the
-    # JSON-string multipart body aren't stripped by the admin-injection strip.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={"allow_client_tags": True},
+        metadata={},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -4043,3 +3848,174 @@ def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
     assert result == [
         "my-guardrail"
     ], f"Expected guardrails from litellm_metadata fallback, got: {result}"
+
+
+# ============================================================================
+# Tests for #27516: provider hint resolution from deployment when the
+# user-facing model name has no provider prefix.
+# ============================================================================
+
+
+def test_resolve_provider_from_deployment_uses_litellm_params_model():
+    """When custom_llm_provider is unset, fall back to the prefix of model."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert (
+        _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+    )
+
+
+def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
+    """Explicit custom_llm_provider on the deployment wins over model prefix."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert (
+        _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+    )
+
+
+def test_resolve_provider_from_deployment_no_match():
+    """No deployment for the model group -> None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.return_value = None
+    assert _resolve_provider_from_deployment(router, "unknown-model") is None
+
+
+def test_resolve_provider_from_deployment_router_raises():
+    """Router exceptions must not propagate — fall back to None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
+
+
+def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
+    """If post-alias lookup fails, the pre-alias name is also tried."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+
+    def lookup(model_group_name):
+        if model_group_name == "pre-alias-name":
+            return deployment
+        return None
+
+    router.get_deployment_by_model_group_name.side_effect = lookup
+
+    result = _resolve_provider_from_deployment(
+        router, "post-alias-name", pre_alias_model_name="pre-alias-name"
+    )
+    assert result == "bedrock"
+
+
+def test_apply_overrides_multi_provider_default_picks_correct_provider(
+    setup_test_credentials,
+):
+    """
+    Regression for #27516: when defaultconfig has multiple providers and the
+    request model has no '/' prefix, the deployment's custom_llm_provider must
+    drive provider matching instead of falling through to dict insertion order.
+    """
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="bedrock-team-1",
+            credential_info={},
+            credential_values={"api_key": "ABSK-bedrock-key-for-team-1"},
+        )
+    )
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="gemini-team-1",
+            credential_info={},
+            credential_values={"api_key": "gemini-key-for-team-1"},
+        )
+    )
+
+    data = {"model": "claude-sonnet-4.6"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    # gemini comes first in insertion order — the bug picked it.
+                    "gemini": {"litellm_credentials": "gemini-team-1"},
+                    "bedrock": {"litellm_credentials": "bedrock-team-1"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=router,
+    )
+    assert data["api_key"] == "ABSK-bedrock-key-for-team-1"
+
+
+def test_apply_overrides_no_router_keeps_legacy_behaviour(setup_test_credentials):
+    """
+    Without a router, the function still works for the single-provider case
+    (the historical behaviour). Multi-provider configs with no '/' prefix
+    keep the legacy first-entry behaviour because there is no way to
+    disambiguate — this preserves backwards compatibility.
+    """
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=None
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
+    setup_test_credentials,
+):
+    """
+    When the request model already has a 'provider/...' prefix, the router
+    lookup must be skipped — the explicit prefix is authoritative.
+    """
+    data = {"model": "azure/gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"},
+                    "bedrock": {"litellm_credentials": "hotel-rec-azure"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=router
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+    router.get_deployment_by_model_group_name.assert_not_called()

@@ -206,6 +206,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
+skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[str] = (
@@ -1425,6 +1426,12 @@ if TYPE_CHECKING:
     )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
+    from .llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig as BedrockClaudePlatformConfig,
+    )
+    from .llms.bedrock.claude_platform.messages_transformation import (
+        BedrockClaudePlatformMessagesConfig as BedrockClaudePlatformMessagesConfig,
+    )
     from .llms.anthropic.completion.transformation import (
         AnthropicTextConfig as AnthropicTextConfig,
     )
