@@ -163,7 +163,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPCredentials
+    from litellm.types.mcp import MCPAuth, MCPCredentials
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -1550,6 +1550,57 @@ if MCP_AVAILABLE:
                             api_key = f"Bearer {cookie_key}"
                 except _jwt.InvalidTokenError:
                     pass
+
+        # For delegate_auth_to_upstream servers the entire PKCE handshake
+        # (both /authorize browser redirect and /token authorization_code
+        # exchange) must work without a LiteLLM session.  /authorize is opened
+        # in a VS Code webview that may have no cookie; /token is a programmatic
+        # POST from VS Code. PKCE security (code_verifier) guarantees the
+        # authorization_code exchange cannot be replayed, so anonymous access
+        # is safe for that grant only.
+        #
+        # Importantly, NOT safe for refresh_token grants: ``mcp_token`` will
+        # forward the request to the upstream issuer with LiteLLM's stored
+        # ``client_secret`` attached, so any caller holding a refresh token
+        # issued to this client could mint fresh upstream access tokens through
+        # us. Require normal LiteLLM auth for those.
+        if not api_key:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            server_id = request.path_params.get("server_id", "")
+            if server_id:
+                _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if not _s:
+                    _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                if (
+                    _s
+                    and getattr(_s, "auth_type", None) == MCPAuth.oauth2
+                    and getattr(_s, "delegate_auth_to_upstream", False) is True
+                    and getattr(_s, "available_on_public_internet", True)
+                    # M2M servers fetch tokens with stored credentials; never
+                    # expose their /authorize or /token endpoints anonymously.
+                    and not _s.has_client_credentials
+                ):
+                    # For /token, require PKCE authorization_code; refresh_token
+                    # grants must NOT bypass auth (see comment above).
+                    path_lower = (request.url.path or "").rstrip("/").lower()
+                    if path_lower.endswith("/token"):
+                        body_data = await _read_request_body(request=request)
+                        grant_type = (body_data or {}).get("grant_type", "")
+                        if grant_type != "authorization_code":
+                            # Fall through to normal LiteLLM auth (will 401 if
+                            # no key supplied).
+                            pass
+                        else:
+                            return UserAPIKeyAuth()
+                    else:
+                        # /authorize and other PKCE-flow GETs are safe to
+                        # bypass: PKCE binds the upstream issuer's ``code``
+                        # to the original ``code_challenge`` so no anonymous
+                        # token can be minted via the redirect alone.
+                        return UserAPIKeyAuth()
 
         request_data = await _read_request_body(request=request)
         request_data = populate_request_with_path_params(

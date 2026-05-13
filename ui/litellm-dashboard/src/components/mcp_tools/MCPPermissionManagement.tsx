@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { MCPServer } from "./types";
+import { MCPServer, AUTH_TYPE } from "./types";
 const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
@@ -23,6 +23,8 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   getAccessGroupOptions,
 }) => {
   const form = Form.useFormInstance();
+  const watchedAuthType = Form.useWatch("auth_type", form);
+  const isOAuth2 = watchedAuthType === AUTH_TYPE.OAUTH2;
 
   // Set initial values when mcpServer changes
   useEffect(() => {
@@ -40,11 +42,24 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       if (typeof mcpServer.available_on_public_internet === "boolean") {
         form.setFieldValue("available_on_public_internet", mcpServer.available_on_public_internet);
       }
+      if (typeof mcpServer.delegate_auth_to_upstream === "boolean") {
+        form.setFieldValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
+      }
     } else {
       form.setFieldValue("allow_all_keys", false);
       form.setFieldValue("available_on_public_internet", true);
+      form.setFieldValue("delegate_auth_to_upstream", false);
     }
   }, [mcpServer, form]);
+
+  // delegate_auth_to_upstream is only honored server-side when auth_type=oauth2.
+  // Force it back to false whenever the user switches away from oauth2 so a
+  // stale toggle value doesn't get persisted with another auth type.
+  useEffect(() => {
+    if (!isOAuth2) {
+      form.setFieldValue("delegate_auth_to_upstream", false);
+    }
+  }, [isOAuth2, form]);
 
   return (
     <Collapse className="bg-gray-50 border border-gray-200 rounded-lg" expandIconPosition="end" ghost={false}>
@@ -104,6 +119,30 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <Switch />
             </Form.Item>
           </div>
+
+          {isOAuth2 && (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Delegate auth to upstream (PKCE passthrough)
+                  <Tooltip title="When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+                <p className="text-sm text-gray-600 mt-1">
+                  Bypass LiteLLM auth so clients authenticate directly with the upstream OAuth MCP server.
+                </p>
+              </div>
+              <Form.Item
+                name="delegate_auth_to_upstream"
+                valuePropName="checked"
+                initialValue={mcpServer?.delegate_auth_to_upstream ?? false}
+                className="mb-0"
+              >
+                <Switch />
+              </Form.Item>
+            </div>
+          )}
 
           <Form.Item
             label={
