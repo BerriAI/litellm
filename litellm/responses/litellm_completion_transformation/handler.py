@@ -278,12 +278,9 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("logit_bias", None)  # logit bias
             completion_args.pop("n", None)  # 返回多个结果
             completion_args.pop("service_tier", None)  # 服务等级
-            # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
-            completion_args.pop("litellm_metadata", None)
-            completion_args.pop("litellm_logging_obj", None)
-            completion_args.pop("litellm_trace_id", None)
-            completion_args.pop("litellm_call_id", None)
-            completion_args.pop("proxy_server_request", None)
+            # 注意：litellm_* 内部参数（litellm_metadata, litellm_logging_obj, litellm_call_id 等）
+            # 必须保留！这些是代理会计/spend attribution 必需的参数，不应删除。
+            # 只有发送给上游 API 的参数才需要过滤，LiteLLM 内部参数会被 litellm.completion 正确处理。
             completion_args.pop("shared_session", None)
             completion_args.pop("model_info", None)
             completion_args.pop("secret_fields", None)
@@ -302,9 +299,15 @@ class LiteLLMCompletionTransformationHandler:
                 completion_args["tool_choice"] = "auto"
                 logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证
+            # DEBUG: 国内模型参数过滤验证（脱敏 api_base，只显示域名）
+            # 安全：api_base 可能包含凭证或内部主机名，只显示基础域名
+            safe_api_base = (
+                api_base.split("//")[-1].split("/")[0].split("?")[0]
+                if api_base
+                else "none"
+            )
             logger.info(
-                f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
+                f"[DomesticFilter] actual_model={actual_model}, api_base_host={safe_api_base}, "
                 f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
             )
             logger.info(
@@ -444,12 +447,8 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("logit_bias", None)  # logit bias
             acompletion_args.pop("n", None)  # 返回多个结果
             acompletion_args.pop("service_tier", None)  # 服务等级
-            # LiteLLM 内部参数（不应发送给 API，但 custom_llm_provider 必须保留）
-            acompletion_args.pop("litellm_metadata", None)
-            acompletion_args.pop("litellm_logging_obj", None)
-            acompletion_args.pop("litellm_trace_id", None)
-            acompletion_args.pop("litellm_call_id", None)
-            acompletion_args.pop("proxy_server_request", None)
+            # 注意：litellm_* 内部参数必须保留，用于代理会计/spend attribution
+            # 这些参数会被 litellm.completion 正确处理，不会发送给上游 API
             acompletion_args.pop("shared_session", None)
             acompletion_args.pop("model_info", None)
             acompletion_args.pop("secret_fields", None)
@@ -468,9 +467,15 @@ class LiteLLMCompletionTransformationHandler:
                 acompletion_args["tool_choice"] = "auto"
                 logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证
+            # DEBUG: 国内模型参数过滤验证（脱敏 api_base，只显示域名）
+            # 安全：api_base 可能包含凭证或内部主机名，只显示基础域名
+            safe_api_base = (
+                api_base.split("//")[-1].split("/")[0].split("?")[0]
+                if api_base
+                else "none"
+            )
             logger.info(
-                f"[DomesticFilter] actual_model={actual_model}, api_base={api_base}, "
+                f"[DomesticFilter] actual_model={actual_model}, api_base_host={safe_api_base}, "
                 f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
             )
             logger.info(
@@ -522,7 +527,7 @@ class LiteLLMCompletionTransformationHandler:
                             f"[DomesticFilter] msg[{i}] role={role}, has_tool_calls={has_tools}"
                         )
 
-                # 打印第一个有 tool_calls 的消息详情
+                # 打印第一个有 tool_calls 的消息详情（不含 arguments，安全）
                 for i, msg in enumerate(messages_debug or []):
                     if isinstance(msg, dict) and msg.get("tool_calls"):
                         tc = msg.get("tool_calls", [])
@@ -533,11 +538,9 @@ class LiteLLMCompletionTransformationHandler:
                                 if isinstance(first_tc, dict)
                                 else "unknown"
                             )
-                            args_preview = str(
-                                first_tc.get("function", {}).get("arguments", "")
-                            )[:100]
+                            # 安全：不打印 arguments，可能包含敏感内容
                             logger.info(
-                                f"[DomesticFilter] First tool_call msg[{i}] function={func_name}, args_preview={args_preview}"
+                                f"[DomesticFilter] First tool_call msg[{i}] function={func_name}"
                             )
                             break
 
