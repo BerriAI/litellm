@@ -95,6 +95,10 @@ def _get_redis_cluster_kwargs(client=None):
         "redis_connect_func",  # Needed for sync clusters and IAM detection
         "gcp_service_account",
         "gcp_ssl_ca_certs",
+        "azure_redis_ad_token",
+        "azure_client_id",
+        "azure_tenant_id",
+        "azure_client_secret",
         "max_connections",
     }
 
