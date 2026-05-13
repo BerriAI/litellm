@@ -43,7 +43,6 @@ _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
 class BlockedToolsResult:
     """Returned by _extract_blocked_tools when at least one tool was blocked."""
 
-    allowed_tools: list
     explanation: str
 
 
@@ -446,6 +445,5 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
         explanation = blocking_explanation or "Tool call blocked by policy."
         return BlockedToolsResult(
-            allowed_tools=allowed_tools,
             explanation=f"\n\n{explanation}",
         )
