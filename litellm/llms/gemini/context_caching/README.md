@@ -1,1 +1,0 @@
-[Go here for the Gemini Context Caching code](../../vertex_ai/context_caching/)

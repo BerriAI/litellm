@@ -1,1 +1,0 @@
-"""Video endpoints module."""

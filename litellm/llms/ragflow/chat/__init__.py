@@ -1,3 +1,0 @@
-"""
-RAGFlow chat completion configuration.
-"""
