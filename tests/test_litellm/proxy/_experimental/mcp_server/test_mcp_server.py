@@ -3274,7 +3274,7 @@ async def test_probe_upstream_auth_returns_upstream_status():
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.head = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
@@ -3294,7 +3294,7 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+        mock_client.head = AsyncMock(side_effect=Exception("connection refused"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client_cls.return_value = mock_client
