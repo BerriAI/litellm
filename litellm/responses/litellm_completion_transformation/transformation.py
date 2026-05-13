@@ -284,7 +284,9 @@ class LiteLLMCompletionResponsesConfig:
                 if "effort" in reasoning_param:
                     reasoning_effort = reasoning_param.get("effort")
                     # 确保 effort 是字符串
-                    if reasoning_effort is not None and not isinstance(reasoning_effort, str):
+                    if reasoning_effort is not None and not isinstance(
+                        reasoning_effort, str
+                    ):
                         reasoning_effort = str(reasoning_effort)
                 # 如果只有 summary 没有 effort，丢弃整个参数
                 # summary 是 Responses API 特有参数，chat completion 不支持

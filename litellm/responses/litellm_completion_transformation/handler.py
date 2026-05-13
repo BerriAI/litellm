@@ -58,7 +58,11 @@ class LiteLLMCompletionTransformationHandler:
                 tool_calls = getattr(msg, "tool_calls", None)
 
             # 只处理 assistant 消息的 tool_calls
-            if role != "assistant" or not tool_calls or not isinstance(tool_calls, list):
+            if (
+                role != "assistant"
+                or not tool_calls
+                or not isinstance(tool_calls, list)
+            ):
                 result_messages.append(msg)
                 continue
 
@@ -112,7 +116,9 @@ class LiteLLMCompletionTransformationHandler:
                             fixed_args = "{}"
                             needs_rebuild = True
                             fixed_count += 1
-                            args_preview = str(original_args)[:50] if original_args else "None"
+                            args_preview = (
+                                str(original_args)[:50] if original_args else "None"
+                            )
                             logger.warning(
                                 f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
                             )
@@ -132,14 +138,16 @@ class LiteLLMCompletionTransformationHandler:
                         fixed_count += 1
 
                 # 重建 tool_call dict（确保 arguments 是有效 JSON string）
-                new_tool_calls.append({
-                    "id": tc_id,
-                    "type": tc_type,
-                    "function": {
-                        "name": func_name,
-                        "arguments": fixed_args if fixed_args is not None else "{}",
+                new_tool_calls.append(
+                    {
+                        "id": tc_id,
+                        "type": tc_type,
+                        "function": {
+                            "name": func_name,
+                            "arguments": fixed_args if fixed_args is not None else "{}",
+                        },
                     }
-                })
+                )
 
             if needs_rebuild:
                 # 重建整个消息为 dict（确保所有字段被正确复制）
@@ -155,7 +163,11 @@ class LiteLLMCompletionTransformationHandler:
                     }
                     # 复制其他可能存在的字段
                     for field in ["content", "name", "audio"]:
-                        val = getattr(msg, field, None) if not isinstance(msg, dict) else msg.get(field)
+                        val = (
+                            getattr(msg, field, None)
+                            if not isinstance(msg, dict)
+                            else msg.get(field)
+                        )
                         if val is not None:
                             new_msg[field] = val
                 result_messages.append(new_msg)
