@@ -5,12 +5,36 @@ import os
 from typing import Any, Callable, Literal, Optional, get_type_hints
 
 
+def _allow_remote_instance_fn_from_api() -> bool:
+    return os.getenv("LITELLM_ALLOW_REMOTE_INSTANCE_FN_FROM_API", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
     module_name = value
     instance_name = None
     try:
         # Check if value starts with s3:// or gcs://
         if value.startswith("s3://") or value.startswith("gcs://"):
+            # Remote module loading is a documented operator feature when
+            # invoked from config-file load (``config_file_path`` carries
+            # the YAML path). Without that signal the URL is request-body
+            # data on an admin endpoint — a one-step admin-to-RCE primitive
+            # via ``_load_instance_from_remote_storage``'s
+            # ``exec_module``. Refuse unless the operator explicitly opts
+            # back in via ``LITELLM_ALLOW_REMOTE_INSTANCE_FN_FROM_API``.
+            if config_file_path is None and not _allow_remote_instance_fn_from_api():
+                raise ValueError(
+                    "Remote module loading (s3://, gcs://) is only "
+                    "permitted from the config-file load path. Register "
+                    "the module under ``litellm_settings`` in your "
+                    "config.yaml instead. To opt into runtime API "
+                    "loading, set "
+                    "``LITELLM_ALLOW_REMOTE_INSTANCE_FN_FROM_API=true``."
+                )
             return _load_instance_from_remote_storage(value, config_file_path)
 
         # Split the path by dots to separate module from instance
