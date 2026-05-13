@@ -1487,6 +1487,33 @@ def test_validate_trusted_redirect_uri_tolerates_malformed_env_entries(monkeypat
         validate_trusted_redirect_uri(req, "https://foo.example.net/cb")
 
 
+def test_validate_trusted_redirect_uri_rejects_wildcard_entry_with_dot_leading_suffix(
+    monkeypatch,
+):
+    """A wildcard entry like ``*..example.com`` has a suffix that starts
+    with ``.``, which would otherwise match ``anything.example.com`` via
+    the ``host.endswith("." + suffix)`` branch by accepting a netloc
+    whose own leading ``.`` makes it look like a deeper subdomain.
+    Operators who mistype an extra dot should get an ignored entry, not
+    a broader match than they intended."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "*..example.com")
+    req = _make_trusted_request("https://llm.example.com/")
+
+    # None of these should resolve against the malformed wildcard entry.
+    for uri in (
+        "https://app.example.com/cb",
+        "https://foo.bar.example.com/cb",
+        "https://example.com/cb",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            validate_trusted_redirect_uri(req, uri)
+        assert exc.value.status_code == 400
+
+
 def test_validate_trusted_redirect_uri_falls_through_when_origin_lookup_fails():
     """If ``get_request_base_url`` can't determine the proxy's origin,
     same-origin is skipped silently but loopback + allowlist paths are
