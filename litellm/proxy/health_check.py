@@ -86,6 +86,24 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     )
 
 
+def health_check_filter_kwargs_from_general_settings(
+    general_settings: Optional[dict],
+) -> dict:
+    """
+    Build kwargs for ``perform_health_check`` from ``general_settings``.
+
+    When ``health_check_skip_disabled_background_models`` is true, deployments with
+    ``model_info.disable_background_health_check`` are omitted from health runs
+    (including on-demand ``GET /health``), matching the background loop behavior.
+    """
+    g = general_settings or {}
+    return {
+        "health_check_skip_disabled_background_models": bool(
+            g.get("health_check_skip_disabled_background_models", False)
+        ),
+    }
+
+
 def filter_deployments_by_id(
     model_list: List,
 ) -> List:
@@ -438,6 +456,7 @@ async def perform_health_check(
     model_id: Optional[str] = None,
     max_concurrency: Optional[int] = None,
     instrumentation_context: Optional[dict] = None,
+    health_check_skip_disabled_background_models: bool = False,
 ):
     """
     Perform a health check on the system.
@@ -445,6 +464,12 @@ async def perform_health_check(
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
     When model (name) is provided, all deployments matching that name are checked.
+
+    When ``health_check_skip_disabled_background_models`` is True (via
+    ``general_settings.health_check_skip_disabled_background_models``), deployments
+    with ``model_info.disable_background_health_check: true`` are omitted from
+    this run (including targeted ``/health`` queries), consistent with the
+    background health loop.
 
     Returns:
         (bool): True if the health check passes, False otherwise.
@@ -485,6 +510,23 @@ async def perform_health_check(
         if _new_model_list == []:
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
+
+    if health_check_skip_disabled_background_models:
+        model_list = [
+            x
+            for x in model_list
+            if not (x.get("model_info") or {}).get(
+                "disable_background_health_check", False
+            )
+        ]
+    if not model_list:
+        if instrumentation_enabled:
+            logger.debug(
+                "health_check_cycle_skipped source=%s cycle_id=%s reason=no_models_after_filter",
+                source,
+                cycle_id,
+            )
+        return [], [], {}
 
     post_filter_model_count = len(model_list)
     model_list = filter_deployments_by_id(

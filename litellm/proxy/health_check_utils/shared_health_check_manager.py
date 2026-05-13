@@ -192,6 +192,7 @@ class SharedHealthCheckManager:
         model_list: List[Dict[str, Any]],
         details: bool = True,
         max_concurrency: Optional[int] = None,
+        health_check_skip_disabled_background_models: bool = False,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Perform health check with shared state coordination.
@@ -207,6 +208,7 @@ class SharedHealthCheckManager:
             model_list: List of models to check
             details: Whether to include detailed information
             max_concurrency: Optional limit on concurrent health check requests
+            health_check_skip_disabled_background_models: Remove models with disable_background_health_check: true
 
         Returns:
             Tuple of (healthy_endpoints, unhealthy_endpoints)
@@ -240,6 +242,7 @@ class SharedHealthCheckManager:
                     model_list=model_list,
                     details=details,
                     max_concurrency=max_concurrency,
+                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
                 )
 
                 # Cache the results
@@ -260,6 +263,7 @@ class SharedHealthCheckManager:
                     model_list=model_list,
                     details=details,
                     max_concurrency=max_concurrency,
+                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
                 )
 
             # Lock not acquired — poll for cached results until the lock
@@ -316,6 +320,7 @@ class SharedHealthCheckManager:
                 model_list=model_list,
                 details=details,
                 max_concurrency=max_concurrency,
+                health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
             )
 
     async def is_health_check_in_progress(self) -> bool:

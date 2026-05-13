@@ -310,7 +310,10 @@ class TestSharedHealthCheckManager:
 
         # Should call perform_health_check and cache results
         mock_perform.assert_called_once_with(
-            model_list=model_list, details=True, max_concurrency=None
+            model_list=model_list,
+            details=True,
+            max_concurrency=None,
+            health_check_skip_disabled_background_models=False,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -397,7 +400,10 @@ class TestSharedHealthCheckManager:
         assert mock_sleep.call_count == 2
         mock_sleep.assert_called_with(5)
         mock_perform.assert_called_once_with(
-            model_list=model_list, details=True, max_concurrency=None
+            model_list=model_list,
+            details=True,
+            max_concurrency=None,
+            health_check_skip_disabled_background_models=False,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -437,7 +443,10 @@ class TestSharedHealthCheckManager:
         # Should detect orphaned lock after 1 iteration and fall back immediately
         mock_sleep.assert_called_once_with(5)
         mock_perform.assert_called_once_with(
-            model_list=model_list, details=True, max_concurrency=None
+            model_list=model_list,
+            details=True,
+            max_concurrency=None,
+            health_check_skip_disabled_background_models=False,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
@@ -506,7 +515,10 @@ class TestSharedHealthCheckManager:
         # Should NOT sleep at all — falls back to local health check immediately
         mock_sleep.assert_not_called()
         mock_perform.assert_called_once_with(
-            model_list=model_list, details=True, max_concurrency=None
+            model_list=model_list,
+            details=True,
+            max_concurrency=None,
+            health_check_skip_disabled_background_models=False,
         )
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
