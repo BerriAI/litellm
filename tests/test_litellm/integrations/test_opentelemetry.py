@@ -259,10 +259,296 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         ), "Existing LoggerProvider should be respected and not overridden"
 
 
+class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
+    """Two OpenTelemetry handlers coexisting via skip_set_global=True
+    must each get their own provider for every signal (tracer/meter/logger)."""
+
+    @staticmethod
+    def _wire_span_processor(exporter):
+        """Context manager: while active, the next OpenTelemetry instance
+        wires its TracerProvider to `exporter`."""
+        return patch.object(
+            OpenTelemetry,
+            "_get_span_processor",
+            lambda self, dynamic_headers=None: SimpleSpanProcessor(exporter),
+        )
+
+    def test_skip_set_global_creates_isolated_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        own_exporter = InMemorySpanExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console", service_name="iso-test", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider") as mock_set,
+            self._wire_span_processor(own_exporter),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+        mock_set.assert_not_called()
+
+        handler.tracer.start_span("isolation_check").end()
+        handler._tracer_provider.force_flush(2000)
+        self.assertEqual(
+            [s.name for s in own_exporter.get_finished_spans()],
+            ["isolation_check"],
+        )
+
+    def test_skip_set_global_via_callback_name_back_compat(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        cfg = OpenTelemetryConfig(exporter="console", service_name="lf-back-compat")
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg, callback_name="langfuse_otel")
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+
+    def test_default_behavior_reuses_existing_sdk_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        with patch.object(trace, "get_tracer_provider", return_value=fake_existing):
+            handler = OpenTelemetry(config=OpenTelemetryConfig(service_name="shared"))
+        self.assertIs(handler._tracer_provider, fake_existing)
+
+    def test_skip_set_global_creates_isolated_meter_provider(self):
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
+
+        fake_existing = SDKMeterProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="meter-iso-test",
+            enable_metrics=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(metrics, "get_meter_provider", return_value=fake_existing),
+            patch.object(metrics, "set_meter_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._meter_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_skip_set_global_creates_isolated_logger_provider(self):
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        fake_existing = SDKLoggerProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-iso-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._logger_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_emitted_logs_route_to_isolated_logger_provider(self):
+        # End-to-end: emitted logs land in the handler's private LoggerProvider,
+        # not the global one. Guards against get_logger() bypassing self._logger_provider.
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        global_exporter = InMemoryLogExporter()
+        fake_existing = SDKLoggerProvider()
+        fake_existing.add_log_record_processor(
+            SimpleLogRecordProcessor(global_exporter)
+        )
+
+        private_exporter = InMemoryLogExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-emit-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider"),
+            patch.object(
+                OpenTelemetry, "_get_log_exporter", return_value=private_exporter
+            ),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        span = handler.tracer.start_span("emit-test")
+        handler._emit_semantic_logs(
+            kwargs={"messages": [{"role": "user", "content": "hi"}]},
+            response_obj={"choices": []},
+            span=span,
+        )
+        span.end()
+        handler._logger_provider.force_flush(2000)
+
+        self.assertGreater(len(private_exporter.get_finished_logs()), 0)
+        self.assertEqual(len(global_exporter.get_finished_logs()), 0)
+
+    def test_two_handlers_each_receive_their_own_spans(self):
+        # Handler A gets explicit injection (production-ish: claims the global).
+        exporter_a = InMemorySpanExporter()
+        provider_a = TracerProvider()
+        provider_a.add_span_processor(SimpleSpanProcessor(exporter_a))
+        handler_a = OpenTelemetry(
+            config=OpenTelemetryConfig(service_name="handler-a"),
+            tracer_provider=provider_a,
+        )
+
+        # Handler B comes along with the global appearing to be A's provider.
+        exporter_b = InMemorySpanExporter()
+        cfg_b = OpenTelemetryConfig(
+            exporter="console", service_name="handler-b", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=provider_a),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(exporter_b),
+        ):
+            handler_b = OpenTelemetry(config=cfg_b)
+
+        self.assertIsNot(handler_a._tracer_provider, handler_b._tracer_provider)
+
+        handler_a.tracer.start_span("from_handler_a").end()
+        handler_b.tracer.start_span("from_handler_b").end()
+        provider_a.force_flush(2000)
+        handler_b._tracer_provider.force_flush(2000)
+
+        self.assertEqual(
+            sorted(s.name for s in exporter_a.get_finished_spans()),
+            ["from_handler_a"],
+        )
+        self.assertEqual(
+            sorted(s.name for s in exporter_b.get_finished_spans()),
+            ["from_handler_b"],
+        )
+
+
+class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
+    """OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT and the
+    OpenTelemetryConfig.capture_message_content programmatic override
+    drive what the handler captures in spans vs events."""
+
+    @staticmethod
+    def _make(env=None, config_value=None, message_logging=True):
+        env_dict = (
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": env}
+            if env is not None
+            else {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        )
+        with patch.dict(os.environ, env_dict):
+            handler = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content=config_value
+                )
+            )
+            handler.message_logging = message_logging
+            return handler, handler._resolve_capture_mode()
+
+    def test_no_explicit_setting_falls_back_to_message_logging_true(self):
+        _, mode = self._make()
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_no_explicit_setting_falls_back_to_message_logging_false(self):
+        _, mode = self._make(message_logging=False)
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_no_content(self):
+        _, mode = self._make(env="NO_CONTENT")
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_span_only(self):
+        _, mode = self._make(env="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_env_var_event_only(self):
+        _, mode = self._make(env="EVENT_ONLY")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_span_and_event(self):
+        _, mode = self._make(env="SPAN_AND_EVENT")
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_env_var_legacy_true_maps_to_event_only(self):
+        _, mode = self._make(env="true")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_legacy_false_maps_to_no_content(self):
+        for env in ("false", "0"):
+            with self.subTest(env=env):
+                _, mode = self._make(env=env)
+                self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_unknown_value_falls_through_to_legacy(self):
+        _, mode = self._make(env="garbage", message_logging=True)
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_config_field_overrides_env(self):
+        _, mode = self._make(env="EVENT_ONLY", config_value="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_turn_off_message_logging_forces_no_content(self):
+        with patch("litellm.turn_off_message_logging", True):
+            _, mode = self._make(env="SPAN_AND_EVENT", message_logging=True)
+            self.assertEqual(mode, "NO_CONTENT")
+
+    def test_capture_in_span_and_event_predicates(self):
+        cases = {
+            "NO_CONTENT": (False, False),
+            "SPAN_ONLY": (True, False),
+            "EVENT_ONLY": (False, True),
+            "SPAN_AND_EVENT": (True, True),
+        }
+        for mode, (in_span, in_event) in cases.items():
+            handler, _ = self._make(env=mode)
+            self.assertEqual(handler._capture_in_span(), in_span, msg=mode)
+            self.assertEqual(handler._capture_in_event(), in_event, msg=mode)
+
+    def test_two_handlers_can_have_different_modes(self):
+        # FIL's stated requirement: one handler strips content, the other keeps it.
+        with patch.dict(
+            os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        ):
+            stripped = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="NO_CONTENT"
+                )
+            )
+            kept = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="SPAN_AND_EVENT"
+                )
+            )
+        self.assertEqual(stripped._resolve_capture_mode(), "NO_CONTENT")
+        self.assertEqual(kept._resolve_capture_mode(), "SPAN_AND_EVENT")
+        self.assertFalse(stripped._capture_in_span())
+        self.assertFalse(stripped._capture_in_event())
+        self.assertTrue(kept._capture_in_span())
+        self.assertTrue(kept._capture_in_event())
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
-    MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     HERE = os.path.dirname(__file__)
 
     @patch.dict(os.environ, {}, clear=True)
@@ -884,6 +1170,7 @@ class TestOpenTelemetry(unittest.TestCase):
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
 
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     @patch("litellm.turn_off_message_logging", False)
     def test_maybe_log_raw_request_creates_span(self):
         """Test _maybe_log_raw_request creates span when logging enabled"""
@@ -1695,11 +1982,13 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
         - raw_gen_ai_request spans are children of litellm_request spans
         - Correct hierarchy: external_parent → litellm_request → raw_gen_ai_request
         """
+        import copy
+
         # Initialize OpenTelemetry
         otel = OpenTelemetry(tracer_provider=self.tracer_provider)
 
-        # Load test data
-        kwargs, response_obj = self._create_test_kwargs_and_response()
+        kwargs1, response_obj = self._create_test_kwargs_and_response()
+        kwargs2 = copy.deepcopy(kwargs1)
 
         # Create external parent span using our test TracerProvider
         tracer = self.tracer_provider.get_tracer(__name__)
@@ -1712,7 +2001,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
             # First completion call
             start_time = datetime.utcnow()
             end_time = start_time + timedelta(seconds=1)
-            otel._handle_success(kwargs, response_obj, start_time, end_time)
+            otel._handle_success(kwargs1, response_obj, start_time, end_time)
 
             # Verify parent span is still recording
             self.assertTrue(
@@ -1723,7 +2012,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
             # Second completion call
             start_time2 = end_time
             end_time2 = start_time2 + timedelta(seconds=1)
-            otel._handle_success(kwargs, response_obj, start_time2, end_time2)
+            otel._handle_success(kwargs2, response_obj, start_time2, end_time2)
 
             # Verify parent span is still recording
             self.assertTrue(
@@ -2010,6 +2299,19 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
     See: https://github.com/BerriAI/litellm/issues/17794
     """
+
+    def setUp(self):
+        # Insulate from a shell-set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+        # so these tests exercise the legacy default path (message_logging=True).
+        self._prev = os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
+
+    def tearDown(self):
+        if self._prev is not None:
+            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+                self._prev
+            )
 
     def test_input_messages_uses_parts_structure(self):
         """
@@ -2859,3 +3161,1121 @@ class TestResponseIdFallback(unittest.TestCase):
         otel.set_attributes(mock_span, kwargs, response_obj)
 
         mock_span.set_attribute.assert_any_call("litellm.call_id", call_id)
+
+
+class TestOpenTelemetryResponsesAPI(unittest.TestCase):
+    """
+    Tests for Responses API (/v1/responses) OTel span attributes.
+
+    The Responses API uses ``output`` (list of output items) instead of
+    ``choices``, ``instructions`` instead of ``system_instructions``, and
+    ``status`` instead of per-choice ``finish_reason``.
+
+    See: https://github.com/BerriAI/litellm/issues/25840
+    """
+
+    def _base_kwargs(self, **overrides):
+        """Return minimal kwargs for set_attributes with Responses API defaults."""
+        kwargs = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "resp_abc123",
+                "call_type": "responses",
+                "metadata": {},
+            },
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def _responses_api_response_obj(self, text="The answer is 4.", status="completed"):
+        """Return a dict mimicking ResponsesAPIResponse with a message output."""
+        return {
+            "id": "resp_abc123",
+            "model": "gpt-4o",
+            "status": status,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": text,
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+            },
+        }
+
+    def _get_attr(self, mock_span, attr_name):
+        """Extract the value set for a specific attribute name, or None."""
+        calls = [
+            call
+            for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == attr_name
+        ]
+        if not calls:
+            return None
+        return calls[0][0][1]
+
+    # ------------------------------------------------------------------
+    # gen_ai.output.messages
+    # ------------------------------------------------------------------
+
+    def test_output_messages_populated_for_responses_api(self):
+        """gen_ai.output.messages must be set when response has output items."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs()
+        response_obj = self._responses_api_response_obj(text="The answer is 4.")
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        self.assertIsNotNone(raw, "gen_ai.output.messages should be set")
+
+        parsed = json.loads(raw)
+        self.assertIsInstance(parsed, list)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertIn("parts", parsed[0])
+        self.assertEqual(parsed[0]["parts"][0]["type"], "text")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "The answer is 4.")
+
+    def test_output_messages_with_multiple_content_items(self):
+        """Multiple output_text items in a single message should all appear as parts."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_multi",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "First paragraph."},
+                        {"type": "output_text", "text": "Second paragraph."},
+                    ],
+                }
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        parsed = json.loads(raw)
+        self.assertEqual(len(parsed[0]["parts"]), 2)
+        self.assertEqual(parsed[0]["parts"][0]["content"], "First paragraph.")
+        self.assertEqual(parsed[0]["parts"][1]["content"], "Second paragraph.")
+
+    def test_output_messages_with_function_call(self):
+        """function_call output items should appear as tool_call parts."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_fc",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_abc",
+                    "arguments": '{"location": "SF"}',
+                }
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        parsed = json.loads(raw)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertEqual(parsed[0]["parts"][0]["type"], "tool_call")
+        self.assertEqual(parsed[0]["parts"][0]["name"], "get_weather")
+        self.assertEqual(parsed[0]["parts"][0]["arguments"], '{"location": "SF"}')
+        self.assertEqual(parsed[0]["parts"][0]["id"], "call_abc")
+
+    def test_output_messages_mixed_message_and_function_call(self):
+        """Mixed output with both message and function_call items."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_mixed",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Let me check the weather."},
+                    ],
+                },
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_xyz",
+                    "arguments": "{}",
+                },
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        parsed = json.loads(raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Let me check the weather.")
+        self.assertEqual(parsed[1]["parts"][0]["type"], "tool_call")
+
+    def test_output_messages_empty_text_skipped(self):
+        """Output items with empty text should not produce parts."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_empty",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": ""}],
+                }
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        # No output messages should be set since the text is empty
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        self.assertIsNone(
+            raw, "Empty output text should not produce gen_ai.output.messages"
+        )
+
+    def test_choices_still_work(self):
+        """Existing choices-based responses must still work (no regression)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "chatcmpl-123",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi there!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        raw = self._get_attr(mock_span, "gen_ai.output.messages")
+        parsed = json.loads(raw)
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Hi there!")
+        self.assertEqual(parsed[0]["finish_reason"], "stop")
+
+    # ------------------------------------------------------------------
+    # gen_ai.response.finish_reasons
+    # ------------------------------------------------------------------
+
+    def test_finish_reasons_from_status(self):
+        """gen_ai.response.finish_reasons should use ResponsesAPIResponse.status."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel.set_attributes(
+            span=mock_span,
+            kwargs=self._base_kwargs(),
+            response_obj=self._responses_api_response_obj(status="completed"),
+        )
+
+        raw = self._get_attr(mock_span, "gen_ai.response.finish_reasons")
+        self.assertIsNotNone(raw)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed, ["completed"])
+
+    def test_finish_reasons_incomplete_status(self):
+        """Non-completed status values should still be captured."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel.set_attributes(
+            span=mock_span,
+            kwargs=self._base_kwargs(),
+            response_obj=self._responses_api_response_obj(status="incomplete"),
+        )
+
+        raw = self._get_attr(mock_span, "gen_ai.response.finish_reasons")
+        parsed = json.loads(raw)
+        self.assertEqual(parsed, ["incomplete"])
+
+    # ------------------------------------------------------------------
+    # gen_ai.system_instructions
+    # ------------------------------------------------------------------
+
+    def test_system_instructions_from_instructions_kwarg(self):
+        """Responses API passes system prompt as kwargs['instructions']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(instructions="You are a math tutor.")
+        response_obj = self._responses_api_response_obj()
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        self.assertEqual(value, "You are a math tutor.")
+
+    def test_system_instructions_from_system_kwarg(self):
+        """Anthropic Messages API passes system prompt as kwargs['system']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(system="You are a helpful assistant.")
+        response_obj = self._responses_api_response_obj()
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        self.assertEqual(value, "You are a helpful assistant.")
+
+    def test_system_instructions_from_system_instructions_kwarg(self):
+        """Vertex AI Gemini path uses kwargs['system_instructions'] (existing behavior)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(
+            system_instructions=[{"role": "system", "content": "Be concise."}]
+        )
+        response_obj = self._responses_api_response_obj()
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        raw = self._get_attr(mock_span, "gen_ai.system_instructions")
+        self.assertIsNotNone(raw)
+        parsed = json.loads(raw)
+        self.assertEqual(parsed[0]["role"], "system")
+        self.assertIn("parts", parsed[0])
+
+    def test_system_instructions_precedence(self):
+        """system_instructions takes precedence over instructions and system."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(
+            system_instructions="From Gemini",
+            instructions="From Responses API",
+            system="From Anthropic",
+        )
+        response_obj = self._responses_api_response_obj()
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # system_instructions (string) should win — it's checked first
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        self.assertEqual(value, "From Gemini")
+
+    def test_no_system_instructions_when_absent(self):
+        """No gen_ai.system_instructions attr when none of the kwargs are set."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs()
+        response_obj = self._responses_api_response_obj()
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        self.assertIsNone(value)
+
+
+class TestTransformResponsesAPIOutput(unittest.TestCase):
+    """
+    Unit tests for _transform_responses_api_output_to_otel.
+    """
+
+    def test_message_with_output_text(self):
+        otel = OpenTelemetry()
+        output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello!"}],
+            }
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["role"], "assistant")
+        self.assertEqual(result[0]["parts"], [{"type": "text", "content": "Hello!"}])
+
+    def test_function_call_item(self):
+        otel = OpenTelemetry()
+        output = [
+            {
+                "type": "function_call",
+                "name": "search",
+                "call_id": "call_1",
+                "arguments": '{"q": "test"}',
+            }
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["role"], "assistant")
+        self.assertEqual(result[0]["parts"][0]["type"], "tool_call")
+        self.assertEqual(result[0]["parts"][0]["name"], "search")
+        self.assertEqual(result[0]["parts"][0]["id"], "call_1")
+
+    def test_function_call_without_call_id(self):
+        otel = OpenTelemetry()
+        output = [
+            {
+                "type": "function_call",
+                "name": "search",
+                "arguments": "{}",
+            }
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertNotIn("id", result[0]["parts"][0])
+
+    def test_unknown_type_ignored(self):
+        otel = OpenTelemetry()
+        output = [{"type": "reasoning", "content": "thinking..."}]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(result, [])
+
+    def test_non_dict_items_ignored(self):
+        otel = OpenTelemetry()
+        output = ["not a dict", 42, None]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(result, [])
+
+    def test_empty_output(self):
+        otel = OpenTelemetry()
+        result = otel._transform_responses_api_output_to_otel([])
+        self.assertEqual(result, [])
+
+    def test_message_with_empty_text_skipped(self):
+        otel = OpenTelemetry()
+        output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": ""}],
+            }
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(result, [])
+
+    def test_message_default_role(self):
+        """Messages without explicit role should default to assistant."""
+        otel = OpenTelemetry()
+        output = [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Hi"}],
+            }
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(result[0]["role"], "assistant")
+
+    def test_pydantic_like_objects_accepted(self):
+        """Items with .get() but not isinstance(dict) should be accepted."""
+
+        class FakeOutputItem:
+            """Mimics BaseLiteLLMOpenAIResponseObject duck-typing."""
+
+            def __init__(self, data):
+                self._data = data
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        class FakeContent:
+            def __init__(self, data):
+                self._data = data
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        otel = OpenTelemetry()
+        output = [
+            FakeOutputItem(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        FakeContent({"type": "output_text", "text": "Pydantic works!"}),
+                    ],
+                }
+            )
+        ]
+        result = otel._transform_responses_api_output_to_otel(output)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["parts"][0]["content"], "Pydantic works!")
+
+
+class TestSystemInstructionsPrecedence(unittest.TestCase):
+    """Tests for the is-not-None precedence in system_instructions coalescing."""
+
+    def _get_attr(self, mock_span, attr_name):
+        calls = [
+            call
+            for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == attr_name
+        ]
+        if not calls:
+            return None
+        return calls[0][0][1]
+
+    def _base_kwargs(self, **overrides):
+        kwargs = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "responses",
+                "metadata": {},
+            },
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def test_empty_list_system_instructions_does_not_fallthrough(self):
+        """An empty list for system_instructions should NOT fall through to instructions."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._base_kwargs(
+            system_instructions=[],
+            instructions="Should not be used",
+        )
+        response_obj = {"id": "r1", "model": "gpt-4o"}
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # system_instructions is [] (falsy but not None), so it wins.
+        # Since it's an empty list, no attribute should be set (nothing to transform).
+        value = self._get_attr(mock_span, "gen_ai.system_instructions")
+        # The empty list is truthy for `is not None` but produces empty
+        # transformed output — the attribute should NOT contain "Should not be used".
+        if value is not None:
+            self.assertNotIn("Should not be used", str(value))
+
+
+class TestResponsesAPIToolCallSpanAttributes(unittest.TestCase):
+    """Tests for per-tool-call span attributes on Responses API function_call items."""
+
+    def _base_kwargs(self):
+        return {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "What is the weather?"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "resp_tc",
+                "call_type": "responses",
+                "metadata": {},
+            },
+        }
+
+    def test_per_tool_call_attributes_emitted(self):
+        """function_call output items should produce per-tool-call span attributes."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_tc",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_abc",
+                    "arguments": '{"location": "SF"}',
+                }
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        # Verify per-tool-call attributes were set (same format as choices branch)
+        attr_names = [call[0][0] for call in mock_span.set_attribute.call_args_list]
+        tool_call_attrs = [a for a in attr_names if "function_call" in a]
+        self.assertTrue(
+            len(tool_call_attrs) > 0, "Per-tool-call span attributes should be emitted"
+        )
+
+        # Verify the name attribute specifically
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.name", "get_weather"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.arguments", '{"location": "SF"}'
+        )
+
+    def test_multiple_tool_calls_indexed(self):
+        """Multiple function_call items should be indexed correctly."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        response_obj = {
+            "id": "resp_tc2",
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": "call_1",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call",
+                    "name": "get_time",
+                    "call_id": "call_2",
+                    "arguments": "{}",
+                },
+            ],
+        }
+
+        otel.set_attributes(
+            span=mock_span, kwargs=self._base_kwargs(), response_obj=response_obj
+        )
+
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.0.function_call.name", "get_weather"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.completion.1.function_call.name", "get_time"
+        )
+
+
+class TestOpenTelemetryProxyParentSpanChildEmission(unittest.TestCase):
+    """When metadata includes litellm_parent_otel_span (the proxy
+    span), the primary litellm_request span must still be created as a child
+    so the trace hierarchy is complete."""
+
+    def _build_kwargs(self, parent_span):
+        return {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "metadata": {"litellm_parent_otel_span": parent_span},
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+            },
+        }
+
+    def test_get_span_context_returns_none_parent_for_metadata_span(self):
+        """_get_span_context Priority 1 must return (ctx, None) — never the
+        parent span object — so callers always create litellm_request as a
+        child of ctx."""
+        tracer_provider = TracerProvider()
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        parent_span = otel.tracer.start_span("some_external_parent")
+        kwargs = self._build_kwargs(parent_span)
+
+        ctx, returned_parent = otel._get_span_context(kwargs)
+
+        self.assertIsNotNone(ctx, "ctx should carry the parent for child spans")
+        self.assertIsNone(
+            returned_parent,
+            "parent_span return slot must be None so callers create litellm_request",
+        )
+        parent_span.end()
+
+    def test_litellm_request_emitted_as_child_of_proxy_parent_span(self):
+        """End-to-end: proxy span in metadata should yield exactly one
+        litellm_request span parented to it, with no extra root span."""
+        from litellm.integrations.opentelemetry import (
+            LITELLM_PROXY_REQUEST_SPAN_NAME,
+            LITELLM_REQUEST_SPAN_NAME,
+        )
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        proxy_span = otel.tracer.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME)
+        kwargs = self._build_kwargs(proxy_span)
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj=None, start_time=start, end_time=end)
+
+        spans = span_exporter.get_finished_spans()
+        litellm_spans = [s for s in spans if s.name == LITELLM_REQUEST_SPAN_NAME]
+        proxy_spans = [s for s in spans if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME]
+
+        self.assertEqual(
+            len(litellm_spans), 1, "Exactly one litellm_request span must be emitted"
+        )
+        self.assertEqual(
+            len(proxy_spans), 1, "Proxy span should be closed exactly once"
+        )
+
+        litellm_span = litellm_spans[0]
+        self.assertIsNotNone(
+            litellm_span.parent, "litellm_request must have a parent (not root)"
+        )
+        self.assertEqual(
+            litellm_span.parent.span_id,
+            proxy_spans[0].context.span_id,
+            "litellm_request must be a child of the proxy span",
+        )
+
+    def test_end_proxy_span_from_kwargs_closes_recording_proxy_span(self):
+        from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        proxy_span = otel.tracer.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME)
+        self.assertTrue(proxy_span.is_recording())
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": proxy_span},
+            }
+        }
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.utcnow())
+
+        self.assertFalse(
+            proxy_span.is_recording(), "Proxy span should be closed by helper"
+        )
+
+    def test_end_proxy_span_from_kwargs_does_not_close_external_span(self):
+        """Spans not named LITELLM_PROXY_REQUEST_SPAN_NAME must not be closed —
+        they may belong to external owners (Langfuse SDK, user code, etc.)."""
+        tracer_provider = TracerProvider()
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        external = otel.tracer.start_span("external_caller_span")
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": external},
+            }
+        }
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.utcnow())
+
+        self.assertTrue(
+            external.is_recording(),
+            "External (non-proxy) parent span must not be closed by LiteLLM",
+        )
+        external.end()
+
+
+class TestOpenTelemetryProxyLoggerFirstRegisteredWins(unittest.TestCase):
+    """open_telemetry_logger ownership must not be silently
+    overwritten by later handlers. First-registered wins."""
+
+    def _install_fake_proxy_server(self):
+        """Install a stub ``litellm.proxy.proxy_server`` so the test does
+        not depend on optional proxy dependencies (websockets, etc.).
+        Returns (fake_module, cleanup_fn)."""
+        import importlib
+        import types
+
+        proxy_pkg_name = "litellm.proxy"
+        proxy_server_name = "litellm.proxy.proxy_server"
+
+        previous_pkg = sys.modules.get(proxy_pkg_name)
+        previous_mod = sys.modules.get(proxy_server_name)
+
+        # Ensure litellm.proxy package object exists
+        if previous_pkg is None:
+            try:
+                pkg = importlib.import_module(proxy_pkg_name)
+            except Exception:
+                pkg = types.ModuleType(proxy_pkg_name)
+                sys.modules[proxy_pkg_name] = pkg
+        else:
+            pkg = previous_pkg
+
+        fake = types.ModuleType(proxy_server_name)
+        fake.open_telemetry_logger = None
+        sys.modules[proxy_server_name] = fake
+        setattr(pkg, "proxy_server", fake)
+
+        def cleanup():
+            if previous_mod is not None:
+                sys.modules[proxy_server_name] = previous_mod
+                setattr(pkg, "proxy_server", previous_mod)
+            else:
+                sys.modules.pop(proxy_server_name, None)
+                if hasattr(pkg, "proxy_server"):
+                    try:
+                        delattr(pkg, "proxy_server")
+                    except AttributeError:
+                        pass
+            if previous_pkg is None and proxy_pkg_name in sys.modules:
+                if sys.modules[proxy_pkg_name] is pkg:
+                    # Leave it in place — removing it would break later imports
+                    pass
+
+        return fake, cleanup
+
+    def test_first_registered_handler_keeps_ownership(self):
+        fake_proxy_server, cleanup = self._install_fake_proxy_server()
+        try:
+            first = OpenTelemetry()
+            self.assertIs(
+                fake_proxy_server.open_telemetry_logger,
+                first,
+                "First registered handler must own the proxy logger slot",
+            )
+
+            second = OpenTelemetry()
+            self.assertIs(
+                fake_proxy_server.open_telemetry_logger,
+                first,
+                "Second handler must NOT overwrite the first-registered logger",
+            )
+            self.assertIsNot(
+                fake_proxy_server.open_telemetry_logger,
+                second,
+                "Proxy logger must remain pointed at the first handler",
+            )
+        finally:
+            cleanup()
+
+    def test_assignment_happens_when_slot_is_unset(self):
+        fake_proxy_server, cleanup = self._install_fake_proxy_server()
+        try:
+            handler = OpenTelemetry()
+            self.assertIs(fake_proxy_server.open_telemetry_logger, handler)
+        finally:
+            cleanup()
+
+    def test_existing_non_none_logger_is_preserved(self):
+        """If ``proxy_server.open_telemetry_logger`` is already set to any
+        non-None value, a new handler must not overwrite it — even if the
+        existing value is not an OpenTelemetry instance."""
+        fake_proxy_server, cleanup = self._install_fake_proxy_server()
+        try:
+            sentinel = object()
+            fake_proxy_server.open_telemetry_logger = sentinel
+            OpenTelemetry()
+            self.assertIs(
+                fake_proxy_server.open_telemetry_logger,
+                sentinel,
+                "Existing non-None logger must not be overwritten",
+            )
+        finally:
+            cleanup()
+
+
+class TestOpenTelemetrySpanDedupe(unittest.TestCase):
+    """``_emit_once`` is a per-request, per-handler idempotency guard that
+    prevents duplicate span emission across two distinct dual-fire patterns:
+
+    1. Handler-level: streaming triggers both sync and async success/failure
+       callbacks for one request — the second call would otherwise produce a
+       duplicate ``litellm_request`` span.
+    2. Payload-driven entry-level: ``_create_guardrail_span`` is invoked
+       from three lifecycle points (post-call hook, success, failure) and
+       re-reads a mutating list — the same logical guardrail invocation
+       would otherwise be emitted up to three times.
+    """
+
+    def _build_kwargs(self, *, exception: bool = False):
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "metadata": {},
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+            },
+        }
+        if exception:
+            kwargs["exception"] = Exception("test error")
+        return kwargs
+
+    def test_emit_once_first_call_returns_true_then_false(self):
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "success"))
+        self.assertFalse(
+            otel._emit_once(kwargs, "success"),
+            "Repeat call for same handler+scope+kwargs must be deduped",
+        )
+
+    def test_emit_once_distinct_scopes_dont_collide(self):
+        """Different scopes on the same handler+kwargs must each emit once."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "success"))
+        self.assertTrue(
+            otel._emit_once(kwargs, "failure"),
+            "Failure scope must be independent of success scope",
+        )
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "block-code", 1.0, "pre_call"),
+            "Guardrail entry scope must be independent of success/failure scopes",
+        )
+        self.assertFalse(otel._emit_once(kwargs, "success"))
+        self.assertFalse(otel._emit_once(kwargs, "failure"))
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "block-code", 1.0, "pre_call")
+        )
+
+    def test_emit_once_separate_handlers_each_emit(self):
+        """Two distinct handler instances must each emit exactly once for the
+        same scope."""
+        otel_a = OpenTelemetry()
+        otel_b = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel_a._emit_once(kwargs, "success"))
+        self.assertTrue(
+            otel_b._emit_once(kwargs, "success"),
+            "Different handler instance must not share the first handler's marker",
+        )
+        self.assertFalse(otel_a._emit_once(kwargs, "success"))
+        self.assertFalse(otel_b._emit_once(kwargs, "success"))
+
+    def test_emit_once_handles_missing_metadata(self):
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {}}
+        self.assertTrue(otel._emit_once(kwargs, "success"))
+        self.assertFalse(otel._emit_once(kwargs, "success"))
+
+    def test_emit_once_handles_missing_litellm_params(self):
+        otel = OpenTelemetry()
+        kwargs = {}
+        self.assertTrue(otel._emit_once(kwargs, "success"))
+        self.assertFalse(otel._emit_once(kwargs, "success"))
+
+    def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
+        """Sync + async callback paths firing for the same kwargs must
+        result in exactly one litellm_request span."""
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs()
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+
+        otel._handle_success(kwargs, response_obj=None, start_time=start, end_time=end)
+        otel._handle_success(kwargs, response_obj=None, start_time=start, end_time=end)
+
+        spans = span_exporter.get_finished_spans()
+        litellm_spans = [s for s in spans if s.name == LITELLM_REQUEST_SPAN_NAME]
+        self.assertEqual(
+            len(litellm_spans),
+            1,
+            f"Exactly one litellm_request span expected, got {len(litellm_spans)}",
+        )
+
+    def test_handle_success_dedupe_skip_still_closes_proxy_span(self):
+        """When the success path is short-circuited as a duplicate, the
+        proxy span must still be closed so traces don't leak."""
+        from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        proxy_span = otel.tracer.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME)
+        kwargs = self._build_kwargs()
+        kwargs["litellm_params"]["metadata"]["litellm_parent_otel_span"] = proxy_span
+
+        otel._emit_once(kwargs, "success")  # pre-mark to force dedupe-skip branch
+        self.assertTrue(proxy_span.is_recording())
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj=None, start_time=start, end_time=end)
+
+        self.assertFalse(
+            proxy_span.is_recording(),
+            "Dedupe-skip path must still close the proxy span via _end_proxy_span_from_kwargs",
+        )
+
+    def test_handle_failure_emits_single_error_span_on_double_call(self):
+        """Sync + async failure callback paths firing for the same kwargs
+        must result in exactly one ERROR litellm_request span."""
+        from opentelemetry.trace import StatusCode
+
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs(exception=True)
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+
+        otel._handle_failure(kwargs, response_obj=None, start_time=start, end_time=end)
+        otel._handle_failure(kwargs, response_obj=None, start_time=start, end_time=end)
+
+        spans = span_exporter.get_finished_spans()
+        litellm_spans = [s for s in spans if s.name == LITELLM_REQUEST_SPAN_NAME]
+        self.assertEqual(
+            len(litellm_spans),
+            1,
+            f"Exactly one litellm_request ERROR span expected, got {len(litellm_spans)}",
+        )
+        self.assertEqual(litellm_spans[0].status.status_code, StatusCode.ERROR)
+
+    def test_create_guardrail_span_dedupes_across_lifecycle_entrypoints(self):
+        """``_create_guardrail_span`` is called from post-call-success hook,
+        ``_handle_success``, and ``_handle_failure``. A single guardrail
+        invocation (identified by ``(name, start_time, mode)``) must produce
+        exactly one span per handler even when the underlying entry is
+        mutated between calls (e.g. proxy enriches ``guardrail_response``)."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs()
+        guardrail_entry = {
+            "guardrail_name": "block-code",
+            "guardrail_mode": "pre_call",
+            "guardrail_response": "allow",
+            "start_time": 1.0,
+            "end_time": 2.0,
+        }
+        kwargs["standard_logging_object"]["guardrail_information"] = [guardrail_entry]
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        # Mutate the entry between calls — proxy enriches the response.
+        guardrail_entry["guardrail_response"] = [
+            {"type": "code_block", "action_taken": "block"}
+        ]
+        guardrail_entry["end_time"] = 3.0
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            f"Exactly one guardrail span expected per logical invocation, got {len(guardrail_spans)}",
+        )
+
+    def test_create_guardrail_span_emits_distinct_entries(self):
+        """Two real guardrail invocations (different ``start_time``) must
+        each emit a span — entry-level dedupe must not collapse them."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs()
+        kwargs["standard_logging_object"]["guardrail_information"] = [
+            {
+                "guardrail_name": "block-code",
+                "guardrail_mode": "pre_call",
+                "guardrail_response": "allow",
+                "start_time": 1.0,
+                "end_time": 2.0,
+            },
+            {
+                "guardrail_name": "block-code",
+                "guardrail_mode": "post_call",
+                "guardrail_response": "allow",
+                "start_time": 5.0,
+                "end_time": 6.0,
+            },
+        ]
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            2,
+            f"Two distinct guardrail invocations expected, got {len(guardrail_spans)}",
+        )

@@ -363,11 +363,28 @@ async def test_normal_router_call_tpm_v3(
         rate_limit_object, value, "tokens"
     )
 
-    # First request should succeed
+    # First request should succeed. Include messages + a tight max_tokens so
+    # the atomic reserve_tpm_tokens path populates the :tokens counter with a
+    # predictable amount — the pre-call hook no longer touches :tokens via
+    # should_rate_limit.
+    # Estimate: input ~ 1 token (`"hi"`), max_tokens = 5 → reservation = 6,
+    # which fits under the tpm_limit of 10.
+    pre_call_data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 5,
+    }
+    expected_reservation = parallel_request_handler._estimate_tokens_for_request(
+        data=pre_call_data
+    )
+    assert (
+        expected_reservation < 10
+    ), "Test premise: reservation must fit under tpm_limit=10"
+
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=local_cache,
-        data={"model": "azure-model"},
+        data=pre_call_data,
         call_type="",
     )
 
@@ -386,7 +403,7 @@ async def test_normal_router_call_tpm_v3(
     await asyncio.sleep(0)
     time_controller.advance(1)
 
-    # Verify the token count is tracked
+    # Verify the token count is tracked (populated by reserve_tpm_tokens).
     counter_value = await local_cache.async_get_cache(key=counter_key)
     print(f"local_cache: {local_cache.in_memory_cache.cache_dict}")
 
@@ -405,7 +422,7 @@ async def test_normal_router_call_tpm_v3(
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
-            data={"model": "azure-model"},
+            data=pre_call_data,
             call_type="",
         )
 
@@ -416,14 +433,18 @@ async def test_normal_router_call_tpm_v3(
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=local_cache,
-        data={"model": "azure-model"},
+        data=pre_call_data,
         call_type="",
     )
 
-    # Verify new window and reset counter
+    # Verify new window — counter resets and is repopulated to the new
+    # reservation amount (no longer the +1-per-request inflation artifact).
     final_counter_value = await local_cache.async_get_cache(key=counter_key)
 
-    assert final_counter_value == 1, "Counter should reset to 1 after window expiry"
+    assert final_counter_value == expected_reservation, (
+        f"Counter should reset to a fresh reservation ({expected_reservation}) "
+        f"after window expiry, got {final_counter_value}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1027,6 +1048,83 @@ async def test_team_member_rate_limits_v3():
     assert (
         team_member_descriptor["rate_limit"]["tokens_per_unit"] == 1000
     ), "Team member TPM limit should be set"
+
+
+@pytest.mark.asyncio
+async def test_team_member_rate_limits_v3_raises_429_when_over_limit():
+    """
+    When should_rate_limit reports OVER_LIMIT for the team_member descriptor, the
+    pre-call hook raises HTTP 429 with rate_limit headers — same contract as
+    test_rpm_api_key_rate_limits_v3 / test_tpm_api_key_rate_limits_v3.
+    """
+    _api_key = hash_token("sk-12345")
+    _team_id = "team_123"
+    _user_id = "user_456"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id=_team_id,
+        user_id=_user_id,
+        team_member_rpm_limit=10,
+        team_member_tpm_limit=1000,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 10,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "team_member",
+                },
+                {
+                    "code": "OK",
+                    "current_limit": 1000,
+                    "limit_remaining": 500,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "team_member",
+                },
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    error = None
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+    except HTTPException as e:
+        error = e
+        assert e.status_code == 429
+        assert "rate_limit_type" in e.headers
+        assert e.headers.get("rate_limit_type") == "requests"
+        assert "retry-after" in e.headers
+
+    assert error is not None, "An Exception must be thrown"
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    team_member_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "team_member":
+            team_member_descriptor = descriptor
+            break
+    assert team_member_descriptor is not None
+    assert team_member_descriptor["value"] == f"{_team_id}:{_user_id}"
 
 
 @pytest.mark.asyncio
@@ -1900,18 +1998,10 @@ async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatc
         end_time=datetime.now(),
     )
 
-    # Find the TPM increment operation
-    tpm_operation = None
-    for op in captured_operations:
-        if op["key"].endswith(":tokens"):
-            tpm_operation = op
-            break
-
-    assert tpm_operation is not None, "Should have a TPM increment operation"
-    # Should default to 0 when field is missing
-    assert (
-        tpm_operation["increment_value"] == 0
-    ), "Should default to 0 when completion_tokens is missing"
+    # When total_tokens resolves to 0 (missing fields) and there's no reservation,
+    # the reconciliation delta is 0 — no TPM increment should be emitted.
+    tpm_ops = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert tpm_ops == [], f"Expected no TPM ops when usage is empty, got: {tpm_ops}"
 
 
 @pytest.mark.asyncio

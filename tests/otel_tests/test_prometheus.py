@@ -115,6 +115,13 @@ async def test_proxy_failure_metrics():
             "litellm_llm_api_failed_requests_metric_total{",  # Deprecated but may still be used
         ]
 
+        # Master-key auth substitutes LITELLM_PROXY_MASTER_KEY_ALIAS for
+        # hash_token(master_key) so the master key (or its hash) never
+        # propagates into metrics. See PR #26484.
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        expected_hashed_api_key = LITELLM_PROXY_MASTER_KEY_ALIAS
+
         # Check if either pattern is in metrics and contains required fields
         found_metric = False
         for pattern in expected_patterns:
@@ -125,8 +132,7 @@ async def test_proxy_failure_metrics():
                         'api_key_alias="None"' in line
                         and 'exception_class="Openai.RateLimitError"' in line
                         and 'exception_status="429"' in line
-                        and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                        in line
+                        and f'hashed_api_key="{expected_hashed_api_key}"' in line
                         and 'requested_model="fake-azure-endpoint"' in line
                         and 'route="/chat/completions"' in line
                     ):
@@ -135,8 +141,7 @@ async def test_proxy_failure_metrics():
                 # For deprecated llm_api metric, check llm-specific fields
                 elif "litellm_llm_api_failed_requests_metric_total{" in line:
                     if (
-                        'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                        in line
+                        f'hashed_api_key="{expected_hashed_api_key}"' in line
                         and 'model="429"' in line
                     ):  # The deprecated metric uses the actual model from the request
                         found_metric = True
@@ -156,8 +161,7 @@ async def test_proxy_failure_metrics():
         for line in metrics.split("\n"):
             if (
                 total_requests_pattern in line
-                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                in line
+                and f'hashed_api_key="{expected_hashed_api_key}"' in line
                 and 'requested_model="fake-azure-endpoint"' in line
                 and 'status_code="429"' in line
             ):
@@ -195,6 +199,12 @@ async def test_proxy_success_metrics():
 
         assert END_USER_ID not in metrics
 
+        # Master-key auth substitutes LITELLM_PROXY_MASTER_KEY_ALIAS for
+        # hash_token(master_key) (PR #26484).
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        expected_hashed_api_key = LITELLM_PROXY_MASTER_KEY_ALIAS
+
         # Check if the success metric is present and correct - use flexible matching
         # Check for request_total_latency_metric with required fields
         # Note: The model can be "gpt-3.5-turbo-0301" or similar depending on what's returned
@@ -203,8 +213,7 @@ async def test_proxy_success_metrics():
             if (
                 "litellm_request_total_latency_metric_bucket{" in line
                 and 'api_key_alias="None"' in line
-                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                in line
+                and f'hashed_api_key="{expected_hashed_api_key}"' in line
                 and 'requested_model="fake-openai-endpoint"' in line
                 and 'le="0.005"' in line
             ):
@@ -221,8 +230,7 @@ async def test_proxy_success_metrics():
             if (
                 "litellm_llm_api_latency_metric_bucket{" in line
                 and 'api_key_alias="None"' in line
-                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                in line
+                and f'hashed_api_key="{expected_hashed_api_key}"' in line
                 and 'requested_model="fake-openai-endpoint"' in line
                 and 'le="0.005"' in line
             ):
@@ -298,6 +306,12 @@ async def test_proxy_fallback_metrics():
 
         print("/metrics", metrics)
 
+        # Master-key auth substitutes LITELLM_PROXY_MASTER_KEY_ALIAS for
+        # hash_token(master_key) (PR #26484).
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        expected_hashed_api_key = LITELLM_PROXY_MASTER_KEY_ALIAS
+
         # Check if successful fallback metric is incremented - use flexible matching
         found_successful_fallback = False
         for line in metrics.split("\n"):
@@ -307,8 +321,7 @@ async def test_proxy_fallback_metrics():
                 and 'exception_class="Openai.RateLimitError"' in line
                 and 'exception_status="429"' in line
                 and 'fallback_model="fake-openai-endpoint"' in line
-                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                in line
+                and f'hashed_api_key="{expected_hashed_api_key}"' in line
                 and 'requested_model="fake-azure-endpoint"' in line
                 and "1.0" in line
             ):
@@ -328,8 +341,7 @@ async def test_proxy_fallback_metrics():
                 and 'exception_class="Openai.RateLimitError"' in line
                 and 'exception_status="429"' in line
                 and 'fallback_model="unknown-model"' in line
-                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
-                in line
+                and f'hashed_api_key="{expected_hashed_api_key}"' in line
                 and 'requested_model="fake-azure-endpoint"' in line
                 and "1.0" in line
             ):

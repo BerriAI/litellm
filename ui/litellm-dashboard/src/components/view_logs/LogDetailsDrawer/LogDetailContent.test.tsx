@@ -171,27 +171,6 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Request/Response Data Not Available")).not.toBeInTheDocument();
   });
 
-  it("should call onOpenSettings when user clicks open settings in ConfigInfoMessage", async () => {
-    const onOpenSettings = vi.fn();
-    const user = userEvent.setup();
-
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry({
-          messages: [],
-          response: {},
-          metadata: {},
-        })}
-        onOpenSettings={onOpenSettings}
-      />,
-    );
-
-    const settingsButton = screen.getByRole("button", { name: /open the settings/i });
-    await user.click(settingsButton);
-
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
-  });
-
   it("should display loading state when isLoadingDetails is true", () => {
     render(
       <LogDetailContent

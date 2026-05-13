@@ -302,14 +302,14 @@ async def test_user_model_access():
             model="good-model",
         )
 
-        with pytest.raises(openai.AuthenticationError):
+        with pytest.raises(openai.PermissionDeniedError):
             await chat_completion(
                 session=session,
                 key=key,
                 model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             )
 
-        with pytest.raises(openai.AuthenticationError):
+        with pytest.raises(openai.PermissionDeniedError):
             await chat_completion(
                 session=session,
                 key=key,

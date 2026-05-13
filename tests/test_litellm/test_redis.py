@@ -13,7 +13,18 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
-from litellm._redis_credential_provider import GCPIAMCredentialProvider
+from litellm._redis_credential_provider import (
+    GCPIAMCredentialProvider,
+    _token_cache,
+)
+
+
+@pytest.fixture(autouse=True)
+def clear_gcp_iam_token_cache():
+    """Reset the module-level GCP IAM token cache between tests."""
+    _token_cache.clear()
+    yield
+    _token_cache.clear()
 
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -202,7 +213,7 @@ def test_get_redis_async_client_without_connection_pool():
 
 
 def test_gcp_iam_credential_provider_get_credentials():
-    """GCPIAMCredentialProvider.get_credentials() returns a fresh token tuple on every call."""
+    """GCPIAMCredentialProvider.get_credentials() returns a token tuple."""
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
@@ -216,20 +227,76 @@ def test_gcp_iam_credential_provider_get_credentials():
     mock_gen.assert_called_once_with(service_account)
 
 
-def test_gcp_iam_credential_provider_regenerates_token_on_each_call():
-    """Each call to get_credentials() generates a new token (no caching)."""
+def test_gcp_iam_credential_provider_caches_token():
+    """
+    Repeated calls to get_credentials() reuse the cached token and only call
+    _generate_gcp_iam_access_token once, avoiding redundant blocking I/O.
+    """
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
-    tokens = ["tok-1", "tok-2", "tok-3"]
 
     with patch(
         "litellm._redis_credential_provider._generate_gcp_iam_access_token",
-        side_effect=tokens,
+        return_value="tok-cached",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
-        results = [provider.get_credentials() for _ in range(3)]
+        results = [provider.get_credentials() for _ in range(5)]
 
-    assert results == [("tok-1",), ("tok-2",), ("tok-3",)]
-    assert mock_gen.call_count == 3
+    assert all(r == ("tok-cached",) for r in results)
+    # Token must be fetched exactly once regardless of how many connections are established
+    mock_gen.assert_called_once_with(service_account)
+
+
+def test_gcp_iam_credential_provider_refreshes_on_expiry():
+    """
+    get_credentials() fetches a new token after the cached one expires,
+    ensuring connections always authenticate with a valid token.
+    """
+    import time
+
+    import litellm._redis_credential_provider as cred_module
+
+    service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
+
+    with patch(
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        side_effect=["tok-1", "tok-2"],
+    ) as mock_gen:
+        provider = GCPIAMCredentialProvider(service_account)
+
+        # First call — populates cache
+        assert provider.get_credentials() == ("tok-1",)
+
+        # Artificially expire the cached token
+        cred_module._token_cache[service_account] = ("tok-1", time.monotonic() - 1)
+
+        # Second call — cache miss, must refresh
+        assert provider.get_credentials() == ("tok-2",)
+
+    assert mock_gen.call_count == 2
+
+
+def test_gcp_iam_credential_provider_cache_shared_across_instances():
+    """
+    Multiple GCPIAMCredentialProvider instances for the same service account
+    share one cached token so concurrent Redis connections don't each trigger
+    a blocking IAM round-trip.
+    """
+    service_account = (
+        "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
+    )
+
+    with patch(
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        return_value="tok-shared",
+    ) as mock_gen:
+        p1 = GCPIAMCredentialProvider(service_account)
+        p2 = GCPIAMCredentialProvider(service_account)
+
+        assert p1.get_credentials() == ("tok-shared",)
+        assert p2.get_credentials() == ("tok-shared",)
+
+    # Only one network call despite two provider instances
+    mock_gen.assert_called_once()
 
 
 def test_get_redis_async_client_gcp_cluster_uses_credential_provider():

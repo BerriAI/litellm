@@ -43,6 +43,8 @@ import {
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
 import { AccessGroup } from "./types";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 
 declare module "@tanstack/react-table" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -130,6 +132,9 @@ function buildAntdColumns(
 
 export function AccessGroupsPage() {
   const { token } = theme.useToken();
+  const { userRole } = useAuthorized();
+  // Admin Viewer follows the read-parity rule: see access groups, no writes.
+  const canModify = isProxyAdminRole(userRole ?? "");
   const { data: groupsData, isLoading } = useAccessGroups();
   const groups = useMemo(
     () => (groupsData ?? []).map(mapResponseToAccessGroup),
@@ -251,24 +256,28 @@ export function AccessGroupsPage() {
           new Date(getValue() as string).toLocaleDateString(),
         meta: { responsive: ["xl"] },
       },
-      {
-        id: "actions",
-        header: () => <span>Actions</span>,
-        enableSorting: false,
-        cell: ({ row }) => (
-          <Space>
-            <TableIconActionButton
-              variant="Delete"
-              tooltipText="Delete access group"
-              onClick={() => setGroupToDelete(row.original)}
-            />
-          </Space>
-        ),
-      },
+      ...(canModify
+        ? [
+            {
+              id: "actions",
+              header: () => <span>Actions</span>,
+              enableSorting: false,
+              cell: ({ row }: { row: Row<AccessGroup> }) => (
+                <Space>
+                  <TableIconActionButton
+                    variant="Delete"
+                    tooltipText="Delete access group"
+                    onClick={() => setGroupToDelete(row.original)}
+                  />
+                </Space>
+              ),
+            },
+          ]
+        : []),
     ],
     // setSelectedGroup is stable (useState setter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [canModify],
   );
 
   // ---------- TanStack table instance ----------
@@ -329,13 +338,15 @@ export function AccessGroupsPage() {
             Manage resource permissions for your organization
           </Text>
         </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setIsCreateModalVisible(true)}
-        >
-          Create Access Group
-        </Button>
+        {canModify && (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setIsCreateModalVisible(true)}
+          >
+            Create Access Group
+          </Button>
+        )}
       </Flex>
 
       <Card styles={{ body: { padding: 0 } }}>

@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
+    Reasoning,
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -181,12 +182,19 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort = None
+        reasoning_effort: Optional[Union[Reasoning, str]] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high"}
-                reasoning_effort = reasoning_param.get("effort")
+                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
+                # Keep the full dict when summary is set so the responses API bridge can
+                # forward it; otherwise use the effort string for chat completion (e.g. Gemini).
+                if "summary" in reasoning_param:
+                    reasoning_effort = reasoning_param
+                elif "effort" in reasoning_param:
+                    reasoning_effort = reasoning_param.get("effort")
+                else:
+                    reasoning_effort = reasoning_param
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
@@ -1652,7 +1660,7 @@ class LiteLLMCompletionResponsesConfig:
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
-            object=chat_completion_response.object,
+            object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=getattr(
                 chat_completion_response, "incomplete_details", None

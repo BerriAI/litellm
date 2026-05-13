@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
@@ -101,14 +102,22 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
+    call_with_db_reconnect_retry,
+)
 from litellm.proxy.db.log_db_metrics import log_db_metrics
-from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.db.prisma_client import (
+    PrismaWrapper,
+    parse_iam_endpoint_from_url,
+)
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -337,7 +346,7 @@ class ProxyLogging:
 
     def __init__(
         self,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
@@ -2269,6 +2278,13 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.proxy_server import llm_router
+
+        # Merge model-level guardrails before checking which guardrails to run
+        request_data = _check_and_merge_model_level_guardrails(
+            data=request_data, llm_router=llm_router
+        )
+
         current_response = response
 
         for callback in litellm.callbacks:
@@ -2390,7 +2406,8 @@ def jsonify_object(data: dict) -> dict:
     return db_data
 
 
-# In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
+# In-memory cache for deprecated key lookups:
+# maps old_token_hash -> (active_token_id, cache_expires_at_ts, revoke_at_ts).
 # Avoids a DB query on every auth request for non-deprecated keys.
 # Bounded to prevent memory leaks from accumulated rotations.
 _deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
@@ -2412,26 +2429,25 @@ async def _lookup_deprecated_key(
 
     # Check cache first
     cached = _deprecated_key_cache.get(hashed_token)
-    cached = _deprecated_key_cache.get(hashed_token)
     if cached is not None:
         active_token_id, cache_expires_at_ts, revoke_at_ts = cached
         if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
             return active_token_id
-        else:
-            _deprecated_key_cache.pop(hashed_token, None)
+        _deprecated_key_cache.pop(hashed_token, None)
 
     try:
         deprecated_row = await db.litellm_deprecatedverificationtoken.find_first(
             where={
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
-            },
-            select={"active_token_id": True},
+            }
         )
         if deprecated_row and deprecated_row.active_token_id:
+            revoke_at = deprecated_row.revoke_at
             _deprecated_key_cache[hashed_token] = (
                 deprecated_row.active_token_id,
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+                revoke_at.timestamp(),
             )
             return deprecated_row.active_token_id
         # Only cache positive results; negative lookups are fast on indexed columns
@@ -2440,6 +2456,92 @@ async def _lookup_deprecated_key(
         verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
 
     return None
+
+
+# DualCache for LiteLLM_Config param_name reads.
+# Redis layer is attached in proxy_server._init_cache.
+LITELLM_CONFIG_CACHE_TTL_SECONDS: int = int(
+    os.environ.get("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", "60")
+)
+_CONFIG_CACHE_MISS: str = "__litellm_config_param_miss__"
+
+litellm_config_cache: DualCache = DualCache(
+    default_in_memory_ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS,
+    default_redis_ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS,
+)
+
+
+class _ConfigRow:
+    """Mimics the Prisma litellm_config row shape for cached entries."""
+
+    __slots__ = ("param_name", "param_value")
+
+    def __init__(self, param_name: str, param_value: Any) -> None:
+        self.param_name = param_name
+        self.param_value = param_value
+
+
+def _config_cache_key(param_name: str) -> str:
+    return f"litellm_config:param:{param_name}"
+
+
+def _pack_config_row(row: Any) -> Dict[str, Any]:
+    return {"param_name": row.param_name, "param_value": row.param_value}
+
+
+def _unpack_config_row(cached: Any) -> Optional[_ConfigRow]:
+    if cached is None or cached == _CONFIG_CACHE_MISS:
+        return None
+    if isinstance(cached, dict):
+        return _ConfigRow(cached["param_name"], cached["param_value"])
+    return None
+
+
+async def get_config_param(prisma_client: Any, param_name: str) -> Optional[Any]:
+    """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
+    cache_key = _config_cache_key(param_name)
+    cached = await litellm_config_cache.async_get_cache(cache_key)
+    if cached is not None:
+        return _unpack_config_row(cached)
+
+    row = await prisma_client.get_generic_data(
+        key="param_name", value=param_name, table_name="config"
+    )
+    cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+    await litellm_config_cache.async_set_cache(
+        cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
+    )
+    return row
+
+
+async def invalidate_config_param(param_name: str) -> None:
+    """Evict from both cache layers; call after every LiteLLM_Config write."""
+    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+
+
+async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> None:
+    """Batch-load LiteLLM_Config rows into the cache with one find_many."""
+    if not param_names:
+        return
+    try:
+        rows = await prisma_client.db.litellm_config.find_many(
+            where={"param_name": {"in": param_names}}  # type: ignore
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "prefetch_config_params failed, falling through to per-param queries: %s",
+            e,
+        )
+        return
+    by_name = {row.param_name: row for row in rows}
+    for name in param_names:
+        row = by_name.get(name)
+        cache_value: Any = (
+            _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+        )
+        await litellm_config_cache.async_set_cache(
+            _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
+        )
 
 
 class PrismaClient:
@@ -2471,24 +2573,101 @@ class PrismaClient:
             raise Exception(
                 "Unable to find Prisma binaries. Please run 'prisma generate' first."
             )
+        iam_flag = (
+            self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        )
+        # When read-replica routing is on, tag log lines with [writer]/[reader]
+        # so the two wrappers' interleaved IAM refresh logs can be told apart.
+        # Single-DB deployments get an empty prefix (logs unchanged).
+        read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
+        writer_log_prefix = "[writer]" if read_replica_url else ""
         if http_client is not None:
-            self.db = PrismaWrapper(
+            writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
+                iam_token_db_auth=iam_flag,
+                log_prefix=writer_log_prefix,
             )
         else:
-            self.db = PrismaWrapper(
+            writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
-            )  # Client to connect to Prisma db
+                iam_token_db_auth=iam_flag,
+                log_prefix=writer_log_prefix,
+            )
+
+        # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
+        # reads (find_*, count, group_by, query_raw/_first) are routed to the
+        # reader endpoint and writes stay on the writer. Falls back to the
+        # writer-only wrapper when the env var is unset, preserving existing
+        # single-DB deployments.
+        self.db: Union[PrismaWrapper, RoutingPrismaWrapper]
+        if read_replica_url:
+            try:
+                # If IAM auth is enabled, the reader refreshes its own token on
+                # the same cadence as the writer. We parse the static endpoint
+                # pieces (host/port/user/db) once from the reader URL — only
+                # the IAM token rotates after that.
+                reader_iam_endpoint = (
+                    parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
+                )
+                # Mint a fresh IAM token for the reader BEFORE constructing the
+                # Prisma client. Mirrors what `proxy_cli.py` already does for
+                # the writer (proxy_cli.py:812-832) — without this, the reader
+                # Prisma is built with whatever placeholder URL the user
+                # supplied (no real token), and the first query falls through
+                # to the synchronous fallback path in
+                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
+                # and times out after 30s.
+                if iam_flag and reader_iam_endpoint is not None:
+                    from litellm.proxy.auth.rds_iam_token import (
+                        generate_iam_auth_token,
+                    )
+
+                    reader_token = generate_iam_auth_token(
+                        db_host=reader_iam_endpoint.host,
+                        db_port=reader_iam_endpoint.port,
+                        db_user=reader_iam_endpoint.user,
+                    )
+                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
+                    os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
+                reader_kwargs: Dict[str, Any] = {
+                    "datasource": {"url": read_replica_url}
+                }
+                if http_client is not None:
+                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
+                else:
+                    reader_prisma = Prisma(**reader_kwargs)
+                reader_wrapper = PrismaWrapper(
+                    original_prisma=reader_prisma,
+                    iam_token_db_auth=iam_flag,
+                    db_url_env_var="DATABASE_URL_READ_REPLICA",
+                    iam_endpoint=reader_iam_endpoint,
+                    recreate_uses_datasource=True,
+                    log_prefix="[reader]",
+                )
+                self.db = RoutingPrismaWrapper(
+                    writer=writer_wrapper, reader=reader_wrapper
+                )
+                verbose_proxy_logger.info(
+                    "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
+                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                )
+            except Exception as e:
+                # Reader is opt-in; never let its construction fail proxy
+                # startup. Mirrors the runtime contract from
+                # `RoutingPrismaWrapper.connect`: reader-side failures are
+                # logged and we keep serving traffic via the writer alone.
+                # This recovers from transient AWS STS hiccups during the
+                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
+                # and Prisma construction errors. Operator restart is required
+                # to retry read-routing once the underlying issue is resolved.
+                verbose_proxy_logger.warning(
+                    "Failed to initialize read replica Prisma client: %s. "
+                    "Falling back to writer-only mode (no read routing) until proxy restart.",
+                    e,
+                )
+                self.db = writer_wrapper
+        else:
+            self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
         self._db_last_reconnect_attempt_ts: float = 0.0
@@ -2525,6 +2704,13 @@ class PrismaClient:
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
         verbose_proxy_logger.debug("Success - Created Prisma Client")
+
+    @property
+    def writer_db(self) -> PrismaWrapper:
+        """Underlying writer Prisma wrapper, regardless of read-replica routing."""
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.writer
+        return self.db
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]
@@ -2693,30 +2879,42 @@ class PrismaClient:
         table_name: Literal["users", "keys", "config", "spend"],
     ):
         """
-        Generic implementation of get data
+        Generic implementation of get data.
+
+        Self-heals across a single transient transport blip via
+        `call_with_db_reconnect_retry`: on `httpx.ReadError` /
+        `ClientNotConnectedError` / similar, attempt one DB reconnect and
+        retry once before surfacing the failure. Restores the 1.82.6 behavior
+        that was lost in 1.83.x — see issue #25143.
         """
         start_time = time.time()
-        try:
+
+        async def _do_query():
             if table_name == "users":
-                response = await self.db.litellm_usertable.find_first(
+                return await self.db.litellm_usertable.find_first(
                     where={key: value}  # type: ignore
                 )
             elif table_name == "keys":
-                response = await self.db.litellm_verificationtoken.find_first(  # type: ignore
+                return await self.db.litellm_verificationtoken.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             elif table_name == "config":
-                response = await self.db.litellm_config.find_first(  # type: ignore
+                return await self.db.litellm_config.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             elif table_name == "spend":
-                response = await self.db.l.find_first(  # type: ignore
+                return await self.db.l.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
-            return response
-        except Exception as e:
-            import traceback
+            return None
 
+        try:
+            return await call_with_db_reconnect_retry(
+                self,
+                _do_query,
+                reason=f"prisma_get_generic_data_{table_name}_lookup_failure",
+            )
+        except Exception as e:
             error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
             verbose_proxy_logger.error(error_msg)
             error_msg = error_msg + "\nException Type: {}".format(type(e))
@@ -3086,6 +3284,8 @@ class PrismaClient:
                             t.organization_id as org_id,
                             p.project_alias AS project_alias,
                             tm.spend AS team_member_spend,
+                            b_tm.tpm_limit AS team_member_tpm_limit,
+                            b_tm.rpm_limit AS team_member_rpm_limit,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
                             b.max_budget AS litellm_budget_table_max_budget,
@@ -3101,6 +3301,7 @@ class PrismaClient:
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b_tm ON tm.budget_id = b_tm.budget_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
                         LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
@@ -3310,6 +3511,9 @@ class PrismaClient:
 
                     tasks.append(updated_table_row)
                 await asyncio.gather(*tasks)
+                # invalidate cache so other pods see writes from save_config
+                for k in data.keys():
+                    await invalidate_config_param(k)
                 verbose_proxy_logger.info("Data Inserted into Config Table")
             elif table_name == "spend":
                 db_data = self.jsonify_object(data=data)
@@ -4094,8 +4298,11 @@ class PrismaClient:
 
         Uses the _engine_confirmed_dead flag (set by waitpid thread / pidfd / poll
         handlers) to choose between heavy reconnect (engine dead -- recreate
-        Prisma client, re-arm watcher) and lightweight reconnect (network
-        blip -- disconnect, connect, SELECT 1).
+        Prisma client, re-arm watcher) and direct reconnect (network blip --
+        recreate Prisma client, re-arm watcher, SELECT 1). Both paths recreate
+        the client via the non-blocking kill-then-construct flow rather than
+        calling disconnect(), which blocks the event loop on the synchronous
+        subprocess.Popen.wait() inside prisma-client-py (see issue #26191).
         """
         effective_timeout = (
             timeout_seconds
@@ -4115,7 +4322,6 @@ class PrismaClient:
             )
             self._reap_all_zombies()
             self._cleanup_engine_watcher()
-            self._engine_confirmed_dead = False
 
             async def _do_heavy_reconnect() -> None:
                 db_url = os.getenv("DATABASE_URL", "")
@@ -4128,24 +4334,36 @@ class PrismaClient:
                 await self._start_engine_watcher()
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
+            # Only clear the "dead engine" flag after the heavy reconnect
+            # actually completed. If `_do_heavy_reconnect()` raises (timeout,
+            # missing DATABASE_URL, recreate failure), the flag stays True so
+            # the next attempt re-enters the heavy branch instead of silently
+            # demoting to the lightweight path.
+            self._engine_confirmed_dead = False
         else:
             verbose_proxy_logger.debug(
                 "Performing Prisma DB reconnect (engine alive or unknown)."
             )
 
             async def _do_direct_reconnect() -> None:
-                old_pid = self._get_engine_pid()
-                try:
-                    await self.db.disconnect()
-                except Exception as disconnect_err:
-                    verbose_proxy_logger.warning(
-                        "Prisma DB disconnect before reconnect failed: %s",
-                        disconnect_err,
+                db_url = os.getenv("DATABASE_URL", "")
+                if not db_url:
+                    verbose_proxy_logger.error(
+                        "DATABASE_URL not set; cannot reconnect Prisma client."
                     )
-                    await PrismaWrapper._kill_engine_process(old_pid)
-
-                await self.db.connect()
-                await self.db.query_raw("SELECT 1")
+                    raise RuntimeError("DATABASE_URL not set")
+                # Fresh Prisma client + new engine subprocess. The previous
+                # "lightweight" path called `disconnect()` which blocks the
+                # event loop on `subprocess.Popen.wait()`; since that call
+                # ends up killing the engine anyway, we do it non-blockingly
+                # via `_kill_engine_process` inside `recreate_prisma_client`.
+                self._cleanup_engine_watcher()
+                await self.db.recreate_prisma_client(db_url)
+                await self._start_engine_watcher()
+                # Smoke-test the writer specifically; query_raw on the routing
+                # wrapper sends to the reader, which would not validate the
+                # newly-recreated writer engine.
+                await self.writer_db.query_raw("SELECT 1")
 
             await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
 
@@ -4759,10 +4977,10 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
+                        # Sort by end_user_id for consistent lock ordering across pods to prevent deadlocks.
+                        for end_user_id, response_cost in sorted(
+                            end_user_list_transactions.items()
+                        ):
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -4987,6 +5205,11 @@ async def update_daily_tag_spend(
                 proxy_logging_obj=proxy_logging_obj,
             )
     except Exception as e:
+        # NOTE: keep this as a plain ``error`` (no traceback) to match the
+        # historical behavior of this site. ``spend_log_error`` would attach
+        # the active exception's traceback whenever the suppression env var
+        # is unset, which would be a regression for operators who never saw
+        # one here before.
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
@@ -5119,9 +5342,7 @@ async def _monitor_spend_logs_queue(
 
             await asyncio.sleep(current_interval)
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in spend logs queue monitor: {str(e)}\n{traceback.format_exc()}"
-            )
+            spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)
@@ -5600,7 +5821,7 @@ async def get_available_models_for_user(
     include_model_access_groups: bool = False,
     only_model_access_groups: bool = False,
     return_wildcard_routes: bool = False,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: Optional["UserApiKeyCache"] = None,
 ) -> List[str]:
     """
     Get the list of models available to a user based on their API key and team permissions.
