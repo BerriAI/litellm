@@ -3266,13 +3266,15 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
-                is_initialize = _is_initialize_request(body)
-
             # Owner-binding: a live stateful session may only be driven by the
             # caller that created it. Reject mismatches with 403 so a leaked
             # mcp-session-id cannot be hijacked by another authenticated user.
+            #
+            # Run before peeking the request body so the 403 response sees a
+            # pristine ``receive`` channel — JSONResponse only calls ``send``
+            # today, but routing this through an already-drained ``receive``
+            # would silently break the moment a future response/middleware
+            # touches the body.
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(
@@ -3292,6 +3294,10 @@ if MCP_AVAILABLE:
                     )
                     await forbidden_response(scope, receive, send)
                     return
+
+            if scope.get("method") == "POST":
+                consumed_messages, body = await _read_request_body_for_routing(receive)
+                is_initialize = _is_initialize_request(body)
 
             use_stateful = bool(session_id or is_initialize)
             target_manager = (
