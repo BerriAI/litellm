@@ -1521,6 +1521,32 @@ class ProxyLogging:
                 return True
         return False
 
+    @staticmethod
+    def has_streaming_callbacks() -> bool:
+        for callback in litellm.callbacks:
+            if isinstance(callback, str):
+                resolved_callback: Any = (
+                    litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                )
+            else:
+                resolved_callback = callback
+
+            if not isinstance(resolved_callback, CustomLogger):
+                continue
+            if type(resolved_callback) is CustomLogger:
+                continue
+            if isinstance(resolved_callback, CustomGuardrail):
+                return True
+            if (
+                "async_post_call_streaming_hook" in type(resolved_callback).__dict__
+                or "async_post_call_streaming_iterator_hook"
+                in type(resolved_callback).__dict__
+            ):
+                return True
+        return False
+
     async def during_call_hook(
         self,
         data: dict,

@@ -63,10 +63,17 @@ class SummaryStats:
 
 
 class MockOpenAIProvider:
-    def __init__(self, host: str, port: int, first_token_delay_ms: float) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        first_token_delay_ms: float,
+        stream_content_chunks: int,
+    ) -> None:
         self.host = host
         self.port = port
         self.first_token_delay_ms = first_token_delay_ms
+        self.stream_content_chunks = stream_content_chunks
         self.runner: Optional[web.AppRunner] = None
 
     @property
@@ -128,10 +135,8 @@ class MockOpenAIProvider:
             await asyncio.sleep(self.first_token_delay_ms / 1000)
 
         created = int(time.time())
-        chunks = [
-            {"role": "assistant"},
-            {"content": "hello"},
-        ]
+        chunks = [{"role": "assistant"}]
+        chunks.extend({"content": "hello"} for _ in range(self.stream_content_chunks))
         for delta in chunks:
             event = {
                 "id": "chatcmpl-perf",
@@ -387,7 +392,7 @@ async def measure_stream_ttft(
                         error=body.decode("utf-8", errors="ignore")[:200],
                     )
 
-                async for raw_line in response.content:
+                while raw_line := await response.content.readline():
                     line = raw_line.strip()
                     if not line or not line.startswith(b"data:"):
                         continue
@@ -457,6 +462,97 @@ async def run_streaming_ttft_benchmark(
     return summarize(samples, wall_time_s)
 
 
+async def measure_stream_full_response(
+    session: aiohttp.ClientSession,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> RequestSample:
+    async with semaphore:
+        start = time.perf_counter()
+        try:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    body = await response.read()
+                    return RequestSample(
+                        success=False,
+                        latency_ms=(time.perf_counter() - start) * 1000,
+                        status_code=response.status,
+                        error=body.decode("utf-8", errors="ignore")[:200],
+                    )
+
+                saw_content = False
+                while raw_line := await response.content.readline():
+                    line = raw_line.strip()
+                    if not line or not line.startswith(b"data:"):
+                        continue
+                    event_payload = line[5:].strip()
+                    if event_payload == b"[DONE]":
+                        return RequestSample(
+                            success=saw_content,
+                            latency_ms=(time.perf_counter() - start) * 1000,
+                            status_code=response.status,
+                            overhead_header_ms=extract_overhead_header(
+                                response.headers
+                            ),
+                            error="" if saw_content else "stream ended without content",
+                        )
+                    if b'"content"' in event_payload or b'"text"' in event_payload:
+                        saw_content = True
+
+                return RequestSample(
+                    success=False,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status_code=response.status,
+                    error="stream ended before [DONE]",
+                )
+        except Exception as exc:
+            return RequestSample(
+                success=False,
+                latency_ms=(time.perf_counter() - start) * 1000,
+                status_code=0,
+                error=str(exc)[:200],
+            )
+
+
+async def run_streaming_full_benchmark(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    requests: int,
+    concurrency: int,
+    warmup: int,
+    timeout_s: float,
+) -> SummaryStats:
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    connector = aiohttp.TCPConnector(
+        limit=max(concurrency * 2, 10),
+        limit_per_host=max(concurrency, 10),
+        force_close=False,
+    )
+    semaphore = asyncio.Semaphore(concurrency)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        if warmup > 0:
+            await asyncio.gather(
+                *[
+                    measure_stream_full_response(
+                        session, url, headers, payload, semaphore
+                    )
+                    for _ in range(warmup)
+                ]
+            )
+        wall_start = time.perf_counter()
+        samples = await asyncio.gather(
+            *[
+                measure_stream_full_response(session, url, headers, payload, semaphore)
+                for _ in range(requests)
+            ]
+        )
+        wall_time_s = time.perf_counter() - wall_start
+    return summarize(samples, wall_time_s)
+
+
 def stats_to_dict(stats: SummaryStats) -> dict[str, Any]:
     return {
         "requests": stats.requests,
@@ -478,6 +574,7 @@ def print_summary(
     direct: SummaryStats,
     proxy: SummaryStats,
     stream: SummaryStats,
+    stream_full: Optional[SummaryStats],
 ) -> None:
     client_overhead_p50 = proxy.p50_ms - direct.p50_ms
     client_overhead_p95 = proxy.p95_ms - direct.p95_ms
@@ -496,6 +593,10 @@ def print_summary(
     )
     print(f"Streaming TTFT p50: {stream.p50_ms:.2f} ms")
     print(f"Streaming TTFT p95: {stream.p95_ms:.2f} ms")
+    if stream_full is not None:
+        print(f"Streaming full response p50: {stream_full.p50_ms:.2f} ms")
+        print(f"Streaming full response p95: {stream_full.p95_ms:.2f} ms")
+        print(f"Streaming full response RPS: {stream_full.rps:.2f}")
     print("\nMarkdown row:")
     print(
         "| "
@@ -509,6 +610,8 @@ def print_summary(
                 f"{client_overhead_p50:.2f}",
                 f"{client_overhead_p95:.2f}",
                 format_optional_ms(proxy.overhead_header_p50_ms),
+                f"{stream_full.p50_ms:.2f}" if stream_full is not None else "n/a",
+                f"{stream_full.rps:.2f}" if stream_full is not None else "n/a",
             ]
         )
         + " |"
@@ -542,6 +645,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--proxy-start-timeout", type=float, default=90)
     parser.add_argument("--provider-first-token-delay-ms", type=float, default=0)
+    parser.add_argument("--provider-stream-content-chunks", type=int, default=1)
+    parser.add_argument(
+        "--measure-full-stream",
+        action="store_true",
+        help="Also measure time to consume the complete streaming response.",
+    )
     parser.add_argument(
         "--no-start-proxy",
         action="store_true",
@@ -588,6 +697,7 @@ async def async_main() -> None:
                 host=args.provider_host,
                 port=args.provider_port,
                 first_token_delay_ms=args.provider_first_token_delay_ms,
+                stream_content_chunks=args.provider_stream_content_chunks,
             )
             await provider.start()
             provider_base_url = provider.base_url
@@ -633,13 +743,26 @@ async def async_main() -> None:
                 warmup=args.stream_warmup,
                 timeout_s=args.timeout,
             )
+            stream_full = (
+                await run_streaming_full_benchmark(
+                    url=proxy_url,
+                    headers=headers,
+                    payload=stream_payload,
+                    requests=args.stream_requests,
+                    concurrency=args.stream_concurrency,
+                    warmup=args.stream_warmup,
+                    timeout_s=args.timeout,
+                )
+                if args.measure_full_stream
+                else None
+            )
         finally:
             if proxy_process is not None:
                 stop_proxy_process(proxy_process)
             if provider is not None:
                 await provider.stop()
 
-        print_summary(args.label, revision, direct, proxy, stream)
+        print_summary(args.label, revision, direct, proxy, stream, stream_full)
 
         if args.output_json:
             output = {
@@ -648,6 +771,9 @@ async def async_main() -> None:
                 "direct_non_streaming": stats_to_dict(direct),
                 "proxy_non_streaming": stats_to_dict(proxy),
                 "proxy_streaming_ttft": stats_to_dict(stream),
+                "proxy_streaming_full": (
+                    stats_to_dict(stream_full) if stream_full is not None else None
+                ),
                 "client_observed_overhead_p50_ms": proxy.p50_ms - direct.p50_ms,
                 "client_observed_overhead_p95_ms": proxy.p95_ms - direct.p95_ms,
                 "proxy_log_path": str(proxy_log_path),

@@ -66,6 +66,23 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
+def test_restamp_streaming_chunk_skips_matching_model():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_model_response_stream_chunk("client-model")
+
+    result, model_mismatch_logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result is chunk
+    assert result.model == "client-model"
+    assert model_mismatch_logged is False
+
+
 def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
     tmp_path, monkeypatch
 ):

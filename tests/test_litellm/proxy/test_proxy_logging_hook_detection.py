@@ -1,6 +1,7 @@
 import pytest
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import ProxyLogging
 
@@ -19,6 +20,26 @@ def test_has_post_call_response_headers_callbacks_detects_custom_loggers(
     monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
 
     assert ProxyLogging.has_post_call_response_headers_callbacks() is True
+
+
+def test_has_streaming_callbacks_uses_custom_logger_detection(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert ProxyLogging.has_streaming_callbacks() is False
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
+    assert ProxyLogging.has_streaming_callbacks() is False
+
+    class StreamingLogger(CustomLogger):
+        async def async_post_call_streaming_hook(self, **kwargs):
+            return kwargs.get("response")
+
+    monkeypatch.setattr(litellm, "callbacks", [StreamingLogger()])
+    assert ProxyLogging.has_streaming_callbacks() is True
+
+
+def test_has_streaming_callbacks_detects_guardrails(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail()])
+    assert ProxyLogging.has_streaming_callbacks() is True
 
 
 @pytest.mark.asyncio
