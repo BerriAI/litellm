@@ -3292,6 +3292,42 @@ async def test_probe_upstream_auth_returns_upstream_status():
 
 
 @pytest.mark.asyncio
+async def test_probe_upstream_auth_surfaces_httpx_status_error():
+    """Probe extracts status + WWW-Authenticate from httpx.HTTPStatusError.
+
+    AsyncHTTPHandler.post() calls raise_for_status() internally, so when the
+    upstream returns 401/403 the call raises httpx.HTTPStatusError rather than
+    returning the response. The probe must catch that specifically (before the
+    fail-open `except Exception`) so the auth check is not silently defeated.
+    """
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+    request = httpx.Request("POST", "http://upstream/mcp")
+    error = httpx.HTTPStatusError(
+        message="401 Unauthorized", request=request, response=mock_response
+    )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=error)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+
+
+@pytest.mark.asyncio
 async def test_probe_upstream_auth_fails_open_on_network_error():
     """_probe_upstream_auth returns (200, None) when the network call fails."""
     from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
