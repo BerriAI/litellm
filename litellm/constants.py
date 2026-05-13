@@ -305,7 +305,7 @@ MAX_SIZE_IN_MEMORY_QUEUE = int(
     os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8))
 )
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
-    os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
+    os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", LITELLM_ASYNCIO_QUEUE_MAXSIZE)
 )
 ###############################################################################################
 MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(

@@ -94,3 +94,37 @@ async def test_proxy_gunicorn_startup_config_dict():
 
 
 # test_proxy_gunicorn_startup()
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_stops_scheduler_before_prisma_disconnect(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    events = []
+
+    class MockScheduler:
+        def shutdown(self, wait=True):
+            assert wait is True
+            events.append("scheduler_shutdown")
+
+    class MockPrismaClient:
+        async def disconnect(self):
+            events.append("prisma_disconnect")
+
+    mock_jwt_handler = MagicMock()
+    mock_jwt_handler.close = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "scheduler", MockScheduler())
+    monkeypatch.setattr(proxy_server, "spend_logs_queue_monitor_task", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", MockPrismaClient())
+    monkeypatch.setattr(proxy_server, "jwt_handler", mock_jwt_handler)
+    monkeypatch.setattr(proxy_server, "db_writer_client", None)
+    monkeypatch.setattr(litellm, "cache", None)
+
+    await proxy_server.proxy_shutdown_event()
+
+    assert events == ["scheduler_shutdown", "prisma_disconnect"]
+    assert proxy_server.scheduler is None
+    mock_jwt_handler.close.assert_awaited_once()

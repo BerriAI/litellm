@@ -62,11 +62,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         """Enqueue an update."""
         verbose_proxy_logger.debug("Adding update to queue: %s", update)
         await self.update_queue.put(update)
-        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
-            verbose_proxy_logger.warning(
-                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
-            )
-            await self.aggregate_queue_updates()
+        self._schedule_queue_aggregation_if_needed()
 
     async def aggregate_queue_updates(self):
         """
@@ -85,6 +81,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> Dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
+        await self._wait_for_pending_aggregation()
         updates = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(

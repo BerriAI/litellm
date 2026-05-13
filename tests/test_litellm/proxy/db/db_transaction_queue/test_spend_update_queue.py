@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +33,22 @@ async def test_add_update(spend_queue):
 
     # Verify update was added by checking queue size
     assert spend_queue.update_queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_add_update_schedules_aggregation_check(spend_queue):
+    update: SpendUpdateQueueItem = {
+        "entity_type": Litellm_EntityType.USER,
+        "entity_id": "user123",
+        "response_cost": 0.5,
+    }
+
+    with patch.object(
+        spend_queue, "_schedule_queue_aggregation_if_needed"
+    ) as mock_schedule:
+        await spend_queue.add_update(update)
+
+    mock_schedule.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -167,6 +184,8 @@ async def test_queue_max_size_triggers_aggregation(monkeypatch, spend_queue):
             "response_cost": 1.0,
         }
         await spend_queue.add_update(update)
+
+    await spend_queue._wait_for_pending_aggregation()
 
     # Queue should have been aggregated, resulting in a single entry
     assert spend_queue.update_queue.qsize() == 1
