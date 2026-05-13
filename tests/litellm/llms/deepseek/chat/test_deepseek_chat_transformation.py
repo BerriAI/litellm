@@ -4,7 +4,6 @@ Unit tests for DeepSeek chat transformation.
 Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 """
 
-import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -51,9 +50,9 @@ class TestDeepSeekThinkingParams:
         assert result["thinking"] == {"type": "enabled"}
         assert "budget_tokens" not in result.get("thinking", {})
 
-    def test_map_reasoning_effort_medium(self):
-        """Test that reasoning_effort='medium' maps to thinking enabled."""
-        non_default_params = {"reasoning_effort": "medium"}
+    def test_map_reasoning_effort_minimal(self):
+        """Test that reasoning_effort='minimal' maps to reasoning_effort='high'."""
+        non_default_params = {"reasoning_effort": "minimal"}
         optional_params = {}
 
         result = self.config.map_openai_params(
@@ -64,9 +63,10 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
 
     def test_map_reasoning_effort_low(self):
-        """Test that reasoning_effort='low' maps to thinking enabled."""
+        """Test that reasoning_effort='low' maps to reasoning_effort='high'."""
         non_default_params = {"reasoning_effort": "low"}
         optional_params = {}
 
@@ -78,9 +78,25 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
+
+    def test_map_reasoning_effort_medium(self):
+        """Test that reasoning_effort='medium' maps to reasoning_effort='high'."""
+        non_default_params = {"reasoning_effort": "medium"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
 
     def test_map_reasoning_effort_high(self):
-        """Test that reasoning_effort='high' maps to thinking enabled."""
+        """Test that reasoning_effort='high' maps to thinking enabled with reasoning_effort='high'."""
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
@@ -92,9 +108,25 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "high"
+
+    def test_map_reasoning_effort_xhigh(self):
+        """Test that reasoning_effort='xhigh' maps to reasoning_effort='max'."""
+        non_default_params = {"reasoning_effort": "xhigh"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "enabled"}
+        assert result["reasoning_effort"] == "max"
 
     def test_map_reasoning_effort_none_disables_thinking(self):
-        """Test that reasoning_effort='none' maps to thinking disabled."""
+        """Test that reasoning_effort='none' maps to thinking disabled without reasoning_effort."""
         non_default_params = {"reasoning_effort": "none"}
         optional_params = {}
 
@@ -106,6 +138,7 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in result
 
     def test_map_reasoning_effort_null_does_not_enable_thinking(self):
         """Test that reasoning_effort=None does not enable thinking."""
