@@ -1515,13 +1515,15 @@ class ProxyLogging:
     def has_post_call_response_headers_callbacks() -> bool:
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-                _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    cast(_custom_logger_compatible_callbacks_literal, callback)
+                resolved_callback: Any = (
+                    litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
                 )
             else:
-                _callback = callback
+                resolved_callback = callback
 
-            if isinstance(_callback, CustomLogger):
+            if isinstance(resolved_callback, CustomLogger):
                 return True
         return False
 
