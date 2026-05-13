@@ -1328,7 +1328,10 @@ async def list_files(
 
         if should_route:
             # Use model-based routing with credentials from config
-            data.update(credentials)  # type: ignore
+            prepare_data_with_credentials(
+                data=data,
+                credentials=credentials,  # type: ignore
+            )
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
                 purpose=purpose,
