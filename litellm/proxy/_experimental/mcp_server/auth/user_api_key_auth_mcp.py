@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
@@ -199,10 +200,18 @@ class MCPRequestHandler:
     @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:
         """
-        Extract the target MCP server name from the standard MCP transport
-        URL patterns: ``/mcp/{server_name}[/...]`` and
+        Extract the target MCP server name(s) from the standard MCP transport
+        URL patterns: ``/mcp/{server_name_or_csv}[/...]`` and
         ``/{server_name}/mcp[/...]``. Returns ``[]`` for any other path so
         callers fail closed when the target cannot be resolved.
+
+        Mirrors the regex-based parser in ``server.py::_get_mcp_servers_in_path``
+        so the names used for auth gating match the names used for downstream
+        filtering. Without this alignment, an attacker could craft
+        ``/mcp/<delegated_server>/<garbage>`` so that auth treats the request
+        as targeting the delegate server (bypassing LiteLLM auth) while
+        downstream filtering sees a different (non-existent) target and falls
+        back to the caller's full allowed-server set.
 
         REST/admin endpoints, OAuth2 server endpoints
         (``/{server_name}/authorize``, ``/token`` etc.), and ``.well-known``
@@ -210,12 +219,40 @@ class MCPRequestHandler:
         OAuth2 token passthrough. Clients aggregating multiple servers should
         use ``x-mcp-servers``, which takes precedence over path parsing.
         """
+        # ``/{server_name}/mcp[/...]`` form — single server. The literal
+        # ``mcp`` must be the second segment (not the first, which would be
+        # the ``/mcp/...`` form handled below).
         segments = [s for s in path.split("/") if s]
-        if len(segments) >= 2 and segments[0] == "mcp":
-            return [segments[1]]
-        if len(segments) >= 2 and segments[1] == "mcp":
+        if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
             return [segments[0]]
-        return []
+
+        # ``/mcp/...`` form — server name(s) may contain a slash (e.g.
+        # ``custom_solutions/user_123``) and may be a comma-separated list.
+        # Use the same parsing logic as ``_get_mcp_servers_in_path`` so the
+        # parsed names match downstream routing.
+        mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
+        if not mcp_path_match:
+            return []
+        servers_and_path = mcp_path_match.group(1)
+        if not servers_and_path:
+            return []
+
+        if "," in servers_and_path:
+            # Comma-separated servers, possibly followed by a trailing path.
+            path_match = re.search(r"/([^/,]+(?:/[^/,]+)*)$", servers_and_path)
+            if path_match:
+                servers_part = servers_and_path[: -(len(path_match.group(1)) + 1)]
+            else:
+                servers_part = servers_and_path
+            return [s.strip() for s in servers_part.split(",") if s.strip()]
+
+        # Single-server case — server name may contain at most one slash.
+        single_server_match = re.match(
+            r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+        )
+        if single_server_match:
+            return [single_server_match.group(1)]
+        return [servers_and_path]
 
     @staticmethod
     def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:

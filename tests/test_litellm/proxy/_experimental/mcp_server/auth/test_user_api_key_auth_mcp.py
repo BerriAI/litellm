@@ -1595,6 +1595,94 @@ class TestMCPDelegateAuthToUpstream:
         assert "public-server" in result
         assert "internal-server" not in result
 
+    def test_extract_target_server_names_matches_routing_parser(self):
+        """
+        Regression: _extract_target_server_names_from_path must match the
+        downstream regex parser in server.py::_get_mcp_servers_in_path.
+
+        Previously, a request to ``/mcp/<delegated>/garbage`` was parsed as
+        targeting ``<delegated>`` by the auth gate (bypassing LiteLLM auth)
+        while the routing layer parsed it as ``<delegated>/garbage`` — when
+        that name did not resolve, the request fell back to the anonymous
+        allow-list which can include ``allow_all_keys`` servers that normally
+        require a LiteLLM key.
+        """
+        cases = [
+            # Single server, single segment.
+            ("/mcp/foo", ["foo"]),
+            # Server name with one embedded slash (two segments).
+            ("/mcp/foo/bar", ["foo/bar"]),
+            # Server name with embedded slash + extra path → name stays at two segments.
+            ("/mcp/foo/bar/tools", ["foo/bar"]),
+            # Comma-separated servers, no trailing path.
+            ("/mcp/foo,bar", ["foo", "bar"]),
+            # Comma-separated servers with trailing path.
+            ("/mcp/foo,bar/tools", ["foo", "bar"]),
+            # Alternative form: /<server>/mcp/...
+            ("/foo/mcp", ["foo"]),
+            ("/foo/mcp/tools", ["foo"]),
+            # Non-MCP paths → empty (fail closed).
+            ("/.well-known/oauth-authorization-server", []),
+            ("/v1/keys", []),
+            ("/", []),
+        ]
+        for path_input, expected in cases:
+            assert (
+                MCPRequestHandler._extract_target_server_names_from_path(path_input)
+                == expected
+            ), f"path={path_input!r} → expected {expected!r}"
+
+    async def test_delegate_does_not_bypass_on_extra_path_segment(self):
+        """
+        Regression: ``/mcp/<delegated>/<garbage>`` must NOT bypass auth.
+
+        The bypass key check is now performed against the same parsed target
+        as downstream routing — ``<delegated>/<garbage>`` — which will not
+        resolve to a delegate-enabled server, so normal LiteLLM auth runs.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/delegated_server/extra",
+            "headers": [],
+        }
+
+        delegate_server = TestMCPDelegateAuthToUpstream._make_server(
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+
+        def lookup_by_name(name):
+            # Only the *exact* delegated name resolves. Anything else (e.g.
+            # ``delegated_server/extra``) returns None so the bypass fails.
+            if name == "delegated_server":
+                return delegate_server
+            return None
+
+        async def mock_auth_raises(*_args, **_kwargs):
+            raise HTTPException(status_code=401, detail="No key provided")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_auth_raises,
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = lookup_by_name
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            # Auth was attempted (not bypassed) because the parsed target
+            # name does not match any registered delegate server.
+            mock_auth.assert_called_once()
+
 
 class TestMCPCustomHeaderName:
     """Test suite for custom MCP authentication header name functionality"""
