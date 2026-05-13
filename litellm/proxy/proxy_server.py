@@ -6774,7 +6774,15 @@ class ProxyStartupEvent:
             for k, v in general_settings["litellm_jwtauth"].items():
                 if isinstance(v, str) and v.startswith("os.environ/"):
                     general_settings["litellm_jwtauth"][k] = get_secret(v)
-            litellm_jwtauth = LiteLLM_JWTAuth(**general_settings["litellm_jwtauth"])
+            # ``user_config_file_path`` is set by ``ProxyConfig._get_config_from_file``
+            # during startup. Threading it through lets an operator-
+            # configured ``custom_validate: s3://...`` resolve through
+            # the runtime gate; admin-API JWT config writes (no config
+            # file context) hit the gate and refuse remote loads.
+            litellm_jwtauth = LiteLLM_JWTAuth(
+                config_file_path=user_config_file_path,
+                **general_settings["litellm_jwtauth"],
+            )
         else:
             litellm_jwtauth = LiteLLM_JWTAuth()
         jwt_handler.update_environment(
