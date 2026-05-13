@@ -957,3 +957,44 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         assert response.usage is not None
         assert response.usage.prompt_tokens_details is not None
         assert response.usage.prompt_tokens_details.image_count == 1
+
+
+def test_bedrock_embedding_with_aws_external_id():
+    """Test that aws_external_id is correctly passed to get_credentials for Bedrock embeddings"""
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    test_api_key = "test-bearer-token-12345"
+    model = "bedrock/amazon.titan-embed-text-v1"
+    embed_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        with patch(
+            "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.get_credentials"
+        ) as mock_get_creds:
+            mock_get_creds.return_value = (Mock(), "us-east-1")
+
+            response = litellm.embedding(
+                model=model,
+                input=test_input,
+                client=client,
+                aws_region_name="us-east-1",
+                aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+                api_key=test_api_key,
+                aws_role_name="arn:aws:iam::123456789012:role/test-role",
+                aws_external_id="test-external-id",
+            )
+
+            assert isinstance(response, litellm.EmbeddingResponse)
+            mock_get_creds.assert_called_once()
+            _, kwargs = mock_get_creds.call_args
+            assert kwargs.get("aws_external_id") == "test-external-id"
+            assert (
+                kwargs.get("aws_role_name")
+                == "arn:aws:iam::123456789012:role/test-role"
+            )
