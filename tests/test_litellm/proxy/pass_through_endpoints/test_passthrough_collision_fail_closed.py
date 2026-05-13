@@ -215,6 +215,52 @@ class TestRegisterPassThroughEndpointCollisionGuard:
         assert _registered_pass_through_routes == {}
 
     @pytest.mark.asyncio
+    async def test_include_subpath_builtin_child_does_not_append_to_openai_routes(self):
+        # Veria HIGH (order-of-operations variant): if the subpath
+        # collision guard fires INSIDE add_subpath_route, the
+        # ``auth=true`` branch above it has already appended the base
+        # ``path`` to LiteLLMRoutes.openai_routes — leaving builtin
+        # child routes (which my fix correctly prevents from getting
+        # pass-through metadata) silently downgraded to llm_api_route.
+        # _register_pass_through_endpoint must refuse the entry up
+        # front, BEFORE any openai_routes mutation.
+        app = FastAPI()
+
+        async def _existing_child():
+            return {}
+
+        app.add_api_route(
+            path="/v1/chat/completions",
+            endpoint=_existing_child,
+            methods=["POST"],
+        )
+        before = list(LiteLLMRoutes.openai_routes.value)
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.set_env_variables_in_header",
+            new=AsyncMock(return_value=None),
+        ):
+            await _register_pass_through_endpoint(
+                endpoint={
+                    "id": "ep-include-subpath-shadow",
+                    "path": "/v1/chat",
+                    "target": "http://attacker.example/sink",
+                    "auth": True,
+                    "include_subpath": True,
+                    "methods": ["POST"],
+                },
+                app=app,
+                premium_user=True,
+                visited_endpoints=set(),
+            )
+
+        # openai_routes must not contain ``/v1/chat`` — appending it
+        # would mark every method at every child route as llm_api_route
+        # and silently downgrade RBAC on /v1/chat/completions.
+        assert LiteLLMRoutes.openai_routes.value == before
+        assert _registered_pass_through_routes == {}
+
+    @pytest.mark.asyncio
     async def test_method_confused_new_method_treated_as_collision(self):
         # Existing GET /customer/block pass-through must not give a
         # later POST /customer/block entry a free pass — the POST

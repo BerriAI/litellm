@@ -2483,6 +2483,31 @@ async def _register_pass_through_endpoint(
         )
         return
 
+    # ``include_subpath`` makes the registration classify every route
+    # under ``path + "/"`` (see ``get_registered_pass_through_route``).
+    # If a builtin child route already exists, FastAPI dispatches the
+    # child request to the builtin but the auth gate would honor the
+    # pass-through ``auth`` flag for that ``(route, method)`` — an
+    # unauthenticated bypass on the builtin child. Refuse the entry
+    # before any ``openai_routes`` mutation: ``auth: true`` would
+    # otherwise append the base ``path`` and silently downgrade the
+    # builtin child's RBAC even though the subpath route helper later
+    # refuses to record metadata.
+    if endpoint_data.get("include_subpath", False) is True and new_methods:
+        if SafeRouteAdder._has_builtin_child_routes(
+            app=app, path=path, methods=new_methods
+        ):
+            verbose_proxy_logger.warning(
+                "Pass-through include_subpath path %r (methods %s) would "
+                "classify existing builtin child routes; the pass-through "
+                "entry is ignored to prevent the auth gate from honoring "
+                "its ``auth`` flag against routes FastAPI dispatches to "
+                "the builtin handler.",
+                path,
+                new_methods,
+            )
+            return
+
     if auth is not None and str(auth).lower() == "true":
         # Authentication on a pass-through endpoint used to be enterprise-only.
         # That left OSS with no safe configuration: auth=True raised at startup

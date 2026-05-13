@@ -1750,13 +1750,18 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 def _is_unauthenticated_pass_through_route(
     pass_through_endpoints: Optional[List],
+    request: Request,
     route: str,
-    method: str,
 ) -> bool:
     """``auth: false`` pass-through entries skip common_checks — but only
     if a forwarder is actually registered for the request's (route,
     method). Method-aware variant of the gate in
-    ``check_api_key_for_custom_headers_or_pass_through_endpoints``."""
+    ``check_api_key_for_custom_headers_or_pass_through_endpoints``.
+
+    Accepts the request rather than the method so ``request.method`` is
+    only resolved on the pass-through path — test stubs that build a
+    minimal Starlette ``Request`` without populating ``scope['method']``
+    won't trip on the common (non-pass-through) authn path."""
     if pass_through_endpoints is None:
         return False
 
@@ -1766,7 +1771,7 @@ def _is_unauthenticated_pass_through_route(
 
     if (
         InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=route, method=method
+            route=route, method=request.method
         )
         is None
     ):
@@ -1834,8 +1839,8 @@ async def _run_centralized_common_checks(
     # contract; honor it.
     if _is_unauthenticated_pass_through_route(
         pass_through_endpoints=general_settings.get("pass_through_endpoints", None),
+        request=request,
         route=route,
-        method=request.method,
     ):
         return
 
