@@ -16,11 +16,11 @@ fireworks = FireworksAIConfig()
 
 
 def test_map_openai_params_tool_choice():
-    # Test case 1: tool_choice is "required"
+    # Test case 1: tool_choice "required" is passed through natively
     result = fireworks.map_openai_params(
         {"tool_choice": "required"}, {}, "some_model", drop_params=False
     )
-    assert result == {"tool_choice": "any"}
+    assert result == {"tool_choice": "required"}
 
     # Test case 2: tool_choice is "auto"
     result = fireworks.map_openai_params(
@@ -43,12 +43,10 @@ def test_map_openai_params_tool_choice():
 
 def test_map_response_format():
     """
-    Test that the response format is translated correctly.
+    Test that the response format is passed through as-is.
 
-    h/t to https://github.com/DaveDeCaprio (@DaveDeCaprio) for the test case
-
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6797
-    Fireworks AI Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting#step-1-import-libraries
+    Fireworks now natively supports the OpenAI json_schema response_format.
+    Ref: https://docs.fireworks.ai/api-reference/post-chatcompletions
     """
     response_format = {
         "type": "json_schema",
@@ -65,16 +63,7 @@ def test_map_response_format():
     result = fireworks.map_openai_params(
         {"response_format": response_format}, {}, "some_model", drop_params=False
     )
-    assert result == {
-        "response_format": {
-            "type": "json_object",
-            "schema": {
-                "properties": {"result": {"type": "boolean"}},
-                "required": ["result"],
-                "type": "object",
-            },
-        }
-    }
+    assert result == {"response_format": response_format}
 
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):

@@ -1021,6 +1021,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.fireworks_ai.embed.fireworks_ai_transformation",
         "FireworksAIEmbeddingConfig",
     ),
+    "FireworksAIMessagesConfig": (
+        ".llms.fireworks_ai.messages.transformation",
+        "FireworksAIMessagesConfig",
+    ),
+    "FireworksAIResponsesConfig": (
+        ".llms.fireworks_ai.responses.transformation",
+        "FireworksAIResponsesConfig",
+    ),
     "FriendliaiChatConfig": (
         ".llms.friendliai.chat.transformation",
         "FriendliaiChatConfig",

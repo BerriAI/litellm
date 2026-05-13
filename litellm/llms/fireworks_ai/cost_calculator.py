@@ -4,14 +4,15 @@ For calculating cost of fireworks ai serverless inference models.
 
 from typing import Tuple
 
+from litellm._logging import verbose_logger
 from litellm.constants import (
     FIREWORKS_AI_4_B,
     FIREWORKS_AI_16_B,
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
 
 
 # Extract the number of billion parameters from the model name
@@ -58,6 +59,11 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
+    Routes through ``generic_cost_per_token`` so cache-token and reasoning-token
+    pricing are picked up automatically. Falls back to the parameter-size
+    heuristic (``fireworks-ai-up-to-4b`` etc.) when the model is not present in
+    ``model_prices_and_context_window.json``.
+
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
@@ -65,22 +71,18 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## check if model mapped, else use default pricing
     try:
-        model_info = get_model_info(model=model, custom_llm_provider="fireworks_ai")
-    except Exception:
-        base_model = get_base_model_for_pricing(model_name=model)
-
-        ## GET MODEL INFO
-        model_info = get_model_info(
-            model=base_model, custom_llm_provider="fireworks_ai"
+        return generic_cost_per_token(
+            model=model, usage=usage, custom_llm_provider="fireworks_ai"
         )
-
-    ## CALCULATE INPUT COST
-
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
-
-    ## CALCULATE OUTPUT COST
-    completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
-
-    return prompt_cost, completion_cost
+    except Exception as e:
+        verbose_logger.debug(
+            "fireworks_ai cost_per_token: model '%s' not in pricing JSON, "
+            "falling back to size heuristic: %s",
+            model,
+            e,
+        )
+        base_model = get_base_model_for_pricing(model_name=model)
+        return generic_cost_per_token(
+            model=base_model, usage=usage, custom_llm_provider="fireworks_ai"
+        )
