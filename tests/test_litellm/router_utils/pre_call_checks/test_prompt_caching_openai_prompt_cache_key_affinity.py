@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,7 +26,7 @@ def _long_user_messages() -> list:
 
 
 def _make_openai_success_payload() -> StandardLoggingPayload:
-    # TypedDict 构造函数对「缺字段」很敏感；测试里用 dict + cast，避免维护完整 StandardLoggingMetadata 继承链。
+    # TypedDict is strict; build a dict and cast to avoid maintaining the full metadata hierarchy.
     raw: dict[str, Any] = {
         "id": "test_id",
         "trace_id": "trace-1",
@@ -255,3 +256,396 @@ async def test_anthropic_success_does_not_write_openai_affinity_key():
         prompt_cache_key="should-not-create-openai-key",
     )
     assert await cache.async_get_cache(key=openai_style_key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_skips_when_standard_logging_object_missing():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    await check.async_log_success_event(
+        kwargs={"prompt_cache_key": "x"},
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    assert await cache.async_get_cache(
+        key=_openai_prompt_cache_affinity_cache_key(
+            router_model="gpt-4o-mini",
+            tenant_token="",
+            prompt_cache_key="x",
+        )
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_skips_embedding_call_type():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    payload["call_type"] = CallTypes.embedding.value
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "prompt_cache_key": "k",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="k",
+    )
+    assert await cache.async_get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_openai_custom_llm_provider_from_kwargs():
+    """When payload omits custom_llm_provider, fall back to kwargs."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    raw = cast(dict[str, Any], payload)
+    raw.pop("custom_llm_provider", None)
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": cast(StandardLoggingPayload, raw),
+            "custom_llm_provider": "openai",
+            "prompt_cache_key": "doc-key",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="doc-key",
+    )
+    cached = await cache.async_get_cache(key=key)
+    assert cached is not None
+    assert cached["model_id"] == "dep-openai-1"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_prompt_cache_key_from_optional_params():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "optional_params": {"prompt_cache_key": "from-optional"},
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="from-optional",
+    )
+    cached = await cache.async_get_cache(key=key)
+    assert cached is not None
+    assert cached["model_id"] == "dep-openai-1"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_openai_affinity_set_cache_failure_swallowed():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    with patch.object(
+        cache,
+        "async_set_cache",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("redis down"),
+    ):
+        await check.async_log_success_event(
+            kwargs={
+                "standard_logging_object": payload,
+                "prompt_cache_key": "k",
+                "metadata": {"user_api_key_hash": "hash-abc"},
+            },
+            response_obj={},
+            start_time=0.0,
+            end_time=1.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_optional_params_prompt_cache_key():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "optional_params": {"prompt_cache_key": "opt-key"},
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    model_group = "gpt-4o-mini"
+    healthy = [
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={
+            "optional_params": {"prompt_cache_key": "opt-key"},
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "dep-openai-1"
+
+
+@pytest.mark.asyncio
+async def test_filter_openai_affinity_inferred_from_deployments_only():
+    """Model string without openai/ prefix still applies affinity when deployments are OpenAI."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "prompt_cache_key": "route-inf",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    model_group = "gpt-4o-mini"
+    healthy = [
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={
+            "prompt_cache_key": "route-inf",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "dep-openai-1"
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_pinned_id_not_in_healthy_returns_all():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model_group = "gpt-4o-mini"
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model=model_group,
+        tenant_token="hash-abc",
+        prompt_cache_key="orphan-pin",
+    )
+    await cache.async_set_cache(
+        key,
+        {"model_id": "dep-not-listed"},
+        ttl=300,
+    )
+    healthy = [
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={
+            "prompt_cache_key": "orphan-pin",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+    )
+    assert len(filtered) == 2
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_cache_dict_without_model_id_returns_all():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model_group = "gpt-4o-mini"
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model=model_group,
+        tenant_token="hash-abc",
+        prompt_cache_key="bad-dict",
+    )
+    await cache.async_set_cache(key, {"not_model_id": "x"}, ttl=300)
+    healthy = [
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={
+            "prompt_cache_key": "bad-dict",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+    )
+    assert len(filtered) == 1
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_cache_string_model_id():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model_group = "gpt-4o-mini"
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model=model_group,
+        tenant_token="hash-abc",
+        prompt_cache_key="str-val",
+    )
+    await cache.async_set_cache(key, "dep-openai-1", ttl=300)
+    healthy = [
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={
+            "prompt_cache_key": "str-val",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "dep-openai-1"
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_short_prompt_returns_all_deployments():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    healthy = [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "model_info": {"id": "a"},
+        },
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "model_info": {"id": "b"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model="gpt-4o-mini",
+        healthy_deployments=healthy,
+        messages=[{"role": "user", "content": "short"}],
+        request_kwargs={
+            "prompt_cache_key": "k",
+            "metadata": {"user_api_key_hash": "h"},
+        },
+    )
+    assert len(filtered) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_completion_call_type_writes_affinity():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    payload["call_type"] = CallTypes.completion.value
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "prompt_cache_key": "sync-completion",
+            "metadata": {"user_api_key_hash": "hash-abc"},
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    await asyncio.sleep(0.05)
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="sync-completion",
+    )
+    assert await cache.async_get_cache(key=key) is not None
