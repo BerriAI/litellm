@@ -1,4 +1,4 @@
-import { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
+import { RoleMappings, SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
 /**
  * Processes SSO settings form values and transforms them into the payload format expected by the API
@@ -65,6 +65,28 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   }
 
   return payload;
+};
+
+// Build form fields to prefill the role mappings section from existing SSO settings.
+// Shared by Add (SSOModals) and Edit (EditSSOSettingsModal) flows so detection and
+// extraction rules stay in one place.
+export const extractRoleMappingFields = (roleMappings: RoleMappings | null | undefined): Record<string, any> => {
+  if (!roleMappings) return {};
+
+  const joinTeams = (teams: string[] | undefined): string => {
+    if (!teams || teams.length === 0) return "";
+    return teams.join(", ");
+  };
+
+  return {
+    use_role_mappings: true,
+    group_claim: roleMappings.group_claim,
+    default_role: roleMappings.default_role || "internal_user",
+    proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
+    admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
+    internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
+    internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
+  };
 };
 
 // Determine the SSO provider based on the configuration

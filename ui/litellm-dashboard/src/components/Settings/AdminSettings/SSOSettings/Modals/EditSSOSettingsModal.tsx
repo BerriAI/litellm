@@ -5,7 +5,7 @@ import React, { useEffect } from "react";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
+import { detectSSOProvider, extractRoleMappingFields, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 
@@ -27,28 +27,7 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
       // Determine which SSO provider is configured
       const selectedProvider = detectSSOProvider(ssoData.values);
-
-      // Extract role mappings if they exist
-      let roleMappingFields = {};
-      if (ssoData.values.role_mappings) {
-        const roleMappings = ssoData.values.role_mappings;
-
-        // Helper function to join arrays into comma-separated strings
-        const joinTeams = (teams: string[] | undefined): string => {
-          if (!teams || teams.length === 0) return "";
-          return teams.join(", ");
-        };
-
-        roleMappingFields = {
-          use_role_mappings: true,
-          group_claim: roleMappings.group_claim,
-          default_role: roleMappings.default_role || "internal_user",
-          proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
-          admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
-          internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
-          internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
-        };
-      }
+      const roleMappingFields = extractRoleMappingFields(ssoData.values.role_mappings);
 
       // Extract team mappings if they exist
       let teamMappingFields = {};

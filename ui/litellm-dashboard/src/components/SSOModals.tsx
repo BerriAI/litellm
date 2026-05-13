@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
-import { detectSSOProvider } from "./Settings/AdminSettings/SSOSettings/utils";
+import { detectSSOProvider, extractRoleMappingFields } from "./Settings/AdminSettings/SSOSettings/utils";
 import NotificationsManager from "./molecules/notifications_manager";
 import { parseErrorMessage } from "./shared/errorUtils";
 
@@ -116,28 +116,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
           const ssoData = await getSSOSettings(accessToken);
           if (ssoData && ssoData.values) {
             const selectedProvider = detectSSOProvider(ssoData.values);
-
-            // Extract role mappings if they exist
-            let roleMappingFields = {};
-            if (ssoData.values.role_mappings) {
-              const roleMappings = ssoData.values.role_mappings;
-
-              // Helper function to join arrays into comma-separated strings
-              const joinTeams = (teams: string[] | undefined): string => {
-                if (!teams || teams.length === 0) return "";
-                return teams.join(", ");
-              };
-
-              roleMappingFields = {
-                use_role_mappings: true,
-                group_claim: roleMappings.group_claim,
-                default_role: roleMappings.default_role || "internal_user",
-                proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
-                admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
-                internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
-                internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
-              };
-            }
+            const roleMappingFields = extractRoleMappingFields(ssoData.values.role_mappings);
 
             // Set form values with existing data (excluding UI access control fields)
             const formValues = {
