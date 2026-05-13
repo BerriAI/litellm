@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LiteLLM — Lines of Code Over Time</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 32px;
+    background: #fafafa;
+    color: #1a1a1a;
+  }
+  h1 { margin: 0 0 4px 0; font-size: 22px; }
+  .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+  .chart-wrap {
+    background: white;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .chart-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+  canvas { max-width: 100%; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat {
+    background: white;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 14px 18px;
+  }
+  .stat-label { color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .stat-sub { color: #888; font-size: 12px; margin-top: 2px; }
+  .note { color: #777; font-size: 12px; margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>LiteLLM — Lines of Code Over Time</h1>
+<div class="subtitle">Tracked .py / .ts / .tsx / .js / .jsx files, sampled at the last commit of each month.</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Current total</div>
+    <div class="stat-value">1,583,297</div>
+    <div class="stat-sub">May 2026</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">First snapshot</div>
+    <div class="stat-value">846</div>
+    <div class="stat-sub">Jul 2023</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Growth (35 months)</div>
+    <div class="stat-value">1,871×</div>
+    <div class="stat-sub">~45k lines/month avg</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Last 12 months</div>
+    <div class="stat-value">+1,175k</div>
+    <div class="stat-sub">3.9× expansion since May 2025</div>
+  </div>
+</div>
+
+<div class="chart-wrap">
+  <div class="chart-title">Total lines of code</div>
+  <canvas id="totalChart" height="120"></canvas>
+</div>
+
+<div class="chart-wrap">
+  <div class="chart-title">Composition by file type (stacked)</div>
+  <canvas id="stackedChart" height="120"></canvas>
+</div>
+
+<div class="chart-wrap">
+  <div class="chart-title">Monthly change (lines added/removed per month)</div>
+  <canvas id="diffChart" height="120"></canvas>
+</div>
+
+<div class="note">
+Methodology: for each month, the last commit on or before the 1st of the next month was selected.
+Lines were counted with <code>git grep -c "" &lt;commit&gt; -- '*.py' '*.ts' '*.tsx' '*.js' '*.jsx'</code>,
+excluding paths under <code>node_modules</code>, <code>.next</code>, <code>_experimental/out</code>,
+<code>dist</code>, and <code>build</code>. Counts include tests, generated code under <code>litellm/proxy/</code>, etc.
+</div>
+
+<script>
+const labels = ["2023-07","2023-08","2023-09","2023-10","2023-11","2023-12","2024-01","2024-02","2024-03","2024-04","2024-05","2024-06","2024-07","2024-08","2024-09","2024-10","2024-11","2024-12","2025-01","2025-02","2025-03","2025-04","2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05"];
+const totals = [846,8484,16390,23233,30662,55105,69044,84477,98591,117031,149689,174111,194615,218590,239914,260965,280438,294822,318129,342229,370062,408147,453606,505733,571290,610038,658367,746862,842754,956392,1096152,1273008,1409317,1515809,1583297];
+const py    = [846,8072,15730,22555,29984,54393,67366,79380,92141,107226,135363,158340,178337,200916,221862,242737,261629,275716,295197,313904,336778,367960,405920,450863,502226,535722,581602,656244,732812,832109,931008,1057547,1167338,1268402,1333945];
+const tsx   = [0,0,0,0,0,0,592,3980,5157,8499,13001,14425,14843,16070,16315,16527,16598,16904,20683,25969,30701,36987,44130,51191,65244,70343,72633,85282,103381,113214,143319,178144,198405,205412,207284];
+const ts    = [0,0,0,0,0,0,129,129,304,304,304,304,304,304,431,477,479,479,475,574,764,1344,1650,1704,1812,1943,2094,3106,4369,8741,19292,34658,39668,40643,40716];
+const js    = [0,412,660,678,678,712,957,988,989,1002,1021,1042,1131,1300,1306,1224,1732,1723,1774,1782,1819,1856,1906,1975,2008,2030,2038,2230,2192,2328,2533,2659,3906,1352,1352];
+
+const monthlyDiff = totals.map((v,i) => i === 0 ? v : v - totals[i-1]);
+
+const fmt = (v) => v >= 1000 ? (v/1000).toFixed(0) + 'k' : v;
+
+new Chart(document.getElementById('totalChart'), {
+  type: 'line',
+  data: {
+    labels,
+    datasets: [{
+      label: 'Total LOC',
+      data: totals,
+      borderColor: '#2563eb',
+      backgroundColor: 'rgba(37, 99, 235, 0.08)',
+      borderWidth: 2,
+      fill: true,
+      tension: 0.25,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: (ctx) => ctx.parsed.y.toLocaleString() + ' lines' } }
+    },
+    scales: {
+      y: { ticks: { callback: fmt }, grid: { color: '#eee' } },
+      x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
+    }
+  }
+});
+
+new Chart(document.getElementById('stackedChart'), {
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      { label: 'Python (.py)',     data: py,  backgroundColor: 'rgba(37,99,235,0.7)',  borderColor: '#2563eb', fill: true, tension: 0.2, pointRadius: 0 },
+      { label: 'TSX (.tsx)',       data: tsx, backgroundColor: 'rgba(16,185,129,0.7)', borderColor: '#10b981', fill: true, tension: 0.2, pointRadius: 0 },
+      { label: 'TypeScript (.ts)', data: ts,  backgroundColor: 'rgba(245,158,11,0.7)', borderColor: '#f59e0b', fill: true, tension: 0.2, pointRadius: 0 },
+      { label: 'JS/JSX',           data: js,  backgroundColor: 'rgba(168,85,247,0.7)', borderColor: '#a855f7', fill: true, tension: 0.2, pointRadius: 0 },
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 12 } } },
+      tooltip: { mode: 'index', callbacks: { label: (ctx) => ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() } }
+    },
+    scales: {
+      y: { stacked: true, ticks: { callback: fmt }, grid: { color: '#eee' } },
+      x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
+    }
+  }
+});
+
+new Chart(document.getElementById('diffChart'), {
+  type: 'bar',
+  data: {
+    labels,
+    datasets: [{
+      label: 'Net lines added',
+      data: monthlyDiff,
+      backgroundColor: monthlyDiff.map(v => v >= 0 ? 'rgba(37,99,235,0.7)' : 'rgba(239,68,68,0.7)'),
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: (ctx) => ctx.parsed.y.toLocaleString() + ' lines' } }
+    },
+    scales: {
+      y: { ticks: { callback: fmt }, grid: { color: '#eee' } },
+      x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
+    }
+  }
+});
+</script>
+</body>
+</html>
