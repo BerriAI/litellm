@@ -885,6 +885,23 @@ class ResponsesAPIRequestUtils:
             raw_headers_from_request,
         )
 
+    @staticmethod
+    def get_verified_mcp_client_ip(
+        secret_fields: Optional[Dict[str, Any]],
+    ) -> str:
+        """Return the verified MCP client IP or a fail-closed sentinel.
+
+        LazyMCP access control uses this value for IP filtering. When no verified
+        IP is available, return a non-None sentinel so internal-only servers stay
+        hidden instead of bypassing filtering.
+        """
+
+        if secret_fields and isinstance(secret_fields, dict):
+            client_ip = secret_fields.get("mcp_client_ip")
+            if isinstance(client_ip, str) and client_ip.strip():
+                return client_ip.strip()
+        return "__invalid_mcp_client_ip__"
+
 
 class ResponseAPILoggingUtils:
     @staticmethod

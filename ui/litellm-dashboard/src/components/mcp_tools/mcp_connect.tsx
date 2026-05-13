@@ -112,10 +112,14 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 
 interface MCPConnectProps {
   currentServerAccessGroups?: string[];
+  mode?: "mcp" | "lazymcp";
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [], mode = "mcp" }) => {
   const proxyBaseUrl = getProxyBaseUrl();
+  const endpointPath = mode === "lazymcp" ? "/lazymcp" : "/mcp";
+  const endpointName = mode === "lazymcp" ? "LazyMCP" : "MCP";
+  const serverLabel = mode === "lazymcp" ? "litellm-lazymcp" : "litellm";
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
     openai: [],
@@ -234,9 +238,9 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <FeatureCard
           icon={<ServerIcon className="text-emerald-600" size={16} />}
           title="MCP Server Information"
-          description="Connection details for your LiteLLM MCP server"
+          description={`Connection details for your LiteLLM ${endpointName} server`}
         >
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="litellm-server-url" />
+          <CodeBlock title="Server URL" code={`${proxyBaseUrl}${endpointPath}`} copyKey="litellm-server-url" />
         </FeatureCard>
 
         <FeatureCard
@@ -255,8 +259,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     "tools": [
         {
             "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "litellm_proxy",
+            "server_label": "${serverLabel}",
+            "server_url": "litellm_proxy${mode === "lazymcp" ? "/lazymcp" : ""}",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_VIRTUAL_KEY",
@@ -317,9 +321,9 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <FeatureCard
           icon={<ServerIcon className="text-blue-600" size={16} />}
           title="MCP Server Information"
-          description="Connection details for your LiteLLM MCP server"
+          description={`Connection details for your LiteLLM ${endpointName} server`}
         >
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="openai-server-url" />
+          <CodeBlock title="Server URL" code={`${proxyBaseUrl}${endpointPath}`} copyKey="openai-server-url" />
         </FeatureCard>
 
         <FeatureCard
@@ -338,8 +342,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     "tools": [
         {
             "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "${proxyBaseUrl}/mcp",
+            "server_label": "${serverLabel}",
+            "server_url": "${proxyBaseUrl}${endpointPath}",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -368,7 +372,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           </Title>
         </div>
         <Text className="text-purple-700">
-          Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks
+          Use tools directly from Cursor IDE with LiteLLM {endpointName}. Enable your AI assistant to perform real-world tasks
           without leaving your coding environment.
         </Text>
       </div>
@@ -405,8 +409,8 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               <CodeBlock
                 code={`{
   "mcpServers": {
-    "Zapier_MCP": {
-      "url": "${proxyBaseUrl}/mcp",
+    "${mode === "lazymcp" ? "LiteLLM LazyMCP" : "Zapier_MCP"}": {
+      "url": "${proxyBaseUrl}${endpointPath}",
       "headers": {
         "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
         "x-mcp-servers": "Zapier_MCP,dev-group"
@@ -434,7 +438,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           </Title>
         </div>
         <Text className="text-green-700">
-          Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
+          Connect to LiteLLM {endpointName} using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
         </Text>
       </div>
 
@@ -450,7 +454,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               appropriate transport method.
             </Text>
           </div>
-          <CodeBlock title="Server URL" code={`${proxyBaseUrl}/mcp`} copyKey="http-server-url" />
+          <CodeBlock title="Server URL" code={`${proxyBaseUrl}${endpointPath}`} copyKey="http-server-url" />
           <CodeBlock
             title="Headers Configuration"
             code={JSON.stringify(
@@ -481,10 +485,13 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div>
       <Space direction="vertical" size="large" className="w-full">
         <div>
-          <TremorTitle className="text-3xl font-bold text-gray-900 mb-3">Connect to your MCP client</TremorTitle>
-          <TremorText className="text-lg text-gray-600">
-            Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world
-            tasks through a simple, secure connection.
+          <TremorTitle className="text-gray-900">
+            {mode === "lazymcp" ? "Connect to your MCP client with LazyMCP" : "Connect to your MCP client"}
+          </TremorTitle>
+          <TremorText className="text-gray-500 text-sm">
+            {mode === "lazymcp"
+              ? "LazyMCP connects MCP clients to LiteLLM while exposing only three gateway tools: mcp_describe, mcp_call, and mcp_status. This avoids sending every upstream MCP tool schema to the model on each request. LazyMCP respects virtual key, team, access group, toolset, and request-header permissions. The x-mcp-servers header works the same as standard MCP and server descriptions help the model choose the right server."
+              : "Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world tasks through a simple, secure connection."}
           </TremorText>
         </div>
 
