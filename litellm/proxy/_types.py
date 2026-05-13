@@ -2401,6 +2401,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "health checks run without a concurrency cap"
         ),
     )
+    health_check_skip_disabled_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.disable_background_health_check "
+            "are skipped for on-demand GET /health as well as the background health loop."
+        ),
+    )
     alerting: Optional[List] = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
