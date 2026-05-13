@@ -15,6 +15,7 @@ Usage:
     litellm.failure_callback = ["tokenjam"]
 """
 
+import asyncio
 import os
 from typing import Any, Optional
 
@@ -45,8 +46,8 @@ class TokenJamLogger(CustomLogger):
             )
         except Exception as e:
             verbose_logger.warning(
-                f"TokenJam client initialization failed: {e}. "
-                "Events will be dropped."
+                "TokenJam client initialization failed: %s. Events will be dropped.",
+                e,
             )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -61,7 +62,9 @@ class TokenJamLogger(CustomLogger):
                 success=True,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] TokenJam log_success_event: {e}")
+            verbose_logger.debug(
+                "[Non-Blocking] TokenJam log_success_event: %s", e,
+            )
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         if self._client is None:
@@ -75,10 +78,20 @@ class TokenJamLogger(CustomLogger):
                 success=False,
             )
         except Exception as e:
-            verbose_logger.debug(f"[Non-Blocking] TokenJam log_failure_event: {e}")
+            verbose_logger.debug(
+                "[Non-Blocking] TokenJam log_failure_event: %s", e,
+            )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.log_success_event(kwargs, response_obj, start_time, end_time)
+        # emit_litellm_span makes a blocking HTTP call; offload to a thread
+        # so we don't stall the event loop on every LiteLLM async call.
+        await asyncio.get_event_loop().run_in_executor(
+            None, self.log_success_event,
+            kwargs, response_obj, start_time, end_time,
+        )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.log_failure_event(kwargs, response_obj, start_time, end_time)
+        await asyncio.get_event_loop().run_in_executor(
+            None, self.log_failure_event,
+            kwargs, response_obj, start_time, end_time,
+        )
