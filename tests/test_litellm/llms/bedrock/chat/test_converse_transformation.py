@@ -3125,25 +3125,8 @@ def test_supports_native_structured_outputs():
     try:
         config = AmazonConverseConfig()
 
-        # Supported models (have supports_native_structured_output=true in cost JSON)
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-haiku-4-5-20251001-v1:0"
-        )
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-opus-4-6-v1"
-        )
-        # Regional prefix is stripped by get_bedrock_base_model
-        assert config._supports_native_structured_outputs(
-            "eu.anthropic.claude-opus-4-5-20251101-v1:0"
-        )
-        # Claude 4.6 Sonnet
-        assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-6")
-        assert config._supports_native_structured_outputs(
-            "us.anthropic.claude-sonnet-4-6"
-        )
+        # Supported models (have supports_native_structured_output=true in cost JSON
+        # AND are not Anthropic — Anthropic is excluded on Converse, see #27846)
         # Non-Anthropic models
         assert config._supports_native_structured_outputs(
             "qwen.qwen3-235b-a22b-2507-v1:0"
@@ -3158,6 +3141,26 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
 
         # Unsupported models -- should fall back to tool-call approach
+        # Anthropic models are excluded on Converse even if they have the flag
+        # in model_prices_and_context_window.json (see #27846)
+        assert not config._supports_native_structured_outputs(
+            "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+        assert not config._supports_native_structured_outputs(
+            "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        assert not config._supports_native_structured_outputs(
+            "anthropic.claude-opus-4-6-v1"
+        )
+        assert not config._supports_native_structured_outputs(
+            "eu.anthropic.claude-opus-4-5-20251101-v1:0"
+        )
+        assert not config._supports_native_structured_outputs(
+            "anthropic.claude-sonnet-4-6"
+        )
+        assert not config._supports_native_structured_outputs(
+            "us.anthropic.claude-sonnet-4-6"
+        )
         assert not config._supports_native_structured_outputs(
             "anthropic.claude-sonnet-4-20250514-v1:0"
         )
@@ -3245,7 +3248,7 @@ def test_translate_response_format_native_output_config():
         optional_params: dict = {}
         result = config._translate_response_format_param(
             value=response_format,
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="qwen.qwen3-235b-a22b-2507-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format},
             is_thinking_enabled=False,
@@ -3313,6 +3316,67 @@ def test_translate_response_format_fallback_tool_call():
     assert result["json_mode"] is True
 
 
+def test_anthropic_model_uses_tool_call_fallback_for_structured_output():
+    """Anthropic models on Converse should use tool-call fallback, not native outputConfig.
+
+    Even though Anthropic 4.5+ models have ``supports_native_structured_output=True``
+    in ``model_prices_and_context_window.json`` (for the native Anthropic API), Bedrock
+    Converse translates ``outputConfig.textFormat`` to ``output_config.format`` internally,
+    which the model rejects with ``"Extra inputs are not permitted"``.
+
+    Ref: https://github.com/BerriAI/litellm/issues/27846
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "TextResponse",
+                "schema": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            },
+        }
+
+        # Test with multiple Anthropic model variants
+        for model in [
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "eu.anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-6-v1",
+            "us.anthropic.claude-sonnet-4-6",
+        ]:
+            optional_params: dict = {}
+            result = config._translate_response_format_param(
+                value=response_format,
+                model=model,
+                optional_params=optional_params,
+                non_default_params={"response_format": response_format},
+                is_thinking_enabled=False,
+            )
+
+            # Should use tool-call fallback, NOT native outputConfig
+            assert (
+                "outputConfig" not in result
+            ), f"Model {model} should NOT use native outputConfig on Converse"
+            assert (
+                "tools" in result
+            ), f"Model {model} should use tool-call fallback on Converse"
+            assert result["json_mode"] is True
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
 def test_native_structured_output_no_fake_stream():
     """When using native structured outputs with streaming, fake_stream should NOT be set."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
@@ -3338,7 +3402,7 @@ def test_native_structured_output_no_fake_stream():
         optional_params: dict = {}
         result = config._translate_response_format_param(
             value=response_format,
-            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="qwen.qwen3-235b-a22b-2507-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format, "stream": True},
             is_thinking_enabled=False,
@@ -3396,7 +3460,7 @@ def test_transform_request_with_output_config():
     }
 
     result = config._transform_request(
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="qwen.qwen3-235b-a22b-2507-v1:0",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},

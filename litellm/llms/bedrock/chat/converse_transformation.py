@@ -760,12 +760,21 @@ class AmazonConverseConfig(BaseConfig):
     ) -> bool:
         """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
 
-        Delegates to the standard ``supports_native_structured_output`` utility
-        which looks up the flag in ``litellm.model_cost`` via
-        ``_get_model_info_helper``.
+        Anthropic models are excluded: Bedrock translates ``outputConfig.textFormat``
+        into the Anthropic-native ``output_config.format`` before forwarding to the
+        model, but the model rejects it with
+        ``"output_config.format: Extra inputs are not permitted"``.
+        These models fall back to the universally reliable tool-call approach.
+
+        Ref: https://github.com/BerriAI/litellm/issues/27846
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
+        from litellm.llms.bedrock.common_utils import get_bedrock_base_model
         from litellm.utils import supports_native_structured_output
+
+        base_model = get_bedrock_base_model(model)
+        if base_model.startswith("anthropic"):
+            return False
 
         return supports_native_structured_output(
             model=model, custom_llm_provider=custom_llm_provider
