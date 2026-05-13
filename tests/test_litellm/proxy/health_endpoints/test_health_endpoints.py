@@ -844,15 +844,19 @@ def test_health_readiness(proxy_client):
         duration_ms < 500
     ), f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
 
-    # Assert response contains only low-detail public probe fields
+    # Assert response includes diagnostic fields (legacy detailed payload)
     response_data = response.json()
-    assert response_data == {"status": "healthy"}
+    assert response_data["status"] == "healthy"
+    assert "litellm_version" in response_data
+    assert "success_callbacks" in response_data
+    assert "cache" in response_data
     print(f"Response time: {duration_ms:.2f}ms")
 
 
 def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     """
-    Detailed readiness diagnostics stay available behind the auth dependency.
+    /health/readiness/details remains available behind the auth dependency
+    and returns the same diagnostic payload.
     """
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
@@ -864,30 +868,6 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     response = client.get("/health/readiness/details")
-
-    assert response.status_code == 200, response.text
-    response_data = response.json()
-    assert response_data["status"] == "healthy"
-    assert "litellm_version" in response_data
-    assert "success_callbacks" in response_data
-    assert "cache" in response_data
-
-
-def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
-    """
-    Operators can explicitly preserve the legacy public readiness payload.
-    """
-    app = FastAPI()
-    app.include_router(_health_endpoints_module.router)
-    client = TestClient(app)
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings",
-        {"allow_public_health_readiness_details": True},
-    )
-
-    response = client.get("/health/readiness")
 
     assert response.status_code == 200, response.text
     response_data = response.json()
@@ -1750,7 +1730,8 @@ async def test_health_readiness_returns_503_when_db_disconnected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 503
-    assert result == {"status": "healthy"}
+    assert result["status"] == "healthy"
+    assert result["db"] == "disconnected"
 
 
 @pytest.mark.asyncio
@@ -1773,7 +1754,8 @@ async def test_health_readiness_returns_200_when_db_connected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result == {"status": "healthy"}
+    assert result["status"] == "healthy"
+    assert result["db"] == "connected"
 
 
 @pytest.mark.asyncio
@@ -1792,7 +1774,8 @@ async def test_health_readiness_returns_200_when_no_db_configured():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result == {"status": "healthy"}
+    assert result["status"] == "healthy"
+    assert result["db"] == "Not connected"
 
 
 def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
