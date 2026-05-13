@@ -3,7 +3,6 @@ Test domestic model compatibility fixes in handler.py
 """
 
 import json
-import pytest
 
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,

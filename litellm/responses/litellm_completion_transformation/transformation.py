@@ -33,7 +33,6 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
-    Reasoning,
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,

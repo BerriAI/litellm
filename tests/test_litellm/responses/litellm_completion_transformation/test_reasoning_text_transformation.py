@@ -2,8 +2,6 @@
 Test reasoning parameter transformation in transformation.py
 """
 
-import pytest
-
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
