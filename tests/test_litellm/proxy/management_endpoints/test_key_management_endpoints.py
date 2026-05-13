@@ -11046,6 +11046,52 @@ class TestRegenerateProjectMembershipGate:
             assert "not a member" in str(exc.value.detail)
 
 
+class TestRegenerateTeamChangeDbErrorReturns5xx:
+    """Greptile P1 follow-up #2: the ``/key/regenerate`` team-change
+    validation branch had its own bare ``except Exception`` that
+    silently surfaced infrastructure errors as 404 "Team not found".
+    Must surface as a 5xx like the project gate does."""
+
+    @pytest.mark.asyncio
+    async def test_team_lookup_failure_raises_500(self):
+        from litellm.proxy._types import (
+            LiteLLM_VerificationToken,
+            RegenerateKeyRequest,
+        )
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _execute_virtual_key_regeneration,
+        )
+
+        # Non-admin caller changing team_id is what triggers the
+        # team-change validation block at line 4459.
+        key_in_db = LiteLLM_VerificationToken(
+            token="hashed-existing", team_id="team-old", user_id="user-internal"
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                new=AsyncMock(side_effect=RuntimeError("db timeout")),
+            ),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.hash_token", return_value="new-hash"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await _execute_virtual_key_regeneration(
+                    prisma_client=MagicMock(),
+                    key_in_db=key_in_db,
+                    hashed_api_key="hashed-existing",
+                    key="sk-existing",
+                    data=RegenerateKeyRequest(key="sk-existing", team_id="team-new"),
+                    user_api_key_dict=_internal_user_auth(),
+                    litellm_changed_by=None,
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=MagicMock(),
+                )
+            assert exc.value.status_code == 500
+            assert "Unable to verify team membership" in str(exc.value.detail)
+
+
 class TestProjectKeyLimitsDbErrorReturns5xx:
     """Greptile P1 follow-up: when ``get_team_object`` fails for an
     infrastructure reason (DB timeout, connection error) the previous

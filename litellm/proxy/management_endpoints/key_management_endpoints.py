@@ -4450,8 +4450,25 @@ async def _execute_virtual_key_regeneration(
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     check_db_only=True,
                 )
-            except Exception:
-                team_obj_for_change = None
+            except Exception as exc:
+                # Don't mask infrastructure errors as 404 "Team not
+                # found" — operators need the real signal and the
+                # caller gets a retryable 5xx.
+                verbose_proxy_logger.exception(
+                    "Failed to fetch team_id=%s during /key/regenerate "
+                    "team-change validation: %s",
+                    data.team_id,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": (
+                            f"Unable to verify team membership for "
+                            f"team_id={data.team_id}. Please retry."
+                        )
+                    },
+                ) from exc
             if team_obj_for_change is None:
                 raise HTTPException(
                     status_code=404,
