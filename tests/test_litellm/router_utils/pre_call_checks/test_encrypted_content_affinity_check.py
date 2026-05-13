@@ -1172,3 +1172,154 @@ def test_boundary_key_rejects_non_dict_like_inputs():
         )
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# Fail-fast when originating deployment is unavailable and no boundary peer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_affinity_raises_service_unavailable_when_origin_cooled_down():
+    """
+    Originating deployment is in the router config but absent from
+    healthy_deployments (e.g. in cooldown), and no boundary peer is configured.
+    The check must fail fast with a transient 503 rather than dispatching to a
+    non-peer deployment that would 400 with invalid_encrypted_content.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import ServiceUnavailableError
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = MagicMock()
+    originating.litellm_params.model_dump.return_value = {
+        "api_base": "https://account-a.openai.azure.com/",
+        "api_key": "key-a",
+    }
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = originating
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-a-cooled", "rs_test"
+    )
+    healthy_only_b = [
+        {
+            "model_info": {"id": "deployment-b"},
+            "litellm_params": {
+                "api_base": "https://account-b.openai.azure.com/",
+                "api_key": "key-b",
+                "model": "azure/gpt-5.4",
+            },
+        }
+    ]
+    request_kwargs = {
+        "input": [{"id": encoded_id, "type": "reasoning"}],
+    }
+
+    with pytest.raises(ServiceUnavailableError) as excinfo:
+        await check.async_filter_deployments(
+            model="gpt-5.4",
+            healthy_deployments=healthy_only_b,
+            messages=None,
+            request_kwargs=request_kwargs,
+        )
+
+    assert "deployment-a-cooled" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_affinity_raises_bad_request_when_origin_removed():
+    """
+    Originating deployment was removed from the router config and no boundary
+    peer is available. This is permanent (the stale encrypted_content cannot
+    be honored), so surface a 400 with actionable text.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import BadRequestError
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-removed", "rs_test"
+    )
+    healthy_only_b = [
+        {
+            "model_info": {"id": "deployment-b"},
+            "litellm_params": {
+                "api_base": "https://account-b.openai.azure.com/",
+                "api_key": "key-b",
+                "model": "azure/gpt-5.4",
+            },
+        }
+    ]
+    request_kwargs = {
+        "input": [{"id": encoded_id, "type": "reasoning"}],
+    }
+
+    with pytest.raises(BadRequestError) as excinfo:
+        await check.async_filter_deployments(
+            model="gpt-5.4",
+            healthy_deployments=healthy_only_b,
+            messages=None,
+            request_kwargs=request_kwargs,
+        )
+
+    assert "deployment-removed" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_affinity_does_not_raise_when_boundary_peer_available():
+    """
+    Even when the originating deployment is filtered out, if a peer on the
+    same (api_base, api_key) is in healthy_deployments, the boundary-match
+    path must succeed silently — no exception.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = MagicMock()
+    originating.litellm_params.model_dump.return_value = {
+        "api_base": "https://account-a.openai.azure.com/",
+        "api_key": "key-a",
+    }
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = originating
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-a", "rs_test"
+    )
+    peer = {
+        "model_info": {"id": "deployment-a-peer"},
+        "litellm_params": {
+            "api_base": "https://account-a.openai.azure.com/",
+            "api_key": "key-a",
+            "model": "azure/gpt-5.4",
+        },
+    }
+    request_kwargs = {
+        "input": [{"id": encoded_id, "type": "reasoning"}],
+    }
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=[peer],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [peer]
+    assert request_kwargs.get("_encrypted_content_affinity_pinned") is True

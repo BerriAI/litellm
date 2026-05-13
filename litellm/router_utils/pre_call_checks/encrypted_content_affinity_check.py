@@ -39,6 +39,7 @@ Safe to enable globally:
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import BadRequestError, ServiceUnavailableError
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -189,7 +190,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> List[dict]:
         """
         If the request ``input`` contains litellm-encoded item IDs, decode the
-        embedded ``model_id`` and pin the request to that deployment.
+        embedded ``model_id`` and pin the request to that deployment. Raises
+        ``ServiceUnavailableError`` / ``BadRequestError`` when the originating
+        deployment is unavailable and no encryption-boundary peer exists,
+        rather than dispatching a doomed request to a non-peer deployment.
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
@@ -243,10 +247,34 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
-        verbose_router_logger.error(
-            "EncryptedContentAffinityCheck: decoded deployment=%s not found in "
-            "healthy_deployments and no boundary match available; falling back to "
-            "full deployment pool (encrypted_content may be rejected upstream)",
-            model_id,
+        # Dispatching to a non-peer would guarantee an upstream
+        # `invalid_encrypted_content` 400, so fail fast with a clearer error.
+        raise self._unavailable_origin_error(model=model, model_id=model_id)
+
+    def _unavailable_origin_error(self, model: str, model_id: str) -> Exception:
+        originating = (
+            self.router.get_deployment(model_id=model_id)
+            if self.router is not None
+            else None
         )
-        return typed_healthy_deployments
+        if originating is not None:
+            return ServiceUnavailableError(
+                message=(
+                    f"Deployment id={model_id} that produced this encrypted_content "
+                    "is currently unavailable (likely cooled down), and no deployment "
+                    "on the same encryption boundary is configured. Retry later or "
+                    "configure a deployment with the same (api_base, api_key)."
+                ),
+                llm_provider="",
+                model=model,
+            )
+        return BadRequestError(
+            message=(
+                f"Deployment id={model_id} that produced this encrypted_content is "
+                "no longer configured on this router, and no deployment on the same "
+                "encryption boundary is available. Re-issue the request without the "
+                "stale encrypted_content items, or restore the originating deployment."
+            ),
+            model=model,
+            llm_provider="",
+        )
