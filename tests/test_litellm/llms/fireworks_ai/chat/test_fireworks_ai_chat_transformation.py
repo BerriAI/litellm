@@ -235,7 +235,7 @@ def test_transform_messages_helper_removes_provider_specific_fields():
 
 
 def test_transform_messages_helper_strips_thinking_blocks():
-    """Fireworks chat API rejects messages[].thinking_blocks (Claude Code / Anthropic replay)."""
+    """thinking_blocks must not be forwarded to Fireworks chat completions."""
     config = FireworksAIConfig()
     messages = [
         {"role": "user", "content": "Translate a poem."},
