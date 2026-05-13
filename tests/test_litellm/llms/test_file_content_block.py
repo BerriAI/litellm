@@ -186,6 +186,50 @@ def test_google_ai_studio_transform_messages_http_file_id_converts_to_base64(mon
     assert "file_id" not in file_field
 
 
+def test_google_ai_studio_transform_messages_http_file_id_convert_failure_leaves_file_unchanged(
+    monkeypatch,
+):
+    """If convert_url_to_base64 fails, the Studio prep step must not mutate the block
+    (see try/except in GoogleAIStudioGeminiConfig._transform_messages)."""
+    https_id = "https://example.com/missing.pdf"
+
+    def _raise(_url: str) -> str:
+        raise litellm.ImageFetchError("simulated fetch failure")
+
+    monkeypatch.setattr(
+        "litellm.llms.gemini.chat.transformation.convert_url_to_base64",
+        _raise,
+    )
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": https_id,
+                            "format": "application/pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+    config = GoogleAIStudioGeminiConfig()
+    config._transform_messages(messages=messages, model="gemini-2.0-flash")
+    content = messages[0].get("content")
+    assert isinstance(content, list)
+    file_block = next(c for c in content if isinstance(c, dict) and c.get("type") == "file")
+    file_field = file_block.get("file")
+    assert isinstance(file_field, dict)
+    assert file_field.get("file_id") == https_id
+    assert file_field.get("format") == "application/pdf"
+    assert "file_data" not in file_field
+
+
 # ---------------------------------------------------------------------------
 # common_utils.py - update_messages_with_model_file_ids
 # ---------------------------------------------------------------------------
