@@ -2434,8 +2434,14 @@ async def _validate_update_key_data(
     _project_id_to_check = _explicit_project_id or getattr(
         existing_key_row, "project_id", None
     )
+    # An explicit project_id reassignment must always go through the
+    # membership gate even when models/max_budget aren't changing —
+    # ``prepare_key_update_data`` persists project_id alone otherwise,
+    # letting a non-admin attach their key to an arbitrary project.
     if _project_id_to_check is not None and (
-        data.models is not None or data.max_budget is not None
+        _explicit_project_id is not None
+        or data.models is not None
+        or data.max_budget is not None
     ):
         await _check_project_key_limits(
             project_id=_project_id_to_check,

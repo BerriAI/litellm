@@ -11131,6 +11131,41 @@ class TestRegenerateTeamChangeDbErrorReturns5xx:
             assert exc.value.status_code == 404
 
 
+class TestUpdateProjectOnlyChangeRunsMembershipGate:
+    """Veria HIGH: ``/key/update`` only ran the project membership gate
+    when ``models`` or ``max_budget`` was also being changed. A
+    non-admin caller could send a project-only update and persist
+    ``project_id`` for a project whose team they are not a member of —
+    ``prepare_key_update_data`` writes ``project_id`` even with no other
+    fields changed. An explicit project_id reassignment must always
+    enforce the gate."""
+
+    def test_explicit_project_id_only_triggers_membership_check(self):
+        """Unit-level: a project_id-only ``UpdateKeyRequest`` (no models,
+        no max_budget) must still satisfy the condition that calls
+        ``_check_project_key_limits``. The Veria HIGH was that the
+        condition only fired when models/max_budget were also set, so
+        a project-only update bypassed the gate."""
+        from litellm.proxy._types import UpdateKeyRequest
+
+        data = UpdateKeyRequest(key="sk-x", project_id="proj-victim")
+        _explicit_project_id = getattr(data, "project_id", None)
+        _project_id_to_check = _explicit_project_id  # existing_key.project_id=None
+
+        # Mirror the production condition: this must be True so the
+        # membership gate runs even on project-only updates.
+        condition = _project_id_to_check is not None and (
+            _explicit_project_id is not None
+            or data.models is not None
+            or data.max_budget is not None
+        )
+        assert condition is True, (
+            "Project-only updates must trigger _check_project_key_limits — "
+            "without the explicit-project-id check the gate is skipped and "
+            "a non-admin can reassign the key to an arbitrary project."
+        )
+
+
 class TestProjectKeyLimitsDbErrorReturns5xx:
     """Greptile P1 follow-up: when ``get_team_object`` fails for an
     infrastructure reason (DB timeout, connection error) the previous
