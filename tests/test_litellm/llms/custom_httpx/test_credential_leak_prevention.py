@@ -135,6 +135,41 @@ class TestMaskedHTTPStatusError:
         # Content-Encoding must have been stripped from the rebuilt headers.
         assert "content-encoding" not in {k.lower() for k in masked.response.headers}
 
+    def test_handles_streaming_request_body(self):
+        """Multipart/streaming request bodies are not read-back-able; accessing
+        request.content raises httpx.RequestNotRead. MaskedHTTPStatusError must
+        not surface this as the user-facing error — it should fall back to an
+        empty body so the original upstream error is preserved.
+        """
+
+        def _gen():
+            yield b"chunk"
+
+        # Build a streaming request so .content raises RequestNotRead.
+        streaming_request = httpx.Request(
+            "POST",
+            "https://api.example.com/v1/images/edits?key=SECRET",
+            content=_gen(),
+        )
+        response = httpx.Response(
+            status_code=400,
+            content=b'{"error": "bad request"}',
+            request=streaming_request,
+        )
+        orig = httpx.HTTPStatusError(
+            "400 Bad Request", request=streaming_request, response=response
+        )
+
+        # Sanity check: confirm the streaming body really does raise on .content.
+        with pytest.raises(httpx.RequestNotRead):
+            _ = streaming_request.content
+
+        masked = MaskedHTTPStatusError(orig)
+
+        assert masked.status_code == 400
+        assert masked.response.content == b'{"error": "bad request"}'
+        assert "SECRET" not in str(masked.request.url)
+
 
 class TestSafeResponseHelpers:
     def test_safe_get_response_text_normal(self):

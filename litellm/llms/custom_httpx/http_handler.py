@@ -485,11 +485,20 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
+        # Streaming/multipart request bodies (e.g. file uploads) are not
+        # read-back-able — accessing `.content` raises httpx.RequestNotRead,
+        # which would replace the real upstream error with a confusing
+        # "Attempted to access streaming request content" message.
+        try:
+            request_content = original_error.request.content
+        except httpx.RequestNotRead:
+            request_content = b""
+
         masked_request = httpx.Request(
             method=original_error.request.method,
             url=masked_url,
             headers=original_error.request.headers,
-            content=original_error.request.content,
+            content=request_content,
         )
 
         super().__init__(
