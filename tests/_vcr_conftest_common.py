@@ -825,6 +825,110 @@ def _reset_session_stats() -> None:
     _session_stats["skip_reason_examples"].clear()
 
 
+# user_properties keys used to ship structured outcome data from xdist workers
+# back to the controller. ``vcr_verdict`` is the human-readable line that
+# ``VerboseReporterState.maybe_emit_verdict`` writes next to each test;
+# ``vcr_outcome`` + ``vcr_recorded_by`` are the structured payload that
+# ``aggregate_report_outcome`` folds into the controller's ``_session_stats``
+# so the session-end summary actually has data in xdist mode.
+_USER_PROP_VERDICT_LINE = "vcr_verdict"
+_USER_PROP_OUTCOME = "vcr_outcome"
+_USER_PROP_RECORDED_BY = "vcr_recorded_by"
+
+
+def _emit_outcome_payload(
+    node,
+    verdict: str,
+    *,
+    skip_reason: str | None = None,
+    live_call_hosts: Iterable[str] | None = None,
+) -> None:
+    """Stash a structured VCR outcome on a pytest node so the xdist
+    controller can fold it into ``_session_stats``.
+
+    On a worker, ``record_vcr_outcome`` has already updated the worker-local
+    ``_session_stats`` — but in xdist mode that state lives in the worker
+    process and never reaches the controller's ``pytest_terminal_summary``.
+    We use the report's ``user_properties`` channel (which xdist round-trips
+    back to the controller) to ship the outcome, and
+    ``aggregate_report_outcome`` rebuilds the controller's stats from there.
+
+    The recorder tags ``vcr_recorded_by`` with ``PYTEST_XDIST_WORKER`` so
+    the controller can distinguish "recorded in this same main process —
+    already counted" from "recorded in a worker — needs aggregation here".
+    """
+    node.user_properties.append(
+        (
+            _USER_PROP_OUTCOME,
+            {
+                "verdict": verdict,
+                "skip_reason": skip_reason,
+                "live_call_hosts": list(live_call_hosts) if live_call_hosts else [],
+            },
+        )
+    )
+    node.user_properties.append(
+        (_USER_PROP_RECORDED_BY, os.environ.get("PYTEST_XDIST_WORKER", ""))
+    )
+
+
+def aggregate_report_outcome(report) -> None:
+    """Fold a worker-produced VCR outcome into the controller's session stats.
+
+    No-op outside the xdist controller path:
+
+    * On a worker, ``_session_stats`` was already updated in-process by
+      ``record_vcr_outcome`` — and the worker doesn't render the summary
+      anyway, so there's nothing for us to aggregate.
+    * In single-process mode, ``vcr_recorded_by`` is the empty string,
+      which means the same process that ran the test is now handling the
+      report — ``_session_stats`` already has the entry, double-counting
+      would be a bug.
+    * Only when ``vcr_recorded_by`` is a non-empty worker id (``"gw0"``
+      etc.) do we know the controller's ``_session_stats`` is missing this
+      test and needs the outcome folded in.
+    """
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    if report.when != "teardown":
+        return
+
+    recorded_by = next(
+        (v for k, v in (report.user_properties or []) if k == _USER_PROP_RECORDED_BY),
+        None,
+    )
+    if not recorded_by:
+        return
+
+    outcome = next(
+        (v for k, v in (report.user_properties or []) if k == _USER_PROP_OUTCOME),
+        None,
+    )
+    if not outcome:
+        return
+
+    verdict = outcome.get("verdict")
+    if not verdict:
+        return
+
+    nodeid = report.nodeid
+    _session_stats["verdict_counts"][verdict] += 1
+
+    if verdict == VERDICT_MISS_OVERFLOW:
+        _session_stats["overflow_tests"].append(nodeid)
+    elif verdict == VERDICT_UNMARKED_LIVE_CALL:
+        _session_stats["unmarked_live_call_tests"].append(
+            (nodeid, list(outcome.get("live_call_hosts") or []))
+        )
+
+    skip_reason = outcome.get("skip_reason")
+    if skip_reason:
+        _session_stats["skip_reason_counts"][skip_reason] += 1
+        examples = _session_stats["skip_reason_examples"][skip_reason]
+        if len(examples) < 5:
+            examples.append(nodeid)
+
+
 def session_stats_snapshot() -> dict:
     """Read-only copy of the per-session VCR stats. Used by the summary."""
     return {
@@ -993,9 +1097,10 @@ def record_vcr_outcome(request, vcr) -> None:
         if not test_passed and verdict == VERDICT_MISS_RECORDED:
             verdict = VERDICT_MISS_NOT_PERSISTED
         _session_stats["verdict_counts"][verdict] += 1
+        _emit_outcome_payload(request.node, verdict)
         if vcr_outcome_logging_enabled():
             line = _format_verdict_line(verdict, cassette)
-            request.node.user_properties.append(("vcr_verdict", line))
+            request.node.user_properties.append((_USER_PROP_VERDICT_LINE, line))
         return
 
     # Cassette is None ⇒ test wasn't VCR-marked. Honor the skip reason
@@ -1021,9 +1126,15 @@ def record_vcr_outcome(request, vcr) -> None:
     if len(examples) < 5:
         examples.append(nodeid)
 
+    _emit_outcome_payload(
+        request.node,
+        verdict,
+        skip_reason=skip_reason,
+        live_call_hosts=hosts,
+    )
     if vcr_outcome_logging_enabled():
         request.node.user_properties.append(
-            ("vcr_verdict", _format_verdict_line(verdict, None, extra))
+            (_USER_PROP_VERDICT_LINE, _format_verdict_line(verdict, None, extra))
         )
 
 
@@ -1225,6 +1336,13 @@ class VerboseReporterState:
         return self.terminal_reporter
 
     def maybe_emit_verdict(self, report) -> None:
+        # Aggregate xdist-worker stats into the controller's session counters
+        # first — this path is independent of verbose logging because the
+        # structured outcome payload is always attached when VCR is active,
+        # and ``aggregate_report_outcome`` no-ops outside the xdist-controller
+        # case on its own.
+        aggregate_report_outcome(report)
+
         if report.when != "teardown":
             return
         if os.environ.get("PYTEST_XDIST_WORKER"):
@@ -1235,7 +1353,11 @@ class VerboseReporterState:
         if reporter is None:
             return
         verdict = next(
-            (v for k, v in (report.user_properties or []) if k == "vcr_verdict"),
+            (
+                v
+                for k, v in (report.user_properties or [])
+                if k == _USER_PROP_VERDICT_LINE
+            ),
             None,
         )
         if not verdict:
