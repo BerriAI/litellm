@@ -123,7 +123,7 @@ class MCPRequestHandler:
         if request.url.path.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
-            not has_explicit_litellm_key
+            not litellm_api_key
             and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
                 path=request.url.path, mcp_servers=mcp_servers
             )
@@ -131,12 +131,13 @@ class MCPRequestHandler:
             # Operator opted this oauth2 server into upstream-delegated auth
             # (PKCE passthrough): skip LiteLLM API-key/SSO entirely so the
             # client authenticates directly with the upstream MCP server.
-            # Only fires when NO x-litellm-api-key is present — if the client
-            # does supply a LiteLLM key (e.g. for stored-credential lookup),
-            # we fall through to normal auth so user_id is resolved and the
-            # stored OAuth token can be retrieved and forwarded upstream.
-            # Gated by _target_servers_delegate_auth_to_upstream, which only
-            # returns True when EVERY target is auth_type=oauth2 AND has the
+            # Fires ONLY when neither x-litellm-api-key nor Authorization is
+            # present. If any LiteLLM key is supplied (primary or secondary
+            # header), we fall through so user_id is resolved, spend/rate
+            # limiting apply, and any stored OAuth token can be retrieved
+            # and forwarded upstream. Gated by
+            # _target_servers_delegate_auth_to_upstream, which only returns
+            # True when EVERY target is auth_type=oauth2 AND has the
             # delegate_auth_to_upstream flag set — fails closed otherwise.
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:

@@ -1132,12 +1132,19 @@ class TestMCPDelegateAuthToUpstream:
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
-    async def test_delegate_skips_litellm_auth_with_authorization_header(self):
+    async def test_delegate_with_upstream_token_in_authorization_falls_back_to_anonymous(
+        self,
+    ):
         """
-        oauth2 + delegate_auth_to_upstream=True, Authorization header present
-        → still anonymous; auth is bypassed unconditionally so the bearer is
-        forwarded upstream untouched.
+        oauth2 + delegate_auth_to_upstream=True with an upstream OAuth token in
+        ``Authorization`` (not a LiteLLM key): LiteLLM auth is attempted first
+        (and fails), then the existing oauth2 fallback returns anonymous so the
+        bearer is forwarded upstream untouched. The delegate branch itself does
+        not fire when Authorization is present — that is what protects spend
+        tracking for callers using Authorization-style LiteLLM keys.
         """
+        from fastapi import HTTPException
+
         from litellm.types.mcp import MCPAuth
 
         scope = {
@@ -1147,10 +1154,14 @@ class TestMCPDelegateAuthToUpstream:
             "headers": [(b"authorization", b"Bearer upstream-pkce-token")],
         }
 
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            ) as mock_auth,
+                side_effect=mock_user_api_key_auth_fails,
+            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr,
@@ -1170,7 +1181,6 @@ class TestMCPDelegateAuthToUpstream:
                 _,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
-            mock_auth.assert_not_called()
             assert oauth2_headers.get("Authorization") == "Bearer upstream-pkce-token"
 
     async def test_delegate_off_still_requires_litellm_auth(self):
@@ -1343,6 +1353,43 @@ class TestMCPDelegateAuthToUpstream:
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
             "headers": [(b"x-litellm-api-key", b"Bearer sk-1234")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=UserAPIKeyAuth(user_id="real-user"),
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                )
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            assert auth_result.user_id == "real-user"
+            mock_auth.assert_called_once()
+
+    async def test_litellm_key_via_authorization_header_not_bypassed(self):
+        """
+        Regression: a LiteLLM key sent via the secondary ``Authorization`` header
+        (e.g. ``Authorization: Bearer sk-...``) must still trigger normal auth
+        and not be silently swallowed by the delegate bypass — otherwise spend
+        tracking and rate limiting are skipped for those callers.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/delegated_oauth_server",
+            "headers": [(b"authorization", b"Bearer sk-1234")],
         }
 
         with (
