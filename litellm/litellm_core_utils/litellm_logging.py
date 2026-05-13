@@ -4300,6 +4300,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
+        elif logging_integration == "tokenjam":
+            from litellm.integrations.tokenjam.tokenjam import TokenJamLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TokenJamLogger):
+                    return callback  # type: ignore
+            tokenjam_logger = TokenJamLogger()
+            _in_memory_loggers.append(tokenjam_logger)
+            return tokenjam_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4564,6 +4573,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
+                    return callback
+        elif logging_integration == "tokenjam":
+            from litellm.integrations.tokenjam.tokenjam import TokenJamLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TokenJamLogger):
                     return callback
         return None
 
