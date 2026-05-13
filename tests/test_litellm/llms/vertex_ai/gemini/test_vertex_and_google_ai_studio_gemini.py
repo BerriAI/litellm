@@ -4557,6 +4557,89 @@ def test_chunk_parser_error_chunk_non_numeric_code_defaults_to_500():
     assert "Malformed" in exc_info.value.message
 
 
+def test_chunk_parser_error_chunk_empty_dict_defaults_to_500():
+    """Empty error object {} uses default code 500 and default message/status strings."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": {}}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "UNKNOWN" in exc_info.value.message
+    assert "Unknown error" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_dict_int_value():
+    """Non-dict error payloads (e.g. bare JSON number) must raise with status 500, not TypeError."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": 503}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Unexpected error format" in exc_info.value.message
+    assert "503" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_dict_null_value():
+    """JSON null for error must hit the non-dict branch (same as int/string)."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": None}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Unexpected error format" in exc_info.value.message
+
+
 def test_mid_stream_429_error_raises_during_iteration():
     """
     Simulate a full streaming scenario: normal thinking chunks arrive first,
