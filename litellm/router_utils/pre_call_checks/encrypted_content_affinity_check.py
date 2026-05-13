@@ -36,11 +36,20 @@ Safe to enable globally:
 - No cache required.
 """
 
+import time
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
+import httpx
+
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import (
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
@@ -153,27 +162,31 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         healthy_deployments: List[dict],
         model_id: str,
-    ) -> List[dict]:
+    ) -> tuple[List[dict], Any]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
-        deployment's ``(api_base, api_key)``. Returns ``[]`` if router isn't
-        wired in, the originating deployment was removed, or no boundary match.
+        deployment's ``(api_base, api_key)``, alongside the originating
+        deployment object (or ``None`` if it was removed / router unavailable).
+        Returns ``([], originating_or_None)`` when no boundary match exists,
+        so the caller can reuse the looked-up ``originating`` rather than
+        re-querying the router.
         """
         if self.router is None:
-            return []
+            return [], None
         originating = self.router.get_deployment(model_id=model_id)
         if originating is None:
-            return []
+            return [], None
         boundary = self._encryption_boundary_key(
             originating.litellm_params.model_dump(exclude_none=True)
         )
         if boundary is None:
-            return []
-        return [
+            return [], originating
+        matches = [
             d
             for d in healthy_deployments
             if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
         ]
+        return matches, originating
 
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
@@ -189,7 +202,14 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> List[dict]:
         """
         If the request ``input`` contains litellm-encoded item IDs, decode the
-        embedded ``model_id`` and pin the request to that deployment.
+        embedded ``model_id`` and pin the request to that deployment. Raises
+        ``RateLimitError`` / ``ServiceUnavailableError`` / ``BadRequestError``
+        when the originating deployment is unavailable and no encryption-boundary
+        peer exists, rather than dispatching a doomed request to a non-peer
+        deployment. The 429/503 split mirrors the originating cooldown's status:
+        a 429-induced cooldown surfaces as 429 (with ``Retry-After`` set to the
+        remaining cooldown window) so OpenAI-compatible clients back off and
+        retry after the deployment is eligible again.
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
@@ -229,9 +249,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
-        boundary_matches = self._find_deployments_on_same_encryption_boundary(
-            healthy_deployments=typed_healthy_deployments,
-            model_id=model_id,
+        boundary_matches, originating = (
+            self._find_deployments_on_same_encryption_boundary(
+                healthy_deployments=typed_healthy_deployments,
+                model_id=model_id,
+            )
         )
         if boundary_matches:
             verbose_router_logger.debug(
@@ -243,10 +265,98 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
-        verbose_router_logger.error(
-            "EncryptedContentAffinityCheck: decoded deployment=%s not found in "
-            "healthy_deployments and no boundary match available; falling back to "
-            "full deployment pool (encrypted_content may be rejected upstream)",
-            model_id,
+        # Dispatching to a non-peer would guarantee an upstream
+        # `invalid_encrypted_content` 400, so fail fast with a clearer error.
+        raise await self._unavailable_origin_error(
+            model=model,
+            model_id=model_id,
+            originating=originating,
+            parent_otel_span=parent_otel_span,
         )
-        return typed_healthy_deployments
+
+    async def _unavailable_origin_error(
+        self,
+        model: str,
+        model_id: str,
+        originating: Any,
+        parent_otel_span: Optional[Span],
+    ) -> Exception:
+        # Public error messages intentionally omit the originating ``model_id`` so
+        # an authenticated caller forging encrypted-content markers cannot use the
+        # error surface to enumerate which deployment IDs exist on this router.
+        if originating is None:
+            return BadRequestError(
+                message=(
+                    "The deployment that produced this encrypted_content is no "
+                    "longer configured on this router, and no deployment on the "
+                    "same encryption boundary is available. Re-issue the request "
+                    "without the stale encrypted_content items, or restore the "
+                    "originating deployment."
+                ),
+                model=model,
+                llm_provider="",
+            )
+
+        cooldown = await self._get_origin_cooldown(
+            model_id=model_id, parent_otel_span=parent_otel_span
+        )
+
+        if cooldown is not None and str(cooldown.get("status_code")) == "429":
+            retry_after = self._cooldown_seconds_remaining(cooldown)
+            return RateLimitError(
+                message=(
+                    "The deployment that produced this encrypted_content is "
+                    f"rate-limited (cooling down for ~{retry_after}s), and no "
+                    "deployment on the same encryption boundary is configured. "
+                    "Retry after the Retry-After window or configure a deployment "
+                    "with the same (api_base, api_key)."
+                ),
+                llm_provider="",
+                model=model,
+                response=httpx.Response(
+                    status_code=429,
+                    headers={"retry-after": str(retry_after)},
+                    request=httpx.Request("POST", "https://litellm.ai/"),
+                ),
+            )
+
+        return ServiceUnavailableError(
+            message=(
+                "The deployment that produced this encrypted_content is "
+                "currently unavailable (likely cooled down), and no deployment "
+                "on the same encryption boundary is configured. Retry later or "
+                "configure a deployment with the same (api_base, api_key)."
+            ),
+            llm_provider="",
+            model=model,
+        )
+
+    async def _get_origin_cooldown(
+        self,
+        model_id: str,
+        parent_otel_span: Optional[Span],
+    ) -> Optional[CooldownCacheValue]:
+        if self.router is None:
+            return None
+        cooldown_cache = getattr(self.router, "cooldown_cache", None)
+        if cooldown_cache is None:
+            return None
+        try:
+            active = await cooldown_cache.async_get_active_cooldowns(
+                model_ids=[model_id], parent_otel_span=parent_otel_span
+            )
+        except Exception:
+            return None
+        for cached_model_id, value in active:
+            if cached_model_id == model_id:
+                return value
+        return None
+
+    @staticmethod
+    def _cooldown_seconds_remaining(cooldown: CooldownCacheValue) -> int:
+        remaining = (
+            float(cooldown.get("timestamp", 0.0))
+            + float(cooldown.get("cooldown_time", 0.0))
+            - time.time()
+        )
+        return max(1, int(remaining))
