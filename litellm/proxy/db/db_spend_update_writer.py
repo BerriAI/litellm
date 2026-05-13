@@ -447,50 +447,50 @@ class DBSpendUpdateWriter:
         user_id = payload.get("user")
         if user_id is not None and user_id != "":
             daily_transaction_key = f"{user_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyUserSpendTransaction(
+            daily_user_transaction = DailyUserSpendTransaction(
                 user_id=user_id, **base_daily_transaction
             )
             await self.daily_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_user_transaction}
             )
 
         team_id = payload.get("team_id")
         if team_id is not None and team_id != "":
             daily_transaction_key = f"{team_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyTeamSpendTransaction(
+            daily_team_transaction = DailyTeamSpendTransaction(
                 team_id=team_id, **base_daily_transaction
             )
             await self.daily_team_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_team_transaction}
             )
 
         if org_id is not None and org_id != "":
             daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyOrganizationSpendTransaction(
+            daily_org_transaction = DailyOrganizationSpendTransaction(
                 organization_id=org_id, **base_daily_transaction
             )
             await self.daily_org_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_org_transaction}
             )
 
         end_user_id = payload.get("end_user")
         if end_user_id is not None and end_user_id != "":
             daily_transaction_key = f"{end_user_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyEndUserSpendTransaction(
+            daily_end_user_transaction = DailyEndUserSpendTransaction(
                 end_user_id=end_user_id, **base_daily_transaction
             )
             await self.daily_end_user_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_end_user_transaction}
             )
 
         agent_id = payload.get("agent_id")
         if agent_id is not None and agent_id != "":
             daily_transaction_key = f"{agent_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyAgentSpendTransaction(
+            daily_agent_transaction = DailyAgentSpendTransaction(
                 agent_id=agent_id, **base_daily_transaction
             )
             await self.daily_agent_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_agent_transaction}
             )
 
         request_tags = payload.get("request_tags")
@@ -503,13 +503,13 @@ class DBSpendUpdateWriter:
 
         for tag in request_tags:
             daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload.get('model')}_{payload.get('custom_llm_provider')}_{endpoint_str}"
-            daily_transaction = DailyTagSpendTransaction(
+            daily_tag_transaction = DailyTagSpendTransaction(
                 tag=tag,
                 **base_daily_transaction,
                 request_id=payload.get("request_id"),
             )
             await self.daily_tag_spend_update_queue.add_update(
-                update={daily_transaction_key: daily_transaction}
+                update={daily_transaction_key: daily_tag_transaction}
             )
 
     def _get_base_daily_spend_transaction(
