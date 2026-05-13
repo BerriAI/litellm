@@ -11319,7 +11319,7 @@ class TestRegenerateExplicitNullScopingFields:
     write and detaches the key. The shared ownership-change helper
     must reject the clear before that write happens."""
 
-    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    @pytest.mark.parametrize("field", ["team_id", "project_id", "organization_id"])
     def test_non_admin_explicit_null_clear_rejected(self, field):
         from litellm.proxy._types import RegenerateKeyRequest
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -11330,6 +11330,7 @@ class TestRegenerateExplicitNullScopingFields:
             user_id="user-internal",
             team_id="team-a",
             project_id="proj-a",
+            organization_id="org-a",
         )
         data = RegenerateKeyRequest(key="sk-x", **{field: None})
 
@@ -11342,7 +11343,7 @@ class TestRegenerateExplicitNullScopingFields:
         assert exc.value.status_code == 403
         assert field in str(exc.value.detail)
 
-    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    @pytest.mark.parametrize("field", ["team_id", "project_id", "organization_id"])
     def test_admin_explicit_null_allowed(self, field):
         from litellm.proxy._types import RegenerateKeyRequest
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -11350,7 +11351,10 @@ class TestRegenerateExplicitNullScopingFields:
         )
 
         existing_key_row = MagicMock(
-            user_id="admin", team_id="team-a", project_id="proj-a"
+            user_id="admin",
+            team_id="team-a",
+            project_id="proj-a",
+            organization_id="org-a",
         )
         data = RegenerateKeyRequest(key="sk-x", **{field: None})
 
@@ -11360,7 +11364,7 @@ class TestRegenerateExplicitNullScopingFields:
             user_api_key_dict=_proxy_admin_auth(),
         )
 
-    @pytest.mark.parametrize("field", ["team_id", "project_id"])
+    @pytest.mark.parametrize("field", ["team_id", "project_id", "organization_id"])
     def test_omitted_field_no_op(self, field):
         from litellm.proxy._types import RegenerateKeyRequest
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -11368,7 +11372,10 @@ class TestRegenerateExplicitNullScopingFields:
         )
 
         existing_key_row = MagicMock(
-            user_id="user-internal", team_id="team-a", project_id="proj-a"
+            user_id="user-internal",
+            team_id="team-a",
+            project_id="proj-a",
+            organization_id="org-a",
         )
         # Caller did not include the field in the request body — must
         # not be treated as an explicit-null clear.

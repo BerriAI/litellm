@@ -476,12 +476,13 @@ def _validate_caller_can_change_key_ownership(
       ``litellm_usertable`` to derive the request's role; a non-admin
       rebinding their own key's ``user_id`` to a ``PROXY_ADMIN`` row
       promotes themselves.
-    - ``team_id`` / ``project_id``: an explicit ``null`` survives
-      ``model_dump(exclude_unset=True)`` in ``prepare_key_update_data``
-      and writes NULL to the token row — detaching the key from the
-      tenant whose budget / models / spend gates would otherwise scope
-      it. ``/key/update`` reaches this on every write; ``/key/regenerate``
-      now does too via the shared chokepoint.
+    - ``team_id`` / ``project_id`` / ``organization_id``: an explicit
+      ``null`` survives ``model_dump(exclude_unset=True)`` in
+      ``prepare_key_update_data`` and writes NULL to the token row —
+      detaching the key from the tenant whose budget / models / spend
+      gates would otherwise scope it. ``/key/update`` reaches this on
+      every write; ``/key/regenerate`` now does too via the shared
+      chokepoint.
 
     ``/key/update`` already enforced ``user_id`` inline;
     ``/key/regenerate`` did not. Sharing the check keeps both endpoints —
@@ -511,10 +512,11 @@ def _validate_caller_can_change_key_ownership(
                 ),
             )
 
-    # ``team_id`` / ``project_id``: refuse explicit-null clears by
-    # non-admins. Rebinding to a different value is allowed at this
-    # layer; downstream team/project membership gates own that check.
-    for scoping_field in ("team_id", "project_id"):
+    # ``team_id`` / ``project_id`` / ``organization_id``: refuse
+    # explicit-null clears by non-admins. Rebinding to a different
+    # value is allowed at this layer; downstream membership gates
+    # own that check.
+    for scoping_field in ("team_id", "project_id", "organization_id"):
         if scoping_field not in fields_set:
             continue
         incoming = getattr(data, scoping_field, None)
