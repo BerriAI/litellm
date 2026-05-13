@@ -5164,17 +5164,34 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
     counter_key = "spend:team:team-concurrent-seed"
     redis_store: dict = {}
     db_read_count = 0
-
-    async def redis_get_cache(key):
-        return redis_store.get(key)
+    set_results: list = []
+    get_after_set_count = 0
+    set_completed_count = 0
 
     async def redis_set_cache(key, value, nx=False, **_):
-        if nx and key in redis_store:
-            return False
-        # Yield so concurrent tasks can interleave their pre-SET miss check.
+        # Yield BEFORE the membership check so two concurrent callers
+        # interleave the way real atomic Redis SET NX does: the first
+        # to resume runs check + write atomically and wins; the second
+        # resumes after the key exists and loses. Yielding *after* the
+        # check would let both callers pass the empty-store check before
+        # either writes, so neither would ever lose.
         await asyncio.sleep(0)
+        if nx and key in redis_store:
+            set_results.append(False)
+            return False
         redis_store[key] = float(value)
+        set_results.append(True)
+        nonlocal set_completed_count
+        set_completed_count += 1
         return True
+
+    async def redis_get_cache(key):
+        # Track reads that happen after at least one SET NX has completed
+        # — those are the loser-path fallback reads we want to verify.
+        if set_completed_count > 0:
+            nonlocal get_after_set_count
+            get_after_set_count += 1
+        return redis_store.get(key)
 
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
@@ -5221,7 +5238,8 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
 
     assert all(r == 506.0 for r in results), results
     assert redis_store[counter_key] == pytest.approx(506.0), redis_store
-    # Both pods read the DB and both attempted SET NX; only one wrote.
+    # Both pods read the DB and both attempted SET NX; exactly one wrote
+    # (winner) and one was rejected (loser).
     assert db_read_count == 2
     assert fake_redis.async_set_cache.await_count == 2
     nx_writes = [
@@ -5230,6 +5248,15 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
+    assert sorted(set_results) == [False, True], (
+        f"expected exactly one SET NX winner and one loser, got {set_results}"
+    )
+    # Loser path executed: after the winner's SET NX returned True, the
+    # losing coalesced() call falls back to async_get_cache to read the
+    # winner's value rather than re-seeding.
+    assert get_after_set_count >= 1, (
+        "loser branch (else: read back winner's value) was never exercised"
+    )
 
 
 @pytest.mark.asyncio
