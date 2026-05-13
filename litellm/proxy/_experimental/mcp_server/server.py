@@ -1349,7 +1349,7 @@ if MCP_AVAILABLE:
                         extra_headers = db_headers
 
                 # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
-                if extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                elif extra_headers is None and server.auth_type == MCPAuth.oauth2:
                     extra_headers = await _get_user_oauth_extra_headers_from_db(
                         server,
                         user_api_key_auth,
