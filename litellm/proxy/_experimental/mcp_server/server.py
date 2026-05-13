@@ -2080,7 +2080,27 @@ if MCP_AVAILABLE:
         cache_key = f"lazymcp:catalog:{scope_hash}"
         cached = await _lazymcp_cache_get(cache_key)
         if isinstance(cached, dict):
-            return cached
+            allowed_servers = await _get_lazymcp_allowed_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=client_ip,
+            )
+            allowed_names = {
+                _get_lazymcp_server_label(server).lower() for server in allowed_servers
+            }
+            filtered_servers = [
+                server
+                for server in cached.get("servers", [])
+                if str(server.get("name", "")).lower() in allowed_names
+            ]
+            return {
+                **cached,
+                "servers": filtered_servers,
+                "server_count": len(filtered_servers),
+                "tool_count": sum(
+                    server.get("tool_count", 0) for server in filtered_servers
+                ),
+            }
 
         allowed_servers = await _get_lazymcp_allowed_servers(
             user_api_key_auth=user_api_key_auth,

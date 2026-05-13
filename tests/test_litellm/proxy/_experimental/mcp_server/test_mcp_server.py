@@ -427,6 +427,99 @@ def test_lazymcp_cache_helpers_tolerate_cache_errors(monkeypatch):
     fake_cache.async_set_cache.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_lazymcp_cached_catalog_rechecks_current_visibility(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cached_catalog = {
+        "description": "cached catalog",
+        "server_count": 2,
+        "tool_count": 3,
+        "servers": [
+            {"name": "visible", "description": "ok", "tool_count": 1, "tools": []},
+            {
+                "name": "revoked",
+                "description": "must not leak",
+                "tool_count": 2,
+                "tools": [],
+            },
+        ],
+    }
+    allowed_server = types.SimpleNamespace(
+        server_id="visible-id", alias="visible", server_name=None, name="visible"
+    )
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_cache_get",
+        AsyncMock(return_value=cached_catalog),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[allowed_server]),
+    )
+
+    catalog = await mcp_server_module._get_lazymcp_catalog(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        client_ip="10.0.0.1",
+    )
+
+    assert catalog["server_count"] == 1
+    assert catalog["tool_count"] == 1
+    assert [server["name"] for server in catalog["servers"]] == ["visible"]
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_cached_catalog_hides_all_revoked_servers(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_cache_get",
+        AsyncMock(
+            return_value={
+                "description": "cached catalog",
+                "server_count": 1,
+                "tool_count": 1,
+                "servers": [
+                    {"name": "revoked", "description": "must not leak", "tools": []}
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[]),
+    )
+
+    catalog = await mcp_server_module._get_lazymcp_catalog(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        client_ip="10.0.0.1",
+    )
+
+    assert catalog["server_count"] == 0
+    assert catalog["tool_count"] == 0
+    assert catalog["servers"] == []
+
+
 def test_invalidating_toolset_cache_tolerates_lazymcp_invalidation_error():
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
