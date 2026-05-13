@@ -272,6 +272,23 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       )}
                     </div>
                   </div>
+                  {handleAuth(mcpServer.auth_type) === "oauth2" && (
+                    <div className="py-3 grid grid-cols-3 gap-4">
+                      <Text className="text-sm font-medium text-gray-500">Delegate Auth to Upstream</Text>
+                      <div className="col-span-2">
+                        {mcpServer.delegate_auth_to_upstream ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200 text-xs font-medium">
+                            <span className="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                            Enabled (PKCE passthrough)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-600 rounded-full border border-gray-200 text-xs font-medium">
+                            Disabled
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   <div className="py-3 grid grid-cols-3 gap-4">
                     <Text className="text-sm font-medium text-gray-500">Access Groups</Text>
                     <div className="col-span-2">
