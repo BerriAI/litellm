@@ -2759,11 +2759,27 @@ if MCP_AVAILABLE:
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
-        """Return the raw Authorization header value from the ASGI scope, or None."""
+        """Return the upstream-bound ``Authorization`` header value, or None.
+
+        Only returns the ``Authorization`` header when ``x-litellm-api-key`` is
+        also present. In that case ``Authorization`` is unambiguously the
+        upstream token the caller wants forwarded to the MCP server. When
+        ``x-litellm-api-key`` is absent the ``Authorization`` header may itself
+        be the LiteLLM proxy API key (backward-compat path in
+        ``MCPRequestHandler.process_mcp_request``), and forwarding it upstream
+        would leak the proxy key to a third-party MCP server.
+        """
+        authorization = None
+        has_litellm_key_header = False
         for key, value in scope.get("headers", []):
-            if key.lower() == b"authorization":
-                return value.decode("latin-1")
-        return None
+            key_lower = key.lower()
+            if key_lower == b"authorization":
+                authorization = value.decode("latin-1")
+            elif key_lower == b"x-litellm-api-key":
+                has_litellm_key_header = True
+        if not has_litellm_key_header:
+            return None
+        return authorization
 
     async def _probe_upstream_auth(
         url: str,

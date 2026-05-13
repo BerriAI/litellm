@@ -3312,7 +3312,7 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
 
 
 def test_get_forwarded_auth_from_scope_extracts_header():
-    """_get_forwarded_auth_from_scope returns the Authorization value."""
+    """Returns Authorization value when x-litellm-api-key is also present."""
     from litellm.proxy._experimental.mcp_server.server import (
         _get_forwarded_auth_from_scope,
     )
@@ -3320,6 +3320,7 @@ def test_get_forwarded_auth_from_scope_extracts_header():
     scope = {
         "headers": [
             (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
             (b"authorization", b"Bearer my-token"),
         ]
     }
@@ -3332,3 +3333,24 @@ def test_get_forwarded_auth_from_scope_returns_none_when_missing():
     )
 
     assert _get_forwarded_auth_from_scope({"headers": []}) is None
+
+
+def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
+    """Skip when ``x-litellm-api-key`` is absent.
+
+    Without ``x-litellm-api-key``, the ``Authorization`` header may itself be
+    the LiteLLM proxy API key (backward-compat). Forwarding it upstream would
+    leak the proxy key, so the helper must return None and the probe must
+    not fire.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer ambiguous-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) is None
