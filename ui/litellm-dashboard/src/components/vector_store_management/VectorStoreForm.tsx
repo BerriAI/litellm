@@ -209,6 +209,38 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           />
         )}
 
+        {/* Vertex AI Search Setup Instructions */}
+        {selectedProvider === "vertex_ai/search_api" && (
+          <Alert
+            message="Vertex AI Search Setup"
+            description={
+              <div>
+                <p>To use Vertex AI Search (Discovery Engine):</p>
+                <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                  <li>
+                    Enable the Discovery Engine API on your Google Cloud project and create a data store following the
+                    guide:{" "}
+                    <a
+                      href="https://cloud.google.com/generative-ai-app-builder/docs/create-data-store-es"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ textDecoration: "underline" }}
+                    >
+                      Create a Vertex AI Search data store
+                    </a>
+                  </li>
+                  <li>Pick a supported location: global, us, or eu</li>
+                  <li>Copy the data store ID from the Vertex AI Search console</li>
+                  <li>Enter the data store ID in the Vector Store ID field below</li>
+                </ol>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: "16px" }}
+          />
+        )}
+
         <Form.Item
           label={
             <span>
@@ -225,7 +257,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             placeholder={
               selectedProvider === "vertex_rag_engine"
                 ? "6917529027641081856 (Get corpus ID from Vertex AI console)"
-                : "Enter vector store ID from your provider"
+                : selectedProvider === "vertex_ai/search_api"
+                  ? "my-datastore_1234567890 (Get data store ID from Vertex AI Search console)"
+                  : "Enter vector store ID from your provider"
             }
           />
         </Form.Item>
@@ -233,12 +267,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         {/* Provider-specific fields */}
         {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
           if (field.type === "select") {
-            const embeddingModels = modelInfo
-              .filter((option: ModelGroup) => option.mode === "embedding" || option.mode === null)
-              .map((option: ModelGroup) => ({
-                value: option.model_group,
-                label: option.model_group,
-              }));
+            const selectOptions =
+              field.options ??
+              modelInfo
+                .filter((option: ModelGroup) => option.mode === "embedding" || option.mode === null)
+                .map((option: ModelGroup) => ({
+                  value: option.model_group,
+                  label: option.model_group,
+                }));
 
             return (
               <Form.Item
@@ -252,6 +288,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   </span>
                 }
                 name={field.name}
+                initialValue={field.initialValue}
                 rules={
                   field.required ? [{ required: true, message: `Please select the ${field.label.toLowerCase()}` }] : []
                 }
@@ -260,7 +297,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   placeholder={field.placeholder}
                   showSearch={true}
                   filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                  options={embeddingModels}
+                  options={selectOptions}
                   style={{ width: "100%" }}
                 />
               </Form.Item>

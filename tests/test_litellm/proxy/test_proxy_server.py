@@ -6379,6 +6379,84 @@ class TestLazyFeatureMiddleware:
         assert loads == ["json"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_root_path,request_path,should_load,case",
+        [
+            # SERVER_ROOT_PATH set: incoming path includes prefix → strip and match.
+            ("/api/v1", "/api/v1/dummy/x", True, "root_path strip + match"),
+            # Trailing-slash env var must be normalized.
+            ("/api/v1/", "/api/v1/dummy/x", True, "trailing-slash env normalization"),
+            # Reverse proxy already stripped the prefix → original path still matches.
+            ("/api/v1", "/dummy/x", True, "pre-stripped path still loads"),
+            # No SERVER_ROOT_PATH set → unchanged behavior.
+            ("", "/dummy/x", True, "no root path"),
+            # SERVER_ROOT_PATH=/ must be a no-op (not strip every leading slash).
+            ("/", "/dummy/x", True, "root_path='/' is no-op"),
+            # Boundary check: /apiv2 must not match root /api.
+            ("/api", "/apiv2/foo", False, "boundary check prevents false match"),
+            # Genuine non-match under root_path.
+            ("/api/v1", "/api/v1/unrelated", False, "unrelated path under root"),
+        ],
+    )
+    async def test_root_path_handling(
+        self, monkeypatch, server_root_path, request_path, should_load, case
+    ):
+        """
+        The middleware must strip SERVER_ROOT_PATH before prefix-matching so
+        lazy features load under deployments that set a server root path,
+        while handling boundary, trailing-slash, and reverse-proxy edge cases
+        correctly.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name=f"dummy_{case}",
+            module_path="json",
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await mw(
+            {
+                "type": "http",
+                "path": request_path,
+                "method": "GET",
+                "headers": [],
+            },
+            receive,
+            send,
+        )
+        if should_load:
+            assert loads == ["json"], f"{case}: expected feature to load"
+        else:
+            assert loads == [], f"{case}: feature must not load"
+
+    @pytest.mark.asyncio
     async def test_concurrent_first_requests_only_register_once(self):
         """
         Two requests to the same prefix arriving in parallel must result in

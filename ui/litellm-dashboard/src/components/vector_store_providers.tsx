@@ -3,6 +3,7 @@ export enum VectorStoreProviders {
   S3Vectors = "Amazon S3 Vectors",
   PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
   VertexRagEngine = "Vertex AI RAG Engine",
+  VertexAiSearch = "Vertex AI Search",
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
@@ -12,6 +13,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   Bedrock: "bedrock",
   PgVector: "pg_vector",
   VertexRagEngine: "vertex_ai",
+  VertexAiSearch: "vertex_ai/search_api",
   OpenAI: "openai",
   Azure: "azure",
   Milvus: "milvus",
@@ -24,6 +26,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
   [VectorStoreProviders.PgVector]: `${asset_logos_folder}postgresql.svg`, // Fallback to a generic database icon if needed
   [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
+  [VectorStoreProviders.VertexAiSearch]: `${asset_logos_folder}google.svg`,
   [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
   [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
   [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
@@ -38,6 +41,8 @@ export interface VectorStoreFieldConfig {
   placeholder?: string;
   required: boolean;
   type?: "text" | "password" | "select";
+  options?: { value: string; label: string }[];
+  initialValue?: string;
 }
 
 // Provider-specific field configurations
@@ -62,6 +67,37 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
     },
   ],
   vertex_rag_engine: [],
+  "vertex_ai/search_api": [
+    {
+      name: "vertex_project",
+      label: "Vertex Project",
+      tooltip: "Google Cloud project ID that hosts the Vertex AI Search data store.",
+      placeholder: "my-gcp-project-id",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "vertex_location",
+      label: "Vertex Location",
+      tooltip: "Vertex AI Search data store location. Must be one of global, us, or eu.",
+      required: true,
+      type: "select",
+      options: [
+        { value: "global", label: "global" },
+        { value: "us", label: "us" },
+        { value: "eu", label: "eu" },
+      ],
+      initialValue: "global",
+    },
+    {
+      name: "vertex_collection_id",
+      label: "Collection ID (optional)",
+      tooltip: "Discovery Engine collection ID. Leave blank to use the default collection.",
+      placeholder: "e.g. my-custom-collection",
+      required: false,
+      type: "text",
+    },
+  ],
   openai: [
     {
       name: "api_key",
