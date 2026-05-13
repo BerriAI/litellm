@@ -49,6 +49,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -1714,6 +1715,12 @@ class ProxyBaseLLMRequestProcessing:
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
+
+        # Add Retry-After header when router has all deployments in cooldown
+        if isinstance(e, RouterRateLimitError):
+            cooldown_time = getattr(e, "cooldown_time", None)
+            if cooldown_time is not None:
+                headers["retry-after"] = str(int(cooldown_time))
 
         # Call response headers hook for failure
         try:

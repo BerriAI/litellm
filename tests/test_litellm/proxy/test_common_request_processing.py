@@ -2156,3 +2156,60 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+@pytest.mark.asyncio
+class TestHandleLLMApiExceptionRetryAfterHeader:
+    """
+    Verify that RouterRateLimitError produces a Retry-After header
+    so downstream clients can programmatically determine when to retry.
+    """
+
+    async def _invoke(self, exc: Exception):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_router_rate_limit_error_includes_retry_after_header(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="glm-5.1",
+            cooldown_time=60.0,
+            enable_pre_call_checks=True,
+            cooldown_list=["abc123"],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.headers is not None
+        assert proxy_exc.headers.get("retry-after") == "60"
+
+    async def test_router_rate_limit_error_cooldown_time_zero(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="test-model",
+            cooldown_time=0.0,
+            enable_pre_call_checks=False,
+            cooldown_list=[],
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.headers.get("retry-after") == "0"
+
+    async def test_non_rate_limit_error_has_no_retry_after_header(self):
+        exc = ValueError("some other error")
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.headers.get("retry-after") is None
