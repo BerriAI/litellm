@@ -273,21 +273,24 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort: Optional[Union[Reasoning, str]] = None
+        # LiteLLM chat completion 只支持 reasoning_effort 为字符串，不支持 dict 格式
+        # 因此总是提取 effort 字段作为字符串，忽略 summary 等其他字段
+        reasoning_effort: Optional[str] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
-                # Keep the full dict when summary is set so the responses API bridge can
-                # forward it; otherwise use the effort string for chat completion (e.g. Gemini).
-                if "summary" in reasoning_param:
-                    reasoning_effort = reasoning_param
-                elif "effort" in reasoning_param:
+                # reasoning dict 格式: {"effort": "low|medium|high", "summary": "detailed"}
+                # 只提取 effort 字段作为字符串，其他字段（如 summary）被丢弃
+                # 因为 LiteLLM chat completion 不支持 dict 格式
+                if "effort" in reasoning_param:
                     reasoning_effort = reasoning_param.get("effort")
-                else:
-                    reasoning_effort = reasoning_param
+                    # 确保 effort 是字符串
+                    if reasoning_effort is not None and not isinstance(reasoning_effort, str):
+                        reasoning_effort = str(reasoning_effort)
+                # 如果只有 summary 没有 effort，丢弃整个参数
+                # summary 是 Responses API 特有参数，chat completion 不支持
             elif isinstance(reasoning_param, str):
-                # reasoning could be a string directly
+                # reasoning 直接是字符串
                 reasoning_effort = reasoning_param
 
         # 国内模型不支持 reasoning_effort、parallel_tool_calls 等参数
