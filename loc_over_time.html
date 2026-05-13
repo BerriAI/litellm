@@ -81,6 +81,16 @@
 </div>
 
 <div class="chart-wrap">
+  <div class="chart-title">Composition by module (stacked)</div>
+  <canvas id="moduleChart" height="140"></canvas>
+</div>
+
+<div class="chart-wrap">
+  <div class="chart-title">Module growth (lines, log scale)</div>
+  <canvas id="moduleLogChart" height="140"></canvas>
+</div>
+
+<div class="chart-wrap">
   <div class="chart-title">Monthly change (lines added/removed per month)</div>
   <canvas id="diffChart" height="120"></canvas>
 </div>
@@ -89,7 +99,14 @@
 Methodology: for each month, the last commit on or before the 1st of the next month was selected.
 Lines were counted with <code>git grep -c "" &lt;commit&gt; -- '*.py' '*.ts' '*.tsx' '*.js' '*.jsx'</code>,
 excluding paths under <code>node_modules</code>, <code>.next</code>, <code>_experimental/out</code>,
-<code>dist</code>, and <code>build</code>. Counts include tests, generated code under <code>litellm/proxy/</code>, etc.
+<code>dist</code>, and <code>build</code>. Module buckets:
+<code>litellm/proxy/</code>, <code>litellm/llms/</code>, <code>litellm/integrations/</code>,
+<code>litellm/types/</code>, <code>litellm/core</code> (everything else under <code>litellm/</code>:
+<code>main.py</code>, <code>router*</code>, <code>utils.py</code>, <code>caching/</code>, etc.),
+<code>ui/</code> (Next.js dashboard), <code>tests/</code>, <code>enterprise/</code>,
+<code>litellm-proxy-extras/</code>, and <code>other</code> (<code>cookbook/</code>, <code>scripts/</code>, CI).
+The drop in <code>litellm/core</code> in Sep 2024 is a code reorg — about 62k lines moved into
+<code>tests/</code> that month (and the <code>ui/</code> bucket also appeared in volume that month).
 </div>
 
 <script>
@@ -99,6 +116,18 @@ const py    = [846,8072,15730,22555,29984,54393,67366,79380,92141,107226,135363,
 const tsx   = [0,0,0,0,0,0,592,3980,5157,8499,13001,14425,14843,16070,16315,16527,16598,16904,20683,25969,30701,36987,44130,51191,65244,70343,72633,85282,103381,113214,143319,178144,198405,205412,207284];
 const ts    = [0,0,0,0,0,0,129,129,304,304,304,304,304,304,431,477,479,479,475,574,764,1344,1650,1704,1812,1943,2094,3106,4369,8741,19292,34658,39668,40643,40716];
 const js    = [0,412,660,678,678,712,957,988,989,1002,1021,1042,1131,1300,1306,1224,1732,1723,1774,1782,1819,1856,1906,1975,2008,2030,2038,2230,2192,2328,2533,2659,3906,1352,1352];
+
+// Per-module breakdown (tracked source files only)
+const mod_proxy   = [0,0,268,915,2095,4710,8161,12194,16299,18105,24328,27187,31522,36560,40222,39625,41925,42431,44578,47956,52199,59777,67255,72740,83101,86759,94199,109284,121135,133027,146213,172530,190521,203428,213792];
+const mod_llms    = [0,728,2599,4503,5863,9416,9811,10908,13418,15523,21644,26960,30830,34699,37753,39949,42449,41933,44726,46868,48975,52594,58958,64588,68928,73209,78802,92222,110118,126543,137709,148872,159360,165550,169404];
+const mod_integ   = [0,1176,1234,1516,1535,1879,2117,2584,2887,3829,5713,6760,8077,9087,10313,11506,12093,13268,14693,15022,15265,16288,17363,18835,18092,19027,20834,22837,27247,30363,34775,36783,38673,39529,40431];
+const mod_types   = [0,0,0,0,0,0,100,100,100,357,1144,2873,3538,4047,4282,4960,5344,5916,6178,6504,7317,8712,10251,10946,12208,12608,13400,15174,17158,20090,21872,23598,24684,25258,25498];
+const mod_core    = [825,5822,11339,14767,19750,37299,44429,48994,53598,62489,74501,83586,92851,104480,42249,45187,46593,52062,54485,55606,57947,61837,64829,71049,74256,76876,80291,85359,93948,105268,112739,122878,131660,138667,141287];
+const mod_ui      = [0,0,0,0,0,278,1576,4978,6161,9503,14012,15437,15806,17082,17327,17540,17525,17200,20901,26286,31208,37534,44730,51849,66013,71243,73556,87350,106571,120715,161371,211269,236906,245910,248030];
+const mod_tests   = [0,0,0,0,0,0,1219,1697,2270,3207,3970,4214,4475,5188,80088,94573,106837,114627,125157,136547,149426,162646,179364,203898,233847,255264,281755,318376,352894,404833,464545,537457,606620,675822,722602];
+const mod_ent     = [0,0,0,0,0,0,0,977,1174,1226,1422,4091,4303,4200,4217,4240,4240,3971,3971,3971,3972,4531,6565,6996,9720,9628,9623,9681,6744,7689,7802,8758,9196,10338,10422];
+const mod_extras  = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,92,371,371,371,371,370,370,381,485,545,602,602,626,1229,1229];
+const mod_other   = [21,758,950,1532,1419,1523,1631,2045,2684,2792,2955,3003,3213,3247,3463,3385,3432,3414,3440,3469,3661,3857,3920,4461,4754,5054,5537,6198,6454,7319,8524,10261,11071,10078,10602];
 
 const monthlyDiff = totals.map((v,i) => i === 0 ? v : v - totals[i-1]);
 
@@ -152,6 +181,84 @@ new Chart(document.getElementById('stackedChart'), {
     },
     scales: {
       y: { stacked: true, ticks: { callback: fmt }, grid: { color: '#eee' } },
+      x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
+    }
+  }
+});
+
+const moduleDatasets = [
+  { label: 'tests/',                      data: mod_tests,  color: '#2563eb' },
+  { label: 'ui/ (dashboard)',             data: mod_ui,     color: '#10b981' },
+  { label: 'litellm/proxy/',              data: mod_proxy,  color: '#f59e0b' },
+  { label: 'litellm/llms/',               data: mod_llms,   color: '#a855f7' },
+  { label: 'litellm/core (router/utils)', data: mod_core,   color: '#ef4444' },
+  { label: 'litellm/integrations/',       data: mod_integ,  color: '#06b6d4' },
+  { label: 'litellm/types/',              data: mod_types,  color: '#84cc16' },
+  { label: 'enterprise/',                 data: mod_ent,    color: '#ec4899' },
+  { label: 'litellm-proxy-extras/',       data: mod_extras, color: '#64748b' },
+  { label: 'other (cookbook/scripts)',    data: mod_other,  color: '#9ca3af' },
+];
+
+const toRgba = (hex, a) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255}, ${(n>>8)&255}, ${n&255}, ${a})`;
+};
+
+new Chart(document.getElementById('moduleChart'), {
+  type: 'line',
+  data: {
+    labels,
+    datasets: moduleDatasets.map(d => ({
+      label: d.label,
+      data: d.data,
+      backgroundColor: toRgba(d.color, 0.75),
+      borderColor: d.color,
+      borderWidth: 1,
+      fill: true,
+      tension: 0.2,
+      pointRadius: 0,
+    }))
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+      tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString() } }
+    },
+    scales: {
+      y: { stacked: true, ticks: { callback: fmt }, grid: { color: '#eee' } },
+      x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
+    }
+  }
+});
+
+new Chart(document.getElementById('moduleLogChart'), {
+  type: 'line',
+  data: {
+    labels,
+    datasets: moduleDatasets.map(d => ({
+      label: d.label,
+      data: d.data.map(v => v === 0 ? null : v),
+      borderColor: d.color,
+      backgroundColor: d.color,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.25,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      spanGaps: true,
+    }))
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+      tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + (ctx.parsed.y == null ? '—' : ctx.parsed.y.toLocaleString()) } }
+    },
+    scales: {
+      y: { type: 'logarithmic', ticks: { callback: fmt }, grid: { color: '#eee' } },
       x: { grid: { display: false }, ticks: { maxRotation: 60, minRotation: 60, autoSkip: true } }
     }
   }
