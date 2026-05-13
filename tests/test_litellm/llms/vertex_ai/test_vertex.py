@@ -1282,6 +1282,34 @@ def test_process_gemini_media():
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
+def test_process_gemini_media_gcs_explicit_format_skips_litellm_registry():
+    """Explicit format for gs:// must not require litellm's FILE_MIME_TYPES entry."""
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    result = _process_gemini_media(
+        "gs://bucket/object-no-ext",
+        format="application/octet-stream",
+    )
+    assert result["file_data"] == FileDataType(
+        mime_type="application/octet-stream",
+        file_uri="gs://bucket/object-no-ext",
+    )
+
+
+def test_process_gemini_media_gcs_explicit_format_still_applies_mime_alias():
+    """Known MIME aliases still apply when format is explicit for gs:// URIs."""
+    from litellm.types.llms.vertex_ai import FileDataType
+
+    result = _process_gemini_media(
+        "gs://bucket/object-no-ext",
+        format="image/jpg",
+    )
+    assert result["file_data"] == FileDataType(
+        mime_type="image/jpeg",
+        file_uri="gs://bucket/object-no-ext",
+    )
+
+
 def test_process_gemini_media_gcs_without_extension_raises_clear_error():
     # Mock the GCS metadata lookup to avoid real outbound HTTP in tests.
     with patch(
@@ -1380,6 +1408,26 @@ def test_dotted_bucket_name_up_to_222_chars_is_accepted():
     assert _is_valid_gcs_bucket_name(dotted_bucket) is True
 
 
+def test_is_valid_gcs_bucket_name_rejects_too_short():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    assert _is_valid_gcs_bucket_name("ab") is False
+
+
+def test_is_valid_gcs_bucket_name_rejects_too_long_plain():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    bucket = "a" * 64
+    assert len(bucket) == 64
+    assert _is_valid_gcs_bucket_name(bucket) is False
+
+
+def test_is_valid_gcs_bucket_name_rejects_double_dot():
+    from litellm.llms.vertex_ai.gemini.transformation import _is_valid_gcs_bucket_name
+
+    assert _is_valid_gcs_bucket_name("ab..cd") is False
+
+
 def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
     from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 
@@ -1389,15 +1437,18 @@ def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
     mock_http_response.json.return_value = {"contentType": "image/png"}
     mock_http_response.raise_for_status.return_value = None
 
+    mock_http_handler = MagicMock()
+    mock_http_handler.get.return_value = mock_http_response
+
     with (
         patch.object(
             gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
         ),
         patch(
-            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
-        ) as mock_http_get,
+            "litellm.llms.vertex_ai.gemini.transformation._get_gcs_metadata_http_handler",
+            return_value=mock_http_handler,
+        ),
     ):
-        mock_http_get.return_value = mock_http_response
         content_type = gemini_transformation._get_gcs_object_content_type(
             image_url="gs://my-bucket/path/to/image-without-extension",
             vertex_project="project-123",
@@ -1472,15 +1523,18 @@ def test_get_gcs_object_content_type_without_credentials_skips_auth():
     mock_http_response.json.return_value = {"contentType": "image/jpeg"}
     mock_http_response.raise_for_status.return_value = None
 
+    mock_http_handler = MagicMock()
+    mock_http_handler.get.return_value = mock_http_response
+
     with (
         patch.object(
             gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
         ),
         patch(
-            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
-        ) as mock_http_get,
+            "litellm.llms.vertex_ai.gemini.transformation._get_gcs_metadata_http_handler",
+            return_value=mock_http_handler,
+        ),
     ):
-        mock_http_get.return_value = mock_http_response
         content_type = gemini_transformation._get_gcs_object_content_type(
             image_url="gs://public-bucket/public-object"
         )
@@ -1488,9 +1542,10 @@ def test_get_gcs_object_content_type_without_credentials_skips_auth():
     # Must not call get_access_token (so default server credentials are not used)
     mock_vertex_base.get_access_token.assert_not_called()
     # An anonymous request is still sent, covering publicly-readable objects.
-    mock_http_get.assert_called_once()
-    call_kwargs = mock_http_get.call_args.kwargs
-    assert "Authorization" not in call_kwargs.get("headers", {})
+    mock_http_handler.get.assert_called_once()
+    call_kwargs = mock_http_handler.get.call_args.kwargs
+    headers = call_kwargs.get("headers")
+    assert headers is None or "Authorization" not in headers
     assert content_type == "image/jpeg"
 
 
@@ -1559,11 +1614,17 @@ def test_async_transform_request_body_does_not_block_event_loop():
         await transform_task
         return sleep_elapsed
 
+    mock_http_handler = MagicMock()
+    mock_http_handler.get.side_effect = slow_http_get
+
     with (
         patch.object(
             gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
         ),
-        patch.object(gemini_transformation.httpx, "get", side_effect=slow_http_get),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation._get_gcs_metadata_http_handler",
+            return_value=mock_http_handler,
+        ),
         patch(
             "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
             "ContextCachingEndpoints.async_check_and_create_cache",

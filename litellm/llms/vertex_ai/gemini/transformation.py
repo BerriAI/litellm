@@ -64,9 +64,19 @@ from ..common_utils import (
 # vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
 # the first time GCS metadata needs to be fetched.
 _GCS_METADATA_VERTEX_BASE: Optional[Any] = None
+# Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
+# from litellm's HTTP stack apply (see Greptile review on PR #27278).
+_GCS_METADATA_HTTP_HANDLER: Optional[HTTPHandler] = None
 _GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
     "image/jpg": "image/jpeg",
 }
+
+
+def _apply_gemini_mime_type_aliases(mime_type: str) -> str:
+    """Normalize known MIME aliases only; does not consult the file-type registry."""
+    return _GEMINI_MIME_TYPE_ALIASES.get(
+        mime_type.strip().lower(), mime_type.strip().lower()
+    )
 
 
 def _get_vertex_base() -> Any:
@@ -77,6 +87,13 @@ def _get_vertex_base() -> Any:
 
         _GCS_METADATA_VERTEX_BASE = VertexBase()
     return _GCS_METADATA_VERTEX_BASE
+
+
+def _get_gcs_metadata_http_handler() -> HTTPHandler:
+    global _GCS_METADATA_HTTP_HANDLER
+    if _GCS_METADATA_HTTP_HANDLER is None:
+        _GCS_METADATA_HTTP_HANDLER = HTTPHandler(timeout=5.0)
+    return _GCS_METADATA_HTTP_HANDLER
 
 
 if TYPE_CHECKING:
@@ -279,7 +296,10 @@ def _get_gcs_object_content_type(
         params={"fields": "contentType"},
     )
     try:
-        response = httpx.get(url=metadata_url, headers=headers, timeout=5.0)
+        response = _get_gcs_metadata_http_handler().get(
+            url=str(metadata_url),
+            headers=headers or None,
+        )
         response.raise_for_status()
         content_type = response.json().get("contentType")
         if isinstance(content_type, str) and len(content_type) > 0:
@@ -296,9 +316,7 @@ def _normalize_and_validate_gemini_mime_type(
     # litellm.types.files.
     from litellm.types.files import get_file_extension_from_mime_type
 
-    normalized_mime_type = _GEMINI_MIME_TYPE_ALIASES.get(
-        mime_type.strip().lower(), mime_type.strip().lower()
-    )
+    normalized_mime_type = _apply_gemini_mime_type_aliases(mime_type)
     try:
         file_extension = get_file_extension_from_mime_type(normalized_mime_type)
         file_type = get_file_type_from_extension(file_extension)
@@ -346,6 +364,7 @@ def _process_gemini_media(
             extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
+            explicit_gcs_format = False
             if not format:
                 mime_type: Optional[str] = None
                 # For extension-less gs:// URIs, we cannot infer from path.
@@ -382,16 +401,23 @@ def _process_gemini_media(
                         )
             else:
                 mime_type = format
+                explicit_gcs_format = True
             if mime_type is None:
                 raise litellm.BadRequestError(
                     message=f"File type not supported by gemini - {image_url}",
                     model=model,
                     llm_provider="vertex_ai",
                 )
-            mime_type = _normalize_and_validate_gemini_mime_type(
-                mime_type=mime_type,
-                model=model,
-            )
+            if explicit_gcs_format:
+                # Callers who pass format/mime_type explicitly for gs:// URIs
+                # rely on pass-through to Gemini (pre-PR behavior). Only apply
+                # known MIME aliases; skip litellm's file-type registry.
+                mime_type = _apply_gemini_mime_type_aliases(mime_type)
+            else:
+                mime_type = _normalize_and_validate_gemini_mime_type(
+                    mime_type=mime_type,
+                    model=model,
+                )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(
