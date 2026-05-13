@@ -59,6 +59,7 @@ def test_get_silent_experiment_kwargs():
         },
         "litellm_call_id": "call-123",
         "stream": True,
+        "stream_options": {"include_usage": True},
         "proxy_server_request": {"body": {"model": "test"}},
     }
     result = router._get_silent_experiment_kwargs(**kwargs)
@@ -67,6 +68,11 @@ def test_get_silent_experiment_kwargs():
     assert "litellm_call_id" not in result
     # stream must be forced to False so callbacks fire in background
     assert result["stream"] is False
+    # stream_options must be stripped — OpenAI-compatible servers (vLLM, OpenAI)
+    # return 400 when stream_options is present with stream=False.
+    assert "stream_options" not in result
+    # Original kwargs must NOT be mutated — primary call still needs stream_options.
+    assert kwargs["stream_options"] == {"include_usage": True}
     # proxy_server_request must be preserved for spend log metadata
     assert "proxy_server_request" in result
     # CRITICAL: metadata must be a DIFFERENT dict object than the original,
