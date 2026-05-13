@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.otel_span import litellm_otel_tracer
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -49,12 +50,14 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.services import ServiceTypes
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
 StreamChunkSerializer = Callable[[Any], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
+
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -1112,6 +1115,7 @@ class ProxyBaseLLMRequestProcessing:
         )
         self._debug_log_request_payload()
 
+        logging_obj: Optional[LiteLLMLoggingObj] = None
         if skip_pre_call_logic:
             logging_obj = self.data.get("litellm_logging_obj")
             if logging_obj is None:
@@ -1120,22 +1124,30 @@ class ProxyBaseLLMRequestProcessing:
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
         else:
-            self.data, logging_obj = await self.common_processing_pre_call_logic(
-                request=request,
-                general_settings=general_settings,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_dict,
-                version=version,
-                proxy_config=proxy_config,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                model=model,
-                route_type=route_type,
-                llm_router=llm_router,
-            )
+            async with litellm_otel_tracer.trace(
+                "proxy.chat.common_processing_pre_call_logic",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                self.data, logging_obj = await self.common_processing_pre_call_logic(
+                    request=request,
+                    general_settings=general_settings,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                    proxy_config=proxy_config,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    model=model,
+                    route_type=route_type,
+                    llm_router=llm_router,
+                )
+        if logging_obj is None:
+            raise ValueError("Unable to initialize LiteLLM logging object")
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
@@ -1158,17 +1170,23 @@ class ProxyBaseLLMRequestProcessing:
             logging_obj._defer_async_logging = True  # type: ignore
 
         tasks = []
+
         # Start the moderation check (during_call_hook) as early as possible
         # This gives it a head start to mask/validate input while the proxy handles routing
-        tasks.append(
-            asyncio.create_task(
-                proxy_logging_obj.during_call_hook(
+        async def _run_during_call_hook_with_span() -> Any:
+            async with litellm_otel_tracer.trace(
+                "proxy.chat.during_call_hook",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                return await proxy_logging_obj.during_call_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     call_type=route_type,  # type: ignore
                 )
-            )
-        )
+
+        tasks.append(asyncio.create_task(_run_during_call_hook_with_span()))
 
         # Pass contents if provided
         if contents:
@@ -1176,13 +1194,20 @@ class ProxyBaseLLMRequestProcessing:
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
-        llm_call = await route_request(
-            data=self.data,
-            route_type=route_type,
-            llm_router=llm_router,
-            user_model=user_model,
-            user_api_key_dict=user_api_key_dict,
-        )
+        llm_call: Any = None
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.route_request",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+        ):
+            llm_call = await route_request(
+                data=self.data,
+                route_type=route_type,
+                llm_router=llm_router,
+                user_model=user_model,
+                user_api_key_dict=user_api_key_dict,
+            )
         tasks.append(llm_call)
 
         # wait for call to end
@@ -1209,15 +1234,22 @@ class ProxyBaseLLMRequestProcessing:
                 hidden_params.get("additional_headers", {}) or {},
             )
 
-            # Post Call Processing
-            if llm_router is not None:
-                self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
-            asyncio.create_task(
-                proxy_logging_obj.update_request_status(
-                    litellm_call_id=self.data.get("litellm_call_id", ""),
-                    status="success",
+            with litellm_otel_tracer.trace(
+                "proxy.chat.deployment_and_status_update",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                if llm_router is not None:
+                    self.data["deployment"] = llm_router.get_deployment(
+                        model_id=model_id
+                    )
+                asyncio.create_task(
+                    proxy_logging_obj.update_request_status(
+                        litellm_call_id=self.data.get("litellm_call_id", ""),
+                        status="success",
+                    )
                 )
-            )
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(
@@ -1357,19 +1389,31 @@ class ProxyBaseLLMRequestProcessing:
             # preserves blocking behavior and avoids double invocation.
             if getattr(logging_obj, "_on_deferred_stream_complete", None):
                 logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
-            response = await proxy_logging_obj.post_call_success_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                response=response,  # type: ignore[arg-type]
-            )
+            async with litellm_otel_tracer.trace(
+                "proxy.chat.post_call_success_hook",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                response = await proxy_logging_obj.post_call_success_hook(
+                    data=self.data,
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,  # type: ignore[arg-type]
+                )
         except Exception:
             _exception_raised = True
             raise
         finally:
-            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-                logging_obj=logging_obj,
-                exception_raised=_exception_raised,
-            )
+            with litellm_otel_tracer.trace(
+                "proxy.chat.flush_deferred_async_logging",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                    logging_obj=logging_obj,
+                    exception_raised=_exception_raised,
+                )
 
             # Streaming cleanup: if an exception occurred AND the deferred
             # streaming closure is still set, no streaming route will
@@ -1429,35 +1473,54 @@ class ProxyBaseLLMRequestProcessing:
         )  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=logging_obj.litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                fastest_response_batch_completion=fastest_response_batch_completion,
-                request_data=self.data,
-                hidden_params=hidden_params,
-                litellm_logging_obj=logging_obj,
-                **additional_headers,
+        with litellm_otel_tracer.trace(
+            "proxy.chat.build_custom_response_headers",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+        ):
+            fastapi_response.headers.update(
+                ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    call_id=logging_obj.litellm_call_id,
+                    model_id=model_id,
+                    cache_key=cache_key,
+                    api_base=api_base,
+                    version=version,
+                    response_cost=response_cost,
+                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                    fastest_response_batch_completion=fastest_response_batch_completion,
+                    request_data=self.data,
+                    hidden_params=hidden_params,
+                    litellm_logging_obj=logging_obj,
+                    **additional_headers,
+                )
             )
-        )
 
         # Call response headers hook for non-streaming success
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-            data=self.data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
+        callback_headers: Optional[dict] = None
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.post_call_response_headers_hook",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+        ):
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
 
-        await check_response_size_is_safe(response=response)
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.check_response_size_is_safe",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+        ):
+            await check_response_size_is_safe(response=response)
 
         return response
 

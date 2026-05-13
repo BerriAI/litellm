@@ -538,6 +538,8 @@ class OpenTelemetry(CustomLogger):
 
         if parent_otel_span is not None:
             _span_name = payload.service
+            if event_metadata and isinstance(event_metadata.get("span_name"), str):
+                _span_name = event_metadata["span_name"]
             service_logging_span = self.tracer.start_span(
                 name=_span_name,
                 context=trace.set_span_in_context(parent_otel_span),
