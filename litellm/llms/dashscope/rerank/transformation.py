@@ -63,11 +63,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
-        env_base = get_secret_str("DASHSCOPE_API_BASE_RERANK")
-        if env_base:
-            return env_base.rstrip("/")
-
         if api_base is None:
+            api_base = get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
+
+        if api_base == DEFAULT_RERANK_URL:
             return DEFAULT_RERANK_URL
 
         cleaned = api_base.rstrip("/")
