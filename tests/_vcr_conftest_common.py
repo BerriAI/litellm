@@ -514,7 +514,6 @@ _LIVE_CALL_HOST_SUFFIXES = (
     ".vertexai.googleapis.com",
     ".aiplatform.googleapis.com",
     ".googleapis.com",
-    ".bedrock-runtime.amazonaws.com",
     ".x.ai",
     ".cohere.ai",
     ".cohere.com",
@@ -758,7 +757,6 @@ def _format_verdict_line(verdict: str, cassette, extra: str = "") -> str:
 # "confirmed: this test connected to host X".
 # ---------------------------------------------------------------------------
 
-_LIVE_CALL_PROBE_INSTALLED = False
 _LIVE_CALL_BUFFER_KEY = "vcr_live_call_hosts"
 
 
@@ -768,7 +766,16 @@ def _is_live_call_host(host: str) -> bool:
     host = host.lower()
     if any(host.startswith(p) for p in _LIVE_CALL_LOCAL_PREFIXES):
         return False
-    return any(host.endswith(suffix) for suffix in _LIVE_CALL_HOST_SUFFIXES)
+    if any(host.endswith(suffix) for suffix in _LIVE_CALL_HOST_SUFFIXES):
+        return True
+    # AWS Bedrock endpoints are ``bedrock-runtime[-fips].{region}.amazonaws.com``
+    # (region between ``bedrock-runtime`` and ``amazonaws.com``), so plain
+    # suffix matching can't catch them.
+    if host.endswith(".amazonaws.com") and host.split(".", 1)[0].startswith(
+        "bedrock-runtime"
+    ):
+        return True
+    return False
 
 
 class _LiveCallProbe:

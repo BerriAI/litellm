@@ -178,8 +178,9 @@ def test_should_distinguish_different_aws_access_keys():
     [
         ("api.openai.com", True),
         ("api.anthropic.com", True),
-        ("bedrock-runtime.us-east-1.amazonaws.com", False),
-        ("api.us-east-1.bedrock-runtime.amazonaws.com", True),
+        ("bedrock-runtime.us-east-1.amazonaws.com", True),
+        ("bedrock-runtime-fips.us-east-1.amazonaws.com", True),
+        ("api.us-east-1.bedrock-runtime.amazonaws.com", False),
         ("foo.bar.openai.com", True),
         ("127.0.0.1", False),
         ("localhost", False),
