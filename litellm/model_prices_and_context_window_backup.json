@@ -3596,7 +3596,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-transcribe": {
-        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 16000,
@@ -3608,7 +3608,7 @@
         ]
     },
     "azure/gpt-4o-transcribe-diarize": {
-        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 16000,
@@ -8974,7 +8974,7 @@
         "supports_vision": true
     },
     "gpt-4o-transcribe-diarize": {
-        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
@@ -19121,7 +19121,7 @@
         "supports_vision": true
     },
     "gpt-4o-transcribe": {
-        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16000,
