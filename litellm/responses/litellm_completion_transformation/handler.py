@@ -215,6 +215,7 @@ class LiteLLMCompletionTransformationHandler:
         # 这些参数在 transformation.py 中已转换为对应的 chat completion 参数
         # 例如：text → response_format, reasoning → reasoning_effort
         completion_args.pop("text", None)  # 已转换为 response_format
+        completion_args.pop("reasoning", None)  # 已转换为 reasoning_effort
         completion_args.pop("instructions", None)  # Responses API 专用
         completion_args.pop("background", None)  # Responses API 专用
         completion_args.pop("truncation", None)  # Responses API 专用
@@ -380,6 +381,7 @@ class LiteLLMCompletionTransformationHandler:
         # 这些参数在 transformation.py 中已转换为对应的 chat completion 参数
         # 例如：text → response_format, reasoning → reasoning_effort
         acompletion_args.pop("text", None)  # 已转换为 response_format
+        acompletion_args.pop("reasoning", None)  # 已转换为 reasoning_effort
         acompletion_args.pop("instructions", None)  # Responses API 专用
         acompletion_args.pop("background", None)  # Responses API 专用
         acompletion_args.pop("truncation", None)  # Responses API 专用
