@@ -42,13 +42,13 @@ from tests._vcr_conftest_common import (  # noqa: E402
     _is_live_call_host,
     _reset_session_stats,
     _stable_key_value,
+    aggregate_report_outcome,
     apply_vcr_auto_marker_to_items,
     emit_vcr_classification_summary,
     install_live_call_probe,
     record_vcr_outcome,
     session_stats_snapshot,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -502,6 +502,252 @@ def test_should_emit_no_summary_when_no_tests_observed(vcr_enabled):
     reporter = _FakeReporter()
     emit_vcr_classification_summary(reporter)
     assert reporter.output == ""
+
+
+# ---------------------------------------------------------------------------
+# xdist controller aggregation
+#
+# _session_stats lives in module-global memory. Under xdist that memory is
+# per-worker, so the controller's pytest_terminal_summary would render an
+# empty summary without these aggregation hooks. The tests below simulate
+# the controller receiving teardown reports produced by workers.
+# ---------------------------------------------------------------------------
+
+
+def _worker_report(nodeid: str, user_properties, *, when: str = "teardown"):
+    """Stand-in for a pytest TestReport delivered to the xdist controller.
+
+    Only the attributes ``aggregate_report_outcome`` reads (``nodeid``,
+    ``when``, ``user_properties``) are populated.
+    """
+    return SimpleNamespace(
+        nodeid=nodeid,
+        when=when,
+        user_properties=list(user_properties),
+    )
+
+
+def _outcome_from_worker(
+    verdict: str,
+    *,
+    worker_id: str = "gw0",
+    skip_reason=None,
+    live_call_hosts=None,
+):
+    """Build the ``user_properties`` list a worker-side ``record_vcr_outcome``
+    would attach. ``worker_id=""`` simulates the single-process case where
+    the same process that ran the test is handling the report."""
+    return [
+        (
+            "vcr_outcome",
+            {
+                "verdict": verdict,
+                "skip_reason": skip_reason,
+                "live_call_hosts": list(live_call_hosts) if live_call_hosts else [],
+            },
+        ),
+        ("vcr_recorded_by", worker_id),
+    ]
+
+
+def test_controller_aggregates_hit_outcome_from_worker_report(vcr_enabled):
+    """An xdist controller starts with an empty _session_stats; a teardown
+    report carrying a worker-produced ``vcr_outcome`` must populate the
+    controller's verdict counts so the session summary has data to render."""
+    report = _worker_report(
+        "t::hit",
+        _outcome_from_worker(VERDICT_HIT),
+    )
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"][VERDICT_HIT] == 1
+
+
+def test_controller_records_overflow_nodeid_from_worker_report(vcr_enabled):
+    """OVERFLOW outcomes from workers must also populate
+    ``overflow_tests`` (the named-list the summary surfaces)."""
+    report = _worker_report(
+        "t::bedrock_overflow",
+        _outcome_from_worker(VERDICT_MISS_OVERFLOW),
+    )
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"][VERDICT_MISS_OVERFLOW] == 1
+    assert snap["overflow_tests"] == ["t::bedrock_overflow"]
+
+
+def test_controller_records_live_call_hosts_from_worker_report(vcr_enabled):
+    """LIVE_CALL outcomes must round-trip the destination hosts so the
+    summary's 'UNMARKED TESTS WITH LIVE API CALLS' section has the same
+    detail it would in single-process mode."""
+    report = _worker_report(
+        "t::prompt_caching",
+        _outcome_from_worker(
+            VERDICT_UNMARKED_LIVE_CALL,
+            skip_reason=SKIP_REASON_INCOMPATIBLE,
+            live_call_hosts=["api.anthropic.com", "api.x.ai"],
+        ),
+    )
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"][VERDICT_UNMARKED_LIVE_CALL] == 1
+    assert snap["unmarked_live_call_tests"] == [
+        ("t::prompt_caching", ["api.anthropic.com", "api.x.ai"])
+    ]
+    assert snap["skip_reason_counts"][SKIP_REASON_INCOMPATIBLE] == 1
+    assert "t::prompt_caching" in snap["skip_reason_examples"][SKIP_REASON_INCOMPATIBLE]
+
+
+def test_controller_does_not_double_count_single_process_reports(vcr_enabled):
+    """In single-process mode, ``record_vcr_outcome`` updates
+    ``_session_stats`` in the same process that later handles the report.
+    The aggregator must detect this (via empty ``vcr_recorded_by``) and
+    skip — otherwise every verdict would be counted twice."""
+    report = _worker_report(
+        "t::single_proc",
+        _outcome_from_worker(VERDICT_HIT, worker_id=""),
+    )
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"] == {}
+
+
+def test_controller_ignores_reports_without_vcr_outcome(vcr_enabled):
+    """Tests outside the VCR plumbing (e.g. when VCR is disabled, or unit
+    tests that never went through ``_vcr_outcome_gate``) produce reports
+    with no ``vcr_outcome`` user property. The aggregator must no-op."""
+    report = _worker_report("t::unrelated", [("other", "value")])
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"] == {}
+
+
+def test_controller_ignores_non_teardown_phases(vcr_enabled):
+    """Only the teardown report carries the final outcome; setup/call
+    reports must not contribute to the counts."""
+    for phase in ("setup", "call"):
+        report = _worker_report(
+            "t::phase",
+            _outcome_from_worker(VERDICT_HIT),
+            when=phase,
+        )
+        aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"] == {}
+
+
+def test_controller_no_ops_when_running_inside_xdist_worker(vcr_enabled, monkeypatch):
+    """Workers update their own ``_session_stats`` directly via
+    ``record_vcr_outcome`` — re-aggregating from the report would
+    double-count their own work. The aggregator must bail when
+    ``PYTEST_XDIST_WORKER`` is set."""
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+    report = _worker_report(
+        "t::on_worker",
+        _outcome_from_worker(VERDICT_HIT, worker_id="gw3"),
+    )
+
+    aggregate_report_outcome(report)
+
+    snap = session_stats_snapshot()
+    assert snap["verdict_counts"] == {}
+
+
+def test_controller_aggregated_outcomes_drive_session_summary(vcr_enabled):
+    """End-to-end: with only worker-produced reports (no in-process
+    ``record_vcr_outcome``), the session-end summary must still render
+    the OVERFLOW + LIVE_CALL sections that prove the cost-leak signal
+    survived the xdist worker→controller hop."""
+    aggregate_report_outcome(
+        _worker_report(
+            "t::overflow_via_worker",
+            _outcome_from_worker(VERDICT_MISS_OVERFLOW),
+        )
+    )
+    aggregate_report_outcome(
+        _worker_report(
+            "t::live_call_via_worker",
+            _outcome_from_worker(
+                VERDICT_UNMARKED_LIVE_CALL,
+                skip_reason=SKIP_REASON_RESPX,
+                live_call_hosts=["api.openai.com"],
+            ),
+        )
+    )
+
+    reporter = _FakeReporter()
+    emit_vcr_classification_summary(reporter)
+
+    assert "VCR CACHE CLASSIFICATION SUMMARY" in reporter.output
+    assert "CASSETTE OVERFLOW" in reporter.output
+    assert "t::overflow_via_worker" in reporter.output
+    assert "UNMARKED TESTS WITH LIVE API CALLS" in reporter.output
+    assert "api.openai.com" in reporter.output
+    assert "t::live_call_via_worker" in reporter.output
+
+
+def test_record_vcr_outcome_emits_structured_payload_for_marked_tests(
+    vcr_enabled,
+):
+    """``record_vcr_outcome`` must always stash the structured outcome on
+    ``user_properties`` (independent of verbose logging) so the controller
+    has something to aggregate from in xdist mode."""
+    request = SimpleNamespace(
+        node=SimpleNamespace(
+            nodeid="t::marked",
+            user_properties=[],
+            rep_call=SimpleNamespace(passed=True),
+        )
+    )
+    cassette = _cassette(played=1, dirty=False, total=1)
+    cassette._path = None
+    record_vcr_outcome(request, cassette)
+
+    outcomes = [v for k, v in request.node.user_properties if k == "vcr_outcome"]
+    recorded_by = [v for k, v in request.node.user_properties if k == "vcr_recorded_by"]
+    assert outcomes == [
+        {"verdict": VERDICT_HIT, "skip_reason": None, "live_call_hosts": []}
+    ]
+    # No PYTEST_XDIST_WORKER set in the vcr_enabled fixture, so the
+    # recording-process tag is the empty string (single-process mode).
+    assert recorded_by == [""]
+
+
+def test_record_vcr_outcome_emits_structured_payload_for_unmarked_live_call(
+    vcr_enabled,
+):
+    """The unmarked-LIVE_CALL path must ship the hosts list and the
+    skip-reason so the controller can rebuild both."""
+    request_node = SimpleNamespace(
+        nodeid="t::leak",
+        user_properties=[],
+        rep_call=SimpleNamespace(passed=True),
+    )
+    setattr(request_node, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_RESPX)
+    setattr(request_node, "vcr_live_call_hosts", ["api.openai.com"])
+    request = SimpleNamespace(node=request_node)
+
+    record_vcr_outcome(request, None)
+
+    outcomes = [v for k, v in request.node.user_properties if k == "vcr_outcome"]
+    assert outcomes == [
+        {
+            "verdict": VERDICT_UNMARKED_LIVE_CALL,
+            "skip_reason": SKIP_REASON_RESPX,
+            "live_call_hosts": ["api.openai.com"],
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
