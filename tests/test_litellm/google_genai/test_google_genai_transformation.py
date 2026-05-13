@@ -482,6 +482,69 @@ def test_transform_generate_content_request_preserves_response_json_schema_when_
     assert gen_config["responseJsonSchema"] == caller_json_schema
 
 
+def test_response_schema_normalization_parity_across_chat_and_native_paths():
+    """Parity guard between the two Gemini schema-normalization paths.
+
+    The native ``generateContent`` path (``_normalize_response_schema``) must
+    produce the same normalized schema as the ``/chat/completions`` path
+    (``apply_response_schema_transformation``) for the same input schema, on
+    both Gemini 2.0+ and Gemini 1.5. If either implementation drifts, this
+    test fails — forcing both paths to be updated together.
+    """
+    from copy import deepcopy
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    schema = {
+        "$defs": {
+            "Highlight": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["title"],
+            }
+        },
+        "type": "object",
+        "properties": {
+            "park_name": {"type": "string"},
+            "highlights": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Highlight"},
+            },
+            "rating": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        },
+        "required": ["park_name", "highlights"],
+    }
+
+    native_config = GoogleGenAIConfig()
+    chat_config = VertexGeminiConfig()
+
+    for model, native_out_key, chat_out_key in (
+        ("gemini-2.5-flash-lite", "responseJsonSchema", "response_json_schema"),
+        ("gemini-1.5-pro", "responseSchema", "response_schema"),
+    ):
+        native_dict = {"responseSchema": deepcopy(schema)}
+        native_config._normalize_response_schema(native_dict, model)
+
+        chat_optional_params: dict = {}
+        chat_config.apply_response_schema_transformation(
+            value={"type": "json_schema", "response_schema": deepcopy(schema)},
+            optional_params=chat_optional_params,
+            model=model,
+        )
+
+        assert native_dict[native_out_key] == chat_optional_params[chat_out_key], (
+            f"Schema normalization drifted between native generateContent and "
+            f"chat/completions paths for {model}. Update both "
+            f"GoogleGenAIConfig._normalize_response_schema and "
+            f"VertexGeminiConfig.apply_response_schema_transformation together."
+        )
+
+
 def test_transform_generate_content_request_without_schema_unchanged():
     """No schema in config → no normalization side effects."""
     config = GoogleGenAIConfig()
