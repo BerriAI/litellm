@@ -35,7 +35,9 @@ class TestEnsureValidJsonArguments:
         )
 
         assert len(result) == 1
-        assert result[0]["tool_calls"][0]["function"]["arguments"] == '{"expr": "15 + 27"}'
+        assert (
+            result[0]["tool_calls"][0]["function"]["arguments"] == '{"expr": "15 + 27"}'
+        )
 
     def test_null_arguments_converted_to_empty_json(self):
         """Test that null arguments are converted to {}"""
