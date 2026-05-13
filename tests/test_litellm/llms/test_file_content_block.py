@@ -1,14 +1,17 @@
 """
-Tests for handling malformed 'file' content blocks (missing 'file' sub-field).
+Tests for handling malformed or invalid 'file' content blocks (missing or null
+`file` sub-field, HTTP file_id URLs for Google AI Studio).
 
 Regression tests for:
 - litellm/llms/vertex_ai/gemini/transformation.py
 - litellm/llms/gemini/chat/transformation.py
 - litellm/litellm_core_utils/prompt_templates/common_utils.py
+  (migrate_file_to_image_url raises on missing `file`; file-id helpers skip non-OpenAI shapes)
 - litellm/litellm_core_utils/prompt_templates/factory.py (Bedrock + Anthropic)
 - litellm/llms/openai/chat/gpt_transformation.py
 """
 
+import asyncio
 import copy
 from typing import List, cast
 
@@ -62,6 +65,11 @@ MALFORMED_FILE_OBJECT: ChatCompletionFileObject = cast(
     ChatCompletionFileObject, {"type": "file"}
 )
 
+EXPLICIT_NULL_FILE_OBJECT: ChatCompletionFileObject = cast(
+    ChatCompletionFileObject,
+    {"type": "file", "file": None},
+)
+
 
 def _malformed() -> List[AllMessageValues]:
     return copy.deepcopy(cast(List[AllMessageValues], _MALFORMED_MESSAGES_RAW))
@@ -69,6 +77,23 @@ def _malformed() -> List[AllMessageValues]:
 
 def _well_formed() -> List[AllMessageValues]:
     return copy.deepcopy(cast(List[AllMessageValues], _WELL_FORMED_MESSAGES_RAW))
+
+
+def _explicit_null_file_in_content() -> List[AllMessageValues]:
+    return copy.deepcopy(
+        cast(
+            List[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {"type": "file", "file": None},
+                    ],
+                }
+            ],
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +111,15 @@ def test_gemini_convert_messages_malformed_file_raises_bad_request():
         )
 
 
+def test_gemini_convert_messages_explicit_null_file_field_raises_bad_request():
+    """Explicit JSON null for `file` must be rejected like a missing `file` key."""
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        _gemini_convert_messages_with_history(
+            messages=_explicit_null_file_in_content(),
+            model="gemini-2.0-flash",
+        )
+
+
 # ---------------------------------------------------------------------------
 # gemini/chat/transformation.py - GoogleAIStudioGeminiConfig
 # ---------------------------------------------------------------------------
@@ -99,20 +133,78 @@ def test_google_ai_studio_transform_messages_malformed_file_raises_bad_request()
         config._transform_messages(messages=_malformed(), model="gemini-2.0-flash")
 
 
+def test_google_ai_studio_transform_messages_explicit_null_file_field_raises_bad_request():
+    """Explicit JSON null for `file` must be rejected like a missing `file` key."""
+    config = GoogleAIStudioGeminiConfig()
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        config._transform_messages(
+            messages=_explicit_null_file_in_content(), model="gemini-2.0-flash"
+        )
+
+
+def test_google_ai_studio_transform_messages_http_file_id_converts_to_base64(monkeypatch):
+    """Google AI Studio rejects raw HTTP(S) file URLs; _transform_messages should
+    fetch and replace them with base64 `file_data` before conversion."""
+    # Data URL shape so downstream Gemini media parsing accepts the inlined bytes
+    # (mirrors real `convert_url_to_base64` output from `_process_image_response`).
+    fake_file_data = "data:application/pdf;base64,aGVsbG8="
+
+    def _fake_convert_url_to_base64(url: str) -> str:
+        assert url == "https://example.com/doc.pdf"
+        return fake_file_data
+
+    monkeypatch.setattr(
+        "litellm.llms.gemini.chat.transformation.convert_url_to_base64",
+        _fake_convert_url_to_base64,
+    )
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "https://example.com/doc.pdf",
+                            "format": "pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+    config = GoogleAIStudioGeminiConfig()
+    config._transform_messages(messages=messages, model="gemini-2.0-flash")
+    content = messages[0].get("content")
+    assert isinstance(content, list)
+    file_block = next(c for c in content if isinstance(c, dict) and c.get("type") == "file")
+    file_field = file_block.get("file")
+    assert isinstance(file_field, dict)
+    assert file_field.get("file_data") == fake_file_data
+    assert "file_id" not in file_field
+
+
 # ---------------------------------------------------------------------------
 # common_utils.py - update_messages_with_model_file_ids
 # ---------------------------------------------------------------------------
 
 
-def test_update_messages_with_model_file_ids_malformed_raises_bad_request():
-    """update_messages_with_model_file_ids should raise BadRequestError for content
-    blocks that have type='file' but no 'file' sub-field."""
-    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-        update_messages_with_model_file_ids(
-            messages=_malformed(),
-            model_id="some-model",
-            model_file_id_mapping={},
-        )
+def test_update_messages_with_model_file_ids_malformed_skips_non_openai_file_block():
+    """Non-OpenAI file blocks (e.g. missing nested `file` dict) are skipped so callers
+    relying on LangChain v1 / provider-native shapes are not rejected here."""
+    messages = _malformed()
+    result = update_messages_with_model_file_ids(
+        messages=messages,
+        model_id="some-model",
+        model_file_id_mapping={},
+    )
+    assert result == messages
+    content = result[0].get("content")
+    assert isinstance(content, list)
+    file_block = next(c for c in content if isinstance(c, dict) and c.get("type") == "file")
+    assert "file" not in file_block
 
 
 def test_update_messages_with_model_file_ids_well_formed_updates():
@@ -134,10 +226,9 @@ def test_update_messages_with_model_file_ids_well_formed_updates():
 # ---------------------------------------------------------------------------
 
 
-def test_get_file_ids_from_messages_malformed_raises_bad_request():
-    """get_file_ids_from_messages should raise BadRequestError for malformed file blocks."""
-    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-        get_file_ids_from_messages(messages=_malformed())
+def test_get_file_ids_from_messages_malformed_skips_non_openai_file_block():
+    """Blocks with type='file' but no OpenAI `file` sub-dict yield no extracted ids."""
+    assert get_file_ids_from_messages(messages=_malformed()) == []
 
 
 def test_get_file_ids_from_messages_well_formed_returns_ids():
@@ -170,14 +261,36 @@ def test_bedrock_process_file_message_malformed_raises_bad_request():
         BedrockConverseMessagesProcessor._process_file_message(MALFORMED_FILE_OBJECT)
 
 
-@pytest.mark.asyncio
-async def test_bedrock_async_process_file_message_malformed_raises_bad_request():
+def test_bedrock_process_file_message_explicit_null_file_field_raises_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        BedrockConverseMessagesProcessor._process_file_message(EXPLICIT_NULL_FILE_OBJECT)
+
+
+def test_bedrock_async_process_file_message_malformed_raises_bad_request():
     """_async_process_file_message should raise BadRequestError (not KeyError)
     when the file object is missing the 'file' sub-field."""
-    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-        await BedrockConverseMessagesProcessor._async_process_file_message(
-            MALFORMED_FILE_OBJECT
-        )
+
+    async def _run() -> None:
+        with pytest.raises(
+            litellm.BadRequestError, match="missing the required 'file' field"
+        ):
+            await BedrockConverseMessagesProcessor._async_process_file_message(
+                MALFORMED_FILE_OBJECT
+            )
+
+    asyncio.run(_run())
+
+
+def test_bedrock_async_process_file_message_explicit_null_file_field_raises_bad_request():
+    async def _run() -> None:
+        with pytest.raises(
+            litellm.BadRequestError, match="missing the required 'file' field"
+        ):
+            await BedrockConverseMessagesProcessor._async_process_file_message(
+                EXPLICIT_NULL_FILE_OBJECT
+            )
+
+    asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +307,16 @@ def test_openai_apply_common_transform_malformed_file_raises_bad_request():
     )
     with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
         config._apply_common_transform_content_item(malformed_block)
+
+
+def test_openai_apply_common_transform_explicit_null_file_field_raises_bad_request():
+    config = OpenAIGPTConfig()
+    explicit_null_block: OpenAIMessageContentListBlock = cast(
+        OpenAIMessageContentListBlock,
+        {"type": "file", "file": None},
+    )
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        config._apply_common_transform_content_item(explicit_null_block)
 
 
 def test_openai_apply_common_transform_well_formed_file_does_not_raise():
@@ -221,6 +344,11 @@ def test_anthropic_process_openai_file_message_malformed_raises_bad_request():
         anthropic_process_openai_file_message(MALFORMED_FILE_OBJECT)
 
 
+def test_anthropic_process_openai_file_message_explicit_null_file_field_raises_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        anthropic_process_openai_file_message(EXPLICIT_NULL_FILE_OBJECT)
+
+
 def test_anthropic_process_openai_file_message_well_formed_file_id_does_not_raise():
     """anthropic_process_openai_file_message should not raise for a well-formed file_id block."""
     well_formed: ChatCompletionFileObject = cast(
@@ -241,6 +369,11 @@ def test_migrate_file_to_image_url_malformed_raises_bad_request():
     when the file object is missing the 'file' sub-field."""
     with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
         migrate_file_to_image_url(MALFORMED_FILE_OBJECT)
+
+
+def test_migrate_file_to_image_url_explicit_null_file_field_raises_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
+        migrate_file_to_image_url(EXPLICIT_NULL_FILE_OBJECT)
 
 
 def test_migrate_file_to_image_url_well_formed_returns_image_url():
