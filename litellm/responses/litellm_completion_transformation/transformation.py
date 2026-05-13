@@ -988,14 +988,16 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
-                )
-            ]
+            message = GenericChatCompletionMessage(
+                role=input_item.get("role") or "user",
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            cache_control = input_item.get("cache_control")
+            if cache_control is not None:
+                message["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
+            return [message]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -1276,32 +1278,38 @@ class LiteLLMCompletionResponsesConfig:
                     content_list.append(item)
                 elif isinstance(item, dict):
                     if item.get("type") == "input_file":
-                        content_list.append(
-                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                        block = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                            item
+                        )
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
+                        content_list.append(block)
+                    elif item.get("type") == "input_image":
+                        block = dict(
+                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
                                 item
                             )
                         )
-                    elif item.get("type") == "input_image":
-                        content_list.append(
-                            dict(
-                                LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                                    item
-                                )
-                            )
-                        )
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control
+                        content_list.append(block)
                     else:
                         # Skip text blocks with None text to avoid downstream errors
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_list.append(
-                            {
-                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                    item.get("type") or "text"
-                                ),
-                                "text": text_value,
-                            }
-                        )
+                        block = {
+                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                item.get("type") or "text"
+                            ),
+                            "text": text_value,
+                        }
+                        cache_control = item.get("cache_control")
+                        if cache_control is not None:
+                            block["cache_control"] = cache_control
+                        content_list.append(block)
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
@@ -2093,7 +2101,7 @@ class LiteLLMCompletionResponsesConfig:
             and usage.prompt_tokens_details is not None
         ):
             prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, int] = {}
+            input_details_dict: Dict[str, Any] = {}
 
             if (
                 hasattr(prompt_details, "cached_tokens")
@@ -2114,6 +2122,16 @@ class LiteLLMCompletionResponsesConfig:
                 and prompt_details.audio_tokens is not None
             ):
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
+
+            # Forward Anthropic prompt-caching fields so callers see cache
+            # creation token counts on the Responses API usage payload.
+            for cache_field in (
+                "cache_creation_tokens",
+                "cache_creation_token_details",
+            ):
+                value = getattr(prompt_details, cache_field, None)
+                if value is not None:
+                    input_details_dict[cache_field] = value
 
             if input_details_dict:
                 response_usage.input_tokens_details = InputTokensDetails(
