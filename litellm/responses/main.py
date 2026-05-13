@@ -338,6 +338,7 @@ async def aresponses_api_with_mcp(
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers_from_request,
+                client_ip=client_ip,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
             )

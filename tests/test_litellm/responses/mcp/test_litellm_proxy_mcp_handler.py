@@ -1,5 +1,6 @@
 import sys
 import types
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from typing import Any, cast
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
 
@@ -922,3 +924,100 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
+    monkeypatch,
+):
+    from litellm.responses import main as responses_main
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/lazymcp/internal"}]
+    captured_execute_kwargs = {}
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda _tools: (tools, [])),
+    )
+
+    async def fake_process(**_kwargs):
+        return ([], {"mcp_call": 'lazymcp:{"mcp_servers":["internal"]}'})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        fake_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_args, **_kwargs: []),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_kwargs: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_extract_tool_calls_from_response",
+        staticmethod(
+            lambda **_kwargs: [
+                {
+                    "id": "call-1",
+                    "function": {
+                        "name": "mcp_call",
+                        "arguments": '{"server":"internal","tool":"search","arguments":{}}',
+                    },
+                }
+            ]
+        ),
+    )
+
+    async def fake_execute(**kwargs):
+        captured_execute_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_execute_tool_calls",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        responses_main.ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_kwargs: (None, None, None, None)),
+    )
+    monkeypatch.setattr(
+        responses_main,
+        "aresponses",
+        AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id="resp-1",
+                model="test-model",
+                created_at=123,
+                output=[],
+                usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+        ),
+    )
+
+    await responses_main.aresponses_api_with_mcp(
+        model="test-model",
+        input="hello",
+        tools=tools,
+        secret_fields={"mcp_client_ip": "10.0.0.7"},
+    )
+
+    assert captured_execute_kwargs["client_ip"] == "10.0.0.7"
+
+
+def test_chat_streaming_iterator_execution_threads_client_ip():
+    from litellm.responses.mcp import chat_completions_handler
+
+    source = inspect.getsource(chat_completions_handler.acompletion_with_mcp)
+
+    assert "client_ip=client_ip" in source
+    assert "self.client_ip = client_ip" in source
+    assert "client_ip=self.client_ip" in source

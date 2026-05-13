@@ -220,6 +220,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
+                client_ip,
                 litellm_call_id,
                 litellm_trace_id,
                 openai_tools,
@@ -233,6 +234,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.mcp_server_auth_headers = mcp_server_auth_headers
                 self.oauth2_headers = oauth2_headers
                 self.raw_headers = raw_headers
+                self.client_ip = client_ip
                 self.litellm_call_id = litellm_call_id
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
@@ -458,6 +460,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                                 mcp_server_auth_headers=self.mcp_server_auth_headers,
                                 oauth2_headers=self.oauth2_headers,
                                 raw_headers=self.raw_headers,
+                                client_ip=self.client_ip,
                                 litellm_call_id=self.litellm_call_id,
                                 litellm_trace_id=self.litellm_trace_id,
                             )
@@ -518,6 +521,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            client_ip=client_ip,
             litellm_call_id=kwargs.get("litellm_call_id"),
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
