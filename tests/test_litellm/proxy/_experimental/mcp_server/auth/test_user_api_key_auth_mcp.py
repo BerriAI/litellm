@@ -1618,9 +1618,11 @@ class TestMCPDelegateAuthToUpstream:
             ("/mcp/foo,bar", ["foo", "bar"]),
             # Comma-separated servers with trailing path.
             ("/mcp/foo,bar/tools", ["foo", "bar"]),
-            # Alternative form: /<server>/mcp/...
-            ("/foo/mcp", ["foo"]),
-            ("/foo/mcp/tools", ["foo"]),
+            # ``/<server>/mcp`` form is rewritten to ``/mcp/<server>`` by
+            # ``dynamic_mcp_route`` before reaching the MCP handler, so the
+            # auth parser correctly does NOT recognise it here.
+            ("/foo/mcp", []),
+            ("/foo/mcp/tools", []),
             # Non-MCP paths → empty (fail closed).
             ("/.well-known/oauth-authorization-server", []),
             ("/v1/keys", []),
