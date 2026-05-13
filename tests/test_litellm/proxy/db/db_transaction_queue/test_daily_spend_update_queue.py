@@ -292,6 +292,8 @@ async def test_queue_max_size_triggers_aggregation(
     for i in range(6):
         await daily_spend_update_queue.add_update({test_key: test_transaction})
 
+    await daily_spend_update_queue._wait_for_pending_aggregation()
+
     # Queue should have aggregated to a single item
     assert daily_spend_update_queue.update_queue.qsize() == 1
 

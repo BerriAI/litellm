@@ -60,5 +60,7 @@ def test_misconfigured_queue_thresholds_warns():
         patch.object(bq_module.verbose_proxy_logger, "warning") as mock_warning,
     ):
         BaseUpdateQueue()
-        mock_warning.assert_called_once()
-        assert "Misconfigured queue thresholds" in mock_warning.call_args[0][0]
+        assert any(
+            "Misconfigured queue thresholds" in call_args[0][0]
+            for call_args in mock_warning.call_args_list
+        )

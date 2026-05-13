@@ -30,6 +30,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> DBSpendUpdateTransactions:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
+        await self._wait_for_pending_aggregation()
         updates = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
@@ -44,12 +45,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         verbose_proxy_logger.debug("Adding update to queue: %s", update)
         await self.update_queue.put(update)
 
-        # if the queue is full, aggregate the updates
-        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
-            verbose_proxy_logger.warning(
-                "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
-            )
-            await self.aggregate_queue_updates()
+        self._schedule_queue_aggregation_if_needed()
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""

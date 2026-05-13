@@ -19,7 +19,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 @pytest.mark.asyncio
 async def test_daily_spend_tracking_with_disabled_spend_logs():
     """
-    Test that add_spend_log_transaction_to_daily_user_transaction is still called
+    Test that daily spend updates are still enqueued
     even when disable_spend_logs is True
     """
     # Setup
@@ -27,7 +27,7 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
 
     # Mock the methods we want to track
     db_writer._insert_spend_log_to_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    db_writer._enqueue_daily_spend_updates = AsyncMock()
 
     # Mock the imported modules/variables
     with (
@@ -59,13 +59,11 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         # Verify that _insert_spend_log_to_db was NOT called (since disable_spend_logs is True)
         db_writer._insert_spend_log_to_db.assert_not_called()
 
-        # Verify that add_spend_log_transaction_to_daily_user_transaction WAS called
-        assert db_writer.add_spend_log_transaction_to_daily_user_transaction.called
+        # Verify that daily spend updates were still enqueued
+        assert db_writer._enqueue_daily_spend_updates.called
 
-        # Verify the payload passed to add_spend_log_transaction_to_daily_user_transaction
-        call_args = (
-            db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
-        )
+        # Verify the payload passed to _enqueue_daily_spend_updates
+        call_args = db_writer._enqueue_daily_spend_updates.call_args[1]
         assert "payload" in call_args
         assert call_args["payload"]["spend"] == 0.1
         assert call_args["payload"]["model"] == "gpt-4"
@@ -1091,6 +1089,58 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
 
 
 @pytest.mark.asyncio
+async def test_enqueue_daily_spend_updates_builds_shared_payload_once():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-daily-batch",
+        "user": "test-user",
+        "team_id": "test-team",
+        "end_user": "test-end-user",
+        "agent_id": "test-agent",
+        "request_tags": '["tag-a", "tag-b"]',
+        "call_type": "acompletion",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "spend": 0.15,
+        "metadata": '{"usage_object": {"cache_read_input_tokens": 3}}',
+    }
+
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+    writer.daily_team_spend_update_queue.add_update = AsyncMock()
+    writer.daily_org_spend_update_queue.add_update = AsyncMock()
+    writer.daily_end_user_spend_update_queue.add_update = AsyncMock()
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+    writer.daily_tag_spend_update_queue.add_update = AsyncMock()
+
+    await writer._enqueue_daily_spend_updates(
+        payload=payload,
+        org_id="test-org",
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.get_request_status.assert_called_once_with(payload)
+    writer.daily_spend_update_queue.add_update.assert_awaited_once()
+    writer.daily_team_spend_update_queue.add_update.assert_awaited_once()
+    writer.daily_org_spend_update_queue.add_update.assert_awaited_once()
+    writer.daily_end_user_spend_update_queue.add_update.assert_awaited_once()
+    writer.daily_agent_spend_update_queue.add_update.assert_awaited_once()
+    assert writer.daily_tag_spend_update_queue.add_update.await_count == 2
+
+    user_update = writer.daily_spend_update_queue.add_update.call_args[1]["update"]
+    user_transaction = next(iter(user_update.values()))
+    assert user_transaction["endpoint"] == "/chat/completions"
+    assert user_transaction["cache_read_input_tokens"] == 3
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     """
     Test that when batch upsert fails, detailed error information is logged.
@@ -1354,12 +1404,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
     db_writer._update_agent_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+    db_writer._enqueue_daily_spend_updates = AsyncMock()
 
     await db_writer._batch_database_updates(
         response_cost=0.1,
@@ -1382,12 +1427,7 @@ async def test_batch_database_updates_isolation_on_failure():
     db_writer._update_org_db.assert_awaited_once()
     db_writer._update_tag_db.assert_awaited_once()
     db_writer._update_agent_db.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_end_user_transaction.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_team_transaction.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_org_transaction.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_tag_transaction.assert_awaited_once()
+    db_writer._enqueue_daily_spend_updates.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1402,12 +1442,12 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer = DBSpendUpdateWriter()
 
     # Capture the payload object that get_logging_payload returns (the "original")
-    # and the payload the agent handler receives (should be a deepcopy)
+    # and the payload the daily batch helper receives (should be a deepcopy)
     original_payload_ref = {}
-    captured_agent_payloads = []
+    captured_daily_payloads = []
 
-    async def capture_agent_payload(**kwargs):
-        captured_agent_payloads.append(kwargs.get("payload"))
+    async def capture_daily_payload(**kwargs):
+        captured_daily_payloads.append(kwargs.get("payload"))
 
     # Mock all helpers
     db_writer._insert_spend_log_to_db = AsyncMock()
@@ -1417,14 +1457,9 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
     db_writer._update_agent_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
-        side_effect=capture_agent_payload
+    db_writer._enqueue_daily_spend_updates = AsyncMock(
+        side_effect=capture_daily_payload
     )
-    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
 
     # Mock get_logging_payload to return a known dict and capture its identity
     fake_payload = {
@@ -1463,13 +1498,13 @@ async def test_daily_agent_receives_deepcopied_payload():
         # Let the single batched task run
         await asyncio.sleep(0)
 
-    # The agent handler should have been called
-    assert len(captured_agent_payloads) == 1
+    # The daily batch helper should have been called
+    assert len(captured_daily_payloads) == 1
     # The payload must NOT be the same object as the original (deepcopy occurred)
-    assert captured_agent_payloads[0] is not original_payload_ref["obj"]
+    assert captured_daily_payloads[0] is not original_payload_ref["obj"]
     # But it should have equivalent content
-    assert captured_agent_payloads[0]["model"] == "gpt-4"
-    assert captured_agent_payloads[0]["spend"] == 0.1
+    assert captured_daily_payloads[0]["model"] == "gpt-4"
+    assert captured_daily_payloads[0]["spend"] == 0.1
 
 
 @pytest.mark.asyncio

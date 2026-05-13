@@ -168,6 +168,8 @@ async def test_queue_max_size_triggers_aggregation(monkeypatch, spend_queue):
         }
         await spend_queue.add_update(update)
 
+    await spend_queue._wait_for_pending_aggregation()
+
     # Queue should have been aggregated, resulting in a single entry
     assert spend_queue.update_queue.qsize() == 1
 
