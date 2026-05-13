@@ -118,36 +118,26 @@ _ISHAAN_GITHUB_BYTES = _read_image_bytes("ishaan_github.png")
 _LITELLM_SITE_BYTES = _read_image_bytes("litellm_site.png")
 
 
-class _RewindableImage(BytesIO):
-    """``BytesIO`` that re-seeks to 0 on read after exhaustion.
-
-    The OpenAI / Azure SDKs read the file pointer once per request. When we
-    pass the *same* object to a parametrized or retried test, the second
-    invocation must see the same bytes from offset 0, not EOF.
-    """
-
-    def read(self, size=-1):
-        if self.tell() and self.tell() >= len(self.getvalue()):
-            self.seek(0)
-        return super().read(size)
-
-
 def _make_test_images() -> list:
-    """Return a fresh pair of rewindable image streams.
+    """Return a fresh pair of image streams seeded with the fixture bytes.
 
     Use this everywhere you'd previously have used the module-level
     ``TEST_IMAGES``. Each call returns brand new ``BytesIO`` objects whose
     file pointers start at 0, so multipart uploads encode the full image
-    bytes on every test invocation.
+    bytes on every test invocation. Parametrized and ``flaky``-retried
+    test methods call ``get_base_image_edit_call_args`` once per
+    invocation, so a fresh stream per call is sufficient — the factory
+    must not auto-rewind on EOF or the SDK's multipart writer will read
+    the same bytes forever (worker OOM).
     """
     return [
-        _RewindableImage(_ISHAAN_GITHUB_BYTES),
-        _RewindableImage(_LITELLM_SITE_BYTES),
+        BytesIO(_ISHAAN_GITHUB_BYTES),
+        BytesIO(_LITELLM_SITE_BYTES),
     ]
 
 
 def _make_single_test_image() -> BytesIO:
-    return _RewindableImage(_ISHAAN_GITHUB_BYTES)
+    return BytesIO(_ISHAAN_GITHUB_BYTES)
 
 
 def get_test_images_as_bytesio():
