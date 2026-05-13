@@ -23,6 +23,7 @@ from typing import (
     cast,
 )
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
@@ -51,13 +52,17 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     iter_known_server_prefixes,
 )
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -2754,6 +2759,157 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
+        """Return the upstream-bound ``Authorization`` header value, or None.
+
+        Only returns the ``Authorization`` header when ``x-litellm-api-key`` is
+        also present. In that case ``Authorization`` is unambiguously the
+        upstream token the caller wants forwarded to the MCP server. When
+        ``x-litellm-api-key`` is absent the ``Authorization`` header may itself
+        be the LiteLLM proxy API key (backward-compat path in
+        ``MCPRequestHandler.process_mcp_request``), and forwarding it upstream
+        would leak the proxy key to a third-party MCP server.
+        """
+        authorization = None
+        has_litellm_key_header = False
+        for key, value in scope.get("headers", []):
+            key_lower = key.lower()
+            if key_lower == b"authorization":
+                authorization = value.decode("latin-1")
+            elif key_lower == b"x-litellm-api-key":
+                has_litellm_key_header = True
+        if not has_litellm_key_header:
+            return None
+        return authorization
+
+    async def _probe_upstream_auth(
+        url: str,
+        auth_header: str,
+        timeout: float = 5.0,
+    ) -> tuple:
+        """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
+
+        Uses POST so StreamableHTTP MCP servers run the same auth path as a
+        real client request. Returns (status_code, www_authenticate).
+        Fails-open with (200, None) on network errors so a transient hiccup
+        does not block valid requests.
+
+        Uses the public ``AsyncHTTPHandler.post()`` interface and catches
+        ``httpx.HTTPStatusError`` separately so the 401/403 we want to surface
+        is not swallowed by the broad fail-open ``except Exception`` below.
+        """
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": timeout},
+        )
+        probe_payload = {
+            "jsonrpc": "2.0",
+            "id": "litellm-mcp-auth-probe",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCPSpecVersion.jun_2025.value,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "litellm-mcp-auth-probe",
+                    "version": "1.0.0",
+                },
+            },
+        }
+        probe_headers = {
+            "Authorization": auth_header,
+            "Accept": "application/json, text/event-stream",
+        }
+        try:
+            resp = await client.post(
+                url=url,
+                headers=probe_headers,
+                json=probe_payload,
+                timeout=timeout,
+            )
+            return resp.status_code, resp.headers.get("www-authenticate")
+        except httpx.HTTPStatusError as exc:
+            # AsyncHTTPHandler.post() calls raise_for_status(); a 401/403 from
+            # upstream lands here. Return its status so the caller can map it
+            # to the appropriate response.
+            return exc.response.status_code, exc.response.headers.get(
+                "www-authenticate"
+            )
+        except Exception as exc:
+            verbose_logger.debug(
+                f"_probe_upstream_auth: probe to {url} failed ({exc}), allowing request through"
+            )
+            return 200, None
+
+    async def _check_passthrough_upstream_auth(
+        scope: Scope,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+    ) -> None:
+        """Probe pass-through upstream servers in parallel before the MCP session starts.
+
+        Only servers the caller's key is already authorized to reach are probed —
+        the list is derived from _get_allowed_mcp_servers so that a user cannot
+        trigger an upstream probe against a server their key is not permitted for.
+
+        The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
+        can only be returned before that point. This function raises HTTPException(401)
+        with a WWW-Authenticate header if any upstream rejects the client token.
+        Fails-open: network errors are logged and the request is allowed through.
+        """
+        forwarded_auth = _get_forwarded_auth_from_scope(scope)
+        if not forwarded_auth:
+            return
+
+        # Use the authorized server set, not the raw user-supplied names, so that
+        # a caller cannot force a probe to a server their key is not allowed to use.
+        allowed_servers = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        passthrough_servers = [
+            srv
+            for srv in allowed_servers
+            if srv.extra_headers
+            and any(h.lower() == "authorization" for h in srv.extra_headers)
+            # Exclude M2M servers: _prepare_mcp_server_headers skips caller
+            # Authorization when has_client_credentials is set, so probing
+            # those with the caller's token would send the wrong credential.
+            and not srv.has_client_credentials
+        ]
+        if not passthrough_servers:
+            return
+
+        probe_results = await asyncio.gather(
+            *[
+                _probe_upstream_auth(srv.url or "", forwarded_auth)
+                for srv in passthrough_servers
+            ]
+        )
+        request = StarletteRequest(scope)
+        base_url = get_request_base_url(request)
+        for srv, (probe_status, _) in zip(passthrough_servers, probe_results):
+            if probe_status == 401:
+                # Token is missing or expired — direct the client to re-authorize.
+                authorization_uri = (
+                    f"Bearer authorization_uri="
+                    f"{base_url}/.well-known/oauth-authorization-server/{srv.name}"
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"WWW-Authenticate": authorization_uri},
+                )
+            if probe_status == 403:
+                # Token is valid but the caller lacks permission — do not hint
+                # at re-authorization (RFC 9110: a fresh token with the same
+                # scopes would just hit 403 again and loop indefinitely).
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden",
+                )
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2826,6 +2982,13 @@ if MCP_AVAILABLE:
                 user_api_key_auth = await _apply_toolset_scope(
                     user_api_key_auth, active_toolset_id
                 )
+
+            # Pre-flight auth check for pass-through servers.  Must run after
+            # toolset scoping so the probe list is derived from the fully-authorized
+            # server set, not the raw user-supplied names.
+            await _check_passthrough_upstream_auth(
+                scope, user_api_key_auth, mcp_servers, _client_ip
+            )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers = MCPDebug.maybe_build_debug_headers(
