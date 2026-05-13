@@ -992,6 +992,34 @@ class TestContentTypeTransformation:
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
 
+    def test_cache_control_preserved_on_text_blocks(self):
+        """cache_control on a Responses-API text/input_text block must survive
+        the hop to Chat-Completion content so Anthropic prompt-caching markers
+        actually reach the wire. Without this passthrough the marker is dropped
+        and cache reads silently degrade to 0%."""
+        content = [
+            {"type": "input_text", "text": "system-y prefix"},
+            {
+                "type": "input_text",
+                "text": "cached chunk",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert "cache_control" not in result[0]
+        assert result[1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_absent_when_not_set(self):
+        """Blocks without cache_control don't get an empty/None key added."""
+        content = [{"type": "input_text", "text": "plain"}]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert "cache_control" not in result[0]
+
 
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
