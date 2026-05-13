@@ -10,20 +10,22 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sys
+from collections import defaultdict
 from typing import Iterable
 
 import pytest
 
 from tests._vcr_redis_persister import (
+    MAX_EPISODES_PER_CASSETTE,
+    VCR_VERBOSE_ENV,
     cassette_cache_capacity_snapshot,
     cassette_cache_health,
     filter_non_2xx_response,
-    format_vcr_verdict,
     make_redis_persister,
     mark_test_outcome_for_cassette,
     patch_vcrpy_aiohttp_record_path,
-    vcr_verbose_enabled,
 )
 
 CASSETTE_CACHE_HIGH_WATER_FRACTION = 0.85
@@ -231,6 +233,29 @@ def _iter_header_values(headers, name: str):
             yield value
 
 
+_AWS_SIGV4_CREDENTIAL_RE = re.compile(
+    r"AWS4-HMAC-SHA256\s+Credential=([^/\s,]+)/", re.IGNORECASE
+)
+
+
+def _stable_key_value(header_name: str, raw: str) -> str:
+    """Return a *stable* identifier for a credential header.
+
+    For Bearer / API-key headers the entire value is stable across calls,
+    so we hash it as-is. For AWS SigV4 ``Authorization`` headers, only
+    the access-key portion of ``Credential=AKIA.../<DATE>/...`` is stable
+    — date, region, signed headers, and signature all rotate per request,
+    so hashing the full value would push every Bedrock request into a new
+    cassette episode. Extract just the access-key id when present.
+    """
+    if header_name.lower() != "authorization":
+        return raw
+    match = _AWS_SIGV4_CREDENTIAL_RE.search(raw)
+    if match:
+        return f"aws-sigv4:{match.group(1)}"
+    return raw
+
+
 def _compute_key_fingerprint(request) -> str:
     headers = getattr(request, "headers", None)
     parts: list[str] = []
@@ -242,7 +267,8 @@ def _compute_key_fingerprint(request) -> str:
             text = text.strip()
             if not text:
                 continue
-            parts.append(f"{header_name}={text}")
+            stable = _stable_key_value(header_name, text)
+            parts.append(f"{header_name}={stable}")
     if not parts:
         return "no-key"
     digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
@@ -470,6 +496,114 @@ def register_persister_if_enabled(vcr) -> None:
         _atexit_banner_registered = True
 
 
+VCR_SKIP_REASON_USER_ATTR = "vcr_skip_reason"
+
+# Marker reasons recorded per-item / per-test for the session summary.
+SKIP_REASON_RESPX = "respx_conflict"
+SKIP_REASON_RESPX_MODULE = "respx_conflict_module"
+SKIP_REASON_INCOMPATIBLE = "incompatible"
+SKIP_REASON_FILE_OPT_OUT = "file_opt_out"
+SKIP_REASON_DISABLED = "disabled"
+SKIP_REASON_PRE_MARKED = "already_marked"
+
+# Hostnames we consider an "expensive live call" if a non-VCR-marked test
+# happens to hit them. Localhost/redis/databases are explicitly excluded.
+_LIVE_CALL_HOST_SUFFIXES = (
+    ".openai.com",
+    ".anthropic.com",
+    ".vertexai.googleapis.com",
+    ".aiplatform.googleapis.com",
+    ".googleapis.com",
+    ".bedrock-runtime.amazonaws.com",
+    ".x.ai",
+    ".cohere.ai",
+    ".cohere.com",
+    ".voyageai.com",
+    ".perplexity.ai",
+    ".mistral.ai",
+    ".groq.com",
+    ".huggingface.co",
+    ".azure.com",
+    ".tavily.com",
+    ".serper.dev",
+    ".searchapi.io",
+    ".firecrawl.dev",
+    ".exa.ai",
+)
+_LIVE_CALL_LOCAL_PREFIXES = (
+    "127.",
+    "localhost",
+    "::1",
+    "0.0.0.0",
+    "10.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "192.168.",
+)
+
+
+def _module_uses_respx(item) -> bool:
+    """Return True if the test's *module* actually wires up respx.
+
+    A bare ``from respx import MockRouter`` import (with no actual usage)
+    does not patch the httpx transport, so it does not conflict with vcrpy.
+    We confirm by checking the module's source for any of:
+    - ``@pytest.mark.respx``
+    - ``@respx.mock`` / ``with respx.mock``
+    - ``respx_mock`` fixture name
+    """
+    module = getattr(item, "module", None)
+    src_file = getattr(module, "__file__", None)
+    if not src_file or not os.path.isfile(src_file):
+        return False
+    try:
+        with open(src_file, encoding="utf-8") as f:
+            src = f.read()
+    except OSError:
+        return False
+    if "respx_mock" in src:
+        return True
+    if "@pytest.mark.respx" in src or "@respx.mock" in src:
+        return True
+    if "respx.mock" in src or "with respx" in src:
+        return True
+    return False
+
+
+def _item_uses_respx(item) -> bool:
+    """Return True if *this specific item* will trigger respx.
+
+    Two signals: the ``respx`` pytest marker, and the ``respx_mock``
+    fixture appearing in the item's resolved fixture chain. Either alone
+    causes vcrpy + respx to fight over the httpx transport.
+    """
+    if item.get_closest_marker("respx") is not None:
+        return True
+    fixturenames = getattr(item, "fixturenames", None) or ()
+    if "respx_mock" in fixturenames:
+        return True
+    return False
+
+
+# Cache the source-scan result so we don't reread each module per item.
+_RESPX_MODULE_CACHE: dict[str, bool] = {}
+
+
+def _module_path_uses_respx(item) -> bool:
+    src_file = str(getattr(item, "path", "") or "")
+    if not src_file:
+        return False
+    cached = _RESPX_MODULE_CACHE.get(src_file)
+    if cached is not None:
+        return cached
+    result = _module_uses_respx(item)
+    _RESPX_MODULE_CACHE[src_file] = result
+    return result
+
+
 def apply_vcr_auto_marker_to_items(
     items,
     *,
@@ -478,24 +612,230 @@ def apply_vcr_auto_marker_to_items(
 ) -> None:
     """Auto-apply ``pytest.mark.vcr`` to collected items.
 
-    ``skip_files`` are basenames to leave un-marked (e.g. respx-using
-    files, since respx and vcrpy both patch the httpx transport).
-    ``skip_nodeid_suffixes`` are node-id suffixes for individual tests
-    that depend on live cross-call provider state.
+    Skip semantics (in priority order):
+
+    1. ``vcr_disabled()`` — global env-var off-switch (``LITELLM_VCR_DISABLE=1``
+       or no ``CASSETTE_REDIS_URL``).
+    2. Item already carries ``@pytest.mark.vcr`` — leave it alone.
+    3. Item triggers respx (per-item marker / fixture) — vcrpy and respx
+       both patch the httpx transport so applying both makes one silently
+       no-op. We tag the item ``vcr_skip_reason=respx_conflict``.
+    4. Module wires up respx anywhere — even tests in the file that don't
+       themselves use respx still inherit the patched transport when
+       respx fixtures activate at session level. Tagged
+       ``respx_conflict_module``.
+    5. ``skip_files`` / ``skip_nodeid_suffixes`` opt-out lists from the
+       caller — used for tests that observe live cross-call provider state
+       (e.g. prompt-cache warmup) which deterministic replay can't model.
+       Tagged ``incompatible``.
+
+    Each skipped item gets a ``vcr_skip_reason`` attribute so the
+    session-end summary can show why it isn't cached.
     """
     if vcr_disabled():
+        for item in items:
+            setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_DISABLED)
         return
     skip_files = frozenset(skip_files)
     skip_nodeid_suffixes = tuple(skip_nodeid_suffixes)
     for item in items:
+        if item.get_closest_marker("vcr") is not None:
+            setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_PRE_MARKED)
+            continue
+        if _item_uses_respx(item):
+            setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_RESPX)
+            continue
         filename = os.path.basename(str(item.path))
         if filename in skip_files:
+            # Trust the caller's opt-out, but split by reason: if the
+            # module actually uses respx, label the conflict precisely so
+            # the summary surfaces dead respx imports vs. real conflicts.
+            if _module_path_uses_respx(item):
+                setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_RESPX_MODULE)
+            else:
+                setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_FILE_OPT_OUT)
             continue
         if any(item.nodeid.endswith(suffix) for suffix in skip_nodeid_suffixes):
-            continue
-        if item.get_closest_marker("vcr") is not None:
+            setattr(item, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_INCOMPATIBLE)
             continue
         item.add_marker(pytest.mark.vcr)
+
+
+# ---------------------------------------------------------------------------
+# Per-test stats accumulator + verdict classification.
+#
+# The session-end summary needs richer signal than the line-level verdict:
+# - which tests overflowed ``MAX_EPISODES_PER_CASSETTE`` (cassette refused
+#   to save → live calls every CI run);
+# - which tests fired live HTTP at a real LLM endpoint while VCR was not
+#   active for them (genuine wasted spend, not just "test mocked elsewhere");
+# - skip-reason buckets so we can tell respx-conflict from
+#   incompatible-by-design from "module imports respx but never uses it".
+# ---------------------------------------------------------------------------
+
+# Verdict tags used in the per-test logline AND in the session summary
+# breakdown.
+VERDICT_HIT = "VCR HIT"
+VERDICT_MISS_RECORDED = "VCR MISS:RECORDED"
+VERDICT_MISS_OVERFLOW = "VCR MISS:OVERFLOW"
+VERDICT_MISS_NOT_PERSISTED = "VCR MISS:NOT_PERSISTED"
+VERDICT_PARTIAL = "VCR PARTIAL"
+VERDICT_NOOP_NO_TRAFFIC = "VCR NOOP"
+VERDICT_UNMARKED_LIVE_CALL = "VCR UNMARKED:LIVE_CALL"
+VERDICT_UNMARKED_NO_TRAFFIC = "VCR UNMARKED:NO_TRAFFIC"
+VERDICT_DISABLED = "VCR DISABLED"
+
+# Per-session stats. Cleared by ``_reset_session_stats`` for unit tests.
+_session_stats = {
+    "verdict_counts": defaultdict(int),
+    "overflow_tests": [],  # list of nodeids
+    "unmarked_live_call_tests": [],  # list of (nodeid, hosts)
+    "skip_reason_counts": defaultdict(int),
+    "skip_reason_examples": defaultdict(list),
+}
+
+
+def _reset_session_stats() -> None:
+    _session_stats["verdict_counts"].clear()
+    _session_stats["overflow_tests"].clear()
+    _session_stats["unmarked_live_call_tests"].clear()
+    _session_stats["skip_reason_counts"].clear()
+    _session_stats["skip_reason_examples"].clear()
+
+
+def session_stats_snapshot() -> dict:
+    """Read-only copy of the per-session VCR stats. Used by the summary."""
+    return {
+        "verdict_counts": dict(_session_stats["verdict_counts"]),
+        "overflow_tests": list(_session_stats["overflow_tests"]),
+        "unmarked_live_call_tests": list(_session_stats["unmarked_live_call_tests"]),
+        "skip_reason_counts": dict(_session_stats["skip_reason_counts"]),
+        "skip_reason_examples": {
+            k: list(v) for k, v in _session_stats["skip_reason_examples"].items()
+        },
+    }
+
+
+def _classify_marked_test(cassette) -> str:
+    """Map cassette state → verdict tag for tests that *were* VCR-marked."""
+    played = getattr(cassette, "play_count", 0) or 0
+    dirty = getattr(cassette, "dirty", False)
+    total = len(cassette) if hasattr(cassette, "__len__") else 0
+
+    # "OVERFLOW" mirrors ``_RedisPersister.save_cassette``'s
+    # ``> MAX_EPISODES_PER_CASSETTE`` guard. Cassettes that hit this
+    # threshold are refused for save, so the test re-records live every
+    # run.
+    if total > MAX_EPISODES_PER_CASSETTE:
+        return VERDICT_MISS_OVERFLOW
+    if played == 0 and not dirty:
+        return VERDICT_NOOP_NO_TRAFFIC
+    if played > 0 and not dirty:
+        return VERDICT_HIT
+    if played == 0 and dirty:
+        return VERDICT_MISS_RECORDED
+    return VERDICT_PARTIAL
+
+
+def _format_verdict_line(verdict: str, cassette, extra: str = "") -> str:
+    if cassette is None:
+        return f"[{verdict}]{(' ' + extra) if extra else ''}"
+    played = getattr(cassette, "play_count", 0) or 0
+    total = len(cassette) if hasattr(cassette, "__len__") else 0
+    base = f"[{verdict}] played={played} entries={total}"
+    if extra:
+        base = f"{base} {extra}"
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Live-call detection for tests that bypass VCR.
+#
+# When a test isn't VCR-marked (respx_conflict, incompatible, or just
+# plain unmarked), we wrap its socket calls inside the autouse
+# ``_vcr_outcome_gate`` fixture so we can flag any outbound TCP connection
+# to a known LLM provider. This converts "likely live call" into
+# "confirmed: this test connected to host X".
+# ---------------------------------------------------------------------------
+
+_LIVE_CALL_PROBE_INSTALLED = False
+_LIVE_CALL_BUFFER_KEY = "vcr_live_call_hosts"
+
+
+def _is_live_call_host(host: str) -> bool:
+    if not host:
+        return False
+    host = host.lower()
+    if any(host.startswith(p) for p in _LIVE_CALL_LOCAL_PREFIXES):
+        return False
+    return any(host.endswith(suffix) for suffix in _LIVE_CALL_HOST_SUFFIXES)
+
+
+class _LiveCallProbe:
+    """Context manager that monkeypatches ``socket.create_connection`` and
+    ``socket.socket.connect`` for the lifetime of a test, recording any
+    outbound TCP connection to a known LLM host.
+
+    We don't intercept HTTP at the application layer because that would
+    fight with vcrpy/respx in tests that *do* mock httpx — the socket
+    layer is below both, so this probe is safe regardless of what's
+    patched above it. We also don't raise: the goal is observability, not
+    a hard gate.
+    """
+
+    def __init__(self) -> None:
+        self.hosts: list[str] = []
+        self._orig_create_connection = None
+        self._orig_socket_connect = None
+
+    def __enter__(self):
+        self._orig_create_connection = socket.create_connection
+        self._orig_socket_connect = socket.socket.connect
+
+        def _wrapped_create_connection(address, *args, **kwargs):
+            try:
+                host = address[0] if isinstance(address, tuple) else None
+                if host and _is_live_call_host(host) and host not in self.hosts:
+                    self.hosts.append(host)
+            except Exception:
+                pass
+            return self._orig_create_connection(address, *args, **kwargs)
+
+        def _wrapped_socket_connect(sock_self, address):
+            try:
+                host = address[0] if isinstance(address, tuple) else None
+                if host and _is_live_call_host(host) and host not in self.hosts:
+                    self.hosts.append(host)
+            except Exception:
+                pass
+            return self._orig_socket_connect(sock_self, address)
+
+        socket.create_connection = _wrapped_create_connection
+        socket.socket.connect = _wrapped_socket_connect
+        return self
+
+    def __exit__(self, *exc):
+        if self._orig_create_connection is not None:
+            socket.create_connection = self._orig_create_connection
+        if self._orig_socket_connect is not None:
+            socket.socket.connect = self._orig_socket_connect
+        return False
+
+
+def vcr_outcome_logging_enabled() -> bool:
+    """Verdict logging is on whenever VCR itself is active.
+
+    The old ``LITELLM_VCR_VERBOSE=1`` gate kept logs quiet by default, but
+    that hides the very signal we need to know whether a paid test ran
+    against a real provider. CI logs already drop a one-line verdict per
+    test; that's what makes the cost analysis tractable. Set
+    ``LITELLM_VCR_VERBOSE=0`` if you really want the legacy quiet mode.
+    """
+    if vcr_disabled():
+        return False
+    if os.environ.get(VCR_VERBOSE_ENV) == "0":
+        return False
+    return True
 
 
 def record_vcr_outcome(request, vcr) -> None:
@@ -507,10 +847,71 @@ def record_vcr_outcome(request, vcr) -> None:
     if cassette_path:
         mark_test_outcome_for_cassette(cassette_path, test_passed)
 
-    if not vcr_verbose_enabled():
+    nodeid = request.node.nodeid
+
+    if cassette is not None:
+        verdict = _classify_marked_test(cassette)
+        # Track overflow tests even when verbose logging is off — the
+        # session summary shows them either way.
+        if verdict == VERDICT_MISS_OVERFLOW:
+            _session_stats["overflow_tests"].append(nodeid)
+        if not test_passed and verdict == VERDICT_MISS_RECORDED:
+            verdict = VERDICT_MISS_NOT_PERSISTED
+        _session_stats["verdict_counts"][verdict] += 1
+        if vcr_outcome_logging_enabled():
+            line = _format_verdict_line(verdict, cassette)
+            request.node.user_properties.append(("vcr_verdict", line))
         return
-    verdict = format_vcr_verdict(cassette)
-    request.node.user_properties.append(("vcr_verdict", verdict))
+
+    # Cassette is None ⇒ test wasn't VCR-marked. Honor the skip reason
+    # we tagged at collection time, and pull live-call hosts captured by
+    # the socket probe (if any).
+    skip_reason = getattr(
+        request.node, VCR_SKIP_REASON_USER_ATTR, SKIP_REASON_FILE_OPT_OUT
+    )
+    _session_stats["skip_reason_counts"][skip_reason] += 1
+
+    hosts = getattr(request.node, _LIVE_CALL_BUFFER_KEY, []) or []
+    if hosts:
+        verdict = VERDICT_UNMARKED_LIVE_CALL
+        _session_stats["unmarked_live_call_tests"].append((nodeid, list(hosts)))
+        extra = f"reason={skip_reason} hosts={','.join(hosts)}"
+    else:
+        verdict = VERDICT_UNMARKED_NO_TRAFFIC
+        extra = f"reason={skip_reason}"
+
+    _session_stats["verdict_counts"][verdict] += 1
+
+    examples = _session_stats["skip_reason_examples"][skip_reason]
+    if len(examples) < 5:
+        examples.append(nodeid)
+
+    if vcr_outcome_logging_enabled():
+        request.node.user_properties.append(
+            ("vcr_verdict", _format_verdict_line(verdict, None, extra))
+        )
+
+
+def install_live_call_probe(request, vcr) -> None:
+    """Activate the live-call socket probe for non-VCR-marked tests.
+
+    Call this from inside the per-test autouse ``_vcr_outcome_gate``
+    fixture *before* the ``yield``. When ``vcr`` is ``None`` (test isn't
+    VCR-marked) we patch ``socket.connect`` for the duration of the test
+    and stash any LLM-host connections on ``request.node`` so
+    ``record_vcr_outcome`` can include them in the verdict line.
+
+    Tests that *are* VCR-marked don't get the probe — vcrpy itself
+    intercepts above the socket layer, so any "outbound" socket would be
+    a recording cycle, not real spend.
+    """
+    if vcr is not None or vcr_disabled():
+        return None
+    probe = _LiveCallProbe()
+    probe.__enter__()
+    setattr(request.node, _LIVE_CALL_BUFFER_KEY, probe.hosts)
+    request.addfinalizer(lambda: probe.__exit__(None, None, None))
+    return probe
 
 
 def _format_capacity_line(snapshot: dict) -> str:
@@ -523,6 +924,99 @@ def _format_capacity_line(snapshot: dict) -> str:
         f"  Cassette Redis usage: {used_mb:.1f} MiB / {cap_mb:.1f} MiB "
         f"({pct:.1f}% of maxmemory)"
     )
+
+
+def emit_vcr_classification_summary(terminalreporter) -> None:
+    """Render the per-classification summary at session end.
+
+    Output sections (only included when non-empty):
+
+    * **Verdict counts** — full breakdown of HIT / MISS:RECORDED /
+      MISS:OVERFLOW / MISS:NOT_PERSISTED / PARTIAL / NOOP /
+      UNMARKED:LIVE_CALL / UNMARKED:NO_TRAFFIC. The OVERFLOW and
+      UNMARKED:LIVE_CALL counts are the cost-leak signals.
+    * **Cassette overflow** (>``MAX_EPISODES_PER_CASSETTE``) — these tests
+      fire live every CI run because the persister refuses to save them.
+      Usually means the request body is non-deterministic (file handle
+      consumed, AWS SigV4 timestamp, random UUID).
+    * **Unmarked tests with live API calls** — confirmed live HTTP traffic
+      to a known LLM host while VCR was *not* active for the test. This
+      is the "convert likely → confirmed" signal: each entry is real
+      money the cache would otherwise prevent.
+    * **Skip-reason breakdown** — how many tests opted out of VCR and
+      why (respx_conflict, respx_conflict_module, file_opt_out,
+      incompatible). Bare ``file_opt_out`` entries with zero respx usage
+      in the module are dead skip-list rows worth pruning.
+    """
+    if vcr_disabled():
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+
+    snapshot = session_stats_snapshot()
+    counts = snapshot["verdict_counts"]
+    if not counts:
+        return
+
+    terminalreporter.write_sep("=", "VCR CACHE CLASSIFICATION SUMMARY", bold=True)
+    for verdict in (
+        VERDICT_HIT,
+        VERDICT_PARTIAL,
+        VERDICT_MISS_RECORDED,
+        VERDICT_MISS_OVERFLOW,
+        VERDICT_MISS_NOT_PERSISTED,
+        VERDICT_NOOP_NO_TRAFFIC,
+        VERDICT_UNMARKED_NO_TRAFFIC,
+        VERDICT_UNMARKED_LIVE_CALL,
+    ):
+        n = counts.get(verdict, 0)
+        if not n:
+            continue
+        terminalreporter.write_line(f"  [{verdict}] {n}")
+
+    overflow = snapshot["overflow_tests"]
+    if overflow:
+        terminalreporter.write_sep(
+            "-",
+            f"CASSETTE OVERFLOW (>{MAX_EPISODES_PER_CASSETTE} episodes, save refused)",
+            red=True,
+            bold=True,
+        )
+        terminalreporter.write_line(
+            "  These tests will hit the live provider on every CI run "
+            "because the persister won't save cassettes that grew past "
+            "the limit. Stabilize the request body (file handle consumed, "
+            "SigV4 timestamp, UUID, or boundary leak)."
+        )
+        for nodeid in overflow:
+            terminalreporter.write_line(f"    - {nodeid}")
+
+    live_calls = snapshot["unmarked_live_call_tests"]
+    if live_calls:
+        terminalreporter.write_sep(
+            "-",
+            "UNMARKED TESTS WITH LIVE API CALLS",
+            red=True,
+            bold=True,
+        )
+        terminalreporter.write_line(
+            "  These tests connected to a real LLM provider host while "
+            "they were NOT VCR-marked. Either add @pytest.mark.vcr "
+            "explicitly, mock with respx, or move them off the "
+            "respx_conflict / incompatible skip list."
+        )
+        for nodeid, hosts in live_calls:
+            terminalreporter.write_line(f"    - {nodeid}  →  {','.join(hosts)}")
+
+    reasons = snapshot["skip_reason_counts"]
+    if reasons:
+        terminalreporter.write_sep("-", "SKIP-REASON BREAKDOWN", bold=True)
+        for reason, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            examples = snapshot["skip_reason_examples"].get(reason, [])
+            terminalreporter.write_line(f"  {reason}: {n}")
+            for ex in examples:
+                terminalreporter.write_line(f"    - {ex}")
+    terminalreporter.write_sep("=", bold=True)
 
 
 def emit_cassette_cache_session_banner(terminalreporter) -> None:
@@ -600,7 +1094,7 @@ class VerboseReporterState:
             return
         if os.environ.get("PYTEST_XDIST_WORKER"):
             return
-        if not vcr_verbose_enabled():
+        if not vcr_outcome_logging_enabled():
             return
         reporter = self.resolve_terminal_reporter()
         if reporter is None:
