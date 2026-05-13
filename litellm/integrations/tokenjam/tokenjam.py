@@ -63,7 +63,8 @@ class TokenJamLogger(CustomLogger):
             )
         except Exception as e:
             verbose_logger.debug(
-                "[Non-Blocking] TokenJam log_success_event: %s", e,
+                "[Non-Blocking] TokenJam log_success_event: %s",
+                e,
             )
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -79,19 +80,28 @@ class TokenJamLogger(CustomLogger):
             )
         except Exception as e:
             verbose_logger.debug(
-                "[Non-Blocking] TokenJam log_failure_event: %s", e,
+                "[Non-Blocking] TokenJam log_failure_event: %s",
+                e,
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # emit_litellm_span makes a blocking HTTP call; offload to a thread
         # so we don't stall the event loop on every LiteLLM async call.
         await asyncio.get_event_loop().run_in_executor(
-            None, self.log_success_event,
-            kwargs, response_obj, start_time, end_time,
+            None,
+            self.log_success_event,
+            kwargs,
+            response_obj,
+            start_time,
+            end_time,
         )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         await asyncio.get_event_loop().run_in_executor(
-            None, self.log_failure_event,
-            kwargs, response_obj, start_time, end_time,
+            None,
+            self.log_failure_event,
+            kwargs,
+            response_obj,
+            start_time,
+            end_time,
         )
