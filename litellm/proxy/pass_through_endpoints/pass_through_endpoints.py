@@ -2447,6 +2447,37 @@ def _get_combined_pass_through_endpoints(
     return pass_through_endpoints + config_pass_through_endpoints
 
 
+def _compute_new_methods_for_registration(
+    path: str,
+    methods: List[str],
+    endpoint_id: str,
+    expected_type: str,
+) -> List[str]:
+    """Return the subset of ``methods`` that are NOT a genuine self-re-
+    registration. A (path, method) is treated as self-rereg only when
+    the existing registry entry matches THIS ``endpoint_id`` AND
+    ``expected_type``. Without the type match, an exact pass-through at
+    ``/config`` would mask a later ``include_subpath: true`` registration
+    for the same path — the empty ``new_methods`` would skip the
+    child-route guard before ``openai_routes`` is appended.
+    """
+    out: List[str] = []
+    for m in methods:
+        existing = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=path, method=m
+        )
+        if existing is None:
+            out.append(m)
+            continue
+        if (
+            existing.get("endpoint_id") == endpoint_id
+            and existing.get("type") == expected_type
+        ):
+            continue
+        out.append(m)
+    return out
+
+
 async def _register_pass_through_endpoint(
     endpoint: Union[Dict[str, Any], PassThroughGenericEndpoint],
     app: FastAPI,
@@ -2491,33 +2522,15 @@ async def _register_pass_through_endpoint(
         "DELETE",
         "PATCH",
     ]
-    # Treat a (path, method) as a self-re-registration only when the
-    # existing registry entry matches THIS endpoint_id AND the type
-    # being registered. Without the type match, an exact pass-through
-    # at ``/config`` masks a later ``include_subpath: true`` registration
-    # for the same path — ``new_methods`` becomes empty and the
-    # child-route guard is skipped before openai_routes is appended.
     expected_type = (
         "subpath" if endpoint_data.get("include_subpath", False) is True else "exact"
     )
-    new_methods = []
-    for m in methods_for_collision_check:
-        existing = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=path, method=m
-        )
-        if existing is None:
-            new_methods.append(m)
-            continue
-        if (
-            existing.get("endpoint_id") == endpoint_id
-            and existing.get("type") == expected_type
-        ):
-            # Genuine self-rereg of the same entry.
-            continue
-        # Existing entry is a separate registration (different
-        # endpoint_id, or exact-vs-subpath swap) — this method is new
-        # for our (endpoint, type).
-        new_methods.append(m)
+    new_methods = _compute_new_methods_for_registration(
+        path=path,
+        methods=methods_for_collision_check,
+        endpoint_id=endpoint_id,
+        expected_type=expected_type,
+    )
     if new_methods and SafeRouteAdder._is_path_registered(
         app=app, path=path, methods=new_methods
     ):
