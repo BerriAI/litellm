@@ -1332,7 +1332,23 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                 )
 
-                # If no OAuth2 token came from request headers, fall back to pre-fetched creds
+                # Prefer server-stored per-user OAuth when configured, so a stale
+                # Authorization header from the MCP client cannot override Redis/DB
+                # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
+                if (
+                    server.auth_type == MCPAuth.oauth2
+                    and getattr(server, "needs_user_oauth_token", False)
+                    and user_api_key_auth is not None
+                ):
+                    db_headers = await _get_user_oauth_extra_headers_from_db(
+                        server,
+                        user_api_key_auth,
+                        prefetched_creds=_prefetched_oauth_creds,
+                    )
+                    if db_headers:
+                        extra_headers = db_headers
+
+                # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
                 if extra_headers is None and server.auth_type == MCPAuth.oauth2:
                     extra_headers = await _get_user_oauth_extra_headers_from_db(
                         server,

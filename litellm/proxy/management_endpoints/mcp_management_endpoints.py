@@ -1551,6 +1551,25 @@ if MCP_AVAILABLE:
                 except _jwt.InvalidTokenError:
                     pass
 
+        # For delegate_auth_to_upstream servers the entire PKCE handshake
+        # (both /authorize browser redirect and /token code exchange) must work
+        # without a LiteLLM session.  /authorize is opened in a VS Code webview
+        # that may have no cookie; /token is a programmatic POST from VS Code.
+        # PKCE security (code_verifier) guarantees the exchange cannot be
+        # replayed, so allowing anonymous access here is safe.
+        if not api_key:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            server_id = request.path_params.get("server_id", "")
+            if server_id:
+                _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if not _s:
+                    _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                if _s and getattr(_s, "delegate_auth_to_upstream", False) is True:
+                    return UserAPIKeyAuth()
+
         request_data = await _read_request_body(request=request)
         request_data = populate_request_with_path_params(
             request_data=request_data, request=request

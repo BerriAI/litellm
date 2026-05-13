@@ -402,6 +402,9 @@ class MCPServerManager:
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
                 ),
+                delegate_auth_to_upstream=bool(
+                    server_config.get("delegate_auth_to_upstream", False)
+                ),
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -796,6 +799,9 @@ class MCPServerManager:
             available_on_public_internet=bool(
                 getattr(mcp_server, "available_on_public_internet", True)
             ),
+            delegate_auth_to_upstream=bool(
+                getattr(mcp_server, "delegate_auth_to_upstream", False)
+            ),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(
@@ -966,6 +972,26 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+
+            # For anonymous callers (no user_id, no role), also surface any
+            # servers the operator has opted into upstream-delegated auth.
+            # These servers handle their own auth at the upstream level, so
+            # LiteLLM granting access here does not bypass any security gate.
+            is_anonymous = not (
+                user_api_key_auth
+                and (
+                    getattr(user_api_key_auth, "user_id", None)
+                    or getattr(user_api_key_auth, "user_role", None)
+                    or getattr(user_api_key_auth, "api_key", None)
+                )
+            )
+            if is_anonymous:
+                delegate_server_ids = [
+                    server.server_id
+                    for server in self.get_registry().values()
+                    if getattr(server, "delegate_auth_to_upstream", False) is True
+                ]
+                combined_servers.update(delegate_server_ids)
 
             if len(combined_servers) == 0:
                 verbose_logger.debug(

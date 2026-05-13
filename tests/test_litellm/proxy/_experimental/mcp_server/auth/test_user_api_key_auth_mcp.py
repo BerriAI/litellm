@@ -1075,6 +1075,298 @@ class TestMCPOAuth2FallbackTargetGating:
                 await MCPRequestHandler.process_mcp_request(scope)
 
 
+@pytest.mark.asyncio
+class TestMCPDelegateAuthToUpstream:
+    """
+    Tests for the ``delegate_auth_to_upstream`` per-server flag.
+
+    When set on an ``auth_type=oauth2`` MCP server, LiteLLM must skip its own
+    API-key/SSO check entirely so the client completes PKCE directly with the
+    upstream MCP server. The gate must fail closed for any non-oauth2 server,
+    any mixed-target request, and any request where the target cannot be
+    resolved.
+    """
+
+    @staticmethod
+    def _make_server(auth_type, delegate_auth_to_upstream=False):
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport="http",
+            auth_type=auth_type,
+            delegate_auth_to_upstream=delegate_auth_to_upstream,
+        )
+
+    async def test_delegate_skips_litellm_auth_with_no_authorization(self):
+        """
+        oauth2 + delegate_auth_to_upstream=True, no Authorization header at
+        all → anonymous UserAPIKeyAuth and ``user_api_key_auth`` is never
+        called.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/delegated_oauth_server",
+            "headers": [],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                )
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_auth.assert_not_called()
+
+    async def test_delegate_skips_litellm_auth_with_authorization_header(self):
+        """
+        oauth2 + delegate_auth_to_upstream=True, Authorization header present
+        → still anonymous; auth is bypassed unconditionally so the bearer is
+        forwarded upstream untouched.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/delegated_oauth_server",
+            "headers": [(b"authorization", b"Bearer upstream-pkce-token")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                )
+            )
+            (
+                auth_result,
+                _,
+                _,
+                _,
+                oauth2_headers,
+                _,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_auth.assert_not_called()
+            assert oauth2_headers.get("Authorization") == "Bearer upstream-pkce-token"
+
+    async def test_delegate_off_still_requires_litellm_auth(self):
+        """
+        oauth2 server but delegate flag is OFF → existing behaviour: a missing
+        / invalid LiteLLM key still 401s (no anonymous fast-path).
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/non_delegated_oauth_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=False,
+                )
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_delegate_ignored_for_non_oauth2_server(self):
+        """
+        Defense in depth: even if an operator turns on delegate_auth_to_upstream
+        for a non-oauth2 server (api_key, bearer_token, etc.), the gate must
+        not fire — only oauth2 servers may delegate.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/api_key_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.api_key,
+                    delegate_auth_to_upstream=True,
+                )
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_delegate_mixed_targets_fail_closed(self):
+        """
+        x-mcp-servers can list multiple targets. If ANY of them does not opt in
+        to delegate_auth_to_upstream, the bypass must NOT fire — otherwise an
+        attacker could mix one delegated server in to skip auth on the others.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"x-mcp-servers", b"delegated_oauth,plain_oauth"),
+            ],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        def mock_lookup(name, client_ip=None):
+            if name == "delegated_oauth":
+                return TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                )
+            return TestMCPDelegateAuthToUpstream._make_server(
+                auth_type=MCPAuth.oauth2,
+                delegate_auth_to_upstream=False,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = mock_lookup
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_delegate_no_resolvable_target_fail_closed(self):
+        """
+        If the target server cannot be resolved at all (e.g. admin/REST path
+        that isn't ``/mcp/{name}`` or ``/{name}/mcp``), we cannot prove the
+        gate's preconditions, so we must fail closed and run normal auth.
+        """
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/admin/whatever",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_explicit_litellm_key_takes_precedence_over_delegate(self):
+        """
+        When ``x-litellm-api-key`` is present, normal auth runs even for a
+        delegate server, so ``user_id`` is resolved and any stored upstream
+        OAuth credentials can be looked up and forwarded. The bypass only
+        fires when no LiteLLM key is supplied.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/delegated_oauth_server",
+            "headers": [(b"x-litellm-api-key", b"Bearer sk-1234")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=UserAPIKeyAuth(user_id="real-user"),
+            ) as mock_auth,
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPDelegateAuthToUpstream._make_server(
+                    auth_type=MCPAuth.oauth2,
+                    delegate_auth_to_upstream=True,
+                )
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            assert auth_result.user_id == "real-user"
+            mock_auth.assert_called_once()
+
+
 class TestMCPCustomHeaderName:
     """Test suite for custom MCP authentication header name functionality"""
 

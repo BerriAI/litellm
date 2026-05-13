@@ -122,6 +122,23 @@ class MCPRequestHandler:
         # cannot be smuggled via query string, hostname, or a deeper URL segment.
         if request.url.path.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            not has_explicit_litellm_key
+            and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
+                path=request.url.path, mcp_servers=mcp_servers
+            )
+        ):
+            # Operator opted this oauth2 server into upstream-delegated auth
+            # (PKCE passthrough): skip LiteLLM API-key/SSO entirely so the
+            # client authenticates directly with the upstream MCP server.
+            # Only fires when NO x-litellm-api-key is present — if the client
+            # does supply a LiteLLM key (e.g. for stored-credential lookup),
+            # we fall through to normal auth so user_id is resolved and the
+            # stored OAuth token can be retrieved and forwarded upstream.
+            # Gated by _target_servers_delegate_auth_to_upstream, which only
+            # returns True when EVERY target is auth_type=oauth2 AND has the
+            # delegate_auth_to_upstream flag set — fails closed otherwise.
+            validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally
             validated_user_api_key_auth = await user_api_key_auth(
@@ -231,6 +248,46 @@ class MCPRequestHandler:
         for name in target_names:
             server = global_mcp_server_manager.get_mcp_server_by_name(name)
             if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+        return True
+
+    @staticmethod
+    def _target_servers_delegate_auth_to_upstream(
+        path: str, mcp_servers: Optional[List[str]]
+    ) -> bool:
+        """
+        True only when EVERY MCP server the request targets is configured for
+        ``auth_type == oauth2`` AND has ``delegate_auth_to_upstream=True``.
+        Fails closed when any target does not opt in or cannot be resolved.
+
+        Used by :meth:`process_mcp_request` to skip LiteLLM API-key/SSO auth
+        entirely (PKCE passthrough) so the client authenticates directly with
+        the upstream MCP server. Mixed-target requests (e.g. one delegated +
+        one non-delegated server) fall back to normal LiteLLM auth.
+        """
+        # Inline imports avoid a circular dependency: mcp_server_manager imports
+        # from this module.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        target_names = (
+            mcp_servers
+            if mcp_servers is not None
+            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        )
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+            # `is True` is intentional: opt-in must be an explicit boolean
+            # True. A MagicMock attribute (in tests) or any other truthy
+            # non-bool must not silently enable the bypass.
+            if getattr(server, "delegate_auth_to_upstream", False) is not True:
                 return False
         return True
 
