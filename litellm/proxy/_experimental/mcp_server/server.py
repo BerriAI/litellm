@@ -51,6 +51,10 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     iter_known_server_prefixes,
 )
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
@@ -2773,15 +2777,16 @@ if MCP_AVAILABLE:
         Fails-open with (200, None) on network errors so a transient hiccup
         does not block valid requests.
         """
-        import httpx
-
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.head(
-                    url,
-                    headers={"Authorization": auth_header},
-                )
-                return resp.status_code, resp.headers.get("www-authenticate")
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.MCP,
+                params={"timeout": timeout},
+            )
+            resp = await client.head(
+                url,
+                headers={"Authorization": auth_header},
+            )
+            return resp.status_code, resp.headers.get("www-authenticate")
         except Exception as exc:
             verbose_logger.debug(
                 f"_probe_upstream_auth: probe to {url} failed ({exc}), allowing request through"

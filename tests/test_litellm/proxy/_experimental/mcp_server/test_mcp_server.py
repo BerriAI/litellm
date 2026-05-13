@@ -3272,13 +3272,13 @@ async def test_probe_upstream_auth_returns_upstream_status():
     mock_response.status_code = 401
     mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client.head = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client_cls.return_value = mock_client
+    mock_client = AsyncMock()
+    mock_client.head = AsyncMock(return_value=mock_response)
 
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
         status, www_auth = await _probe_upstream_auth(
             "http://upstream/mcp", "Bearer some-token"
         )
@@ -3292,13 +3292,13 @@ async def test_probe_upstream_auth_fails_open_on_network_error():
     """_probe_upstream_auth returns (200, None) when the network call fails."""
     from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client.head = AsyncMock(side_effect=Exception("connection refused"))
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client_cls.return_value = mock_client
+    mock_client = AsyncMock()
+    mock_client.head = AsyncMock(side_effect=Exception("connection refused"))
 
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
         status, www_auth = await _probe_upstream_auth(
             "http://upstream/mcp", "Bearer some-token"
         )
