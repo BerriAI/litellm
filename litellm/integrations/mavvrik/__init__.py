@@ -411,7 +411,8 @@ class Service:
 
         total_cost = float(df["spend"].sum() or 0.0) if "spend" in df.columns else 0.0
         total_tokens = (
-            int(df["prompt_tokens"].sum() or 0) + int(df["completion_tokens"].sum() or 0)
+            int(df["prompt_tokens"].sum() or 0)
+            + int(df["completion_tokens"].sum() or 0)
             if "prompt_tokens" in df.columns and "completion_tokens" in df.columns
             else 0
         )
