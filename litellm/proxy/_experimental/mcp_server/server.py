@@ -2172,16 +2172,11 @@ if MCP_AVAILABLE:
                 ],
             }
 
-        if not tool_name:
-            return {
-                "server": server_item["name"],
-                "description": server_item["description"],
-                "tools": server_item["tools"],
-            }
-        for tool in server_item.get("tools", []):
-            if tool.get("name") == tool_name:
-                return {"server": server_item["name"], "tool": tool}
-        return LAZYMCP_UNAVAILABLE_TOOL_ERROR
+        # The catalog can be served from a short-lived cache, so re-check the
+        # current permission/IP-filter result before returning server/tool
+        # details. If access was revoked after the catalog was cached, do not
+        # leak stale cached tool metadata.
+        return LAZYMCP_UNAVAILABLE_SERVER_ERROR
 
     async def _lazymcp_status() -> Dict[str, Any]:
         (

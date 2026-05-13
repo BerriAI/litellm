@@ -247,6 +247,60 @@ async def test_lazymcp_lists_only_gateway_tools_and_describes_visible_servers():
 
 
 @pytest.mark.asyncio
+async def test_lazymcp_describe_denies_stale_cached_server_after_access_revoked():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_describe,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cached_catalog = {
+        "description": "cached catalog",
+        "server_count": 1,
+        "tool_count": 1,
+        "servers": [
+            {
+                "name": "revoked",
+                "description": "stale cached server",
+                "tool_count": 1,
+                "tools": [
+                    {
+                        "name": "revoked-tool",
+                        "description": "must not leak",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"))
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_get",
+            AsyncMock(return_value=cached_catalog),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(side_effect=AssertionError("stale server should not load tools")),
+        ),
+    ):
+        server_detail = await _lazymcp_describe({"server": "revoked"})
+        tool_detail = await _lazymcp_describe(
+            {"server": "revoked", "tool": "revoked-tool"}
+        )
+
+    assert server_detail == {"error": "MCP server is not available for this request."}
+    assert tool_detail == {"error": "MCP server is not available for this request."}
+
+
+@pytest.mark.asyncio
 async def test_lazymcp_call_rechecks_permissions_and_delegates_to_mcp_call():
     try:
         from mcp.types import Tool as MCPTool
