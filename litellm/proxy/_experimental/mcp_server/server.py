@@ -72,8 +72,8 @@ _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
-# Maximum bytes to peek when sniffing the JSON-RPC method on a no-session-id
-# POST. An `initialize` envelope is a few hundred bytes; capping the peek
+# Maximum bytes to peek when sniffing the JSON-RPC method on a POST.
+# An `initialize` envelope is a few hundred bytes; capping the peek
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
@@ -3083,7 +3083,7 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            if scope.get("method") == "POST" and not session_id:
+            if scope.get("method") == "POST":
                 consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
 
@@ -3148,30 +3148,24 @@ if MCP_AVAILABLE:
                     session_id, asyncio.Lock()
                 )
 
-            active_request_session_id = (
-                session_id if use_stateful and session_id else None
-            )
-            if active_request_session_id:
-                _stateful_session_active_request_counts[active_request_session_id] = (
-                    _stateful_session_active_request_counts.get(
-                        active_request_session_id, 0
-                    )
+            active_request_session_ids: List[str] = []
+
+            def _increment_active_request_session(session_id_to_track: str) -> None:
+                if session_id_to_track in active_request_session_ids:
+                    return
+                active_request_session_ids.append(session_id_to_track)
+                _stateful_session_active_request_counts[session_id_to_track] = (
+                    _stateful_session_active_request_counts.get(session_id_to_track, 0)
                     + 1
                 )
+
+            if use_stateful and session_id:
+                _increment_active_request_session(session_id)
 
             def _track_initialized_stateful_session(
                 initialized_session_id: str,
             ) -> None:
-                nonlocal active_request_session_id
-                if active_request_session_id is not None:
-                    return
-                active_request_session_id = initialized_session_id
-                _stateful_session_active_request_counts[initialized_session_id] = (
-                    _stateful_session_active_request_counts.get(
-                        initialized_session_id, 0
-                    )
-                    + 1
-                )
+                _increment_active_request_session(initialized_session_id)
 
             async def _dispatch() -> None:
                 auth_user = _set_or_update_auth_context(
@@ -3212,7 +3206,7 @@ if MCP_AVAILABLE:
                 else:
                     await _dispatch()
             finally:
-                if active_request_session_id:
+                for active_request_session_id in active_request_session_ids:
                     active_request_count = (
                         _stateful_session_active_request_counts.get(
                             active_request_session_id, 0
