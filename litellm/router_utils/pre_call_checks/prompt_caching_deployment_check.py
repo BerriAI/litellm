@@ -33,9 +33,9 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import is_prompt_caching_valid_prompt
 
-from ..prompt_caching_cache import PromptCachingCache, PromptCachingCacheValue
-
 # Redis namespace for OpenAI prompt_cache_key affinity (distinct from PromptCachingCache keys).
+# PromptCachingCache / PromptCachingCacheValue are imported inside methods to avoid a module-level
+# cycle (litellm/__init__ -> Router -> this module -> prompt_caching_cache -> ...).
 _OPENAI_PC_AFFINITY_KEY_PREFIX = "openai_pc_aff"
 
 
@@ -164,6 +164,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
         ):
             return typed_healthy_deployments
 
+        from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+
         prompt_cache = PromptCachingCache(
             cache=self.cache,
         )
@@ -239,6 +241,11 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, MODEL ID IS NONE"
             )
             return
+
+        from litellm.router_utils.prompt_caching_cache import (
+            PromptCachingCache,
+            PromptCachingCacheValue,
+        )
 
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if is_prompt_caching_valid_prompt(
