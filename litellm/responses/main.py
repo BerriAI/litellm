@@ -403,6 +403,7 @@ async def aresponses_api_with_mcp(
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
+                        client_ip=client_ip,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(

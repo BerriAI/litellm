@@ -934,6 +934,7 @@ async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/lazymcp/internal"}]
     captured_execute_kwargs = {}
+    process_calls = []
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
@@ -941,7 +942,8 @@ async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
         staticmethod(lambda _tools: (tools, [])),
     )
 
-    async def fake_process(**_kwargs):
+    async def fake_process(**kwargs):
+        process_calls.append(kwargs)
         return ([], {"mcp_call": 'lazymcp:{"mcp_servers":["internal"]}'})
 
     monkeypatch.setattr(
@@ -977,7 +979,7 @@ async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
 
     async def fake_execute(**kwargs):
         captured_execute_kwargs.update(kwargs)
-        return []
+        return [{"tool_call_id": "call-1", "result": "executed"}]
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
@@ -993,10 +995,36 @@ async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
         responses_main,
         "aresponses",
         AsyncMock(
+            side_effect=[
+                ResponsesAPIResponse(
+                    id="resp-1",
+                    model="test-model",
+                    created_at=123,
+                    output=[],
+                    usage=ResponseAPIUsage(
+                        input_tokens=1, output_tokens=1, total_tokens=2
+                    ),
+                ),
+                ResponsesAPIResponse(
+                    id="resp-2",
+                    model="test-model",
+                    created_at=124,
+                    output=[],
+                    usage=ResponseAPIUsage(
+                        input_tokens=1, output_tokens=1, total_tokens=2
+                    ),
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_make_follow_up_call",
+        AsyncMock(
             return_value=ResponsesAPIResponse(
-                id="resp-1",
+                id="resp-2",
                 model="test-model",
-                created_at=123,
+                created_at=124,
                 output=[],
                 usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
             )
@@ -1011,6 +1039,10 @@ async def test_responses_non_streaming_auto_execution_passes_verified_client_ip(
     )
 
     assert captured_execute_kwargs["client_ip"] == "10.0.0.7"
+    assert [call["client_ip"] for call in process_calls] == [
+        "10.0.0.7",
+        "10.0.0.7",
+    ]
 
 
 def test_chat_streaming_iterator_execution_threads_client_ip():
