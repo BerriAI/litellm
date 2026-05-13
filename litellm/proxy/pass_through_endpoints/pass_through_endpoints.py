@@ -2201,26 +2201,6 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        # Use SafeRouteAdder to only add route if it doesn't exist on the app
-        route_added = SafeRouteAdder.add_api_route_if_not_exists(
-            app=app,
-            path=wildcard_path,
-            endpoint=create_pass_through_route(  # type: ignore
-                path,
-                target,
-                custom_headers,
-                forward_headers,
-                merge_query_params,
-                dependencies,
-                include_subpath=True,
-                cost_per_request=cost_per_request,
-                default_query_params=default_query_params,
-                guardrails=guardrails,
-            ),
-            methods=methods,
-            dependencies=dependencies,
-        )
-
         all_methods_are_self_reregistration = all(
             InitPassThroughEndpointHelpers.get_registered_pass_through_route(
                 route=path, method=m
@@ -2228,17 +2208,13 @@ class InitPassThroughEndpointHelpers:
             is not None
             for m in methods
         )
-        if not route_added and not all_methods_are_self_reregistration:
-            # Wildcard variant of the collision skip in ``add_exact_path_route``.
-            verbose_proxy_logger.warning(
-                "Pass-through wildcard path %r (methods %s) collides with a "
-                "route already registered on the app. The pass-through entry "
-                "is ignored.",
-                wildcard_path,
-                methods,
-            )
-            return
 
+        # Run the base-path and child-route collision checks BEFORE
+        # ``add_api_route_if_not_exists`` registers the wildcard handler
+        # on the FastAPI app. Otherwise a collision later in this
+        # function silently leaves a partial registration on the app
+        # without recorded metadata.
+        #
         # Subpath registrations also match the exact base ``path`` in
         # ``get_registered_pass_through_route()`` (so the auth gate trusts
         # ``auth`` flags here for requests at the base route too). Refuse
@@ -2282,6 +2258,39 @@ class InitPassThroughEndpointHelpers:
                 "``auth`` flag against routes FastAPI dispatches to the "
                 "built-in handler.",
                 path,
+                methods,
+            )
+            return
+
+        # Collision checks have all passed — register the wildcard
+        # handler on the FastAPI app, then guard against a wildcard-path
+        # collision (e.g. a builtin handler already at the exact
+        # wildcard address) and refuse to record metadata if so.
+        route_added = SafeRouteAdder.add_api_route_if_not_exists(
+            app=app,
+            path=wildcard_path,
+            endpoint=create_pass_through_route(  # type: ignore
+                path,
+                target,
+                custom_headers,
+                forward_headers,
+                merge_query_params,
+                dependencies,
+                include_subpath=True,
+                cost_per_request=cost_per_request,
+                default_query_params=default_query_params,
+                guardrails=guardrails,
+            ),
+            methods=methods,
+            dependencies=dependencies,
+        )
+        if not route_added and not all_methods_are_self_reregistration:
+            # Wildcard variant of the collision skip in ``add_exact_path_route``.
+            verbose_proxy_logger.warning(
+                "Pass-through wildcard path %r (methods %s) collides with a "
+                "route already registered on the app. The pass-through entry "
+                "is ignored.",
+                wildcard_path,
                 methods,
             )
             return
