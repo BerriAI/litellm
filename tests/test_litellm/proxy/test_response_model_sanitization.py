@@ -83,6 +83,16 @@ def test_restamp_streaming_chunk_skips_matching_model():
     assert model_mismatch_logged is False
 
 
+def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json():
+    from litellm.proxy.proxy_server import _serialize_streaming_chunk
+
+    chunk = _make_model_response_stream_chunk("client-model")
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
+        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    )
+
+
 def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
     tmp_path, monkeypatch
 ):

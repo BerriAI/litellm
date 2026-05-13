@@ -6512,6 +6512,84 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
+def _fast_serialize_simple_model_response_stream(
+    chunk: ModelResponseStream,
+) -> Optional[bytes]:
+    """
+    Serialize the common OpenAI text streaming chunk without the full Pydantic
+    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
+    provider-specific fields keep the canonical model_dump_json behavior.
+    """
+    if (
+        getattr(chunk, "provider_specific_fields", None) is not None
+        or getattr(chunk, "system_fingerprint", None) is not None
+        or getattr(chunk, "usage", None) is not None
+    ):
+        return None
+
+    choices = getattr(chunk, "choices", None)
+    if not isinstance(choices, list) or len(choices) != 1:
+        return None
+
+    choice = choices[0]
+    if (
+        getattr(choice, "logprobs", None) is not None
+        or getattr(choice, "enhancements", None) is not None
+    ):
+        return None
+
+    delta = getattr(choice, "delta", None)
+    if delta is None:
+        return None
+
+    unsupported_delta_fields = (
+        "function_call",
+        "tool_calls",
+        "audio",
+        "images",
+        "annotations",
+        "reasoning_content",
+        "thinking_blocks",
+        "provider_specific_fields",
+        "refusal",
+    )
+    if any(
+        getattr(delta, field, None) is not None for field in unsupported_delta_fields
+    ):
+        return None
+
+    delta_dict: dict = {}
+    role = getattr(delta, "role", None)
+    content = getattr(delta, "content", None)
+    if role is not None:
+        delta_dict["role"] = role
+    if content is not None:
+        delta_dict["content"] = content
+
+    choice_dict = {"index": getattr(choice, "index", 0), "delta": delta_dict}
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason is not None:
+        choice_dict["finish_reason"] = finish_reason
+
+    payload = {
+        "id": getattr(chunk, "id"),
+        "object": getattr(chunk, "object"),
+        "created": getattr(chunk, "created"),
+        "model": getattr(chunk, "model", None),
+        "choices": [choice_dict],
+    }
+    return orjson.dumps(payload)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> Union[str, bytes]:
+    if isinstance(chunk, ModelResponseStream):
+        serialized_chunk = _fast_serialize_simple_model_response_stream(chunk)
+        if serialized_chunk is not None:
+            return serialized_chunk
+
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -6558,13 +6636,16 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
-                chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+                chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
 
             try:
-                yield f"data: {chunk}\n\n"
+                if isinstance(chunk, bytes):
+                    yield b"data: " + chunk + b"\n\n"
+                else:
+                    yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 

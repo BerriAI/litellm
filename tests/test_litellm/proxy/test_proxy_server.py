@@ -4563,8 +4563,12 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
             ):
                 yielded_data.append(data)
 
-    assert len([chunk for chunk in yielded_data if chunk.startswith("data: {")]) == 2
-    assert yielded_data[-1] == "data: [DONE]\n\n"
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert len([chunk for chunk in yielded_text if chunk.startswith("data: {")]) == 2
+    assert yielded_text[-1] == "data: [DONE]\n\n"
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook.assert_not_called()
     mock_proxy_logging_obj.async_post_call_streaming_hook.assert_not_awaited()
     mock_deferred_logging.assert_called_once_with(mock_request_data)
