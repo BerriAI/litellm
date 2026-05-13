@@ -111,6 +111,25 @@ def test_non_colliding_path_registers():
     )
 
 
+def test_subpath_route_base_path_collision_skips_metadata():
+    # Veria HIGH: ``add_subpath_route`` only checks the generated
+    # ``/{subpath:path}`` route for collisions. But
+    # ``get_registered_pass_through_route()`` returns a subpath entry
+    # whose ``path`` matches the request route exactly — so an
+    # ``include_subpath: true, auth: false`` entry whose base path
+    # shadows a built-in route lets the auth gate honor the ``auth``
+    # flag against the built-in. Refuse the metadata.
+    app = _app_with_route("/customer/block")
+
+    InitPassThroughEndpointHelpers.add_subpath_route(
+        app=app,
+        path="/customer/block",
+        **{**_HELPER_KWARGS, "endpoint_id": "ep-shadowing-subpath"},
+    )
+
+    assert _registered_pass_through_routes == {}
+
+
 def test_parameterized_route_collision_skips_metadata():
     # A built-in such as ``/credentials/{credential_name:path}`` consumes
     # ``/credentials/foo`` via FastAPI's first-match dispatch. The pass-through

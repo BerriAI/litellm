@@ -2195,6 +2195,27 @@ class InitPassThroughEndpointHelpers:
             )
             return
 
+        # Subpath registrations also match the exact base ``path`` in
+        # ``get_registered_pass_through_route()`` (so the auth gate trusts
+        # ``auth`` flags here for requests at the base route too). Refuse
+        # to record metadata if the base path collides with a built-in
+        # route that is not itself a pass-through self-re-registration —
+        # otherwise an ``include_subpath: true, auth: false`` entry whose
+        # ``path`` shadows a built-in endpoint becomes an auth bypass.
+        if (
+            SafeRouteAdder._is_path_registered(app=app, path=path, methods=methods)
+            and not all_methods_are_self_reregistration
+        ):
+            verbose_proxy_logger.warning(
+                "Pass-through subpath base path %r (methods %s) collides with a "
+                "route already registered on the app. The pass-through entry "
+                "is ignored to prevent the auth gate from honoring its ``auth`` "
+                "flag against the built-in route.",
+                path,
+                methods,
+            )
+            return
+
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
