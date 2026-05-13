@@ -283,23 +283,23 @@ async def test_anthropic_messages_fallbacks():
     router = Router(
         model_list=[
             {
-                "model_name": "anthropic/claude-opus-4-20250514",
+                "model_name": "anthropic/claude-opus-4-7",
                 "litellm_params": {
-                    "model": "anthropic/claude-opus-4-20250514",
+                    "model": "anthropic/claude-opus-4-7",
                     "api_key": "bad-key",
                 },
             },
             {
-                "model_name": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                "model_name": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                    "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 },
             },
         ],
         fallbacks=[
             {
-                "anthropic/claude-opus-4-20250514": [
-                    "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+                "anthropic/claude-opus-4-7": [
+                    "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
                 ]
             }
         ],
@@ -311,7 +311,7 @@ async def test_anthropic_messages_fallbacks():
     # Call the handler
     response = await router.aanthropic_messages(
         messages=messages,
-        model="anthropic/claude-opus-4-20250514",
+        model="anthropic/claude-opus-4-7",
         max_tokens=100,
         metadata={
             "user_id": "hello",
