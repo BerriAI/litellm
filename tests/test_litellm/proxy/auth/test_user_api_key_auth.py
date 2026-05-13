@@ -2978,10 +2978,18 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
     """Companion to the auth=False test: when a pass-through endpoint
     has ``auth: true``, the builder runs full authentication and the
     centralized gate must run too. Skipping based on path-match alone
-    would re-open every ``auth: true`` pass-through endpoint."""
+    would re-open every ``auth: true`` pass-through endpoint.
+
+    Populates the runtime ``_registered_pass_through_routes`` registry
+    so the test exercises the actual auth-flag guard rather than the
+    empty-registry short-circuit (Greptile follow-up)."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
+    )
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
     request = Request(scope={"type": "http", "method": "POST"})
@@ -2998,6 +3006,14 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
         ]
     }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    registry_key = "ep-auth-true:exact:/api/public/ingestion:POST"
+    _registered_pass_through_routes[registry_key] = {
+        "endpoint_id": "ep-auth-true",
+        "path": "/api/public/ingestion",
+        "type": "exact",
+        "methods": ["POST"],
+        "passthrough_params": {},
+    }
     try:
         for k, v in attrs.items():
             setattr(_proxy_server_mod, k, v)
@@ -3013,6 +3029,7 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
             )
             mock_checks.assert_awaited_once()
     finally:
+        _registered_pass_through_routes.pop(registry_key, None)
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
 
