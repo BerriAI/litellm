@@ -9,6 +9,7 @@ Covers:
 
 import os
 import sys
+from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -134,6 +135,30 @@ class TestMaskedHTTPStatusError:
         assert masked.response.content == body
         # Content-Encoding must have been stripped from the rebuilt headers.
         assert "content-encoding" not in {k.lower() for k in masked.response.headers}
+
+    def test_handles_unread_multipart_request_content(self):
+        """Multipart file requests can have unread streaming request bodies."""
+        request = httpx.Request(
+            "POST",
+            "https://api.example.com/v1/images/edits?key=SECRET",
+            data={"model": "gpt-image-1"},
+            files=[
+                ("image[]", ("image.png", BytesIO(b"image"), "image/png")),
+                ("mask", ("mask.png", BytesIO(b"mask"), "image/png")),
+            ],
+        )
+        response = httpx.Response(
+            status_code=500,
+            content=b'{"error": "upstream error"}',
+            request=request,
+        )
+        orig = httpx.HTTPStatusError("500", request=request, response=response)
+
+        masked = MaskedHTTPStatusError(orig)
+
+        assert "SECRET" not in str(masked.request.url)
+        assert masked.request.content == b""
+        assert masked.request.headers.get("content-length") == "0"
 
 
 class TestSafeResponseHelpers:
