@@ -1669,8 +1669,11 @@ class Router:
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
-        # Force stream=False so the response is fully consumed and callbacks fire
+        # Force stream=False so the response is fully consumed and callbacks fire.
+        # stream_options is only valid when stream=True — OpenAI-compatible servers
+        # (vLLM, OpenAI) return 400 if it's present alongside stream=False.
         silent_kwargs["stream"] = False
+        silent_kwargs.pop("stream_options", None)
 
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)
