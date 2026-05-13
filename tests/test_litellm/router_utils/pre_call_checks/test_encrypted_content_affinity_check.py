@@ -17,6 +17,8 @@ The mechanism works without any cache and supports two encoding strategies:
 
 import os
 import sys
+import time
+from typing import List, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1179,28 +1181,62 @@ def test_boundary_key_rejects_non_dict_like_inputs():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_affinity_raises_service_unavailable_when_origin_cooled_down():
-    """
-    Originating deployment is in the router config but absent from
-    healthy_deployments (e.g. in cooldown), and no boundary peer is configured.
-    The check must fail fast with a transient 503 rather than dispatching to a
-    non-peer deployment that would 400 with invalid_encrypted_content.
-    """
+def _make_originating_mock(api_base: str, api_key: str):
     from unittest.mock import MagicMock
 
+    originating = MagicMock()
+    originating.litellm_params.model_dump.return_value = {
+        "api_base": api_base,
+        "api_key": api_key,
+    }
+    return originating
+
+
+def _make_router_mock_with_cooldown(
+    originating, cooldown_entries: Optional[List[tuple]] = None
+):
+    """
+    Build a MagicMock router whose ``cooldown_cache.async_get_active_cooldowns``
+    returns ``cooldown_entries`` (defaulting to ``[]`` — no active cooldown).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = originating
+    mock_router.cooldown_cache.async_get_active_cooldowns = AsyncMock(
+        return_value=list(cooldown_entries or [])
+    )
+    return mock_router
+
+
+@pytest.mark.asyncio
+async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_429():
+    """
+    Originating deployment is in the router config, in cooldown for a non-429
+    cause (e.g. a 500), and no boundary peer is configured. The check must
+    surface this as a 503 (transient, but not rate-limit-specific) rather than
+    dispatching to a non-peer deployment.
+    """
     from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
 
-    originating = MagicMock()
-    originating.litellm_params.model_dump.return_value = {
-        "api_base": "https://account-a.openai.azure.com/",
-        "api_key": "key-a",
-    }
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = originating
+    originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
+    mock_router = _make_router_mock_with_cooldown(
+        originating,
+        cooldown_entries=[
+            (
+                "deployment-a-cooled",
+                {
+                    "exception_received": "boom",
+                    "status_code": "500",
+                    "timestamp": time.time(),
+                    "cooldown_time": 60.0,
+                },
+            )
+        ],
+    )
 
     check = EncryptedContentAffinityCheck(router=mock_router)
     encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
@@ -1229,6 +1265,114 @@ async def test_affinity_raises_service_unavailable_when_origin_cooled_down():
         )
 
     assert "deployment-a-cooled" in str(excinfo.value)
+    assert excinfo.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_for_429():
+    """
+    Originating deployment is in cooldown specifically because of a 429.
+    The check must surface this as a 429 RateLimitError with a Retry-After
+    header derived from the cooldown's remaining window, so OpenAI-compatible
+    clients respect the backoff instead of giving up on a 503.
+    """
+    from litellm.exceptions import RateLimitError
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
+    cooldown_started = time.time() - 5.0
+    mock_router = _make_router_mock_with_cooldown(
+        originating,
+        cooldown_entries=[
+            (
+                "deployment-a-cooled-429",
+                {
+                    "exception_received": "rate limited",
+                    "status_code": "429",
+                    "timestamp": cooldown_started,
+                    "cooldown_time": 60.0,
+                },
+            )
+        ],
+    )
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-a-cooled-429", "rs_test"
+    )
+    healthy_only_b = [
+        {
+            "model_info": {"id": "deployment-b"},
+            "litellm_params": {
+                "api_base": "https://account-b.openai.azure.com/",
+                "api_key": "key-b",
+                "model": "azure/gpt-5.4",
+            },
+        }
+    ]
+    request_kwargs = {
+        "input": [{"id": encoded_id, "type": "reasoning"}],
+    }
+
+    with pytest.raises(RateLimitError) as excinfo:
+        await check.async_filter_deployments(
+            model="gpt-5.4",
+            healthy_deployments=healthy_only_b,
+            messages=None,
+            request_kwargs=request_kwargs,
+        )
+
+    assert "deployment-a-cooled-429" in str(excinfo.value)
+    assert excinfo.value.status_code == 429
+    retry_after = excinfo.value.response.headers.get("retry-after")
+    assert retry_after is not None
+    assert 1 <= int(retry_after) <= 60
+
+
+@pytest.mark.asyncio
+async def test_affinity_raises_service_unavailable_when_origin_filtered_without_cooldown_entry():
+    """
+    Originating deployment is configured but absent from healthy_deployments
+    with no active cooldown entry. Surface as 503 (we cannot prove the cause
+    was rate-limiting) rather than guessing 429.
+    """
+    from litellm.exceptions import ServiceUnavailableError
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
+    mock_router = _make_router_mock_with_cooldown(originating, cooldown_entries=[])
+
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-a-filtered", "rs_test"
+    )
+    healthy_only_b = [
+        {
+            "model_info": {"id": "deployment-b"},
+            "litellm_params": {
+                "api_base": "https://account-b.openai.azure.com/",
+                "api_key": "key-b",
+                "model": "azure/gpt-5.4",
+            },
+        }
+    ]
+    request_kwargs = {
+        "input": [{"id": encoded_id, "type": "reasoning"}],
+    }
+
+    with pytest.raises(ServiceUnavailableError) as excinfo:
+        await check.async_filter_deployments(
+            model="gpt-5.4",
+            healthy_deployments=healthy_only_b,
+            messages=None,
+            request_kwargs=request_kwargs,
+        )
+
+    assert excinfo.value.status_code == 503
 
 
 @pytest.mark.asyncio
