@@ -235,6 +235,7 @@ LLM_CONFIG_NAMES = (
     "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
+    "TensormeshResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
@@ -284,6 +285,7 @@ LLM_CONFIG_NAMES = (
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
+    "TensormeshChatConfig",
     "PerplexityChatConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
@@ -947,6 +949,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.perplexity.responses.transformation",
         "PerplexityResponsesConfig",
     ),
+    "TensormeshResponsesConfig": (
+        ".llms.tensormesh.responses.transformation",
+        "TensormeshResponsesConfig",
+    ),
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
         "DatabricksResponsesAPIConfig",
@@ -1083,6 +1089,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "LmStudioEmbeddingConfig",
     ),
     "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "TensormeshChatConfig": (
+        ".llms.tensormesh.chat.transformation",
+        "TensormeshChatConfig",
+    ),
     "PerplexityChatConfig": (
         ".llms.perplexity.chat.transformation",
         "PerplexityChatConfig",

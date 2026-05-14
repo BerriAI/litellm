@@ -622,6 +622,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lambda_ai",
     "vercel_ai_gateway",
     "wandb",
+    "tensormesh",
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
@@ -783,6 +784,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
 ]
 
 
@@ -841,6 +843,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "tensormesh",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -863,6 +866,7 @@ openai_text_completion_compatible_providers: List = (
         "lambda_ai",
         "hyperbolic",
         "wandb",
+        "tensormesh",
     ]
 )
 _openai_like_providers: List = [

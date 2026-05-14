@@ -8243,6 +8243,7 @@ class ProviderConfigManager:
             ),
             LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
             LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.TENSORMESH: (lambda: litellm.TensormeshChatConfig(), False),
             LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
             LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
             LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
@@ -8678,6 +8679,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.TENSORMESH == provider:
+            return litellm.TensormeshResponsesConfig()
         return None
 
     @staticmethod
@@ -8773,6 +8776,8 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.TENSORMESH == provider:
+            return litellm.TensormeshChatConfig()
         return None
 
     @staticmethod

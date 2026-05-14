@@ -1754,6 +1754,9 @@ if TYPE_CHECKING:
         PerplexityChatConfig as _PerplexityChatConfig,
     )
     from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+    from .llms.tensormesh.chat.transformation import (
+        TensormeshChatConfig as _TensormeshChatConfig,
+    )
     from .llms.watsonx.chat.transformation import (
         IBMWatsonXChatConfig as _IBMWatsonXChatConfig,
     )
@@ -1788,6 +1791,7 @@ if TYPE_CHECKING:
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
     NscaleConfig: Type[_NscaleConfig]
+    TensormeshChatConfig: Type[_TensormeshChatConfig]
     IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
@@ -1839,6 +1843,9 @@ if TYPE_CHECKING:
         AzureOpenAIAssistantsAPIConfig as AzureOpenAIAssistantsAPIConfig,
     )
     from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
+    from .llms.tensormesh.responses.transformation import (
+        TensormeshResponsesConfig as TensormeshResponsesConfig,
+    )
     from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
