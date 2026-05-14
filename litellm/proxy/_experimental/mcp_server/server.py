@@ -327,10 +327,15 @@ if MCP_AVAILABLE:
             # ripped out from under it mid-flight.
             if _stateful_session_active_request_counts.get(session_id, 0) > 0:
                 continue
-            _remove_stateful_session_tracking(session_id)
+            # Pop transport + terminate BEFORE removing owner/auth tracking.
+            # Reversing the order avoids a window where ``_stateful_session_owners``
+            # is empty but ``server_instances`` still serves the session — a
+            # concurrent request in that window would observe ``expected_owner
+            # is None`` and bypass the owner-binding check.
             transport = server_instances.pop(session_id, None)
             if transport is not None:
                 await transport.terminate()
+            _remove_stateful_session_tracking(session_id)
 
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
@@ -2769,7 +2774,12 @@ if MCP_AVAILABLE:
         passthrough path), fall back to the client IP so two unrelated
         anonymous callers from different sources do not collapse to a
         single ``anonymous`` owner and end up able to drive each other's
-        stateful sessions.
+        stateful sessions. Note: when even client IP is unavailable
+        (exotic deployments without trusted X-Forwarded-For and direct
+        socket info), the fingerprint degrades to the ``anonymous``
+        sentinel and cannot meaningfully protect against another
+        unauthenticated caller who learns the session id — owner-binding
+        is best-effort in that mode.
         """
 
         def _bytes_for_hash(value: Any) -> Optional[bytes]:
