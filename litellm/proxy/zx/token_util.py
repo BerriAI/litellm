@@ -1,6 +1,9 @@
+import dataclasses
+import json
 import logging
+import os
 from dataclasses import dataclass
-from typing import Literal, Optional, Dict
+from typing import Any, Literal, Optional, Dict
 import time
 import hashlib
 from fastapi import Request
@@ -35,20 +38,41 @@ class TokenStore:
     data: dict
 
 
+# In-memory fallback store (single-node only)
 token_stores: Dict[str, TokenStore] = {}
+
+_REDIS_KEY_PREFIX = "litellm:zx:token"
+_REDIS_AUTH_PREFIX = "litellm:zx:auth"
+_redis_client: Optional[Any] = None
+
+
+async def _get_redis() -> Optional[Any]:
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        return None
+    try:
+        import redis.asyncio as aioredis
+        _redis_client = aioredis.from_url(redis_url, decode_responses=True)
+        return _redis_client
+    except ImportError:
+        logger.warning("redis package not available, falling back to in-memory token store")
+        return None
 
 
 class ClientError(Exception):
     pass
 
 
-def set_store(
+async def set_store(
     type: TokenType,
     token: str,
     auth_key: str | None = None,
     data: dict | None = None,
     timeout: int = 30,
-):
+) -> "TokenStore":
     ts = TokenStore(
         type=type,
         token=token,
@@ -58,33 +82,74 @@ def set_store(
         auth_key=auth_key,
         data=data or {},
     )
-    token_stores[f"{type}:{token}"] = ts
+    redis = await _get_redis()
+    if redis:
+        ttl = timeout * 60
+        payload = json.dumps(dataclasses.asdict(ts))
+        await redis.setex(f"{_REDIS_KEY_PREFIX}:{type}:{token}", ttl, payload)
+        if auth_key:
+            await redis.setex(f"{_REDIS_AUTH_PREFIX}:{auth_key}", ttl, f"{type}:{token}")
+    else:
+        token_stores[f"{type}:{token}"] = ts
     return ts
 
 
-def get_store(
+async def save_store(ts: "TokenStore") -> None:
+    """Persist a mutated TokenStore back to the store (required for Redis path)."""
+    redis = await _get_redis()
+    if redis:
+        ttl = max(1, int(ts.expire_time - time.time()))
+        payload = json.dumps(dataclasses.asdict(ts))
+        await redis.setex(f"{_REDIS_KEY_PREFIX}:{ts.type}:{ts.token}", ttl, payload)
+    else:
+        token_stores[f"{ts.type}:{ts.token}"] = ts
+
+
+async def get_store(
     type: TokenType | None = None,
     token: str | None = None,
     auth_key: str | None = None,
     check_login: bool = True,
     remove: bool = False,
-):
-    for k, v in list(token_stores.items()):
-        if v.expire_time < time.time():
-            del token_stores[k]
+) -> Optional["TokenStore"]:
+    redis = await _get_redis()
+    if redis:
+        if auth_key:
+            ptr = await redis.get(f"{_REDIS_AUTH_PREFIX}:{auth_key}")
+            if not ptr:
+                return None
+            raw = await redis.get(f"{_REDIS_KEY_PREFIX}:{ptr}")
+        elif type and token:
+            raw = await redis.get(f"{_REDIS_KEY_PREFIX}:{type}:{token}")
+        else:
+            return None
+        if not raw:
+            return None
+        ts = TokenStore(**json.loads(raw))
+        if remove:
+            await redis.delete(f"{_REDIS_KEY_PREFIX}:{ts.type}:{ts.token}")
+            if ts.auth_key:
+                await redis.delete(f"{_REDIS_AUTH_PREFIX}:{ts.auth_key}")
+        if check_login and not ts.login:
+            return None
+        return ts
+    else:
+        for k, v in list(token_stores.items()):
+            if v.expire_time < time.time():
+                del token_stores[k]
 
-    store = None
-    if auth_key:
-        store = next((x for x in token_stores.values() if x.auth_key == auth_key), None)
-    elif type and token:
-        store = token_stores.get(f"{type}:{token}", None)
-    if not store:
-        return None
-    if remove:
-        del token_stores[f"{store.type}:{store.token}"]
-    if check_login and not store.login:
-        return None
-    return store
+        store = None
+        if auth_key:
+            store = next((x for x in token_stores.values() if x.auth_key == auth_key), None)
+        elif type and token:
+            store = token_stores.get(f"{type}:{token}", None)
+        if not store:
+            return None
+        if remove:
+            del token_stores[f"{store.type}:{store.token}"]
+        if check_login and not store.login:
+            return None
+        return store
 
 
 async def create_or_get_user_key(

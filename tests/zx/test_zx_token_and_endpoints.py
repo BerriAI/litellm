@@ -29,6 +29,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+import litellm.proxy.zx.token_util as _token_util
 from litellm.proxy.zx.token_util import (
     ClientError,
     TokenStore,
@@ -559,14 +560,12 @@ class TestCliCheckToken:
         """token 对应的 store 存在且已登录时，返回 True"""
         from litellm.proxy.zx.zx_config_endpoints import cli_check_token
 
-        # 在全局 store 中注册一个已登录的 token
-        ts = set_store("cli", "check-token-valid", timeout=10)
-        ts.login = True  # 标记为已登录
+        ts = await set_store("cli", "check-token-valid", timeout=10)
+        ts.login = True  # 标记为已登录（内存路径直接修改对象引用）
 
         result = await cli_check_token(token="check-token-valid")
         assert result is True
 
-        # 清理
         token_stores.pop("cli:check-token-valid", None)
 
     @pytest.mark.asyncio
@@ -590,13 +589,11 @@ class TestCliCheckToken:
         """token 存在但尚未登录（login=False）时，返回 False"""
         from litellm.proxy.zx.zx_config_endpoints import cli_check_token
 
-        ts = set_store("cli", "check-token-pending", timeout=10)
-        # login 默认为 False，不修改
+        await set_store("cli", "check-token-pending", timeout=10)
 
         result = await cli_check_token(token="check-token-pending")
         assert result is False
 
-        # 清理
         token_stores.pop("cli:check-token-pending", None)
 
     @pytest.mark.asyncio
@@ -604,14 +601,13 @@ class TestCliCheckToken:
         """token 已过期时，返回 False"""
         from litellm.proxy.zx.zx_config_endpoints import cli_check_token
 
-        ts = set_store("cli", "check-token-expired", timeout=1)
+        ts = await set_store("cli", "check-token-expired", timeout=1)
         ts.login = True
         ts.expire_time = time.time() - 1  # 强制过期
 
         result = await cli_check_token(token="check-token-expired")
         assert result is False
 
-        # 清理（过期 token 可能已被 get_store 清理）
         token_stores.pop("cli:check-token-expired", None)
 
 
@@ -628,54 +624,44 @@ class TestCliGetConfigYaml:
         """token 无效时应抛出 HTTPException(401)"""
         from litellm.proxy.zx.zx_config_endpoints import cli_get_config_yaml
 
-        result = None
         with pytest.raises(HTTPException) as exc_info:
-            result = await cli_get_config_yaml(token="nonexistent-token-xyz")
+            await cli_get_config_yaml(token="nonexistent-token-xyz")
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_user_not_found_returns_error(self):
-        """用户在数据库中不存在时返回 error 字段（源码第 381-383 行）"""
+        """用户在数据库中不存在时返回 error 字段"""
         from litellm.proxy.zx.zx_config_endpoints import cli_get_config_yaml
 
         org_email = "nouser@fzzixun.com"
 
-        # 注册一个已登录的 token，包含 user_info
-        ts = set_store("cli", "yaml-token-nouser", timeout=10)
+        ts = await set_store("cli", "yaml-token-nouser", timeout=10)
         ts.login = True
         ts.data["user_info"] = {"orgEmail": org_email}
 
-        # mock prisma_client：find_first 返回 None
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-        # prisma_client 在函数内部通过 `from litellm.proxy.proxy_server import prisma_client`
-        # 懒加载，需要 mock proxy_server 模块中的属性
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
-        ):
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             result = await cli_get_config_yaml(token="yaml-token-nouser")
 
         assert "error" in result
         assert org_email in result["error"]
 
-        # 清理
         token_stores.pop("cli:yaml-token-nouser", None)
 
     @pytest.mark.asyncio
     async def test_user_found_returns_config_with_user_id(self):
-        """用户存在时从 yaml 模板替换 <UTOKEN> 并返回（源码第 384-392 行）"""
+        """用户存在时从 yaml 模板替换 <UTOKEN> 并返回"""
         from litellm.proxy.zx.zx_config_endpoints import cli_get_config_yaml
 
         org_email = "zhangsan@fzzixun.com"
         user_id = "user-id-from-db"
 
-        ts = set_store("cli", "yaml-token-user-found", timeout=10)
+        ts = await set_store("cli", "yaml-token-user-found", timeout=10)
         ts.login = True
         ts.data["user_info"] = {"orgEmail": org_email}
 
-        # mock prisma_client：find_first 返回一个包含 user_id 的对象
         mock_db_user = MagicMock()
         mock_db_user.user_id = user_id
 
@@ -684,8 +670,6 @@ class TestCliGetConfigYaml:
 
         yaml_template = "apiBase: https://example.com\nuserToken: <UTOKEN>"
 
-        # prisma_client 在函数内部通过 `from litellm.proxy.proxy_server import prisma_client`
-        # 懒加载，需要 mock proxy_server 模块中的属性
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
@@ -706,23 +690,20 @@ class TestCliGetConfigYaml:
         assert user_id in result["data"]
         assert "<UTOKEN>" not in result["data"]
 
-        # 清理
         token_stores.pop("cli:yaml-token-user-found", None)
 
     @pytest.mark.asyncio
     async def test_token_store_login_false_raises_401(self):
-        """token 存在但未登录时应返回 HTTPException(401)（get_store 返回 None）"""
+        """token 存在但未登录时应返回 HTTPException(401)"""
         from litellm.proxy.zx.zx_config_endpoints import cli_get_config_yaml
 
-        ts = set_store("cli", "yaml-token-not-loggedin", timeout=10)
-        # login 默认 False，不修改
+        await set_store("cli", "yaml-token-not-loggedin", timeout=10)
 
         with pytest.raises(HTTPException) as exc_info:
             await cli_get_config_yaml(token="yaml-token-not-loggedin")
 
         assert exc_info.value.status_code == 401
 
-        # 清理
         token_stores.pop("cli:yaml-token-not-loggedin", None)
 
 
@@ -732,63 +713,72 @@ class TestCliGetConfigYaml:
 
 
 class TestTokenUtilSetAndGetStore:
-    """测试 token_util 的 set_store / get_store 基础行为"""
+    """测试 token_util 的 set_store / get_store 基础行为（无 Redis，使用内存回退）"""
 
     def setup_method(self):
-        """每个测试前清空全局 token_stores，防止用例间干扰"""
+        """每个测试前清空全局 token_stores 并重置 Redis 客户端，防止用例间干扰"""
         token_stores.clear()
+        _token_util._redis_client = None
 
-    def test_set_store_creates_pending_token(self):
+    @pytest.mark.asyncio
+    async def test_set_store_creates_pending_token(self):
         """set_store 创建的 token 初始状态为 pending、未登录"""
-        ts = set_store("cli", "tok-basic-001", timeout=5)
+        ts = await set_store("cli", "tok-basic-001", timeout=5)
         assert ts.status == "pending"
         assert ts.login is False
 
-    def test_set_store_stores_in_global_dict(self):
+    @pytest.mark.asyncio
+    async def test_set_store_stores_in_global_dict(self):
         """set_store 后，token_stores 中应存在对应条目"""
-        set_store("cli", "tok-global-001", timeout=5)
+        await set_store("cli", "tok-global-001", timeout=5)
         assert "cli:tok-global-001" in token_stores
 
-    def test_get_store_returns_none_when_not_logged_in(self):
+    @pytest.mark.asyncio
+    async def test_get_store_returns_none_when_not_logged_in(self):
         """token 未登录时，check_login=True 应返回 None"""
-        set_store("cli", "tok-not-logged", timeout=10)
-        result = get_store(type="cli", token="tok-not-logged", check_login=True)
+        await set_store("cli", "tok-not-logged", timeout=10)
+        result = await get_store(type="cli", token="tok-not-logged", check_login=True)
         assert result is None
 
-    def test_get_store_returns_store_when_logged_in(self):
+    @pytest.mark.asyncio
+    async def test_get_store_returns_store_when_logged_in(self):
         """token 已登录时，check_login=True 应正常返回 store"""
-        ts = set_store("cli", "tok-logged", timeout=10)
+        ts = await set_store("cli", "tok-logged", timeout=10)
         ts.login = True
-        result = get_store(type="cli", token="tok-logged", check_login=True)
+        result = await get_store(type="cli", token="tok-logged", check_login=True)
         assert result is not None
         assert result.token == "tok-logged"
 
-    def test_get_store_expired_token_returns_none(self):
+    @pytest.mark.asyncio
+    async def test_get_store_expired_token_returns_none(self):
         """过期 token 应被清理并返回 None"""
-        ts = set_store("cli", "tok-exp", timeout=1)
+        ts = await set_store("cli", "tok-exp", timeout=1)
         ts.login = True
         ts.expire_time = time.time() - 1  # 强制过期
-        result = get_store(type="cli", token="tok-exp", check_login=True)
+        result = await get_store(type="cli", token="tok-exp", check_login=True)
         assert result is None
         assert "cli:tok-exp" not in token_stores
 
-    def test_get_store_by_auth_key(self):
+    @pytest.mark.asyncio
+    async def test_get_store_by_auth_key(self):
         """通过 auth_key 查找 store"""
-        ts = set_store("cli", "tok-authkey-002", auth_key="ak-unique-001", timeout=10)
-        result = get_store(auth_key="ak-unique-001", check_login=False)
+        await set_store("cli", "tok-authkey-002", auth_key="ak-unique-001", timeout=10)
+        result = await get_store(auth_key="ak-unique-001", check_login=False)
         assert result is not None
         assert result.auth_key == "ak-unique-001"
 
-    def test_get_store_remove_deletes_entry(self):
+    @pytest.mark.asyncio
+    async def test_get_store_remove_deletes_entry(self):
         """remove=True 时，查找后应删除该 store"""
-        ts = set_store("cli", "tok-remove-002", timeout=10)
+        ts = await set_store("cli", "tok-remove-002", timeout=10)
         ts.login = True
-        get_store(type="cli", token="tok-remove-002", remove=True)
+        await get_store(type="cli", token="tok-remove-002", remove=True)
         assert "cli:tok-remove-002" not in token_stores
 
-    def test_get_store_nonexistent_returns_none(self):
+    @pytest.mark.asyncio
+    async def test_get_store_nonexistent_returns_none(self):
         """查找不存在的 token 应返回 None"""
-        result = get_store(type="cli", token="totally-nonexistent-999")
+        result = await get_store(type="cli", token="totally-nonexistent-999")
         assert result is None
 
 

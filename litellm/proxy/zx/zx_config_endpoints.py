@@ -15,7 +15,7 @@ from litellm.proxy._types import (
 )
 from . import zixun_auth
 from . import zx_development_data
-from .token_util import set_store, get_store, create_or_get_user_key, ClientError
+from .token_util import set_store, get_store, save_store, create_or_get_user_key, ClientError
 
 auth = zixun_auth.ZixunAuth(
     os.environ.get("ZX_AUTH_HOST"),
@@ -106,7 +106,7 @@ async def cli_login(
         f"{scheme}://{host}/zx/auth_callback?auth_key={auth_key}"
     )
     key_metadata = {"device_id": device_id, "device_name": device_name}
-    set_store(
+    await set_store(
         type="cli",
         token=token,
         auth_key=auth_key,
@@ -125,7 +125,7 @@ async def auth_callback(auth_key: str, code: str, request: Request):
     处理统一登录
     """
     # 从token_store[code]中匹配auth_key
-    store = get_store(auth_key=auth_key, check_login=False)
+    store = await get_store(auth_key=auth_key, check_login=False)
     if store is None:
         raise RuntimeError(f"回调错误，auth_key [{auth_key}]不正确")
 
@@ -136,6 +136,7 @@ async def auth_callback(auth_key: str, code: str, request: Request):
         store.status = "success"
         store.login = True
         store.data["user_info"] = user_info
+        await save_store(store)
     except Exception as e:
         store.status = "failed"
         raise RuntimeError(f"获取用户信息失败，auth_key [{auth_key}] 错误: {e}")
@@ -255,7 +256,7 @@ async def cli_check_token(token: Annotated[str | None, Header()] = None):
     """
     处理CLI 校验Token
     """
-    store = get_store(type="cli", token=token)
+    store = await get_store(type="cli", token=token)
     if store is None:
         return False
     return True
@@ -271,7 +272,7 @@ async def cli_get_key(
     """
     处理CLI 获取Key
     """
-    store = get_store(type="cli", token=token)
+    store = await get_store(type="cli", token=token)
     if store is None:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -350,7 +351,7 @@ async def cli_get_config(token: Annotated[str | None, Header()] = None):
     """
     处理CLI 获取配置
     """
-    store = get_store(type="cli", token=token)
+    store = await get_store(type="cli", token=token)
     if store is None:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -367,7 +368,7 @@ async def cli_get_config_yaml(token: Annotated[str | None, Header()] = None):
     """
     处理CLI 获取Yaml配置
     """
-    store = get_store(type="cli", token=token)
+    store = await get_store(type="cli", token=token)
     if store is None:
         raise HTTPException(status_code=401, detail="Invalid token")
     user_info = store.data.get("user_info", {})
