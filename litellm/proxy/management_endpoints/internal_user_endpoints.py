@@ -1235,6 +1235,19 @@ async def _update_single_user_helper(
                 },
             )
 
+    # Non-admins cannot modify budget-sensitive fields even on their own record
+    # (GHSA-wvg4-6222-3q4r).
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        _protected_fields = ("max_budget", "soft_budget", "spend")
+        for _field in _protected_fields:
+            if _field in non_default_values:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Non-admin users cannot modify '{_field}'. Contact your proxy admin."
+                    },
+                )
+
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
         if existing_user_row is not None
