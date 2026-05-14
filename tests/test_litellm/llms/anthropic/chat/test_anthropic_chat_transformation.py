@@ -626,6 +626,74 @@ def test_map_tool_choice_dict_type_function_without_name():
     assert result is None
 
 
+def _get_showtimes_tool():
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_showtimes",
+            "description": "Get current showtimes",
+            "parameters": {
+                "type": "object",
+                "properties": {"movie": {"type": "string"}},
+                "required": ["movie"],
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "auto",
+        "none",
+        {"type": "function", "function": {"name": "get_showtimes"}},
+    ],
+)
+def test_map_openai_params_drops_tool_choice_when_tools_empty(tool_choice):
+    config = AnthropicConfig()
+
+    mapped_params = config.map_openai_params(
+        non_default_params={"tools": [], "tool_choice": tool_choice},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert mapped_params == {"tools": []}
+
+
+@pytest.mark.parametrize(
+    "tool_choice,expected_type",
+    [
+        ("auto", "auto"),
+        ("none", "none"),
+        (
+            {"type": "function", "function": {"name": "get_showtimes"}},
+            "tool",
+        ),
+    ],
+)
+def test_map_openai_params_preserves_tool_choice_when_tools_valid(
+    tool_choice, expected_type
+):
+    config = AnthropicConfig()
+
+    mapped_params = config.map_openai_params(
+        non_default_params={
+            "tools": [_get_showtimes_tool()],
+            "tool_choice": tool_choice,
+        },
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert len(mapped_params["tools"]) == 1
+    assert mapped_params["tool_choice"]["type"] == expected_type
+    if expected_type == "tool":
+        assert mapped_params["tool_choice"]["name"] == "get_showtimes"
+
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
