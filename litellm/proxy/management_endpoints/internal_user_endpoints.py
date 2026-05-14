@@ -1161,6 +1161,8 @@ async def _schedule_user_update_audit_log(
 ) -> None:
     from litellm.proxy.proxy_server import prisma_client
 
+    if prisma_client is None:
+        return
     try:
         updated_user_row = await prisma_client.db.litellm_usertable.find_first(
             where={"user_id": response["user_id"]}
