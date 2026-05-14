@@ -2303,6 +2303,13 @@
         "search": true
       }
     },
+    "tinyfish": {
+      "display_name": "TinyFish (`tinyfish`)",
+      "url": "https://docs.litellm.ai/docs/search/tinyfish",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
