@@ -90,7 +90,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
-let mockUseHealthReadinessImpl = () => ({ data: null as any });
+let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 let mockUseAuthorizedImpl = () => ({
   userId: "test-user",
@@ -103,8 +103,8 @@ vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
-  useHealthReadiness: () => mockUseHealthReadinessImpl(),
+vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
+  useHealthReadinessDetails: () => mockUseHealthReadinessDetailsImpl(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -204,14 +204,14 @@ describe("Navbar", () => {
   });
 
   it("should show version badge when health data contains version", () => {
-    mockUseHealthReadinessImpl = () => ({ data: { litellm_version: "1.0.0" } });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: { litellm_version: "1.0.0" } });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
     expect(screen.getByText("v1.0.0")).toBeInTheDocument();
 
     // Reset mock
-    mockUseHealthReadinessImpl = () => ({ data: null });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: null });
   });
 
   it("should use custom logo from theme context", () => {
