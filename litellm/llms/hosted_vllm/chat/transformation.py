@@ -14,7 +14,7 @@ from typing import (
     cast,
     overload,
 )
-import base64
+import hashlib
 import base64
 import secrets
 
@@ -133,15 +133,32 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     else:
                         non_default_params["reasoning_effort"] = "minimal"
 
-        cache_salt = optional_params.get("cache_salt")
-        if cache_salt is None or cache_salt == "":
-            cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
-        optional_params.setdefault("extra_body", {})["cache_salt"] = cache_salt
-
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+        
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        request = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
+        auth_header = headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]
+        else:
+            api_key = ""
+        if api_key:
+            cache_salt = base64.b64encode(hashlib.sha256(api_key.encode()).digest()).decode()
+        else:
+            cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
+        request.setdefault("extra_body", {})["cache_salt"] = cache_salt
+        return request
+        
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
