@@ -145,9 +145,7 @@ class LangFuseHandler:
         return LangfuseLoggingConfig(
             langfuse_secret=params.get("langfuse_secret")
             or params.get("langfuse_secret_key"),
-            langfuse_public_key=params.get(
-                "langfuse_public_key"
-            ),
+            langfuse_public_key=params.get("langfuse_public_key"),
             langfuse_host=params.get("langfuse_host"),
         )
 
