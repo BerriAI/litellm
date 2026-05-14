@@ -11,7 +11,6 @@ sys.path.insert(
 
 import httpx
 import pytest
-from respx import MockRouter
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import litellm
