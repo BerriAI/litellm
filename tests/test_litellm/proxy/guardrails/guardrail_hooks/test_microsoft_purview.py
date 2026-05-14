@@ -128,6 +128,29 @@ class TestShouldBlock:
 
 
 # ---------------------------------------------------------------
+# completion prompt normalization (text completions API)
+# ---------------------------------------------------------------
+
+
+class TestCompletionPromptToStr:
+    def test_string_prompt(self):
+        assert PurviewGuardrailBase.completion_prompt_to_str("  hi  ") == "hi"
+
+    def test_list_of_strings(self):
+        assert (
+            PurviewGuardrailBase.completion_prompt_to_str(["a", "b"])
+            == "a\nb"
+        )
+
+    def test_token_ids_returns_none(self):
+        assert PurviewGuardrailBase.completion_prompt_to_str([1, 2, 3]) is None
+
+    def test_empty(self):
+        assert PurviewGuardrailBase.completion_prompt_to_str("") is None
+        assert PurviewGuardrailBase.completion_prompt_to_str([]) is None
+
+
+# ---------------------------------------------------------------
 # User ID resolution
 # ---------------------------------------------------------------
 
@@ -435,6 +458,57 @@ class TestPostCallHook:
             combined = mock_check.call_args.kwargs["text"]
             assert "First completion" in combined
             assert "Second completion body" in combined
+
+
+class TestTextCompletionHooks:
+    @pytest.mark.asyncio
+    async def test_pre_call_text_completion_uses_prompt(self):
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={"prompt": "Completions API prompt body"},
+                call_type="text_completion",
+            )
+
+            mock_check.assert_called_once()
+            assert mock_check.call_args.kwargs["text"] == "Completions API prompt body"
+            assert mock_check.call_args.kwargs["activity"] == "uploadText"
+
+    @pytest.mark.asyncio
+    async def test_post_call_text_completion_all_choices(self):
+        from litellm.types.utils import TextChoices, TextCompletionResponse
+
+        guardrail = _make_guardrail()
+        response = TextCompletionResponse(
+            model="gpt-3.5-turbo-instruct",
+            choices=[
+                TextChoices(text="alpha", index=0),
+                TextChoices(text="beta", index=1),
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_post_call_success_hook(
+                data={"metadata": {"user_id": "user-123"}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+
+            mock_check.assert_called_once()
+            combined = mock_check.call_args.kwargs["text"]
+            assert "alpha" in combined
+            assert "beta" in combined
 
 
 # ---------------------------------------------------------------
