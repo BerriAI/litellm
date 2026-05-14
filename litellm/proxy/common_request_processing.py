@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -1193,7 +1194,8 @@ class ProxyBaseLLMRequestProcessing:
             self.data["contents"] = contents
 
         ### ROUTE THE REQUEST ###
-        # Do not change this - it should be a constant time fetch - ALWAYS
+        # route_request usually returns the downstream awaitable; some routes
+        # may resolve during routing, so normalize before passing to gather.
         llm_call: Any = None
         async with litellm_otel_tracer.trace(
             "proxy.chat.route_request",
@@ -1208,6 +1210,10 @@ class ProxyBaseLLMRequestProcessing:
                 user_model=user_model,
                 user_api_key_dict=user_api_key_dict,
             )
+        if not inspect.isawaitable(llm_call):
+            completed_llm_call = asyncio.get_running_loop().create_future()
+            completed_llm_call.set_result(llm_call)
+            llm_call = completed_llm_call
         tasks.append(llm_call)
 
         # wait for call to end

@@ -2305,38 +2305,29 @@ async def _return_user_api_key_auth_obj(
         )
     )
 
-    with litellm_otel_tracer.trace(
-        "proxy.auth.user_api_key_auth",
-        service=ServiceTypes.AUTH,
-        parent_span=parent_otel_span,
-        attributes={"route": route},
-        start_time=start_time.timestamp(),
-    ):
-        retrieved_user_role = (
-            user_role
-            or _get_user_role(user_obj=user_obj)
-            or LitellmUserRoles.INTERNAL_USER
-        )
+    retrieved_user_role = (
+        user_role or _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
+    )
 
-        user_api_key_kwargs = {
-            "api_key": api_key,
-            "parent_otel_span": parent_otel_span,
-            "user_role": retrieved_user_role,
-            **valid_token_dict,
-        }
-        if user_obj is not None:
-            user_api_key_kwargs.update(
-                user_tpm_limit=user_obj.tpm_limit,
-                user_rpm_limit=user_obj.rpm_limit,
-                user_email=user_obj.user_email,
-                user_spend=getattr(user_obj, "spend", None),
-                user_max_budget=getattr(user_obj, "max_budget", None),
-            )
-        if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-            user_api_key_kwargs.update(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-            )
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+    user_api_key_kwargs = {
+        "api_key": api_key,
+        "parent_otel_span": parent_otel_span,
+        "user_role": retrieved_user_role,
+        **valid_token_dict,
+    }
+    if user_obj is not None:
+        user_api_key_kwargs.update(
+            user_tpm_limit=user_obj.tpm_limit,
+            user_rpm_limit=user_obj.rpm_limit,
+            user_email=user_obj.user_email,
+            user_spend=getattr(user_obj, "spend", None),
+            user_max_budget=getattr(user_obj, "max_budget", None),
+        )
+    if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
+        user_api_key_kwargs.update(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+    return UserAPIKeyAuth(**user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(

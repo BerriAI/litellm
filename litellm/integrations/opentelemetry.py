@@ -1,5 +1,4 @@
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
@@ -225,7 +224,7 @@ class OpenTelemetry(CustomLogger):
 
         - Adds Otel as a service callback
         - Registers this logger for LiteLLM internal OTEL spans
-        - Sets `proxy_server.open_telemetry_logger` to self when proxy is loaded
+        - Sets `proxy_server.open_telemetry_logger` to self
         """
         # Add self as a service callback
         if "otel" not in litellm.service_callback and all(
@@ -234,9 +233,9 @@ class OpenTelemetry(CustomLogger):
             litellm.service_callback.append(self)
         set_litellm_otel_logger(self)
 
-        proxy_server = sys.modules.get("litellm.proxy.proxy_server")
-        if proxy_server is not None:
-            setattr(proxy_server, "open_telemetry_logger", self)
+        from litellm.proxy import proxy_server
+
+        setattr(proxy_server, "open_telemetry_logger", self)
 
     def _get_or_create_provider(
         self,
