@@ -169,6 +169,10 @@ class PurviewGuardrailBase:
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
         self._scope_cache[user_id] = (etag, response_json, now)
+        # Move refreshed entry to the end so it is treated as most-recently-used.
+        # OrderedDict.__setitem__ preserves existing insertion order for known
+        # keys, so an explicit move_to_end() call is required.
+        self._scope_cache.move_to_end(user_id)
         # Evict least-recently-used entry when cache exceeds max size.
         while len(self._scope_cache) > self._scope_cache_maxsize:
             self._scope_cache.popitem(last=False)
@@ -287,11 +291,14 @@ class PurviewGuardrailBase:
         md = litellm_params.get("metadata")
         return md if isinstance(md, dict) else {}
 
-    def _resolve_user_id_from_logging_kwargs(self, kwargs: Dict[str, Any]) -> Optional[str]:
+    def _resolve_user_id_from_logging_kwargs(
+        self, kwargs: Dict[str, Any]
+    ) -> Optional[str]:
         """Same trust order as ``_resolve_user_id`` for logging-only hooks (no ``UserAPIKeyAuth``)."""
         md = self._logging_kwargs_metadata(kwargs)
         shim = SimpleNamespace(
-            user_id=md.get("user_api_key_user_id") or kwargs.get("user_api_key_user_id"),
+            user_id=md.get("user_api_key_user_id")
+            or kwargs.get("user_api_key_user_id"),
             end_user_id=md.get("user_api_key_end_user_id"),
         )
         return self._resolve_user_id({"metadata": md}, shim)
@@ -344,7 +351,9 @@ class PurviewGuardrailBase:
                 return joined.strip() or None
         return None
 
-    def get_prompt_text_for_dlp(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_prompt_text_for_dlp(
+        self, messages: List["AllMessageValues"]
+    ) -> Optional[str]:
         """Concatenate text from every chat message (all roles) for pre-call DLP.
 
         Evaluates the same payload the model receives, not only the trailing user turn.

@@ -535,6 +535,195 @@ class TestTextCompletionHooks:
 
 
 # ---------------------------------------------------------------
+# Responses API hooks
+# ---------------------------------------------------------------
+
+
+class TestResponsesAPIHooks:
+    @pytest.mark.asyncio
+    async def test_pre_call_responses_api_string_input(self):
+        """Pre-call hook must scan plain-string ``input`` on responses call type."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={"input": "SSN: 123-45-6789"},
+                call_type="responses",
+            )
+
+            mock_check.assert_called_once()
+            assert mock_check.call_args.kwargs["activity"] == "uploadText"
+            assert "SSN: 123-45-6789" in mock_check.call_args.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_aresponses_string_input(self):
+        """Pre-call hook must scan ``input`` on ``aresponses`` call type too."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={"input": "sensitive content"},
+                call_type="aresponses",
+            )
+
+            mock_check.assert_called_once()
+            assert "sensitive content" in mock_check.call_args.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_responses_api_list_input(self):
+        """Pre-call hook must extract text from structured list ``input``."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={
+                    "input": [
+                        {"role": "user", "content": "Secret phrase: alpha bravo"}
+                    ]
+                },
+                call_type="responses",
+            )
+
+            mock_check.assert_called_once()
+            assert "Secret phrase: alpha bravo" in mock_check.call_args.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_responses_api_no_input_skips(self):
+        """Pre-call hook must not call _check_content when ``input`` is absent."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={},
+                call_type="responses",
+            )
+
+            mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_call_responses_api_output_text(self):
+        """Post-call hook must scan text from ``ResponsesAPIResponse.output``."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-1",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "card 4111-1111-1111-1111"}],
+                }
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            result = await guardrail.async_post_call_success_hook(
+                data={"metadata": {"user_id": "user-123"}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+
+            mock_check.assert_called_once()
+            assert mock_check.call_args.kwargs["activity"] == "downloadText"
+            assert "card 4111-1111-1111-1111" in mock_check.call_args.kwargs["text"]
+            assert result is response
+
+    @pytest.mark.asyncio
+    async def test_post_call_responses_api_empty_output_skips(self):
+        """Post-call hook must not call _check_content when output has no text."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-2",
+            created_at=0,
+            output=[],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            await guardrail.async_post_call_success_hook(
+                data={"metadata": {"user_id": "user-123"}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+
+            mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_logging_hook_responses_api_input_and_output(self):
+        """Logging hook must scan both ``input`` and ``ResponsesAPIResponse.output``."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail(logging_only=True)
+        result_response = ResponsesAPIResponse(
+            id="resp-3",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-2",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "response body"}],
+                }
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_logging_hook(
+                kwargs={
+                    "input": "prompt body",
+                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                },
+                result=result_response,
+                call_type="responses",
+            )
+
+            assert mock_check.call_count == 2
+            activities = {c.kwargs["activity"] for c in mock_check.call_args_list}
+            assert activities == {"uploadText", "downloadText"}
+            texts = {c.kwargs["text"] for c in mock_check.call_args_list}
+            assert any("prompt body" in t for t in texts)
+            assert any("response body" in t for t in texts)
+
+
+# ---------------------------------------------------------------
 # Logging hook user resolution
 # ---------------------------------------------------------------
 
@@ -785,6 +974,48 @@ class TestScopeCaching:
             assert mock_post.call_count == 4
             assert "user-a" in guardrail._scope_cache
             assert "user-b" not in guardrail._scope_cache
+
+    @pytest.mark.asyncio
+    async def test_scope_cache_refresh_moves_to_end_of_lru(self):
+        """Refreshing a stale entry must move it to the MRU end of the OrderedDict.
+
+        Before the fix, OrderedDict.__setitem__ preserved the original insertion
+        position for existing keys, causing the just-refreshed entry to be the
+        next candidate for LRU eviction.
+        """
+        guardrail = _make_guardrail()
+        guardrail._scope_cache_maxsize = 2
+
+        scope_payload = (
+            {"value": []},
+            {"ETag": "scope-etag"},
+        )
+
+        with patch.object(
+            guardrail, "_graph_post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = scope_payload
+
+            # Populate cache: user-a (older), user-b (newer)
+            await guardrail._compute_protection_scopes("user-a")
+            await guardrail._compute_protection_scopes("user-b")
+            assert mock_post.call_count == 2
+
+            # Expire user-a's entry so it is re-fetched on the next access.
+            old_etag, old_scope, _ = guardrail._scope_cache["user-a"]
+            guardrail._scope_cache["user-a"] = (old_etag, old_scope, 0.0)
+
+            # Re-fetch user-a — should move it to the MRU end.
+            await guardrail._compute_protection_scopes("user-a")
+            assert mock_post.call_count == 3
+
+            # Adding a third user must evict user-b (the true LRU), not user-a.
+            await guardrail._compute_protection_scopes("user-c")
+            assert mock_post.call_count == 4
+
+            assert "user-a" in guardrail._scope_cache, "user-a was wrongly evicted"
+            assert "user-b" not in guardrail._scope_cache, "user-b should have been evicted"
+            assert "user-c" in guardrail._scope_cache
 
     @pytest.mark.asyncio
     async def test_scope_invalidated_on_modified(self):

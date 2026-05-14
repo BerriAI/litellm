@@ -25,6 +25,7 @@ from litellm.types.utils import (
     Choices,
     GuardrailStatus,
     ModelResponse,
+    ResponsesAPIResponse,
     TextChoices,
     TextCompletionResponse,
 )
@@ -162,7 +163,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
     @staticmethod
     def _completion_response_text_parts(result: Any) -> List[str]:
-        """Collect non-empty assistant text segments from chat or text completions."""
+        """Collect non-empty assistant text segments from chat, text completions, or responses API."""
         parts: List[str] = []
         if isinstance(result, TextCompletionResponse) and result.choices:
             for choice in result.choices:
@@ -171,6 +172,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 raw = choice.get("text")
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
+        elif isinstance(result, ResponsesAPIResponse):
+            text = result.output_text
+            if text and text.strip():
+                parts.append(text)
         elif isinstance(result, ModelResponse) and result.choices:
             for choice in result.choices:
                 if not isinstance(choice, Choices):
@@ -178,12 +183,43 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 msg = choice.message
                 if msg is None:
                     continue
-                raw = msg.get("content") if isinstance(msg, dict) else getattr(
-                    msg, "content", None
+                raw = (
+                    msg.get("content")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "content", None)
                 )
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
         return parts
+
+    def _responses_api_input_to_str(self, data: Dict[str, Any]) -> Optional[str]:
+        """Extract DLP-scannable text from a Responses API request ``input`` field.
+
+        ``input`` may be a plain string or a list of input items (messages).  In
+        the latter case the items are converted to chat messages via the standard
+        LiteLLM transformation and then concatenated by ``get_prompt_text_for_dlp``.
+        """
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        input_data = data.get("input")
+        if input_data is None:
+            return None
+        if isinstance(input_data, str):
+            return input_data.strip() or None
+        try:
+            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+            return self.get_prompt_text_for_dlp(cast(List[Any], messages))
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Purview DLP: failed to transform responses API input; skipping scan",
+                exc_info=True,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Pre-call hook — DLP on prompts
@@ -211,6 +247,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
         elif call_type in ("text_completion", "atext_completion"):
             prompt_text = self.completion_prompt_to_str(data.get("prompt"))
+        elif call_type in ("responses", "aresponses"):
+            prompt_text = self._responses_api_input_to_str(data)
 
         if not prompt_text:
             return data
@@ -306,6 +344,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
             elif call_type in ("text_completion", "atext_completion"):
                 prompt_text = self.completion_prompt_to_str(kwargs.get("prompt"))
+            elif call_type in ("responses", "aresponses"):
+                prompt_text = self._responses_api_input_to_str(kwargs)
 
             if prompt_text:
                 await self._check_content(
