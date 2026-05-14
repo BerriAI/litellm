@@ -8,8 +8,8 @@ Supports three modes:
 """
 
 import asyncio
+import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union, cast
 
@@ -166,10 +166,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """Collect non-empty assistant text segments from chat, text completions, or responses API."""
         parts: List[str] = []
         if isinstance(result, TextCompletionResponse) and result.choices:
-            for choice in result.choices:
-                if not isinstance(choice, TextChoices):
+            for text_choice in result.choices:
+                if not isinstance(text_choice, TextChoices):
                     continue
-                raw = choice.get("text")
+                raw = text_choice.get("text")
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
         elif isinstance(result, ResponsesAPIResponse):
@@ -177,10 +177,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             if text and text.strip():
                 parts.append(text)
         elif isinstance(result, ModelResponse) and result.choices:
-            for choice in result.choices:
-                if not isinstance(choice, Choices):
+            for chat_choice in result.choices:
+                if not isinstance(chat_choice, Choices):
                     continue
-                msg = choice.message
+                msg = chat_choice.message
                 if msg is None:
                     continue
                 raw = (
@@ -300,28 +300,46 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     def logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
-        """Sync wrapper for async_logging_hook (follows Presidio pattern)."""
+        """Fire-and-forget async audit logging; returns original (kwargs, result) immediately.
 
-        def run_in_new_loop() -> Tuple[dict, Any]:
-            new_loop = asyncio.new_event_loop()
+        Unlike the Presidio pattern (which does local text manipulation),
+        ``async_logging_hook`` makes two sequential network calls to the
+        Microsoft Graph API.  Blocking the calling thread — or worse, the
+        event loop thread — until those HTTP round-trips complete would
+        significantly degrade throughput.  Since the hook is audit-only and
+        always returns ``(kwargs, result)`` unchanged, we can schedule the
+        work without waiting and return immediately.
+        """
+
+        async def _log_safe() -> None:
             try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_logging_hook(
-                        kwargs=kwargs, result=result, call_type=call_type
-                    )
+                await self.async_logging_hook(
+                    kwargs=kwargs, result=result, call_type=call_type
                 )
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
+            except Exception as exc:
+                verbose_proxy_logger.error(
+                    "Purview audit background logging error: %s", exc
+                )
 
         try:
-            _ = asyncio.get_running_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
+            loop = asyncio.get_running_loop()
+            loop.create_task(_log_safe())
         except RuntimeError:
-            return run_in_new_loop()
+            # No running event loop — run in a background daemon thread so
+            # the caller still isn't blocked.
+            def _run_in_new_loop() -> None:
+                new_loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(new_loop)
+                    new_loop.run_until_complete(_log_safe())
+                finally:
+                    new_loop.close()
+                    asyncio.set_event_loop(None)
+
+            thread = threading.Thread(target=_run_in_new_loop, daemon=True)
+            thread.start()
+
+        return kwargs, result
 
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str

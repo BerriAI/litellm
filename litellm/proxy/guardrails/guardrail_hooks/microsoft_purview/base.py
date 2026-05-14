@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    convert_content_list_to_str,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -356,9 +356,14 @@ class PurviewGuardrailBase:
     ) -> Optional[str]:
         """Concatenate text from every chat message (all roles) for pre-call DLP.
 
-        Evaluates the same payload the model receives, not only the trailing user turn.
+        Evaluates the same payload the model receives, not only the trailing user
+        turn.  Each message is separated by ``\\n\\n`` so that tokens at message
+        boundaries are not merged (e.g., ``"end of msg1\\n\\nstart of msg2"``
+        rather than ``"end of msg1start of msg2"``), which preserves DLP pattern
+        detection accuracy across message boundaries.
         """
         if not messages:
             return None
-        text = get_str_from_messages(messages).strip()
+        parts = [convert_content_list_to_str(message=msg).strip() for msg in messages]
+        text = "\n\n".join(p for p in parts if p)
         return text or None
