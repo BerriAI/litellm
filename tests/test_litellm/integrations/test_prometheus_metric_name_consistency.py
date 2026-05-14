@@ -81,6 +81,63 @@ def test_prometheus_metric_labels_have_remaining_metrics():
     ), "litellm_remaining_tokens_metric should have api_base label"
 
 
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "litellm_stream_first_chunk_overhead_latency_metric",
+        "litellm_stream_chunk_overhead_latency_metric",
+    ],
+)
+def test_streaming_chunk_overhead_metrics_are_defined(metric_name):
+    from litellm.types.integrations.prometheus import (
+        DEFINED_PROMETHEUS_METRICS,
+        PrometheusMetricLabels,
+    )
+
+    defined_metrics = get_args(DEFINED_PROMETHEUS_METRICS)
+    assert metric_name in defined_metrics
+
+    labels = PrometheusMetricLabels.get_labels(metric_name)
+    assert "model" in labels
+    assert "hashed_api_key" in labels
+    assert "route" in labels
+
+
+def test_overhead_latency_metric_uses_request_latency_labels():
+    from litellm.types.integrations.prometheus import PrometheusMetricLabels
+
+    overhead_labels = PrometheusMetricLabels.get_labels(
+        "litellm_overhead_latency_metric"
+    )
+    total_latency_labels = PrometheusMetricLabels.get_labels(
+        "litellm_request_total_latency_metric"
+    )
+
+    assert overhead_labels == total_latency_labels
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "litellm_upstream_latency_seconds",
+        "litellm_gateway_latency_seconds",
+        "litellm_gateway_overhead_seconds",
+    ],
+)
+def test_bifrost_style_latency_metrics_are_defined(metric_name):
+    from litellm.types.integrations.prometheus import (
+        DEFINED_PROMETHEUS_METRICS,
+        PrometheusMetricLabels,
+    )
+
+    defined_metrics = get_args(DEFINED_PROMETHEUS_METRICS)
+    assert metric_name in defined_metrics
+
+    assert PrometheusMetricLabels.get_labels(
+        metric_name
+    ) == PrometheusMetricLabels.get_labels("litellm_request_total_latency_metric")
+
+
 def test_all_defined_metrics_have_consistent_naming():
     """
     Test that all metrics defined in DEFINED_PROMETHEUS_METRICS follow
@@ -104,4 +161,3 @@ if __name__ == "__main__":
     test_remaining_tokens_metric_name_in_defined_metrics()
     test_prometheus_metric_labels_have_remaining_metrics()
     test_all_defined_metrics_have_consistent_naming()
-    print("All prometheus metric name consistency tests passed!")

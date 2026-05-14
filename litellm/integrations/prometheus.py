@@ -124,6 +124,33 @@ class PrometheusLogger(CustomLogger):
                 buckets=self.latency_buckets,
             )
 
+            self.litellm_upstream_latency_seconds = self._histogram_factory(
+                "litellm_upstream_latency_seconds",
+                "Total latency (seconds) spent in upstream LLM provider calls",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_upstream_latency_seconds"
+                ),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_gateway_latency_seconds = self._histogram_factory(
+                "litellm_gateway_latency_seconds",
+                "Total latency (seconds) for a request through the LiteLLM gateway",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_gateway_latency_seconds"
+                ),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_gateway_overhead_seconds = self._histogram_factory(
+                "litellm_gateway_overhead_seconds",
+                "LiteLLM gateway overhead latency (seconds), computed as gateway latency minus upstream LLM latency",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_gateway_overhead_seconds"
+                ),
+                buckets=self.latency_buckets,
+            )
+
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
                 "litellm_llm_api_time_to_first_token_metric",
                 "Time to first token for a models LLM API call",
@@ -136,6 +163,24 @@ class PrometheusLogger(CustomLogger):
                 # ],
                 labelnames=self.get_labels_for_metric(
                     "litellm_llm_api_time_to_first_token_metric"
+                ),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_stream_first_chunk_overhead_latency_metric = self._histogram_factory(
+                "litellm_stream_first_chunk_overhead_latency_metric",
+                "LiteLLM proxy processing latency (seconds) for the first streamed chunk before yielding to the client",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_stream_first_chunk_overhead_latency_metric"
+                ),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_stream_chunk_overhead_latency_metric = self._histogram_factory(
+                "litellm_stream_chunk_overhead_latency_metric",
+                "LiteLLM proxy processing latency (seconds) for streamed chunks after the first chunk before yielding to the client",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_stream_chunk_overhead_latency_metric"
                 ),
                 buckets=self.latency_buckets,
             )
@@ -1510,7 +1555,27 @@ class PrometheusLogger(CustomLogger):
         end_time: datetime = kwargs.get("end_time") or datetime.now()
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
+        api_call_end_time = kwargs.get("api_call_end_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        standard_logging_hidden_params = (
+            standard_logging_payload.get("hidden_params", {})
+            if isinstance(standard_logging_payload, dict)
+            else {}
+        )
+        llm_api_duration_ms = kwargs.get(
+            "llm_api_duration_ms",
+            standard_logging_hidden_params.get("llm_api_duration_ms"),
+        )
+        upstream_duration_seconds = self._safe_duration_seconds(
+            start_time=api_call_start_time,
+            end_time=api_call_end_time,
+        )
+        if isinstance(llm_api_duration_ms, (int, float)) and llm_api_duration_ms >= 0:
+            upstream_duration_seconds = upstream_duration_seconds or (
+                llm_api_duration_ms / 1000
+            )
+
         time_to_first_token_seconds = self._safe_duration_seconds(
             start_time=api_call_start_time,
             end_time=completion_start_time,
@@ -1560,6 +1625,23 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
+        if upstream_duration_seconds is not None:
+            _upstream_labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_upstream_latency_seconds"
+                ),
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+            self.litellm_upstream_latency_seconds.labels(**_upstream_labels).observe(
+                upstream_duration_seconds
+            )
+            self._track_end_user_metric_series(
+                self.litellm_upstream_latency_seconds,
+                "litellm_upstream_latency_seconds",
+                _upstream_labels,
+            )
+
         # total request latency
         total_time_seconds = self._safe_duration_seconds(
             start_time=start_time,
@@ -1580,6 +1662,58 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_request_total_latency_metric,
                 "litellm_request_total_latency_metric",
                 _labels,
+            )
+
+        # Gateway/upstream/overhead metrics must use the same
+        # sample set. Cache hits and other successes without a provider call
+        # still belong in litellm_request_total_latency_metric above, but they
+        # cannot be compared against upstream latency.
+        if total_time_seconds is not None and upstream_duration_seconds is not None:
+            _gateway_labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_gateway_latency_seconds"
+                ),
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+            self.litellm_gateway_latency_seconds.labels(**_gateway_labels).observe(
+                total_time_seconds
+            )
+            self._track_end_user_metric_series(
+                self.litellm_gateway_latency_seconds,
+                "litellm_gateway_latency_seconds",
+                _gateway_labels,
+            )
+            overhead_seconds = max(total_time_seconds - upstream_duration_seconds, 0)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_overhead_latency_metric"
+                ),
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+            self.litellm_overhead_latency_metric.labels(**_labels).observe(
+                overhead_seconds
+            )
+            self._track_end_user_metric_series(
+                self.litellm_overhead_latency_metric,
+                "litellm_overhead_latency_metric",
+                _labels,
+            )
+            _gateway_overhead_labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_gateway_overhead_seconds"
+                ),
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+            self.litellm_gateway_overhead_seconds.labels(
+                **_gateway_overhead_labels
+            ).observe(overhead_seconds)
+            self._track_end_user_metric_series(
+                self.litellm_gateway_overhead_seconds,
+                "litellm_gateway_overhead_seconds",
+                _gateway_overhead_labels,
             )
 
         # request queue time (time from arrival to processing start)
@@ -1603,6 +1737,75 @@ class PrometheusLogger(CustomLogger):
                 "litellm_request_queue_time_seconds",
                 _labels,
             )
+
+    def record_streaming_chunk_overhead(
+        self,
+        *,
+        user_api_key_dict: Any,
+        request_data: dict,
+        duration_seconds: float,
+        is_first_chunk: bool,
+    ) -> None:
+        metric_name: DEFINED_PROMETHEUS_METRICS = (
+            "litellm_stream_first_chunk_overhead_latency_metric"
+            if is_first_chunk
+            else "litellm_stream_chunk_overhead_latency_metric"
+        )
+        metric = (
+            self.litellm_stream_first_chunk_overhead_latency_metric
+            if is_first_chunk
+            else self.litellm_stream_chunk_overhead_latency_metric
+        )
+        metadata = request_data.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        litellm_metadata = request_data.get("litellm_metadata") or {}
+        if not isinstance(litellm_metadata, dict):
+            litellm_metadata = {}
+        model_info = (
+            litellm_metadata.get("model_info") or metadata.get("model_info") or {}
+        )
+        if not isinstance(model_info, dict):
+            model_info = {}
+
+        enum_values = UserAPIKeyLabelValues(
+            end_user=metadata.get("user_api_key_end_user_id"),
+            hashed_api_key=getattr(user_api_key_dict, "api_key", None)
+            or metadata.get("user_api_key_hash"),
+            api_key_alias=getattr(user_api_key_dict, "key_alias", None)
+            or metadata.get("user_api_key_alias"),
+            requested_model=request_data.get("_litellm_client_requested_model")
+            or request_data.get("model"),
+            model=request_data.get("model"),
+            litellm_model_name=request_data.get("model"),
+            team=getattr(user_api_key_dict, "team_id", None)
+            or metadata.get("user_api_key_team_id"),
+            team_alias=getattr(user_api_key_dict, "team_alias", None)
+            or metadata.get("user_api_key_team_alias"),
+            org_id=getattr(user_api_key_dict, "organization_id", None)
+            or metadata.get("user_api_key_org_id"),
+            org_alias=getattr(user_api_key_dict, "organization_alias", None)
+            or metadata.get("user_api_key_org_alias"),
+            user=getattr(user_api_key_dict, "user_id", None)
+            or metadata.get("user_api_key_user_id"),
+            user_email=getattr(user_api_key_dict, "user_email", None)
+            or metadata.get("user_api_key_user_email"),
+            model_id=model_info.get("id") or metadata.get("model_id"),
+            route=getattr(user_api_key_dict, "request_route", None)
+            or metadata.get("user_api_key_request_route"),
+            client_ip=metadata.get("requester_ip_address"),
+            user_agent=metadata.get("user_agent"),
+            custom_metadata_labels=get_custom_labels_from_metadata(metadata=metadata),
+            stream="True" if litellm.prometheus_emit_stream_label else None,
+        )
+        label_context = PrometheusLabelFactoryContext(enum_values)
+        labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        metric.labels(**labels).observe(duration_seconds)
+        self._track_end_user_metric_series(metric, metric_name, labels)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug(
@@ -2359,20 +2562,6 @@ class PrometheusLogger(CustomLogger):
                 remaining_tokens = additional_headers.get(
                     "x_ratelimit_remaining_tokens", None
                 )
-
-            if litellm_overhead_time_ms := standard_logging_payload[
-                "hidden_params"
-            ].get("litellm_overhead_time_ms"):
-                _labels = prometheus_label_factory(
-                    supported_enum_labels=self.get_labels_for_metric(
-                        metric_name="litellm_overhead_latency_metric"
-                    ),
-                    enum_values=enum_values,
-                    label_context=label_context,
-                )
-                self.litellm_overhead_latency_metric.labels(**_labels).observe(
-                    litellm_overhead_time_ms / 1000
-                )  # set as seconds
 
             if remaining_requests:
                 """
@@ -3803,7 +3992,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
-    standard_logging_payload: Optional[dict],
+    standard_logging_payload: Optional[Union[dict, StandardLoggingPayload]],
 ) -> Dict[str, Any]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
