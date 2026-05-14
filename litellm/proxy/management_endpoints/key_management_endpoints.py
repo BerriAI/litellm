@@ -708,6 +708,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
+    # Capture the caller-supplied max_budget before any defaults or upperbound
+    # params can fill it, so the ceiling check only fires when the caller
+    # explicitly requested a budget.
+    _requested_max_budget = data.max_budget
+
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
         for elem in data:
@@ -727,11 +732,6 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
-
-    # Capture the caller-supplied max_budget *before* upperbound params can
-    # fill it with a default, so the ceiling check only fires when the caller
-    # explicitly requested a budget.
-    _requested_max_budget = data.max_budget
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
