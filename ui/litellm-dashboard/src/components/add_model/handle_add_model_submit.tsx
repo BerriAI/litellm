@@ -64,7 +64,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         delete formValues.cache_read_input_token_cost;
       }
 
-      // Cache Write Cost: if blank, default to 0
+      // Cache Write Cost: explicit value if provided, else leave unset so the
+      // backend keeps the model-level default (per-second pricing, model_prices
+      // entries, etc.). Sending 0 here would overwrite that default.
       if (
         formValues.cache_creation_input_token_cost !== undefined &&
         formValues.cache_creation_input_token_cost !== null &&
@@ -73,7 +75,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         formValues.cache_creation_input_token_cost =
           Number(formValues.cache_creation_input_token_cost) / 1000000;
       } else {
-        formValues.cache_creation_input_token_cost = 0;
+        delete formValues.cache_creation_input_token_cost;
       }
       // Keep input_cost_per_second as is, no conversion needed
 

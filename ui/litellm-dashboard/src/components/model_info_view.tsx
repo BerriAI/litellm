@@ -276,7 +276,9 @@ export default function ModelInfoView({
         }
       }
 
-      // Cache Write Cost: explicit value if provided, else 0 (when touched).
+      // Cache Write Cost: explicit value if provided, else clear the override
+      // so the backend falls back to the model-level default. Sending 0 here
+      // would persist a zero rate even when the user intended to unset it.
       if (form.isFieldTouched("cache_write_cost")) {
         if (
           values.cache_write_cost !== undefined &&
@@ -285,7 +287,7 @@ export default function ModelInfoView({
         ) {
           updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
         } else {
-          updatedLitellmParams.cache_creation_input_token_cost = 0;
+          delete updatedLitellmParams.cache_creation_input_token_cost;
         }
       }
 

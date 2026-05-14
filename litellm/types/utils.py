@@ -108,8 +108,10 @@ SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
 class CostPerToken(TypedDict, total=False):
-    input_cost_per_token: float
-    output_cost_per_token: float
+    # Required base rates — kept under total=False so we can mark them
+    # Required individually while leaving the cache rates NotRequired.
+    input_cost_per_token: Required[float]
+    output_cost_per_token: Required[float]
     cache_read_input_token_cost: float
     cache_creation_input_token_cost: float
 
