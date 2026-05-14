@@ -5,11 +5,12 @@ request body — a user-controlled value would let an attacker name the
 env var or OIDC source the proxy reads on their behalf, enabling
 exfiltration of arbitrary server-process state via provider auth flows.
 
-Two layers of defense:
-1. ``is_request_body_safe`` rejects the indirection prefix in any string
-   value walked at the request boundary.
-2. ``get_secret`` denylists sensitive env vars at the ``os.environ/`` /
-   ``oidc/env/`` resolvers regardless of how they were framed.
+The defense is at the request boundary: ``is_request_body_safe`` rejects
+any string starting with one of the indirection prefixes, walked
+recursively across the body so nested provider auth fields are covered.
+``get_secret`` itself is shared with operator-config loading (which
+legitimately uses both prefixes), so the gate has to live at the
+boundary, not at the resolver.
 """
 
 import os
@@ -25,14 +26,10 @@ from litellm.proxy.auth.auth_utils import (  # noqa: E402
     _check_no_user_supplied_indirection,
     is_request_body_safe,
 )
-from litellm.secret_managers.main import (  # noqa: E402
-    _RESOLVER_INDIRECTION_DENYLIST,
-    get_secret,
-)
 
 
 # ---------------------------------------------------------------------
-# Layer 1: boundary rejection in is_request_body_safe
+# Boundary rejection in is_request_body_safe
 # ---------------------------------------------------------------------
 
 
@@ -266,66 +263,26 @@ def test_is_request_body_safe_bounded_walk_does_not_recurse_forever():
 
 
 # ---------------------------------------------------------------------
-# Layer 2: resolver denylist in get_secret
+# Regression: operator-config indirection at `get_secret` must continue
+# to resolve. Both prefixes are legitimate in `config.yaml`; the gate
+# lives at the request boundary, not at the resolver.
 # ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("var", sorted(_RESOLVER_INDIRECTION_DENYLIST))
-def test_get_secret_refuses_os_environ_prefix_for_denied_var(var, monkeypatch):
-    monkeypatch.setenv(var, "the-secret")
-    with pytest.raises(ValueError, match="not exposable"):
-        get_secret(f"os.environ/{var}")
+def test_get_secret_resolves_os_environ_for_operator_config(monkeypatch):
+    # `master_key: os.environ/LITELLM_MASTER_KEY` and similar patterns
+    # are the documented config.yaml shape — they must keep resolving
+    # at server-side load. The defense lives at `is_request_body_safe`.
+    from litellm.secret_managers.main import get_secret
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "the-master-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/d")
+    assert get_secret("os.environ/LITELLM_MASTER_KEY") == "the-master-key"
+    assert get_secret("os.environ/DATABASE_URL") == "postgresql://u:p@h/d"
 
 
-@pytest.mark.parametrize("var", sorted(_RESOLVER_INDIRECTION_DENYLIST))
-def test_get_secret_refuses_oidc_env_for_denied_var(var, monkeypatch):
-    monkeypatch.setenv(var, "the-secret")
-    with pytest.raises(ValueError, match="not exposable"):
-        get_secret(f"oidc/env/{var}")
+def test_get_secret_resolves_bare_name(monkeypatch):
+    from litellm.secret_managers.main import get_secret
 
-
-def test_get_secret_refuses_oidc_env_path_for_denied_var(monkeypatch):
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "/etc/passwd")
-    with pytest.raises(ValueError, match="not exposable"):
-        get_secret("oidc/env_path/LITELLM_MASTER_KEY")
-
-
-def test_get_secret_allows_non_denied_var_via_os_environ_prefix(monkeypatch):
-    # The fix targets ONLY the listed sensitive vars; other env-var
-    # indirections continue to resolve.
-    monkeypatch.setenv("MY_CUSTOM_VAR", "my-value")
-    assert get_secret("os.environ/MY_CUSTOM_VAR") == "my-value"
-
-
-@pytest.mark.parametrize(
-    "var",
-    [
-        "UI_PASSWORD",
-        "UI_USERNAME",
-        "PROXY_ADMIN_ID",
-        "GOOGLE_CLIENT_SECRET",
-        "MICROSOFT_CLIENT_SECRET",
-        "AZURE_CLIENT_SECRET",
-        "OAUTH_CLIENT_SECRET",
-        "OPENID_CLIENT_SECRET",
-        "GENERIC_CLIENT_SECRET",
-    ],
-)
-def test_get_secret_refuses_ui_and_sso_secrets(var, monkeypatch):
-    # The UI / SSO secrets feed admin-authentication paths. Reading
-    # them via request-body-driven indirection is a one-step
-    # internal_user → PROXY_ADMIN escalation.
-    monkeypatch.setenv(var, "the-secret")
-    with pytest.raises(ValueError, match="not exposable"):
-        get_secret(f"os.environ/{var}")
-    with pytest.raises(ValueError, match="not exposable"):
-        get_secret(f"oidc/env/{var}")
-
-
-def test_get_secret_allows_bare_name_for_denied_var(monkeypatch):
-    # Server-side callers (``get_secret_str("LITELLM_MASTER_KEY")``) use
-    # the bare name — no prefix — and must continue to work. The
-    # denylist only fires on the prefix-driven (request-body)
-    # resolution paths.
     monkeypatch.setenv("LITELLM_MASTER_KEY", "the-key")
     assert get_secret("LITELLM_MASTER_KEY") == "the-key"

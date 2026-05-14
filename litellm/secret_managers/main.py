@@ -1,7 +1,7 @@
 import ast
 import os
 import traceback
-from typing import FrozenSet, Optional, Union
+from typing import Optional, Union
 
 import httpx
 
@@ -156,70 +156,6 @@ def get_secret_bool(
         return str_to_bool(_secret_value)
 
 
-# Server-process secrets — env vars that exist only to configure the
-# proxy itself. Reading any of these via the prefix-driven indirection
-# paths is never a legitimate operator flow (they're set directly as
-# env vars, not referenced via ``os.environ/`` in config). Server-side
-# callers use bare names (no prefix) and bypass the gates below.
-_RESOLVER_INDIRECTION_DENYLIST: FrozenSet[str] = frozenset(
-    {
-        "LITELLM_MASTER_KEY",
-        "LITELLM_SALT_KEY",
-        "LITELLM_LICENSE",
-        "LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE",
-        "DATABASE_URL",
-        "DATABASE_URL_READ_REPLICA",
-        "DATABASE_PASSWORD",
-        "DATABASE_USER",
-        "DATABASE_USERNAME",
-        "DATABASE_HOST",
-        "DATABASE_PORT",
-        "DATABASE_NAME",
-        "DATABASE_SCHEMA",
-        "IAM_TOKEN_DB_AUTH",
-        "REDIS_URL",
-        "REDIS_PASSWORD",
-        "HCP_VAULT_TOKEN",
-        "SMTP_PASSWORD",
-        # Workload-identity tokens — listed so ``os.environ/<X>`` and
-        # ``oidc/env/<X>`` indirection can't smuggle them; the
-        # ``oidc/<provider>/...`` branches that legitimately read them
-        # don't go through this gate (legit operator config uses those
-        # branches).
-        "CIRCLE_OIDC_TOKEN",
-        "CIRCLE_OIDC_TOKEN_V2",
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-        "ACTIONS_ID_TOKEN_REQUEST_URL",
-        "AZURE_FEDERATED_TOKEN_FILE",
-        # UI / SSO admin-authentication secrets. ``UI_PASSWORD`` gates
-        # the ``/login`` admin path; leaking it via indirection is a
-        # one-step internal_user → PROXY_ADMIN escalation.
-        "UI_PASSWORD",
-        "UI_USERNAME",
-        "PROXY_ADMIN_ID",
-        # OAuth / OIDC client secrets used by SSO integrations and
-        # provider-side auth flows.
-        "OAUTH_CLIENT_SECRET",
-        "OPENID_CLIENT_SECRET",
-        "GOOGLE_CLIENT_SECRET",
-        "MICROSOFT_CLIENT_SECRET",
-        "AZURE_CLIENT_SECRET",
-        "AZURE_SENTINEL_CLIENT_SECRET",
-        "AZURE_STORAGE_CLIENT_SECRET",
-        "DATABRICKS_CLIENT_SECRET",
-        "GENERIC_CLIENT_SECRET",
-    }
-)
-
-
-def _reject_if_indirection_denied(env_var: str, scheme: str) -> None:
-    if env_var in _RESOLVER_INDIRECTION_DENYLIST:
-        raise ValueError(
-            f"{scheme}/{env_var}: env var is not exposable via "
-            "request-body indirection."
-        )
-
-
 def get_secret(  # noqa: PLR0915
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
@@ -229,9 +165,7 @@ def get_secret(  # noqa: PLR0915
     secret = None
 
     if secret_name.startswith("os.environ/"):
-        requested = secret_name[len("os.environ/") :]
-        _reject_if_indirection_denied(requested, "os.environ")
-        secret_name = requested
+        secret_name = secret_name[len("os.environ/") :]
 
     # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
     if secret_name.startswith("oidc/"):
@@ -328,14 +262,12 @@ def get_secret(  # noqa: PLR0915
                 return oidc_token
         elif oidc_provider == "env":
             # Load token directly from an environment variable
-            _reject_if_indirection_denied(oidc_aud, "oidc/env")
             oidc_token = os.getenv(oidc_aud)
             if oidc_token is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
             return oidc_token
         elif oidc_provider == "env_path":
             # Load token from a file path specified in an environment variable
-            _reject_if_indirection_denied(oidc_aud, "oidc/env_path")
             token_file_path = os.getenv(oidc_aud)
             if token_file_path is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
