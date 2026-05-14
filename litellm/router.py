@@ -1673,7 +1673,7 @@ class Router:
                 for cb in self.optional_callbacks
             )
             if not already_registered:
-                ec_callback = EncryptedContentAffinityCheck()
+                ec_callback = EncryptedContentAffinityCheck(router=self)
                 self.optional_callbacks.append(ec_callback)
                 litellm.logging_callback_manager.add_litellm_callback(ec_callback)
 
@@ -8771,9 +8771,29 @@ class Router:
                     model_group
                 )
 
+                # get_remaining_model_group_usage reads the router's TPM/RPM
+                # counter, which is incremented post-response by
+                # deployment_callback_on_success. So the values returned here
+                # are pre-decrement for the current request, while vendor
+                # headers (OpenAI/Anthropic/Azure) are post-decrement. Replay
+                # the in-flight increment so router-derived headers match
+                # vendor-derived semantics — for both the HTTP response sent
+                # to the client and the prometheus gauges that read these
+                # headers downstream (LIT-2719).
+                in_flight_tokens = 0
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
+                in_flight_delta = {
+                    "x-ratelimit-remaining-tokens": in_flight_tokens,
+                    "x-ratelimit-remaining-requests": 1,
+                }
+
                 for header, value in remaining_usage.items():
                     if value is not None:
-                        additional_headers[header] = value
+                        additional_headers[header] = value - in_flight_delta.get(
+                            header, 0
+                        )
         return response
 
     def _build_model_name_index(self, model_list: list) -> None:

@@ -29,7 +29,11 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
 )
-from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
+from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
+    MCPApprovalStatus,
+    MCPTransport,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
@@ -2452,6 +2456,51 @@ class TestMCPServerManager:
             assert "test_server_1" in result
             assert "test_server_2" in result
 
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
+        """Anonymous delegated auth listing should only include oauth2 servers."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        manager = MCPServerManager()
+        oauth_delegate_server = MCPServer(
+            server_id="oauth-delegate",
+            name="oauth_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        api_key_delegate_server = MCPServer(
+            server_id="api-key-delegate",
+            name="api_key_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            delegate_auth_to_upstream=True,
+        )
+        oauth_non_delegate_server = MCPServer(
+            server_id="oauth-non-delegate",
+            name="oauth_non_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=False,
+        )
+        manager.registry = {
+            oauth_delegate_server.server_id: oauth_delegate_server,
+            api_key_delegate_server.server_id: api_key_delegate_server,
+            oauth_non_delegate_server.server_id: oauth_non_delegate_server,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert set(result) == {"oauth-delegate"}
+
     def test_get_mcp_server_from_tool_name_uses_server_name_not_name(self):
         """
         Test that _get_mcp_server_from_tool_name uses server.server_name instead of server.name
@@ -3309,6 +3358,127 @@ class TestOAuthDiscoverySSRFGuard:
 
         assert result is None
         mock_client.get.assert_not_called()
+
+
+class TestApprovalStatusGate:
+    """
+    Regression tests for GHSA-gm4g-h72v-jhc3.
+
+    The runtime registry must only contain servers an admin has approved.
+    A non-admin can submit a pending stdio MCP server with an attacker-chosen
+    command/args; before this gate, an admin opening the per-row endpoint
+    triggered ``add_server`` + ``health_check_server``, which spawned the
+    attacker's process under the proxy. The data-layer gate in
+    ``add_server`` / ``update_server`` blocks pending and rejected rows
+    from entering the registry regardless of which caller passes them in.
+    """
+
+    def _make_server(self, server_id: str, approval_status):
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias=f"server_{server_id}",
+            description="test",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["-c", "print('attacker payload')"],
+            env={},
+            approval_status=approval_status,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    @pytest.mark.parametrize(
+        "approval_status,expect_in_registry",
+        [
+            (MCPApprovalStatus.pending_review, False),
+            (MCPApprovalStatus.rejected, False),
+            (MCPApprovalStatus.active, True),
+            # Legacy rows: NULL predates the approval workflow; "approved" is
+            # a legacy alias for "active" still present in older deployments.
+            # Both must continue to load to match the DB-level filter in
+            # reload_servers_from_database().
+            (None, True),
+            ("approved", True),
+        ],
+    )
+    async def test_add_server_respects_approval_status(
+        self, approval_status, expect_in_registry
+    ):
+        manager = MCPServerManager()
+        server_id = f"sid-{approval_status}"
+        await manager.add_server(self._make_server(server_id, approval_status))
+        assert (server_id in manager.registry) is expect_in_registry
+
+    async def test_update_server_evicts_when_transitioned_away_from_active(self):
+        # An admin updates a previously-active server to rejected (or pending).
+        # The stale registry entry must be evicted so subsequent tool calls
+        # and health probes can't reach it.
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-me", MCPApprovalStatus.active)
+        )
+        assert "evict-me" in manager.registry
+
+        await manager.update_server(
+            self._make_server("evict-me", MCPApprovalStatus.rejected)
+        )
+        assert "evict-me" not in manager.registry
+
+    async def test_update_server_eviction_clears_openapi_routing_artifacts(
+        self, tmp_path
+    ):
+        """Rejecting a server must remove its OpenAPI tools and name mappings."""
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.active)
+        )
+        assert "evict-openapi" in manager.registry
+
+        server = manager.registry["evict-openapi"]
+        server.spec_path = str(tmp_path / "unused.yaml")
+        prefix = get_server_prefix(server)
+        prefixed = add_server_prefix_to_name("demo_tool", prefix)
+
+        async def _noop_handler(**kwargs):
+            return None
+
+        global_mcp_tool_registry.register_tool(
+            name=prefixed,
+            description="demo",
+            input_schema={"type": "object"},
+            handler=_noop_handler,
+        )
+        manager.tool_name_to_mcp_server_name_mapping["demo_tool"] = prefix
+        manager.tool_name_to_mcp_server_name_mapping[prefixed] = prefix
+
+        await manager.update_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.rejected)
+        )
+
+        assert "evict-openapi" not in manager.registry
+        assert prefixed not in global_mcp_tool_registry.tools
+        assert "demo_tool" not in manager.tool_name_to_mcp_server_name_mapping
+        assert prefixed not in manager.tool_name_to_mcp_server_name_mapping
+
+    async def test_update_server_noop_for_unregistered_pending(self):
+        # update_server called with a pending row that was never registered
+        # should silently return without adding it. Locks in the early-return
+        # so a future refactor can't accidentally route the pending row to
+        # build_mcp_server_from_table.
+        manager = MCPServerManager()
+        await manager.update_server(
+            self._make_server("never-seen", MCPApprovalStatus.pending_review)
+        )
+        assert "never-seen" not in manager.registry
 
 
 if __name__ == "__main__":

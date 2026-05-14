@@ -133,20 +133,6 @@ class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
         }
 
 
-class TestOpenAIImageEditDallE2(BaseLLMImageEditTest):
-    """
-    Concrete implementation of BaseLLMImageEditTest for OpenAI DALL-E-2 image edits.
-    DALL-E-2 only supports a single image (not an array).
-    """
-
-    def get_base_image_edit_call_args(self) -> dict:
-        """Return base call args for OpenAI DALL-E-2 image edit (single image only)"""
-        return {
-            "model": "dall-e-2",
-            "image": SINGLE_TEST_IMAGE,
-        }
-
-
 class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
     """
     Concrete implementation of BaseLLMImageEditTest for Azure AI FLUX 2 image edits.
@@ -328,10 +314,13 @@ async def test_azure_image_edit_litellm_sdk():
         # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert "Authorization" in headers, "Authorization header should be present"
-        assert headers["Authorization"].startswith(
-            "Bearer "
-        ), "Authorization should be Bearer token"
+        assert (
+            "api-key" in headers
+        ), "Azure image edit must use the api-key header, not Authorization: Bearer"
+        assert headers["api-key"] == test_api_key
+        assert (
+            "Authorization" not in headers
+        ), "Azure image edit must not send an Authorization header when an api_key is provided"
 
         print("result from image edit", result)
 

@@ -463,6 +463,52 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_routes"})
 
 
+def _validate_caller_can_change_key_ownership(
+    data: Optional[BaseModel],
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Non-admin callers must not rebind a key's ``user_id`` to a different
+    user. The ``user_id`` on a verification token is what
+    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    to derive the request's role; a non-admin rebinding their own key's
+    ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
+
+    ``/key/update`` already enforces this inline; ``/key/regenerate`` did
+    not. Sharing the check keeps both endpoints — and any future
+    regenerate-style endpoint — consistent.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if data is None:
+        return
+    # Distinguish "user_id omitted" from "user_id explicitly set to None".
+    # Both leave ``getattr(data, 'user_id', None)`` at None, but only the
+    # explicit-null variant survives ``model_dump(exclude_unset=True)`` in
+    # ``prepare_key_update_data`` and writes NULL to the token row —
+    # detaching the key from its user and bypassing the user-row
+    # role check on subsequent requests.
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    if "user_id" not in fields_set:
+        return
+    incoming_user_id = getattr(data, "user_id", None)
+    if incoming_user_id is None or incoming_user_id == "":
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the user_id from a key.",
+        )
+    existing_user_id = getattr(existing_key_row, "user_id", None)
+    if incoming_user_id != existing_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Non-admin caller is not allowed to rebind the key from "
+                f"user={existing_user_id} to user={incoming_user_id}"
+            ),
+        )
+
+
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
@@ -2088,23 +2134,11 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
-    if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Non-admin users cannot remove the user_id from a key.",
-        )
-
-    # sanity check - prevent non-proxy admin user from updating key to belong to a different user
-    if (
-        data.user_id is not None
-        and data.user_id != existing_key_row.user_id
-        and not _is_proxy_admin
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"User={data.user_id} is not allowed to update key={data.key} to belong to user={existing_key_row.user_id}",
-        )
+    _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
@@ -4152,6 +4186,13 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
 
+    # Mirror the /key/update ownership rebind guard. See helper docstring.
+    _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
@@ -4328,7 +4369,17 @@ async def regenerate_key_fn(  # noqa: PLR0915
                 allow_safe_presets=True,
             )
 
-        is_master_key_regeneration = data and data.new_master_key is not None
+        # Premium-gate bypass for master-key rotation must verify the
+        # caller actually holds the master key, not just that the request
+        # body has a ``new_master_key`` field. A presence-only check let
+        # any non-premium caller skip the enterprise gate by sending any
+        # value in that field.
+        regenerate_target_key = data.key if data and data.key else key
+        is_master_key_regeneration = (
+            data is not None
+            and data.new_master_key is not None
+            and _is_master_key(api_key=regenerate_target_key, _master_key=master_key)
+        )
 
         if (
             premium_user is not True and not is_master_key_regeneration
