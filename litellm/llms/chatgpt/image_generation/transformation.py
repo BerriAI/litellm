@@ -144,6 +144,10 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         self._validate_openai_image_generation_params(model, optional_params)
 
+        # Intentionally pinned fallback for ChatGPT image generation through the
+        # Codex Responses API. Users can override this per request, via
+        # litellm_params, or with CHATGPT_IMAGE_RESPONSES_MODEL without requiring
+        # a LiteLLM release.
         responses_model = (
             optional_params.pop("chatgpt_responses_model", None)
             or litellm_params.get("chatgpt_responses_model")
