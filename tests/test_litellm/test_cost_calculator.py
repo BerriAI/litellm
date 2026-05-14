@@ -2057,3 +2057,47 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["output_cost_per_token"] == 1.5e-06
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_custom_pricing_applies_cache_read_input_cost():
+    """
+    Bug 1 reproduction: custom_cost_per_token with cache_read_input_token_cost
+    should bill cached prompt tokens at the cache rate, not the full input rate.
+    """
+    usage = Usage(
+        prompt_tokens=6074,
+        completion_tokens=285,
+        total_tokens=6359,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=3456,
+            audio_tokens=0,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+        },
+    )
+
+    expected = (
+        (6074 - 3456) * 0.0000025
+        + 3456 * 0.00000025
+        + 285 * 0.000015
+    )
+
+    assert cost == pytest.approx(expected)
