@@ -4,6 +4,9 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, MutableMapping, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_last_user_message,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -279,33 +282,9 @@ class PurviewGuardrailBase:
         return False
 
     # ------------------------------------------------------------------
-    # User prompt extraction (same pattern as AzureGuardrailBase)
+    # User prompt extraction
     # ------------------------------------------------------------------
 
     def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
         """Get the last consecutive block of user messages as a single string."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            convert_content_list_to_str,
-        )
-
-        if not messages:
-            return None
-
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                break
-
-        if not user_messages:
-            return None
-
-        user_messages.reverse()
-        user_prompt = ""
-        for message in user_messages:
-            text_content = convert_content_list_to_str(message)
-            user_prompt += text_content + "\n"
-
-        result = user_prompt.strip()
-        return result if result else None
+        return get_last_user_message(messages)
