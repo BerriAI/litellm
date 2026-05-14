@@ -153,14 +153,147 @@ class TestResolveLLMProviderForRateLimit:
     def test_get_llm_provider_raising_is_swallowed(self):
         # If get_llm_provider itself blows up (unexpected error), we still
         # fall back rather than letting the secondary exception escape.
+        # No router is registered in this test, so the alias-fallback path
+        # also yields None and we land at PROXY_LLM_PROVIDER_FALLBACK.
         with patch.object(
             litellm,
             "get_llm_provider",
             side_effect=RuntimeError("boom"),
         ):
-            resolved_model, provider = resolve_llm_provider_for_rate_limit("anything")
+            with patch(
+                "litellm.proxy.proxy_server.llm_router",
+                None,
+            ):
+                resolved_model, provider = resolve_llm_provider_for_rate_limit(
+                    "anything"
+                )
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
         assert resolved_model == "anything"
+
+    def test_router_alias_resolves_to_underlying_provider(self):
+        """
+        Nearly every real LiteLLM proxy deployment uses router aliases:
+
+            model_list:
+              - model_name: tpm-locked
+                litellm_params:
+                  model: openai/gpt-4o-mini
+                  ...
+
+        ``litellm.get_llm_provider("tpm-locked")`` doesn't know about
+        router aliases and raises. Before this fix the resolver fell
+        through to ``"litellm_proxy"``, defeating the whole point of the
+        ``llm_provider`` field on the rate-limit error. The alias path
+        must look the deployment up in the router's ``model_list`` and
+        resolve from its ``litellm_params.model``.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "tpm-locked",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "fake",
+                    },
+                }
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit("tpm-locked")
+        assert provider == "openai", (
+            f"Router-alias path must resolve through litellm_params.model, "
+            f"not fall through to {PROXY_LLM_PROVIDER_FALLBACK!r}. Got "
+            f"provider={provider!r}, model={resolved_model!r}."
+        )
+        # The resolved model should point at the underlying deployment so
+        # downstream Prometheus labels / failure callbacks attribute the
+        # 429 to the real upstream, not the alias.
+        assert resolved_model == "gpt-4o-mini"
+
+    def test_router_alias_with_multiple_deployments_uses_first(self):
+        """
+        When an alias maps to multiple deployments (the load-balancing
+        case), the rate-limit error fired at the *alias* level is
+        deployment-agnostic — we have no way of knowing which one would
+        have been picked. Use the first deployment's underlying provider:
+        every deployment under one alias should agree on provider in any
+        sensible config, and 'first' is deterministic so the Prometheus
+        label is stable.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "claude-pool",
+                    "litellm_params": {"model": "anthropic/claude-3-5-sonnet"},
+                },
+                {
+                    "model_name": "claude-pool",
+                    "litellm_params": {"model": "anthropic/claude-3-5-haiku"},
+                },
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            _, provider = resolve_llm_provider_for_rate_limit("claude-pool")
+        assert provider == "anthropic"
+
+    def test_router_alias_unknown_falls_back(self):
+        """
+        Alias not in the router model_list — both lookups fail, so we
+        land at the defensive ``litellm_proxy`` fallback rather than
+        raising.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "tpm-locked",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit(
+                "not-an-alias"
+            )
+        assert provider == PROXY_LLM_PROVIDER_FALLBACK
+        assert resolved_model == "not-an-alias"
+
+    def test_router_alias_with_malformed_deployment_falls_back(self):
+        """
+        A deployment in the router model_list with no usable
+        ``litellm_params.model`` (or where ``get_llm_provider`` on the
+        underlying string also raises) must not crash the resolver —
+        fall through to the defensive fallback.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {"model_name": "broken", "litellm_params": {}},
+                {"model_name": "broken", "litellm_params": {"model": ""}},
+                {
+                    "model_name": "broken",
+                    "litellm_params": {"model": "nonsense-no-provider"},
+                },
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit("broken")
+        assert provider == PROXY_LLM_PROVIDER_FALLBACK
+        assert resolved_model == "broken"
 
 
 # ---------------------------------------------------------------------------
