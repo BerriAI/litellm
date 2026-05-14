@@ -224,16 +224,10 @@ TPM_RESERVED_SCOPES_KEY = "_litellm_tpm_reserved_scopes"
 # (e.g. async_log_failure_event firing after async_post_call_failure_hook)
 # does not double-refund.
 TPM_RESERVATION_RELEASED_KEY = "_litellm_tpm_reservation_released"
-# Stash for the rate-limit descriptors the upfront reservation was applied
-# against. async_post_call_failure_hook reads these to refund the correct
-# counters when a downstream hook rejects the request before the LLM call.
 RATE_LIMIT_DESCRIPTORS_KEY = "_litellm_rate_limit_descriptors"
-# All stash keys this limiter writes. Anything in this set must live ONLY in
-# metadata channels (data["metadata"] / data["litellm_metadata"] /
-# litellm_params["metadata"] / standard_logging_object["metadata"]) and never
-# at the top level of the request body — top-level keys are forwarded as
-# request body params to upstream providers (OpenAI, Anthropic, …) which
-# reject unknown fields with 400/429 errors.
+# Stash keys live ONLY in metadata channels — never at the top level of the
+# request body. Top-level keys are forwarded as body params to upstream
+# providers, which reject unknown fields with 400/429 errors.
 _LITELLM_STASH_KEYS: Tuple[str, ...] = (
     TPM_RESERVED_TOKENS_KEY,
     TPM_RESERVED_MODEL_KEY,
@@ -2080,21 +2074,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         f"TPM tokens reserved: {estimated_tokens} for model {requested_model}"
                     )
 
-        # Defense-in-depth: ensure no LiteLLM-internal stash keys leak onto
-        # the upstream request body. The helpers above are designed to write
-        # only into metadata channels, but a stale value from a prior cache
-        # hit, a router pass, or a test fixture could still surface them here.
-        # Providers (OpenAI, Anthropic, …) reject unknown body fields with
-        # 400/429 errors (#27001 leak regression), so strip unconditionally.
+        # Defense-in-depth: scrub any stash key that escaped onto data
+        # top-level (stale cache hit, router pass, test fixture) before the
+        # body is forwarded to the provider.
         self._strip_stash_keys_from_top_level(data)
 
     @staticmethod
     def _strip_stash_keys_from_top_level(data: Any) -> None:
-        """Remove every key in ``_LITELLM_STASH_KEYS`` from ``data`` top level.
-
-        Only the top level is stripped — metadata channels keep the stash so
-        success/failure callbacks can still reconcile and refund.
-        """
         if not isinstance(data, dict):
             return
         for stash_key in _LITELLM_STASH_KEYS:
@@ -2279,25 +2265,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key: str,
         value: Any,
     ) -> None:
-        """
-        Persist ``key=value`` into every metadata channel a callback might
-        read from — ``data["metadata"]`` and ``data["litellm_metadata"]`` —
-        without writing to the top level of ``data``.
-
-        Top-level writes are forbidden for any key in ``_LITELLM_STASH_KEYS``:
-        ``data`` is the upstream request body and providers (OpenAI,
-        Anthropic, …) reject unknown fields with 400/429 errors. Stashes
-        belong in the LiteLLM-internal metadata channels, which are stripped
-        before the body is forwarded.
-        """
         for channel in ("metadata", "litellm_metadata"):
             existing = data.get(channel)
             if isinstance(existing, dict):
                 existing[key] = value
             elif channel == "metadata":
-                # Auto-create ``metadata`` so downstream lookups have a
-                # channel to read from. ``litellm_metadata`` is set by the
-                # router and shouldn't be conjured here.
+                # ``litellm_metadata`` is owned by the router; don't conjure
+                # it here.
                 data[channel] = {key: value}
 
     @classmethod
@@ -2309,11 +2283,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_scopes: Optional[List[Tuple[str, str]]] = None,
     ) -> None:
         """
-        Persist the reservation amount, model, and reserved scopes into the
-        metadata channels callbacks read from. Keeps reservation and
-        reconciliation in sync without leaking ``_litellm_*`` keys onto the
-        upstream request body — see ``_stash_value_in_metadata_channels``.
-
         ``reserved_scopes`` is serialized as a list of [key, value] pairs so
         it round-trips through JSON-based metadata transports.
         """
@@ -2341,15 +2310,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> Any:
         """
         Resolve a stashed value from any metadata channel the request data
-        can flow through to a callback. Top-level ``kwargs`` is intentionally
-        NOT checked: stash keys must never live there (they'd leak into the
-        upstream request body and get rejected by providers).
-
-        Checks (in priority order):
-          1. kwargs["metadata"] (raw request_data shape, pre-router)
-          2. kwargs["litellm_metadata"] (raw request_data shape, pre-router)
-          3. kwargs["litellm_params"]["metadata"] (litellm completion kwargs shape)
-          4. standard_logging_metadata (covers tests that mock the SLO directly)
+        can flow through to a callback. Top-level ``kwargs`` is not checked
+        because stash keys must never live there.
         """
         candidate: Any = None
         if isinstance(kwargs, dict):
@@ -2450,9 +2412,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         standard_logging_object.metadata. Same dict identity across
         ``request_data["metadata"]`` and ``kwargs["litellm_params"]["metadata"]``
         means writes here propagate to the other hook.
-
-        Top-level ``data[...]`` is intentionally not written: stash keys must
-        never live there or they'd leak into the upstream request body.
         """
         if not isinstance(data, dict):
             return

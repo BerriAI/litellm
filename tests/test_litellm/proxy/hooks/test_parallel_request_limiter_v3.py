@@ -2779,19 +2779,8 @@ async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
-    """
-    Regression for the leak introduced by PR #27001.
-
-    The v3 limiter's reservation flow stashes `_litellm_rate_limit_descriptors`
-    and `_litellm_tpm_reserved_*` keys for post-call reconciliation. These
-    MUST live only in metadata channels — never on the top level of the
-    request data dict — because upstream providers (OpenAI, Anthropic, ...)
-    reject unknown body fields with 400/429 errors.
-
-    Asserts: after async_pre_call_hook returns, no `_litellm_*` stash key
-    is at the top level of `data`, but the stash IS reachable via metadata
-    so reconciliation/refund still works.
-    """
+    """Regression for #27001: stash keys must stay in metadata, never on
+    the top level of ``data`` (which gets forwarded as the provider body)."""
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         _LITELLM_STASH_KEYS,
         RATE_LIMIT_DESCRIPTORS_KEY,
@@ -2845,19 +2834,8 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
     )
 
     leaked = [k for k in _LITELLM_STASH_KEYS if k in data]
-    assert not leaked, (
-        f"v3 limiter leaked internal stash keys onto request body top level: "
-        f"{leaked}. These will be forwarded to the upstream provider and "
-        f"rejected with 400/429. Keep them in data['metadata'] only."
-    )
+    assert not leaked, f"stash keys leaked to top level: {leaked}"
 
     metadata = data.get("metadata") or {}
-    assert metadata.get(TPM_RESERVED_TOKENS_KEY), (
-        "Reservation stash missing from metadata channel — post-call "
-        "reconciliation will not be able to refund/settle the reservation."
-    )
-    assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list), (
-        "Descriptor stash missing from metadata channel — "
-        "async_post_call_failure_hook will not be able to refund on "
-        "downstream rejection."
-    )
+    assert metadata.get(TPM_RESERVED_TOKENS_KEY)
+    assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
