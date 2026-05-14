@@ -388,6 +388,8 @@ async def parse_rag_ingest_request(
     # type=external_account + credential_source.file=/proc/1/environ) allows
     # any authenticated user to exfiltrate host secrets via SSRF through
     # google-auth's identity_pool credential refresh.
+    # api_base is also blocked: a user-controlled base URL causes the server
+    # to send its configured provider credentials to an attacker endpoint.
     _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS = {
         "vertex_credentials",
         "vertex_ai_credentials",
@@ -396,6 +398,7 @@ async def parse_rag_ingest_request(
         "aws_session_token",
         "azure_ad_token",
         "api_key",
+        "api_base",
     }
     vector_store_opts = ingest_options.get("vector_store", {})
     if isinstance(vector_store_opts, dict):

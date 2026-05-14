@@ -139,6 +139,7 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         "aws_secret_access_key",
         "aws_session_token",
         "api_key",
+        "api_base",
     ],
 )
 def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_field):
@@ -155,16 +156,28 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             "vector_store": {
                 "custom_llm_provider": "vertex_ai",
                 "vertex_project": "x",
-                blocked_field: {"type": "external_account", "token_url": "http://attacker.example/sts"},
+                blocked_field: {
+                    "type": "external_account",
+                    "token_url": "http://attacker.example/sts",
+                },
             }
         }
     }
     response = client_internal_user.post(
         "/v1/rag/ingest",
-        json={**payload, "file": {"filename": "q.txt", "content": "dGVzdA==", "content_type": "text/plain"}},
+        json={
+            **payload,
+            "file": {
+                "filename": "q.txt",
+                "content": "dGVzdA==",
+                "content_type": "text/plain",
+            },
+        },
     )
-    assert response.status_code == 400, (
-        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
-    )
+    assert (
+        response.status_code == 400
+    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
     body = response.json()
-    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(
+        body
+    ), f"Response should mention '{blocked_field}': {body}"
