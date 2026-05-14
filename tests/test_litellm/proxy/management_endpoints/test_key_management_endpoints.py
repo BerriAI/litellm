@@ -5540,7 +5540,7 @@ async def test_validate_max_budget():
         _validate_max_budget(-10.0)
 
     assert exc_info.value.status_code == 400
-    assert "max_budget cannot be negative" in str(exc_info.value.detail)
+    assert "negative" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

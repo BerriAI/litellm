@@ -1152,6 +1152,41 @@ def _update_internal_user_params(
     return non_default_values
 
 
+def _check_user_update_authz(
+    user_request: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_user_row: Optional[BaseModel],
+) -> None:
+    """Authorization checks for /user/update — raises HTTPException on failure."""
+    if (
+        user_request.user_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can modify user roles."
+        )
+
+    if existing_user_row is not None:
+        typed_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+        if not can_user_call_user_update(
+            user_api_key_dict=user_api_key_dict, user_info=typed_row
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
+    elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        # Silent-create guard: only PROXY_ADMIN may create via /user/update.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "User not found. Only PROXY_ADMIN can create users via /user/update; use /user/new instead."
+            },
+        )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1168,31 +1203,15 @@ async def _update_single_user_helper(
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
-    # Only proxy admins can modify user_role
-    if (
-        user_request.user_role is not None
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admins can modify user roles.",
-        )
-
-    # Validate user identifier
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    # Convert to data format expected by update logic
     data_json: dict = user_request.model_dump(exclude_unset=True)
-
-    # Apply update transformations (reuse existing logic)
     non_default_values = _update_internal_user_params(
         data_json=data_json, data=user_request
     )
-
     _hash_password_in_dict(non_default_values)
 
-    # Get existing user data for audit logging and metadata preparation
     existing_user_row: Optional[BaseModel] = None
     if user_request.user_id:
         existing_user_row = await prisma_client.db.litellm_usertable.find_first(
@@ -1203,37 +1222,12 @@ async def _update_single_user_helper(
             where={"user_email": user_request.user_email}
         )
 
+    _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
+
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(
             **existing_user_row.model_dump(exclude_none=True)
         )
-        if not can_user_call_user_update(
-            user_api_key_dict=user_api_key_dict,
-            user_info=existing_user_row,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
-                },
-            )
-    else:
-        # Silent-create guard: if the target user doesn't exist, the update
-        # path falls through to an upsert that creates a new user with
-        # caller-supplied fields (models, metadata, budgets, …). Only
-        # PROXY_ADMIN is allowed to create users this way; otherwise an org
-        # admin could spawn arbitrary users attached to nothing by supplying
-        # a fresh email, bypassing the /user/new org/team-scoping checks.
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": (
-                        "User not found. Only PROXY_ADMIN can create users "
-                        "via /user/update; use /user/new instead."
-                    )
-                },
-            )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
