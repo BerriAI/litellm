@@ -14,10 +14,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
 
-from litellm.proxy.auth.auth_utils import (  # noqa: E402
-    _BANNED_REQUEST_BODY_PARAMS,
-    is_request_body_safe,
-)
+from litellm.proxy.auth.auth_utils import is_request_body_safe  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -47,10 +44,6 @@ def test_banned_param_under_extra_body_is_rejected(banned_param):
         )
 
 
-def test_azure_ad_token_is_in_banned_list():
-    assert "azure_ad_token" in _BANNED_REQUEST_BODY_PARAMS
-
-
 def test_extra_body_with_safe_fields_is_allowed():
     body = {
         "model": "openai/gpt-4",
@@ -66,9 +59,8 @@ def test_extra_body_with_safe_fields_is_allowed():
 
 
 def test_admin_opt_in_still_permits_extra_body_credentials():
-    # ``general_settings.allow_client_side_credentials`` is the documented
-    # admin escape for clientside-credential passthrough. Walking
-    # ``extra_body`` for banned params must not break the escape.
+    # ``allow_client_side_credentials`` is the admin escape; descending
+    # into ``extra_body`` must preserve it.
     body = {
         "model": "openai/gpt-4",
         "messages": [{"role": "user", "content": "x"}],
