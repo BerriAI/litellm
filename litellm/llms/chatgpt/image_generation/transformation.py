@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -145,13 +144,11 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
         self._validate_openai_image_generation_params(model, optional_params)
 
         # Intentionally pinned fallback for ChatGPT image generation through the
-        # Codex Responses API. Users can override this per request, via
-        # litellm_params, or with CHATGPT_IMAGE_RESPONSES_MODEL without requiring
-        # a LiteLLM release.
+        # Codex Responses API. Users can override this per request or via
+        # litellm_params.
         responses_model = (
             optional_params.pop("chatgpt_responses_model", None)
             or litellm_params.get("chatgpt_responses_model")
-            or os.getenv("CHATGPT_IMAGE_RESPONSES_MODEL")
             or "gpt-5.5"
         )
         request: Dict[str, Any] = {

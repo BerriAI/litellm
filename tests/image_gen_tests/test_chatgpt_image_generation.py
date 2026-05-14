@@ -345,11 +345,8 @@ def test_chatgpt_image_generation_extracts_b64_from_sse_completed_response(
     assert response._hidden_params["model"] == "gpt-image-2"
 
 
-def test_chatgpt_image_generation_uses_optional_responses_model_and_env(
-    monkeypatch, tmp_path
-):
+def test_chatgpt_image_generation_uses_optional_responses_model(monkeypatch, tmp_path):
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
-    monkeypatch.setenv("CHATGPT_IMAGE_RESPONSES_MODEL", "gpt-env")
     config = ChatGPTImageGenerationConfig()
     optional_params = {"chatgpt_responses_model": "gpt-override"}
 
@@ -364,14 +361,23 @@ def test_chatgpt_image_generation_uses_optional_responses_model_and_env(
     assert request["model"] == "gpt-override"
     assert "chatgpt_responses_model" not in optional_params
 
-    env_request = config.transform_image_generation_request(
+    litellm_params_request = config.transform_image_generation_request(
+        model="gpt-image-2",
+        prompt="draw a cat",
+        optional_params={},
+        litellm_params={"chatgpt_responses_model": "gpt-litellm-param"},
+        headers={},
+    )
+    assert litellm_params_request["model"] == "gpt-litellm-param"
+
+    default_request = config.transform_image_generation_request(
         model="gpt-image-2",
         prompt="draw a cat",
         optional_params={},
         litellm_params={},
         headers={},
     )
-    assert env_request["model"] == "gpt-env"
+    assert default_request["model"] == "gpt-5.5"
 
 
 @pytest.mark.parametrize(
