@@ -728,6 +728,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
+    # Capture the caller-supplied max_budget *before* upperbound params can
+    # fill it with a default, so the ceiling check only fires when the caller
+    # explicitly requested a budget.
+    _requested_max_budget = data.max_budget
+
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
 
@@ -737,24 +742,24 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # is present.
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and data.max_budget is not None
+        and _requested_max_budget is not None
     ):
         if user_api_key_dict.max_budget is None:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": (
-                        f"Cannot set max_budget ({data.max_budget}) on a generated "
+                        f"Cannot set max_budget ({_requested_max_budget}) on a generated "
                         "key because the caller's own key has no budget configured."
                     )
                 },
             )
-        if data.max_budget > user_api_key_dict.max_budget:
+        if _requested_max_budget > user_api_key_dict.max_budget:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": (
-                        f"max_budget ({data.max_budget}) cannot exceed the caller's "
+                        f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
                         f"own max_budget ({user_api_key_dict.max_budget})."
                     )
                 },
