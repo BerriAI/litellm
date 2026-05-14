@@ -109,20 +109,30 @@ class TestAzureContainerConfig:
 
         assert "/openai/v1/containers" in url
 
-    def test_get_complete_url_strips_responses_path_from_api_base(self):
-        """When api_base is the responses endpoint URL (as stored in deployment
-        config), get_complete_url must strip /openai/responses so the containers
-        URL uses the resource root, not /openai/responses/openai/containers."""
+    def test_get_complete_url_strips_responses_path_and_preserves_api_version(self):
+        """When api_base is the responses endpoint URL, get_complete_url must:
+        - strip /openai/responses (no double-path)
+        - use the api-version from api_base query string, NOT the deployment's
+          older api_version (e.g. 2024-08-01-preview → containers need 2025-04-01-preview)
+        """
         api_base = "https://my-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview"
 
         url = self.config.get_complete_url(
             api_base=api_base,
-            litellm_params={"api_version": "2025-04-01-preview"},
+            litellm_params={"api_version": "2024-08-01-preview"},
         )
 
-        assert "/openai/responses/openai/containers" not in url
+        assert (
+            "/openai/responses/openai/containers" not in url
+        ), "path must not double /openai/responses"
         assert "my-resource.cognitiveservices.azure.com" in url
         assert "/openai/containers" in url or "/openai/v1/containers" in url
+        assert (
+            "2025-04-01-preview" in url
+        ), "must use version from api_base, not litellm_params"
+        assert (
+            "2024-08-01-preview" not in url
+        ), "must not fall back to older chat api_version"
 
     def test_get_complete_url_raises_without_api_base(self, monkeypatch):
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
