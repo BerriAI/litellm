@@ -156,7 +156,22 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     - OpenAI format: type == "function" with function.name == "litellm_web_search"
     - Anthropic native: type starts with "web_search_" (e.g., "web_search_20250305")
     - Claude Code: name == "web_search" with a type field
-    - Custom: name == "WebSearch" (legacy format)
+    - Custom: name == "WebSearch" (legacy interception marker — only matched
+      when input_schema is absent; see note below)
+
+    Note on the legacy ``WebSearch`` name:
+        Clients like Claude Desktop / Cowork ship a *client-side* tool called
+        ``WebSearch`` (a fully-formed Anthropic client tool with its own
+        ``input_schema``) that they handle themselves. Treating that as our
+        interception marker hijacks it server-side and the client's own tool
+        handler never fires — which means Cowork's separate native
+        ``web_search_20250305`` sub-request (where citation data actually
+        flows) never gets made.
+
+        Real Anthropic client tools always carry an ``input_schema`` (the API
+        rejects them otherwise), so a bare ``{name: "WebSearch"}`` with no
+        schema is the only thing that could be a legacy interception marker.
+        Gate the match on schema absence to keep both groups working.
 
     Args:
         tool: Tool dictionary to check
@@ -172,6 +187,10 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
         >>> is_web_search_tool({"type": "web_search_20250305", "name": "web_search"})
         True
         >>> is_web_search_tool({"name": "calculator"})
+        False
+        >>> is_web_search_tool({"name": "WebSearch"})  # legacy interception marker
+        True
+        >>> is_web_search_tool({"name": "WebSearch", "input_schema": {"type": "object"}})  # Cowork client tool
         False
     """
     tool_name = tool.get("name", "")
@@ -196,8 +215,9 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     if tool_name == "web_search" and tool_type:
         return True
 
-    # Check for legacy WebSearch format
-    if tool_name == "WebSearch":
+    # Legacy "WebSearch" interception marker — only when no schema is
+    # present, so real client-side WebSearch tools (Cowork) pass through.
+    if tool_name == "WebSearch" and "input_schema" not in tool:
         return True
 
     return False
