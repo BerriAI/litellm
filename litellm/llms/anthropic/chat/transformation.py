@@ -1456,28 +1456,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "top_p":
                 optional_params["top_p"] = value
             elif param == "response_format" and isinstance(value, dict):
-                if any(
-                    substring in model
-                    for substring in {
-                        "sonnet-4.5",
-                        "sonnet-4-5",
-                        "opus-4.1",
-                        "opus-4-1",
-                        "opus-4.5",
-                        "opus-4-5",
-                        "opus-4.6",
-                        "opus-4-6",
-                        "opus-4.7",
-                        "opus-4-7",
-                        "sonnet-4.6",
-                        "sonnet-4-6",
-                        "sonnet_4.6",
-                        "sonnet_4_6",
-                        "haiku-4.5",
-                        "haiku-4-5",
-                        "haiku_4.5",
-                        "haiku_4_5",
-                    }
+                if litellm.supports_response_schema(
+                    model=model, custom_llm_provider="anthropic"
                 ):
                     _output_format = (
                         self.map_response_format_to_anthropic_output_format(value)
@@ -2443,7 +2423,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
-            completion_response["stop_reason"] = "stop"
+            completion_response["stop_reason"] = (
+                "tool_use" if json_mode_message.tool_calls else "stop"
+            )
             _message = json_mode_message
 
         model_response.choices[0].message = _message

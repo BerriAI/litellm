@@ -73,6 +73,34 @@ def test_anthropic_json_mode_non_streaming_mixed_internal_and_user_tools():
     assert extra == '{"answer": 42}'
 
 
+def test_haiku_45_uses_model_metadata_for_native_structured_output():
+    config = AnthropicConfig()
+    mapped_params = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "MovieReview",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"title": {"type": "string"}},
+                        "required": ["title"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert "output_format" in mapped_params
+    assert "tools" not in mapped_params
+    assert "tool_choice" not in mapped_params
+
+
 def test_calculate_usage():
     """
     Do not include cache_creation_input_tokens in the prompt_tokens

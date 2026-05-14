@@ -40,7 +40,7 @@ def test_convert_to_model_response_object_basic():
                     "content": "Hi there! How can I assist you today?",
                     "refusal": None,
                 },
-                "finish_reason": "stop",
+                "finish_reason": None,
             }
         ],
         "usage": {
@@ -344,7 +344,7 @@ def test_convert_to_model_response_object_json_mode():
                         }
                     ],
                 },
-                "finish_reason": None,
+                "finish_reason": "stop",
             }
         ],
         "usage": {"total_tokens": 10, "prompt_tokens": 5, "completion_tokens": 5},
@@ -372,6 +372,61 @@ def test_convert_to_model_response_object_json_mode():
     assert result.usage.total_tokens == 10
     assert result.usage.prompt_tokens == 5
     assert result.usage.completion_tokens == 5
+
+
+def test_convert_to_model_response_object_json_mode_with_parallel_real_tool():
+    model_response_object = ModelResponse(model="gpt-3.5-turbo")
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+    response_object = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_real",
+                            "type": "function",
+                            "function": {
+                                "arguments": '{"movie":"Inception"}',
+                                "name": "get_showtimes",
+                            },
+                        },
+                        {
+                            "id": "call_json",
+                            "type": "function",
+                            "function": {
+                                "arguments": '{"title":"Inception"}',
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"total_tokens": 10, "prompt_tokens": 5, "completion_tokens": 5},
+        "model": "gpt-3.5-turbo",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=model_response_object,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=True,
+    )
+
+    assert result.choices[0].message.content == '{"title":"Inception"}'
+    assert result.choices[0].finish_reason == "tool_calls"
+    tool_calls = result.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert len(tool_calls) == 1
+    assert tool_calls[0].function.name == "get_showtimes"
 
 
 def test_convert_to_model_response_object_function_output():

@@ -589,6 +589,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                                 choice["message"]["content"] = json_mode_content_str
                             elif isinstance(choice["message"].get("content"), str):
                                 choice["message"]["content"] += f"\n{json_mode_content_str}"
+                            finish_reason = "tool_calls"
                 if message is None:
                     # Preserve provider_specific_fields if already present
                     # in the response (e.g. from proxy passthrough)
