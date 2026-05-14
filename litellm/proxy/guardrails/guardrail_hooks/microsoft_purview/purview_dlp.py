@@ -135,9 +135,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
             if self._should_block(response):
                 status = "guardrail_intervened"
-        except Exception:
+        except Exception as exc:
             status = "guardrail_failed_to_respond"
-            raise
+            if block_on_violation:
+                raise
+            verbose_proxy_logger.warning(
+                "Purview DLP: API/network error in logging-only mode (not re-raised): %s",
+                exc,
+            )
         finally:
             end_time = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
@@ -161,9 +166,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         return response
 
-    @staticmethod
-    def _completion_response_text_parts(result: Any) -> List[str]:
-        """Collect non-empty assistant text segments from chat, text completions, or responses API."""
+    def _completion_response_text_parts(self, result: Any) -> List[str]:
+        """Collect non-empty text segments from chat, text completions, or responses API.
+
+        Includes assistant message content *and* model-generated tool-call
+        arguments so that sensitive data returned inside function calls is not
+        missed by the DLP scan.
+        """
         parts: List[str] = []
         if isinstance(result, TextCompletionResponse) and result.choices:
             for text_choice in result.choices:
@@ -190,6 +199,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
+                # Include tool-call arguments returned by the model
+                parts.extend(self._extract_tool_call_args_from_message(msg))
         return parts
 
     def _responses_api_input_to_str(self, data: Dict[str, Any]) -> Optional[str]:
@@ -347,15 +358,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """Send both prompt and response to Purview for audit logging.
 
         Errors are logged but never raised — this mode is non-blocking.
+        Each audit call (prompt and response) is wrapped in its own try/except
+        so a failure on the first does not prevent the second from running.
         """
+        user_id = self._resolve_user_id_from_logging_kwargs(kwargs)
+        if not user_id:
+            verbose_proxy_logger.debug("Purview audit: no user_id, skipping")
+            return kwargs, result
+
+        # Log prompt (uploadText)
         try:
-            user_id = self._resolve_user_id_from_logging_kwargs(kwargs)
-
-            if not user_id:
-                verbose_proxy_logger.debug("Purview audit: no user_id, skipping")
-                return kwargs, result
-
-            # Log prompt (uploadText)
             prompt_text: Optional[str] = None
             messages = kwargs.get("messages")
             if messages:
@@ -373,10 +385,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     request_data=kwargs,
                     block_on_violation=False,
                 )
+        except Exception as e:
+            verbose_proxy_logger.error("Purview audit logging error (prompt): %s", e)
 
-            # Log response (downloadText)
+        # Log response (downloadText) — runs regardless of prompt audit outcome
+        try:
             parts = self._completion_response_text_parts(result)
-
             if parts:
                 combined = "\n\n---\n\n".join(parts)
                 await self._check_content(
@@ -387,6 +401,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     block_on_violation=False,
                 )
         except Exception as e:
-            verbose_proxy_logger.error("Purview audit logging error: %s", e)
+            verbose_proxy_logger.error("Purview audit logging error (response): %s", e)
 
         return kwargs, result

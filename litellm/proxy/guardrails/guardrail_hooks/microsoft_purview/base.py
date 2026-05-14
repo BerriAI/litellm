@@ -351,6 +351,57 @@ class PurviewGuardrailBase:
                 return joined.strip() or None
         return None
 
+    @staticmethod
+    def _extract_tool_call_args_from_message(message: Any) -> List[str]:
+        """Return plaintext arguments strings from tool_calls and function_call fields.
+
+        Covers both the request path (assistant messages in chat histories that
+        carry tool_calls / function_call) and the response path (model-generated
+        tool calls returned in a ModelResponse).  Both dict-style and object-style
+        representations are handled.
+        """
+        args: List[str] = []
+
+        # tool_calls: [{"function": {"arguments": "..."}}]
+        tool_calls = (
+            message.get("tool_calls")
+            if isinstance(message, dict)
+            else getattr(message, "tool_calls", None)
+        )
+        if tool_calls:
+            for tc in tool_calls:
+                fn = (
+                    tc.get("function")
+                    if isinstance(tc, dict)
+                    else getattr(tc, "function", None)
+                )
+                if fn is None:
+                    continue
+                arguments = (
+                    fn.get("arguments")
+                    if isinstance(fn, dict)
+                    else getattr(fn, "arguments", None)
+                )
+                if isinstance(arguments, str) and arguments.strip():
+                    args.append(arguments)
+
+        # Legacy function_call: {"arguments": "..."}
+        function_call = (
+            message.get("function_call")
+            if isinstance(message, dict)
+            else getattr(message, "function_call", None)
+        )
+        if function_call is not None:
+            arguments = (
+                function_call.get("arguments")
+                if isinstance(function_call, dict)
+                else getattr(function_call, "arguments", None)
+            )
+            if isinstance(arguments, str) and arguments.strip():
+                args.append(arguments)
+
+        return args
+
     def get_prompt_text_for_dlp(
         self, messages: List["AllMessageValues"]
     ) -> Optional[str]:
@@ -361,9 +412,22 @@ class PurviewGuardrailBase:
         boundaries are not merged (e.g., ``"end of msg1\\n\\nstart of msg2"``
         rather than ``"end of msg1start of msg2"``), which preserves DLP pattern
         detection accuracy across message boundaries.
+
+        Tool-call arguments (``tool_calls[].function.arguments`` and
+        ``function_call.arguments``) are included alongside message content so
+        that sensitive data hidden in function arguments is not bypassed.
         """
         if not messages:
             return None
-        parts = [convert_content_list_to_str(message=msg).strip() for msg in messages]
-        text = "\n\n".join(p for p in parts if p)
+        parts: List[str] = []
+        for msg in messages:
+            segments: List[str] = []
+            content = convert_content_list_to_str(message=msg).strip()
+            if content:
+                segments.append(content)
+            segments.extend(self._extract_tool_call_args_from_message(msg))
+            combined = "\n".join(segments)
+            if combined.strip():
+                parts.append(combined.strip())
+        text = "\n\n".join(parts)
         return text or None

@@ -1211,6 +1211,466 @@ class TestInitializerValidation:
 
 
 # ---------------------------------------------------------------
+# _check_content — API error handling with block_on_violation=False
+# ---------------------------------------------------------------
+
+
+class TestCheckContentApiErrorHandling:
+    @pytest.mark.asyncio
+    async def test_api_error_reraises_when_block_on_violation_true(self):
+        """API/network errors must propagate when block_on_violation=True."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail,
+            "_compute_protection_scopes",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network failure"),
+        ):
+            with pytest.raises(RuntimeError, match="network failure"):
+                await guardrail._check_content(
+                    user_id="user-1",
+                    text="some content",
+                    activity="uploadText",
+                    request_data={},
+                    block_on_violation=True,
+                )
+
+    @pytest.mark.asyncio
+    async def test_api_error_not_reraised_when_block_on_violation_false(self):
+        """API/network errors must be swallowed (logged only) when block_on_violation=False."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail,
+            "_compute_protection_scopes",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network failure"),
+        ):
+            # Must NOT raise — should return empty dict
+            result = await guardrail._check_content(
+                user_id="user-1",
+                text="some content",
+                activity="uploadText",
+                request_data={},
+                block_on_violation=False,
+            )
+
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_process_content_error_not_reraised_when_block_on_violation_false(
+        self,
+    ):
+        """Errors from _process_content itself must also be suppressed in logging-only mode."""
+        guardrail = _make_guardrail()
+
+        with (
+            patch.object(
+                guardrail,
+                "_compute_protection_scopes",
+                new_callable=AsyncMock,
+                return_value=("etag-1", {}),
+            ),
+            patch.object(
+                guardrail,
+                "_process_content",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("timeout"),
+            ),
+        ):
+            result = await guardrail._check_content(
+                user_id="user-1",
+                text="some content",
+                activity="uploadText",
+                request_data={},
+                block_on_violation=False,
+            )
+
+        assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------
+# async_logging_hook — independent prompt/response audit calls
+# ---------------------------------------------------------------
+
+
+class TestAsyncLoggingHookIndependence:
+    @pytest.mark.asyncio
+    async def test_response_audit_runs_even_if_prompt_audit_fails(self):
+        """A failure in the prompt audit must not prevent the response audit from running."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail(logging_only=True)
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(content="response text", role="assistant"),
+                )
+            ],
+        )
+
+        call_activities: list = []
+
+        async def fake_check_content(**kwargs):
+            activity = kwargs.get("activity")
+            if activity == "uploadText":
+                raise RuntimeError("simulated prompt API failure")
+            call_activities.append(activity)
+            return {"policyActions": []}
+
+        with patch.object(guardrail, "_check_content", side_effect=fake_check_content):
+            await guardrail.async_logging_hook(
+                kwargs={
+                    "messages": [{"role": "user", "content": "prompt"}],
+                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                },
+                result=response,
+                call_type="completion",
+            )
+
+        # The response audit must still have been attempted
+        assert "downloadText" in call_activities
+
+    @pytest.mark.asyncio
+    async def test_prompt_audit_runs_even_if_response_audit_fails(self):
+        """A failure in the response audit must not affect the prompt audit result."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail(logging_only=True)
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(content="response text", role="assistant"),
+                )
+            ],
+        )
+
+        call_activities: list = []
+
+        async def fake_check_content(**kwargs):
+            activity = kwargs.get("activity")
+            if activity == "downloadText":
+                raise RuntimeError("simulated response API failure")
+            call_activities.append(activity)
+            return {"policyActions": []}
+
+        with patch.object(guardrail, "_check_content", side_effect=fake_check_content):
+            await guardrail.async_logging_hook(
+                kwargs={
+                    "messages": [{"role": "user", "content": "prompt"}],
+                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                },
+                result=response,
+                call_type="completion",
+            )
+
+        assert "uploadText" in call_activities
+
+    @pytest.mark.asyncio
+    async def test_logging_hook_returns_original_when_both_audits_fail(self):
+        """async_logging_hook must always return (kwargs, result) even if both audits fail."""
+        guardrail = _make_guardrail(logging_only=True)
+
+        with patch.object(
+            guardrail,
+            "_check_content",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("total failure"),
+        ):
+            kwargs = {
+                "messages": [{"role": "user", "content": "prompt"}],
+                "litellm_params": {"metadata": {"user_id": "user-123"}},
+            }
+            result_obj = {"some": "result"}
+            out_kwargs, out_result = await guardrail.async_logging_hook(
+                kwargs=kwargs,
+                result=result_obj,
+                call_type="completion",
+            )
+
+        assert out_kwargs is kwargs
+        assert out_result is result_obj
+
+
+# ---------------------------------------------------------------
+# Tool-call argument extraction
+# ---------------------------------------------------------------
+
+
+class TestExtractToolCallArgs:
+    def test_dict_message_with_tool_calls(self):
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"function": {"arguments": '{"ssn": "123-45-6789"}'}},
+                {"function": {"arguments": '{"card": "4111-1111-1111-1111"}'}},
+            ],
+        }
+        args = MicrosoftPurviewDLPGuardrail._extract_tool_call_args_from_message(msg)
+        assert '{"ssn": "123-45-6789"}' in args
+        assert '{"card": "4111-1111-1111-1111"}' in args
+
+    def test_dict_message_with_function_call(self):
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "lookup", "arguments": '{"query": "secret"}'},
+        }
+        args = MicrosoftPurviewDLPGuardrail._extract_tool_call_args_from_message(msg)
+        assert '{"query": "secret"}' in args
+
+    def test_object_message_with_tool_calls(self):
+        from litellm.types.utils import Message
+
+        msg = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {"name": "fn", "arguments": '{"x": 1}'},
+                },
+            ],
+        )
+        args = MicrosoftPurviewDLPGuardrail._extract_tool_call_args_from_message(msg)
+        assert '{"x": 1}' in args
+
+    def test_message_with_no_tool_calls(self):
+        msg = {"role": "user", "content": "hello"}
+        args = MicrosoftPurviewDLPGuardrail._extract_tool_call_args_from_message(msg)
+        assert args == []
+
+    def test_empty_arguments_skipped(self):
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"function": {"arguments": "  "}}],
+        }
+        args = MicrosoftPurviewDLPGuardrail._extract_tool_call_args_from_message(msg)
+        assert args == []
+
+
+# ---------------------------------------------------------------
+# Tool-call arguments included in DLP text extraction (prompt)
+# ---------------------------------------------------------------
+
+
+class TestGetPromptTextToolCalls:
+    def test_tool_call_args_included_in_prompt_scan(self):
+        """Sensitive data in tool_calls[].function.arguments must appear in DLP text."""
+        guardrail = _make_guardrail()
+        messages = [
+            {"role": "user", "content": "benign query"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "arguments": '{"ssn": "123-45-6789"}',
+                        },
+                    }
+                ],
+            },
+        ]
+        text = guardrail.get_prompt_text_for_dlp(messages)
+        assert text is not None
+        assert "benign query" in text
+        assert '{"ssn": "123-45-6789"}' in text
+
+    def test_function_call_args_included_in_prompt_scan(self):
+        """Legacy function_call.arguments must also appear in DLP text."""
+        guardrail = _make_guardrail()
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Calling function",
+                "function_call": {
+                    "name": "search",
+                    "arguments": '{"credit_card": "4111-1111-1111-1111"}',
+                },
+            }
+        ]
+        text = guardrail.get_prompt_text_for_dlp(messages)
+        assert text is not None
+        assert "Calling function" in text
+        assert '{"credit_card": "4111-1111-1111-1111"}' in text
+
+    def test_content_only_message_unchanged(self):
+        """Messages without tool calls must still produce the same output."""
+        guardrail = _make_guardrail()
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Tell me a joke."},
+        ]
+        text = guardrail.get_prompt_text_for_dlp(messages)
+        assert text is not None
+        assert "You are helpful." in text
+        assert "Tell me a joke." in text
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_scans_tool_call_args(self):
+        """async_pre_call_hook must include tool_call arguments in the text sent to Purview."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=__import__(
+                    "litellm.proxy._types", fromlist=["UserAPIKeyAuth"]
+                ).UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={
+                    "messages": [
+                        {"role": "user", "content": "benign"},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "tc1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "do_thing",
+                                        "arguments": '{"password": "hunter2"}',
+                                    },
+                                }
+                            ],
+                        },
+                    ]
+                },
+                call_type="completion",
+            )
+
+            mock_check.assert_called_once()
+            sent_text = mock_check.call_args.kwargs["text"]
+            assert '{"password": "hunter2"}' in sent_text
+
+
+# ---------------------------------------------------------------
+# Tool-call arguments included in DLP text extraction (response)
+# ---------------------------------------------------------------
+
+
+class TestCompletionResponseTextPartsToolCalls:
+    def test_response_tool_call_args_included(self):
+        """Model-generated tool_call arguments must appear in the DLP scan text."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "tc1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exfil",
+                                    "arguments": '{"data": "secret-value"}',
+                                },
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+        parts = guardrail._completion_response_text_parts(response)
+        assert any("secret-value" in p for p in parts)
+
+    def test_response_with_content_and_tool_calls(self):
+        """Both message content and tool_call arguments must be included."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="Here is the result",
+                        tool_calls=[
+                            {
+                                "id": "tc2",
+                                "type": "function",
+                                "function": {
+                                    "name": "fn",
+                                    "arguments": '{"ssn": "123-45-6789"}',
+                                },
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+        parts = guardrail._completion_response_text_parts(response)
+        combined = " ".join(parts)
+        assert "Here is the result" in combined
+        assert '{"ssn": "123-45-6789"}' in combined
+
+    @pytest.mark.asyncio
+    async def test_post_call_hook_scans_response_tool_call_args(self):
+        """async_post_call_success_hook must send tool_call arguments to Purview."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "tc3",
+                                "type": "function",
+                                "function": {
+                                    "name": "retrieve",
+                                    "arguments": '{"credit_card": "4111-1111-1111-1111"}',
+                                },
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_post_call_success_hook(
+                data={"metadata": {"user_id": "user-123"}},
+                user_api_key_dict=__import__(
+                    "litellm.proxy._types", fromlist=["UserAPIKeyAuth"]
+                ).UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+
+            mock_check.assert_called_once()
+            sent_text = mock_check.call_args.kwargs["text"]
+            assert '{"credit_card": "4111-1111-1111-1111"}' in sent_text
+
+
+# ---------------------------------------------------------------
 # Auto-discovery registration
 # ---------------------------------------------------------------
 
