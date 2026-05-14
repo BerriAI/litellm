@@ -6274,7 +6274,8 @@ async def aadapter_completion(
         if isinstance(response, CustomStreamWrapper):
             translated_response = (
                 translation_obj.translate_completion_output_params_streaming(
-                    completion_stream=response
+                    completion_stream=response,
+                    model=kwargs.get("model", "")
                 )
             )
 
@@ -6325,7 +6326,8 @@ def adapter_completion(
     elif isinstance(response, CustomStreamWrapper) or inspect.isgenerator(response):
         translated_response = (
             translation_obj.translate_completion_output_params_streaming(
-                completion_stream=response
+                completion_stream=response,
+                model=kwargs.get("model", "")
             )
         )
 
