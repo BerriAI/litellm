@@ -532,6 +532,42 @@ class TestScopeCaching:
             assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_scope_cache_lru_keeps_hot_user_on_eviction(self):
+        """Frequently accessed users should not be evicted before cold entries."""
+        guardrail = _make_guardrail()
+        guardrail._scope_cache_maxsize = 3
+
+        scope_payload = (
+            {
+                "value": [
+                    {"activities": "uploadText", "executionMode": "evaluateInline"}
+                ]
+            },
+            {"ETag": "scope-etag"},
+        )
+
+        with patch.object(
+            guardrail, "_graph_post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = scope_payload
+
+            await guardrail._compute_protection_scopes("user-a")
+            await guardrail._compute_protection_scopes("user-b")
+            await guardrail._compute_protection_scopes("user-c")
+            assert mock_post.call_count == 3
+
+            await guardrail._compute_protection_scopes("user-a")
+            assert mock_post.call_count == 3
+
+            await guardrail._compute_protection_scopes("user-d")
+            assert mock_post.call_count == 4
+
+            await guardrail._compute_protection_scopes("user-a")
+            assert mock_post.call_count == 4
+            assert "user-a" in guardrail._scope_cache
+            assert "user-b" not in guardrail._scope_cache
+
+    @pytest.mark.asyncio
     async def test_scope_invalidated_on_modified(self):
         guardrail = _make_guardrail()
 
