@@ -82,6 +82,20 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
+            # Cache resolved label sets per metric. Several entries in
+            # ``PrometheusMetricLabels.get_labels`` read module-level toggles
+            # (e.g. ``litellm.prometheus_emit_stream_label``,
+            # ``litellm.prometheus_emit_rate_limit_labels``) that can be
+            # changed at runtime. Prometheus counters/gauges/histograms are
+            # created with a *fixed* ``labelnames`` set; if a runtime call
+            # to ``get_labels_for_metric`` returned a different set, the
+            # subsequent ``counter.labels(**_labels)`` would raise a
+            # ``ValueError`` from the prometheus client. Snapshotting at
+            # logger init time pins the label set for the lifetime of the
+            # logger so toggling these flags only takes effect after a
+            # restart, keeping init-time and runtime label sets in sync.
+            self._cached_metric_labels: Dict[str, List[str]] = {}
+
             _custom_buckets = litellm.prometheus_latency_buckets
             self.latency_buckets = (
                 tuple(_custom_buckets)
@@ -973,13 +987,27 @@ class PrometheusLogger(CustomLogger):
         self, metric_name: DEFINED_PROMETHEUS_METRICS
     ) -> List[str]:
         """
-        Get the labels for a metric, filtered if configured
+        Get the labels for a metric, filtered if configured.
+
+        The result is cached on the instance so the label set used to
+        construct each Prometheus metric at ``__init__`` time stays in lock
+        step with the label set passed to ``counter.labels(...)`` at
+        runtime, even if the underlying module-level toggles consulted by
+        :meth:`PrometheusMetricLabels.get_labels` (e.g.
+        ``litellm.prometheus_emit_rate_limit_labels``,
+        ``litellm.prometheus_emit_stream_label``) are flipped after the
+        logger has been created.
         """
+        cached = self._cached_metric_labels.get(metric_name)
+        if cached is not None:
+            return cached
+
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
         # If no label filtering is configured for this metric, use default labels
         if metric_name not in self.label_filters:
+            self._cached_metric_labels[metric_name] = default_labels
             return default_labels
 
         # Get configured labels for this metric
@@ -990,6 +1018,7 @@ class PrometheusLogger(CustomLogger):
             label for label in default_labels if label in configured_labels
         ]
 
+        self._cached_metric_labels[metric_name] = filtered_labels
         return filtered_labels
 
     def _track_end_user_metric_series(

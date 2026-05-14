@@ -174,7 +174,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
             self,
             message=message,
             llm_provider=llm_provider,
-            model=model or "",
+            model=model,
             category=category,
             rate_limit_type=rate_limit_type,
             headers=stringified_headers,
