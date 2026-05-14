@@ -2120,6 +2120,23 @@ def batch_cost_calculator(
             )
         except Exception:
             model_info = None
+    elif not (
+        model_info.get("input_cost_per_token_batches")
+        or model_info.get("input_cost_per_token")
+        or model_info.get("output_cost_per_token_batches")
+        or model_info.get("output_cost_per_token")
+    ):
+        # model_info was provided (e.g. deployment metadata with only id/db_model)
+        # but carries no pricing fields. Fall back to the global pricing table so
+        # that standard model pricing is used instead of silently returning $0.
+        try:
+            global_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            if global_info:
+                model_info = global_info
+        except Exception:
+            pass
 
     if not model_info:
         return 0.0, 0.0
