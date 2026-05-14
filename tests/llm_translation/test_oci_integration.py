@@ -40,11 +40,32 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _load_oci_config():
+    """Load OCI config from the profile named by ``OCI_CONFIG_PROFILE`` env var,
+    falling back to ``[DEFAULT]``. Lets CI/local runs target a specific profile
+    without needing a ``[DEFAULT]`` section in ``~/.oci/config``."""
+    oci = pytest.importorskip("oci")
+    profile = os.environ.get("OCI_CONFIG_PROFILE", "DEFAULT")
+    return oci.config.from_file(profile_name=profile)
+
+
 @pytest.fixture(scope="module")
 def oci_signer():
-    """Return an oci.Signer built from ~/.oci/config [DEFAULT]."""
+    """Return an oci.Signer (or SecurityTokenSigner for session-token profiles)
+    built from ~/.oci/config — profile chosen via OCI_CONFIG_PROFILE."""
     oci = pytest.importorskip("oci")
-    config = oci.config.from_file()
+    config = _load_oci_config()
+
+    # Session-token profiles carry a `security_token_file` instead of a user
+    # OCID; build the corresponding signer in that case.
+    if "security_token_file" in config:
+        with open(os.path.expanduser(config["security_token_file"])) as f:
+            token = f.read().strip()
+        private_key = oci.signer.load_private_key_from_file(
+            config["key_file"], config.get("pass_phrase")
+        )
+        return oci.auth.signers.SecurityTokenSigner(token, private_key)
+
     return oci.Signer(
         tenancy=config["tenancy"],
         user=config["user"],
@@ -56,8 +77,7 @@ def oci_signer():
 @pytest.fixture(scope="module")
 def oci_params(oci_signer) -> dict:
     """Common OCI call-time parameters shared by all tests."""
-    oci = pytest.importorskip("oci")
-    config = oci.config.from_file()
+    config = _load_oci_config()
     compartment_id = os.environ.get("OCI_TEST_COMPARTMENT_ID", config["tenancy"])
     region = os.environ.get("OCI_TEST_REGION", "us-chicago-1")
     return {
@@ -308,6 +328,65 @@ async def test_async_tool_use(m: _M, oci_params):
 
 
 # ---------------------------------------------------------------------------
+# Reasoning-effort tests (reasoning models only)
+# ---------------------------------------------------------------------------
+
+# Reasoning model that accepts the `reasoningEffort` parameter on OCI.
+# Not every reasoning model does — xai.grok-4-fast-reasoning, for example,
+# rejects it with a 400.
+_REASONING_MODEL = "xai.grok-3-mini"
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_reasoning_effort_lowercase_accepted(effort, oci_params):
+    """OpenAI clients send lowercase reasoning_effort; OCI requires uppercase.
+    The transform layer should uppercase it transparently."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{_REASONING_MODEL}",
+        messages=[{"role": "user", "content": "What is 2+2? One word."}],
+        max_tokens=200,
+        reasoning_effort=effort,
+        **oci_params,
+    )
+    assert resp.choices[0].finish_reason is not None
+    assert resp.usage.prompt_tokens > 0
+
+
+def test_reasoning_effort_disable_mapped_to_none(oci_params):
+    """OpenAI's 'disable' maps to OCI's 'NONE'. Without this mapping the
+    request 400s."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{_REASONING_MODEL}",
+        messages=[{"role": "user", "content": "What is 2+2? One word."}],
+        max_tokens=200,
+        reasoning_effort="disable",
+        **oci_params,
+    )
+    assert resp.choices[0].finish_reason is not None
+
+
+def test_reasoning_tokens_in_usage(oci_params):
+    """OCI returns completionTokensDetails.reasoningTokens on reasoning models;
+    LiteLLM should surface it on Usage.completion_tokens_details."""
+    import litellm
+
+    resp = litellm.completion(
+        model=f"oci/{_REASONING_MODEL}",
+        messages=[{"role": "user", "content": "What is 2+2? One word."}],
+        max_tokens=200,
+        reasoning_effort="low",
+        **oci_params,
+    )
+    assert resp.usage.completion_tokens_details is not None
+    assert resp.usage.completion_tokens_details.reasoning_tokens is not None
+    assert resp.usage.completion_tokens_details.reasoning_tokens > 0
+
+
+# ---------------------------------------------------------------------------
 # Embedding tests
 # ---------------------------------------------------------------------------
 
@@ -482,8 +561,8 @@ class TestOCIEnvVarCredentials:
 
     def test_completion_via_env_vars(self, monkeypatch):
         """Completion works when credentials are set through environment variables."""
-        oci = pytest.importorskip("oci")
-        config = oci.config.from_file()
+        pytest.importorskip("oci")
+        config = _load_oci_config()
         key_path = os.path.expanduser(config["key_file"])
 
         with open(key_path) as f:
@@ -506,8 +585,8 @@ class TestOCIEnvVarCredentials:
         assert resp.choices[0].message.content is not None
 
     def test_embedding_via_env_vars(self, monkeypatch):
-        oci = pytest.importorskip("oci")
-        config = oci.config.from_file()
+        pytest.importorskip("oci")
+        config = _load_oci_config()
         key_path = os.path.expanduser(config["key_file"])
 
         with open(key_path) as f:
