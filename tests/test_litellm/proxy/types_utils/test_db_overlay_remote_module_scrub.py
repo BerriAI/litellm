@@ -71,6 +71,74 @@ def test_custom_provider_map_custom_handler_stripped():
     assert cleaned["custom_provider_map"][1]["custom_handler"] is None
 
 
+def test_litellm_settings_guardrails_v1_callbacks_stripped():
+    # v1 guardrail shape: {guardrail_name: {callbacks: [...], default_on: bool}}
+    overlay = {
+        "guardrails": [
+            {
+                "prompt_injection": {
+                    "default_on": True,
+                    "callbacks": [
+                        "lakera_prompt_injection",
+                        "s3://attacker/m.i",
+                        "gcs://attacker/m.i",
+                    ],
+                }
+            }
+        ]
+    }
+    cleaned = _scrub_db_overlay_remote_module_loads("litellm_settings", overlay)
+    assert cleaned["guardrails"][0]["prompt_injection"]["callbacks"] == [
+        "lakera_prompt_injection"
+    ]
+
+
+def test_litellm_settings_guardrails_v2_callbacks_and_guardrail_stripped():
+    # v2 shape: {guardrail_name, litellm_params: {guardrail: "module.path", callbacks: [...]}}
+    overlay = {
+        "guardrails": [
+            {
+                "guardrail_name": "custom",
+                "litellm_params": {
+                    "guardrail": "s3://attacker/m.i",
+                    "mode": "pre_call",
+                    "callbacks": ["lakera", "s3://attacker/cb.i"],
+                },
+            }
+        ]
+    }
+    cleaned = _scrub_db_overlay_remote_module_loads("litellm_settings", overlay)
+    lp = cleaned["guardrails"][0]["litellm_params"]
+    assert lp["guardrail"] is None
+    assert lp["callbacks"] == ["lakera"]
+    assert lp["mode"] == "pre_call"
+
+
+def test_litellm_settings_guardrails_local_dotted_name_preserved():
+    overlay = {
+        "guardrails": [
+            {
+                "guardrail_name": "custom",
+                "litellm_params": {
+                    "guardrail": "custom_module.MyGuardrail",
+                    "callbacks": ["my_module.cb", "langfuse"],
+                },
+            }
+        ]
+    }
+    cleaned = _scrub_db_overlay_remote_module_loads("litellm_settings", overlay)
+    lp = cleaned["guardrails"][0]["litellm_params"]
+    assert lp["guardrail"] == "custom_module.MyGuardrail"
+    assert lp["callbacks"] == ["my_module.cb", "langfuse"]
+
+
+def test_litellm_settings_guardrails_non_list_passthrough():
+    cleaned = _scrub_db_overlay_remote_module_loads(
+        "litellm_settings", {"guardrails": "not-a-list"}
+    )
+    assert cleaned["guardrails"] == "not-a-list"
+
+
 def test_pass_through_endpoints_target_stripped():
     overlay = {
         "pass_through_endpoints": [
