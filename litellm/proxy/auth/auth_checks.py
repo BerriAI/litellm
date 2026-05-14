@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import math
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
@@ -328,7 +329,10 @@ def _global_proxy_budget_check(
         and route != "/v1/models"
         and route != "/models"
     ):
-        if global_proxy_spend > litellm.max_budget:
+        if (
+            math.isfinite(litellm.max_budget)
+            and global_proxy_spend > litellm.max_budget
+        ):
             raise litellm.BudgetExceededError(
                 current_cost=global_proxy_spend, max_budget=litellm.max_budget
             )
@@ -645,7 +649,7 @@ async def common_checks(  # noqa: PLR0915
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
             )
-            if user_spend >= user_budget:
+            if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=user_spend,
                     max_budget=user_budget,
@@ -3280,7 +3284,10 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if spend >= valid_token.max_budget:
+        # Defense-in-depth (GHSA-2rv4-xv66-fpjg): spend >= NaN is always False,
+        # so a NaN max_budget would silently disable enforcement.  Treat a
+        # non-finite max_budget as "no configured limit" rather than as a bypass.
+        if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
@@ -3313,7 +3320,7 @@ async def _virtual_key_multi_budget_check(
             counter_key=counter_key,
             fallback_spend=0.0,
         )
-        if window_spend >= w["max_budget"]:
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
@@ -3568,7 +3575,10 @@ async def _check_team_member_budget(
                 fallback_spend=team_member_spend,
             )
 
-            if team_member_spend >= team_member_budget:
+            if (
+                math.isfinite(team_member_budget)
+                and team_member_spend >= team_member_budget
+            ):
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
@@ -3650,7 +3660,7 @@ async def _team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
         )
 
-        if spend > team_object.max_budget:
+        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             if valid_token:
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -3698,7 +3708,7 @@ async def _team_multi_budget_check(
             counter_key=counter_key,
             fallback_spend=0.0,
         )
-        if window_spend >= w["max_budget"]:
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
@@ -3812,6 +3822,7 @@ async def _project_max_budget_check(
     if (
         max_budget is not None
         and project_object.spend is not None
+        and math.isfinite(max_budget)
         and project_object.spend > max_budget
     ):
         if valid_token:
@@ -4004,7 +4015,7 @@ async def _organization_max_budget_check(
     )
 
     # Check if organization spend exceeds max budget
-    if org_spend >= org_max_budget:
+    if math.isfinite(org_max_budget) and org_spend >= org_max_budget:
         # Trigger budget alert
         call_info = CallInfo(
             token=valid_token.token,
