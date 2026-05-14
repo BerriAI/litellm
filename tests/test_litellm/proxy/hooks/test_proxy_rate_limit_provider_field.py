@@ -1096,5 +1096,32 @@ def test_prometheus_exception_class_name_back_compat_for_proxy_rate_limit_error(
     assert PrometheusLogger._get_exception_class_name(exc_no_model) == "HTTPException"
 
 
+def test_prometheus_exception_class_name_back_compat_for_budget_exceeded_error():
+    """
+    The unified rate-limit work also attached ``.llm_provider`` to
+    ``BudgetExceededError`` so callbacks get provider attribution from
+    ``StandardLoggingPayload``. Without a back-compat short-circuit the
+    provider-prefix step in ``_get_exception_class_name`` would silently
+    flip the label from ``"BudgetExceededError"`` to e.g.
+    ``"Openai.BudgetExceededError"`` and break dashboards keyed on the
+    historical value. Pin the literal label here.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    err = litellm.BudgetExceededError(
+        current_cost=1.0,
+        max_budget=0.5,
+        llm_provider="openai",
+    )
+    assert PrometheusLogger._get_exception_class_name(err) == "BudgetExceededError"
+
+    # Default (empty llm_provider) path — same literal label.
+    err_no_provider = litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5)
+    assert (
+        PrometheusLogger._get_exception_class_name(err_no_provider)
+        == "BudgetExceededError"
+    )
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-vv", "-x"]))

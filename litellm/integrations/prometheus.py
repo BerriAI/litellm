@@ -2669,6 +2669,23 @@ class PrometheusLogger(CustomLogger):
         ):
             return "HTTPException"
 
+        # Same back-compat reasoning for ``BudgetExceededError``: the unified
+        # rate-limit error work attached ``.llm_provider`` to budget errors
+        # too (so callbacks reading ``StandardLoggingPayload`` get provider
+        # attribution). Without this short-circuit, the provider prefix below
+        # would silently flip the label from "BudgetExceededError" to e.g.
+        # "Openai.BudgetExceededError" and break dashboards keyed on the
+        # original value.
+        try:
+            from litellm.exceptions import BudgetExceededError
+        except ImportError:
+            BudgetExceededError = None  # type: ignore[assignment,misc]
+
+        if BudgetExceededError is not None and isinstance(
+            exception, BudgetExceededError
+        ):
+            return "BudgetExceededError"
+
         exception_class_name = ""
         if hasattr(exception, "llm_provider"):
             exception_class_name = getattr(exception, "llm_provider") or ""
