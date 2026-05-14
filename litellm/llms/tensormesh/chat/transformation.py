@@ -1,11 +1,8 @@
 from typing import Optional, Tuple
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.tensormesh.common_utils import TENSORMESH_API_BASE
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ProviderSpecificModelInfo
-
-
-TENSORMESH_API_BASE = "https://serverless.tensormesh.ai/v1"
 
 
 class TensormeshChatConfig(OpenAIGPTConfig):
@@ -26,23 +23,12 @@ class TensormeshChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
-        return (
-            api_base
-            or get_secret_str("TENSORMESH_SERVERLESS_BASE_URL")
-            or TENSORMESH_API_BASE
-        )
+        return api_base or get_secret_str("TENSORMESH_SERVERLESS_BASE_URL") or TENSORMESH_API_BASE
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         return self.get_api_base(api_base), self.get_api_key(api_key)
-
-    def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        return {
-            "supports_function_calling": True,
-            "supports_tool_choice": True,
-            "supports_native_structured_output": True,
-        }
 
     def map_openai_params(
         self,

@@ -17,7 +17,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..chat.transformation import TENSORMESH_API_BASE
+from litellm.llms.tensormesh.common_utils import TENSORMESH_API_BASE
 
 
 class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
@@ -32,15 +32,16 @@ class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or get_secret_str(
-            "TENSORMESH_INFERENCE_API_KEY"
-        )
+        api_key = litellm_params.api_key or get_secret_str("TENSORMESH_INFERENCE_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     @staticmethod
-    def _normalize_response_usage(response_json: dict) -> None:
+    def _normalize_response_usage(
+        response_json: dict,
+        convert_to_model: bool = True,
+    ) -> None:
         usage = response_json.get("usage")
         if not isinstance(usage, dict):
             return
@@ -67,16 +68,14 @@ class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
             }
 
         completion_details = usage.get("completion_tokens_details")
-        if (
-            isinstance(completion_details, dict)
-            and "output_tokens_details" not in usage
-        ):
+        if isinstance(completion_details, dict) and "output_tokens_details" not in usage:
             usage["output_tokens_details"] = {
                 "reasoning_tokens": completion_details.get("reasoning_tokens") or 0,
                 "text_tokens": completion_details.get("text_tokens"),
             }
         if (
-            usage.get("input_tokens") is not None
+            convert_to_model
+            and usage.get("input_tokens") is not None
             and usage.get("output_tokens") is not None
             and usage.get("total_tokens") is not None
         ):
@@ -94,23 +93,17 @@ class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
                 additional_args={"complete_input_dict": {}},
             )
             raw_response_json = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(
-                raw_response_json["created_at"]
-            )
-            self._normalize_response_usage(raw_response_json)
+            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
-            raise OpenAIError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
+        self._normalize_response_usage(raw_response_json)
         raw_response_headers = dict(raw_response.headers)
         try:
             response = ResponsesAPIResponse(**raw_response_json)
         except Exception:
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
-        response._hidden_params["additional_headers"] = process_response_headers(
-            raw_response_headers
-        )
+        response._hidden_params["additional_headers"] = process_response_headers(raw_response_headers)
         response._hidden_params["headers"] = raw_response_headers
         return response
 
@@ -122,8 +115,8 @@ class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIStreamingResponse:
         response = parsed_chunk.get("response")
         if isinstance(response, dict):
-            self._normalize_response_usage(response)
-        self._normalize_response_usage(parsed_chunk)
+            self._normalize_response_usage(response, convert_to_model=False)
+        self._normalize_response_usage(parsed_chunk, convert_to_model=False)
         return super().transform_streaming_response(
             model=model,
             parsed_chunk=parsed_chunk,
@@ -135,11 +128,7 @@ class TensormeshResponsesConfig(OpenAIResponsesAPIConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        api_base = (
-            api_base
-            or get_secret_str("TENSORMESH_SERVERLESS_BASE_URL")
-            or TENSORMESH_API_BASE
-        )
+        api_base = api_base or get_secret_str("TENSORMESH_SERVERLESS_BASE_URL") or TENSORMESH_API_BASE
         return f"{api_base.rstrip('/')}/responses"
 
     def supports_native_websocket(self) -> bool:

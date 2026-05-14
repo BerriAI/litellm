@@ -148,25 +148,24 @@ def _openai_stream_chunk(delta: dict[str, Any], finish_reason: str | None = None
 
 
 def test_tensormesh_provider_configured(monkeypatch):
-    from litellm.llms.tensormesh.chat.transformation import (
-        TENSORMESH_API_BASE,
-        TensormeshChatConfig,
-    )
+    from litellm.llms.tensormesh.chat.transformation import TensormeshChatConfig
+    from litellm.llms.tensormesh.common_utils import TENSORMESH_API_BASE
 
     monkeypatch.delenv("TENSORMESH_INFERENCE_API_KEY", raising=False)
     monkeypatch.delenv("TENSORMESH_SERVERLESS_BASE_URL", raising=False)
 
     config = TensormeshChatConfig()
+    supported_params = config.get_supported_openai_params(
+        model="MiniMaxAI/MiniMax-M2.7"
+    )
 
     assert TENSORMESH_API_BASE == "https://serverless.tensormesh.ai/v1"
     assert config.custom_llm_provider == "tensormesh"
     assert config.get_api_base() == "https://serverless.tensormesh.ai/v1"
     assert config.get_api_key() is None
-    assert config.get_provider_info(model="MiniMaxAI/MiniMax-M2.7") == {
-        "supports_function_calling": True,
-        "supports_tool_choice": True,
-        "supports_native_structured_output": True,
-    }
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
+    assert "response_format" in supported_params
 
 
 def test_tensormesh_provider_resolution_preserves_slash_model_ids(monkeypatch):
@@ -205,7 +204,6 @@ def test_tensormesh_provider_resolution_uses_api_base_env(monkeypatch):
 def test_tensormesh_provider_config_manager_returns_dedicated_config():
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
-    from litellm.utils import supports_function_calling, supports_tool_choice
 
     config = ProviderConfigManager.get_provider_chat_config(
         model="Qwen/Qwen3-Coder-30B-A3B-Instruct",
@@ -214,13 +212,12 @@ def test_tensormesh_provider_config_manager_returns_dedicated_config():
 
     assert config is not None
     assert config.custom_llm_provider == "tensormesh"
-    assert config.get_provider_info(model="MiniMaxAI/MiniMax-M2.7") == {
-        "supports_function_calling": True,
-        "supports_tool_choice": True,
-        "supports_native_structured_output": True,
-    }
-    assert supports_function_calling(model="tensormesh/MiniMaxAI/MiniMax-M2.7") is True
-    assert supports_tool_choice(model="tensormesh/MiniMaxAI/MiniMax-M2.7") is True
+    supported_params = config.get_supported_openai_params(
+        model="MiniMaxAI/MiniMax-M2.7"
+    )
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
+    assert "response_format" in supported_params
 
 
 def test_tensormesh_is_registered_as_openai_compatible_provider():

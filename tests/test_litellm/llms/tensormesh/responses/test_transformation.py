@@ -235,3 +235,44 @@ def test_tensormesh_responses_normalizes_usage_before_model_construct():
     assert response.usage.total_tokens == 5
     assert response.usage.input_tokens_details is not None
     assert response.usage.input_tokens_details.cached_tokens == 1
+
+
+def test_tensormesh_responses_streaming_normalizes_usage_without_mutating_to_model():
+    from litellm.llms.tensormesh.responses.transformation import (
+        TensormeshResponsesConfig,
+    )
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    parsed_chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_tensormesh_stream_test",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "MiniMaxAI/MiniMax-M2.7",
+            "output": [],
+            "usage": {
+                "prompt_tokens": 2,
+                "completion_tokens": 3,
+                "total_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 1},
+            },
+        },
+    }
+
+    response = TensormeshResponsesConfig().transform_streaming_response(
+        model="MiniMaxAI/MiniMax-M2.7",
+        parsed_chunk=parsed_chunk,
+        logging_obj=_FakeLogging(),
+    )
+
+    usage = parsed_chunk["response"]["usage"]
+    assert isinstance(usage, dict)
+    assert not isinstance(usage, ResponseAPIUsage)
+    assert usage["input_tokens"] == 2
+    assert usage["output_tokens"] == 3
+    assert usage["total_tokens"] == 5
+    assert usage["input_tokens_details"]["cached_tokens"] == 1
+    assert response.response.usage.input_tokens == 2
+    assert response.response.usage.output_tokens == 3
