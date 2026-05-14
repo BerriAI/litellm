@@ -1522,15 +1522,30 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.exception(
             f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
         )
-        # Allow callbacks to transform the error response
-        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=self.data,
+        # Shield the failure hook so the Redis DECR completes even if the
+        # client disconnects during cleanup. If the awaiter is cancelled
+        # before the hook returns, we lose access to transformed_exception
+        # and fall back to the original e.
+        _failure_hook_task = asyncio.create_task(
+            proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=self.data,
+            )
         )
-        # Use transformed exception if callback returned one, otherwise use original
-        if transformed_exception is not None:
-            e = transformed_exception
+        try:
+            transformed_exception = await asyncio.shield(_failure_hook_task)
+            # Use transformed exception if callback returned one, otherwise use original
+            if transformed_exception is not None:
+                e = transformed_exception
+        except asyncio.CancelledError:
+            # Caller cancelled mid-cleanup; shielded task continues in
+            # background. Proceed with the original exception.
+            pass
+        except Exception:
+            verbose_proxy_logger.exception(
+                "_handle_llm_api_exception(): failure hook errored during exception cleanup"
+            )
         litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -1711,19 +1726,57 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 )
                 yield serialize_chunk(chunk)
+        except asyncio.CancelledError as _cce:
+            # Shield the failure hook so the Redis DECR completes even though
+            # the parent request task is being torn down. Without this, the
+            # inner await raises CancelledError before the DECR Lua round-trip
+            # lands in Redis, leaking the parallel-request counter.
+            _failure_hook_task = asyncio.create_task(
+                proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=_cce,
+                    request_data=request_data,
+                )
+            )
+            try:
+                await asyncio.shield(_failure_hook_task)
+            except asyncio.CancelledError:
+                # Caller cancelled; shielded task continues in background.
+                pass
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "async_data_generator: failure hook errored during cancellation cleanup"
+                )
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=e,
-                request_data=request_data,
+            # Shield the failure hook so the Redis DECR completes even if the
+            # client disconnects during cleanup (regular-exception path race).
+            # If the awaiter is cancelled before the hook returns, we lose
+            # access to transformed_exception and fall back to the original e.
+            _failure_hook_task = asyncio.create_task(
+                proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                )
             )
-            if transformed_exception is not None:
-                e = transformed_exception
+            try:
+                transformed_exception = await asyncio.shield(_failure_hook_task)
+                if transformed_exception is not None:
+                    e = transformed_exception
+            except asyncio.CancelledError:
+                # Caller cancelled mid-cleanup; shielded task continues in
+                # background. Proceed with the original exception.
+                pass
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "async_data_generator: failure hook errored during exception cleanup"
+                )
             verbose_proxy_logger.debug(
                 f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
             )

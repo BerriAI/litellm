@@ -1922,37 +1922,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 f"Error in rate limit success event: {str(e)}"
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ):
         """
-        Decrement max parallel requests counter for the API Key
+        Decrement max parallel requests counter when the overall request fails.
+        Uses async_post_call_failure_hook instead of async_log_failure_event
+        because this hook fires once per logical request (after all retries/fallbacks
+        exhausted), whereas async_log_failure_event fires for each individual
+        deployment attempt.
         """
-        from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
-        )
-
         try:
-            litellm_parent_otel_span: Union[
-                Span, None
-            ] = _get_parent_otel_span_from_kwargs(kwargs)
-            # Get metadata from standard_logging_object - this correctly handles both
-            # 'metadata' and 'litellm_metadata' fields from litellm_params
-            standard_logging_object = kwargs.get("standard_logging_object") or {}
-            standard_logging_metadata = standard_logging_object.get("metadata") or {}
-            user_api_key = standard_logging_metadata.get("user_api_key_hash")
-
-            if user_api_key:
-                # MAX PARALLEL REQUESTS - only support for API Key, use Lua script for atomic decrement
-                user_api_key_token = standard_logging_metadata.get("user_api_key_hash")
-                user_api_key_alias = standard_logging_metadata.get("user_api_key_alias")
+            if user_api_key_dict and user_api_key_dict.api_key:
                 await self._execute_max_parallel_requests_decrement(
                     descriptor_key="api_key",
-                    descriptor_value=user_api_key,
-                    token=user_api_key_token,
-                    key_alias=user_api_key_alias,
+                    descriptor_value=user_api_key_dict.api_key,
+                    token=user_api_key_dict.api_key,
+                    key_alias=user_api_key_dict.key_alias,
                 )
         except Exception as e:
             verbose_proxy_logger.exception(
-                f"Error in rate limit failure event: {str(e)}"
+                f"Error in rate limit failure hook: {str(e)}"
             )
 
     async def async_post_call_success_hook(
