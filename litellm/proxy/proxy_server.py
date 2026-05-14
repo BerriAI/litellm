@@ -253,7 +253,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     log_db_metrics,
 )
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy.auth.auth_utils import (
+    check_response_size_is_safe,
+    is_request_body_safe,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -10100,8 +10103,31 @@ async def supported_openai_params(model: str):
     dependencies=[Depends(user_api_key_auth)],
     response_model=RawRequestTypedDict,
 )
-async def transform_request(request: TransformRequestBody):
+async def transform_request(
+    request: TransformRequestBody,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     from litellm.utils import return_raw_request
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "/utils/transform_request is restricted to proxy admins. "
+                "This endpoint accepts arbitrary provider configuration and must not "
+                "be exposed to non-admin users."
+            },
+        )
+
+    try:
+        is_request_body_safe(
+            request_body=request.request_body,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=request.request_body.get("model", ""),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
