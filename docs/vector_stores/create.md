@@ -16,6 +16,8 @@ Create a vector store which can be used to store and search document chunks for 
 | Support LLM Providers (Passthrough API) | [**Azure AI**](/docs/providers/azure_ai/azure_ai_vector_stores_passthrough) | Full vector stores API support across providers |
 | Support LLM Providers (Dataset Management) | [**RAGFlow**](/docs/providers/ragflow_vector_store.md) | Dataset creation and management (search not supported) |
 
+The proxy also supports **retrieve**, **list**, **update**, and **delete** for vector stores (OpenAI-compatible). See [Vector store management and routing on the proxy](#vector-store-management-and-routing-on-the-proxy) for `curl` examples and provider routing.
+
 ## Usage
 
 ### LiteLLM Python SDK
@@ -142,7 +144,7 @@ print(vector_store)
 
 </TabItem>
 
-<TabItem value="curl-proxy" label="curl">
+<TabItem value="curl-proxy" label="curl (create)">
 
 ```bash showLineNumbers title="Create Vector Store via curl"
 curl -L -X POST 'http://0.0.0.0:4000/v1/vector_stores' \
@@ -170,6 +172,47 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/vector_stores' \
 ```
 
 </TabItem>
+
+<TabItem value="curl-management" label="curl (retrieve, list, update, delete)">
+
+Use the same base URL and API key as for create. Replace `vs_abc123` with your vector store id.
+
+**Retrieve**
+
+```bash
+curl -L 'http://0.0.0.0:4000/v1/vector_stores/vs_abc123' \
+  -H 'Accept: application/json' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+**List** (optional query params: `after`, `before`, `limit`, `order`)
+
+```bash
+curl -L 'http://0.0.0.0:4000/v1/vector_stores?limit=20&order=desc' \
+  -H 'Accept: application/json' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+**Update** (`POST` with JSON body)
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/vector_stores/vs_abc123' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
+  -d '{ "name": "Renamed store", "metadata": { "env": "staging" } }'
+```
+
+**Delete**
+
+```bash
+curl -L -X DELETE 'http://0.0.0.0:4000/v1/vector_stores/vs_abc123' \
+  -H 'Accept: application/json' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+See [Vector store management and routing on the proxy](#vector-store-management-and-routing-on-the-proxy) for provider routing details and OpenAI API references.
+
+</TabItem>
 </Tabs>
 
 ### OpenAI SDK (Standalone)
@@ -191,6 +234,37 @@ print(vector_store)
 
 </TabItem>
 </Tabs>
+
+## Vector store management and routing on the proxy
+
+Besides **create** (`POST /v1/vector_stores` or `/vector_stores`), the LiteLLM proxy exposes OpenAI-compatible **retrieve**, **list**, **update**, and **delete**. Paths work **with or without** the `/v1` prefix (for example `/v1/vector_stores/...` and `/vector_stores/...`).
+
+For **search**, see [Search vector store](./search.md). For **files** on a store, see [Vector store files](../vector_store_files.md).
+
+### Authentication
+
+Use your LiteLLM proxy virtual key with either:
+
+```bash
+-H 'Authorization: Bearer sk-1234'
+# or
+-H 'x-litellm-api-key: sk-1234'
+```
+
+### Provider routing
+
+LiteLLM automatically selects the vector store provider from the request context — no extra query parameters needed:
+
+- **LiteLLM-managed stores** — If `vector_store_id` is a LiteLLM-managed store, the proxy resolves the provider from the registry (`litellm_params` stored in the database).
+- **Model-based routing** — If the request includes a `model` matching a configured deployment/model group, credentials come from that deployment.
+- **SDK default** — If neither applies, the LiteLLM SDK default for that call is used (e.g. `openai`).
+
+### OpenAI API reference (management operations)
+
+- [Retrieve vector store](https://platform.openai.com/docs/api-reference/vector-stores/retrieve)
+- [List vector stores](https://platform.openai.com/docs/api-reference/vector-stores/list)
+- [Modify vector store](https://platform.openai.com/docs/api-reference/vector-stores/modify) — on the LiteLLM proxy, modify is **`POST`** to `/v1/vector_stores/{vector_store_id}` with a JSON body.
+- [Delete vector store](https://platform.openai.com/docs/api-reference/vector-stores/delete)
 
 ## Request Format
 

@@ -14,6 +14,8 @@ Search a vector store for relevant chunks based on a query and file attributes f
 | End-user Tracking | ✅ | |
 | Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine, Azure AI, Milvus, Gemini** | Full vector stores API support across providers |
 
+For **retrieve, list, update, and delete** over HTTP (including `custom_llm_provider` / `model` routing), see [Create vector store](./create.md#vector-store-management-and-routing-on-the-proxy).
+
 ## Usage
 
 ### LiteLLM Python SDK
