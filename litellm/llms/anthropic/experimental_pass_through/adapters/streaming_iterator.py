@@ -75,7 +75,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -103,22 +103,46 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                should_start_new_block = self._should_start_new_content_block(chunk)
+                # First real chunk: peek at its content to determine the initial
+                # content_block type. Without this, the initial block_start was
+                # hardcoded to {"type":"text","text":""} regardless of whether
+                # the first chunk carried thinking or tool_use content — which
+                # caused thinking_delta events to land inside a text block (a
+                # spec violation that broke strict downstream parsers, e.g.
+                # Claude Code).
+                is_first_real_chunk = self.sent_content_block_start is False
+                if is_first_real_chunk:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices  # type: ignore
+                    )
+                    # Restore the original tool name if it was truncated to
+                    # fit OpenAI's 64-char limit. The block-transition path
+                    # (_should_start_new_content_block) already does this; the
+                    # first-chunk path must too, or a first-chunk tool_use with
+                    # a long name emits its truncated name downstream.
+                    self._restore_tool_name(block_type, block_start)
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = block_start
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": block_start,
+                        }
+                    )
+                    # We've initialized the first content_block from this chunk;
+                    # the chunk should not also be treated as a block transition.
+                    should_start_new_block = False
+                else:
+                    should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
@@ -126,6 +150,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
+
+                # If this was the first real chunk and the chunk only carried
+                # the block's declaration (e.g. a tool_call with name+id but
+                # empty arguments), the translated delta is empty. Suppress it
+                # to avoid emitting a spurious content_block_delta with no
+                # content. Matches the gating used in the block-transition
+                # branch below.
+                if is_first_real_chunk and self._is_empty_delta(processed_chunk):
+                    return self.chunk_queue.popleft()
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
@@ -243,23 +276,46 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                # Check if we need to start a new content block
-                should_start_new_block = self._should_start_new_content_block(chunk)
+                # First real chunk: peek at its content to determine the initial
+                # content_block type. Without this, the initial block_start was
+                # hardcoded to {"type":"text","text":""} regardless of whether
+                # the first chunk carried thinking or tool_use content — which
+                # caused thinking_delta events to land inside a text block (a
+                # spec violation that broke strict downstream parsers, e.g.
+                # Claude Code).
+                is_first_real_chunk = self.sent_content_block_start is False
+                if is_first_real_chunk:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices  # type: ignore
+                    )
+                    # Restore the original tool name if it was truncated to
+                    # fit OpenAI's 64-char limit. The block-transition path
+                    # (_should_start_new_content_block) already does this; the
+                    # first-chunk path must too, or a first-chunk tool_use with
+                    # a long name emits its truncated name downstream.
+                    self._restore_tool_name(block_type, block_start)
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = block_start
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": block_start,
+                        }
+                    )
+                    # We've initialized the first content_block from this chunk;
+                    # the chunk should not also be treated as a block transition.
+                    should_start_new_block = False
+                else:
+                    should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
 
@@ -267,6 +323,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
+
+                # If this was the first real chunk and the chunk only carried
+                # the block's declaration (e.g. a tool_call with name+id but
+                # empty arguments), the translated delta is empty. Suppress it
+                # to avoid emitting a spurious content_block_delta with no
+                # content. Matches the gating used in the block-transition
+                # branch below.
+                if is_first_real_chunk and self._is_empty_delta(processed_chunk):
+                    return self.chunk_queue.popleft()
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
@@ -457,6 +522,66 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
+    @staticmethod
+    def _is_empty_delta(processed_chunk: Any) -> bool:
+        """
+        Return True if `processed_chunk` is a content_block_delta whose payload
+        carries no useful content for its delta type:
+
+        - input_json_delta with empty/None partial_json
+        - text_delta with empty/None text
+        - thinking_delta with empty/None thinking
+        - signature_delta with empty/None signature
+
+        Used to suppress spurious empty delta events when the underlying
+        provider chunk only declared a block's metadata (e.g. tool name+id
+        with empty arguments).
+        """
+        if not isinstance(processed_chunk, dict):
+            return False
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
+        delta_type = delta.get("type")
+        if delta_type == "input_json_delta":
+            return not delta.get("partial_json")
+        if delta_type == "text_delta":
+            return not delta.get("text")
+        if delta_type == "thinking_delta":
+            return not delta.get("thinking")
+        if delta_type == "signature_delta":
+            return not delta.get("signature")
+        return False
+
+    def _restore_tool_name(self, block_type: str, content_block_start: Any) -> None:
+        """
+        Restore the original tool name on a tool_use content_block in place.
+
+        OpenAI truncates tool names to its 64-char limit; `tool_name_mapping`
+        (built at request-translation time) maps the truncated name back to
+        the original. The block-type translator returns the name exactly as it
+        appeared on the wire, so every path that emits a `tool_use`
+        content_block_start must run this restoration -- otherwise a tool with
+        a long name surfaces downstream under its truncated form.
+
+        No-op for non-tool_use blocks and for tool blocks without a name.
+        """
+        if block_type != "tool_use":
+            return
+
+        from typing import cast
+
+        from litellm.types.llms.anthropic import ToolUseBlock
+
+        tool_block = cast(ToolUseBlock, content_block_start)
+        if tool_block.get("name"):
+            truncated_name = tool_block["name"]
+            tool_block["name"] = self.tool_name_mapping.get(
+                truncated_name, truncated_name
+            )
+
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
         Determine if we should start a new content block based on the processed chunk.
@@ -482,20 +607,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
-        if block_type == "tool_use":
-            # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
-            from typing import cast
-
-            from litellm.types.llms.anthropic import ToolUseBlock
-
-            tool_block = cast(ToolUseBlock, content_block_start)
-
-            if tool_block.get("name"):
-                truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(
-                    truncated_name, truncated_name
-                )
-                tool_block["name"] = original_name
+        self._restore_tool_name(block_type, content_block_start)
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type

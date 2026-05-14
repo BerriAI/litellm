@@ -1434,10 +1434,18 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
             elif choice.delta.content is not None and len(choice.delta.content) > 0:
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(
-                choice.delta, "thinking_blocks"
-            ):
-                thinking_blocks = choice.delta.thinking_blocks or []
+            elif isinstance(choice, StreamingChoices):
+                # Thinking content arrives via one of two delta fields,
+                # depending on the upstream provider:
+                #   - `thinking_blocks` (Anthropic-style; e.g. ollama_chat)
+                #   - `reasoning_content` (e.g. OpenRouter)
+                # The delta translator (_translate_streaming_openai_chunk_to_
+                # anthropic) already recognizes both. The block-type peek must
+                # mirror it: if it only checks thinking_blocks, a stream whose
+                # first chunk carries thinking via reasoning_content opens a
+                # `text` block and the subsequent `thinking_delta` events land
+                # inside it -- the same spec violation this fix targets.
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
                     if thinking_block["type"] == "thinking":
@@ -1455,6 +1463,10 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+                if getattr(choice.delta, "reasoning_content", None):
+                    return "thinking", ChatCompletionThinkingBlock(
+                        type="thinking", thinking="", signature=""
+                    )
 
         return "text", TextBlock(type="text", text="")
 
