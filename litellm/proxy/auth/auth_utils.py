@@ -13,6 +13,7 @@ from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.utils import CustomPricingLiteLLMParams
 
 
 def _get_request_ip_address(
@@ -169,9 +170,13 @@ def _allow_model_level_clientside_configurable_parameters(
 
 # Config dicts whose entries are spread as ``**dict`` into outbound LLM
 # API calls. ``litellm_embedding_config`` is consumed by the Milvus
-# vector store transformer; future nested-config keys with the same
-# threat shape should be added here.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+# vector store transformer. ``extra_body`` is the OpenAI-SDK passthrough
+# container: provider modules pull provider-auth fields out of it
+# (e.g. Azure's ``extra_body.azure_ad_token``, Bedrock's
+# ``extra_body.aws_web_identity_token``) without re-validating, so the
+# banned-key check has to descend into it the same way it descends into
+# ``litellm_embedding_config``.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -246,6 +251,13 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
+    # Azure managed-identity / federated-auth token. The Azure provider
+    # transformer reads ``azure_ad_token`` (top-level or via
+    # ``extra_body``) and resolves it through ``get_secret`` before
+    # passing it as the bearer token to the Azure endpoint, so a
+    # caller-supplied value is the same exfil shape as
+    # ``aws_web_identity_token`` on the Bedrock path.
+    "azure_ad_token",
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
@@ -265,6 +277,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # integrations are covered automatically. Sorted for stable iteration
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
+    *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
 
@@ -341,8 +354,8 @@ def is_request_body_safe(
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
-        nested = request_body.get(nested_key)
-        if isinstance(nested, dict):
+        nested = _coerce_metadata_to_dict(request_body.get(nested_key))
+        if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
@@ -489,18 +502,24 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        if hasattr(request, "base_url") and request.url.path.startswith(
-            request.base_url.path
-        ):
-            # remove base_url from path
-            return request.url.path[len(request.base_url.path) - 1 :]
-        else:
-            return request.url.path
+        scope = request.scope
+        if not isinstance(scope, dict):
+            return str(request.url.path)
+        raw_path: str = str(scope.get("path", request.url.path))
+        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        if not isinstance(raw_path, str):
+            return str(request.url.path)
+        # Only strip root_path when it is a meaningful prefix (not bare "/").
+        # Stripping bare "/" would remove the leading slash from every path
+        # e.g. "/team/new" → "team/new", breaking route matching.
+        if root_path and root_path != "/" and raw_path.startswith(root_path):
+            return raw_path[len(root_path) :]
+        return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
             f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
         )
-        return request.url.path
+        return str(request.url.path)
 
 
 @lru_cache(maxsize=256)
