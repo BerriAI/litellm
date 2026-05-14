@@ -426,6 +426,120 @@ def test_sync_client_prefers_cluster_over_url_via_env_var(
     assert len(call_kwargs["startup_nodes"]) == 1
 
 
+@patch("litellm._redis.redis.Sentinel")
+def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_cls):
+    """Sentinel auth must be passed to the sentinel, not the Redis master client."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert "password" not in sentinel_call_kwargs
+    assert "username" not in sentinel_call_kwargs
+    assert "ssl" not in sentinel_call_kwargs
+    assert "ssl_cert_reqs" not in sentinel_call_kwargs
+    assert "ssl_check_hostname" not in sentinel_call_kwargs
+    assert "ssl_ca_certs" not in sentinel_call_kwargs
+    assert "max_connections" not in sentinel_call_kwargs
+    assert "socket_timeout" not in sentinel_call_kwargs
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+        "socket_timeout": 5,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+
+@patch("litellm._redis.async_redis.Sentinel")
+def test_async_sentinel_uses_sentinel_password_and_master_password(
+    mock_sentinel_cls,
+):
+    """Async sentinel auth must mirror the sync sentinel password routing."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_async_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert "password" not in sentinel_call_kwargs
+    assert "username" not in sentinel_call_kwargs
+    assert "ssl" not in sentinel_call_kwargs
+    assert "ssl_cert_reqs" not in sentinel_call_kwargs
+    assert "ssl_check_hostname" not in sentinel_call_kwargs
+    assert "ssl_ca_certs" not in sentinel_call_kwargs
+    assert "max_connections" not in sentinel_call_kwargs
+    assert "socket_timeout" not in sentinel_call_kwargs
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+        "socket_timeout": 5,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+
 @patch("litellm._redis.init_redis_cluster")
 def test_sync_client_preserves_password_for_cluster_when_url_also_set(
     mock_init_cluster, monkeypatch

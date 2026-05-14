@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
@@ -33,6 +34,7 @@ from litellm.types.utils import (
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
 )
@@ -687,6 +689,183 @@ def _sanitize_request_body_for_spend_logs_payload(
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
     }
+
+
+# Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
+# ``:``. Covers JSON bodies and Python dict-reprs in provider error strings.
+# ``prompt`` is included for ``/v1/completions``-style payloads where the user
+# input lives under a top-level ``prompt`` key rather than ``messages``.
+_ERROR_MESSAGE_PROMPT_LEAK_KEYS = ("input", "messages", "prompt")
+
+
+# Assignment-style keys: Pydantic v2 validation errors render the offending
+# value as ``input_value=<repr>`` inside ``[type=..., input_value=...,
+# input_type=...]``. The same prompt body that would appear under an
+# ``"input"`` JSON key is echoed here as a Python repr, so we redact it
+# under the same store_prompts_in_spend_logs gate.
+_ERROR_MESSAGE_ASSIGN_LEAK_KEYS = ("input_value",)
+
+
+_SENSITIVE_KEY_START_PATTERN = re.compile(
+    r"(?:"
+    r"['\"](?:" + "|".join(_ERROR_MESSAGE_PROMPT_LEAK_KEYS) + r")['\"]\s*:\s*"
+    r"|"
+    r"\b(?:" + "|".join(_ERROR_MESSAGE_ASSIGN_LEAK_KEYS) + r")\s*=\s*"
+    r")"
+)
+
+
+def _scan_quoted_string_end(text: str, start: int, quote: str) -> int:
+    """
+    Given ``text[start] == quote`` (``'`` or ``"``), return the index just
+    past the matching close quote, honoring backslash escapes. Returns
+    ``-1`` if unterminated.
+    """
+    n = len(text)
+    i = start + 1
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == quote:
+            return i + 1
+        i += 1
+    return -1
+
+
+def _scan_balanced_value_end(text: str, start: int) -> int:
+    """
+    Given ``text[start]`` is ``[``, ``{``, ``'`` or ``"``, return the index
+    just past the matching close, accounting for nested brackets and
+    quoted strings (with escape sequences). Returns ``-1`` if the
+    structure is unterminated.
+
+    Implemented iteratively (no self-recursion): the bracket scanner
+    inlines a quote-skip helper rather than re-entering itself, since
+    JSON-style values cannot contain another bracket *as a first char*
+    inside a quoted string — only the quote-skip case can occur.
+    """
+    n = len(text)
+    if start >= n:
+        return -1
+    first = text[start]
+    if first in ("'", '"'):
+        return _scan_quoted_string_end(text, start, first)
+    if first == "[":
+        close = "]"
+    elif first == "{":
+        close = "}"
+    else:
+        return -1
+    depth = 0
+    i = start
+    while i < n:
+        c = text[i]
+        if c in ("'", '"'):
+            end = _scan_quoted_string_end(text, i, c)
+            if end == -1:
+                return -1
+            i = end
+            continue
+        if c == first:
+            depth += 1
+        elif c == close:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def _redact_prompt_leaks_in_error_string(text: str) -> str:
+    """
+    Strip echoed request input from provider error strings.
+
+    Provider validation errors (e.g. OpenAI ``RateLimitError`` carrying 178
+    pydantic validation errors, each with its own ``'input': [...]`` field)
+    embed the full request body in their message. When prompts must not be
+    stored in spend logs, that echo is a back-door leak.
+
+    Two leak shapes are handled:
+
+    - Quoted-key form — ``"<key>": <value>`` where ``key`` is ``input``,
+      ``messages`` or ``prompt`` (covers JSON bodies, Python dict-reprs,
+      and ``/v1/completions`` payloads).
+    - Assignment form — ``input_value=<value>`` from Pydantic v2 validation
+      errors, which render the offending value as a Python repr inside
+      ``[type=..., input_value=..., input_type=...]``.
+
+    The value scan understands nested ``[]`` / ``{}`` and quoted strings,
+    so multi-modal payloads (``'messages': [{'content': [{...}]}]``) and
+    user text containing brackets (``"secret[123"``) are handled correctly.
+    """
+    if not text:
+        return text
+    redaction = f'"{REDACTED_BY_LITELM_STRING}"'
+    out: List[str] = []
+    n = len(text)
+    pos = 0
+    while pos < n:
+        m = _SENSITIVE_KEY_START_PATTERN.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        out.append(text[pos : m.end()])
+        v_start = m.end()
+        if v_start >= n:
+            break
+        first = text[v_start]
+        if first in ("[", "{", "'", '"'):
+            v_end = _scan_balanced_value_end(text, v_start)
+            if v_end == -1:
+                # Unterminated value — redact through the rest of the string
+                # so a malformed leak can't slip past.
+                out.append(redaction)
+                pos = n
+                break
+            out.append(redaction)
+            pos = v_end
+        else:
+            # Unquoted scalar (number, null, bare identifier) — not a leak
+            # carrier, leave intact and resume after the key match.
+            pos = v_start
+    return "".join(out)
+
+
+def _sanitize_error_information_for_spend_logs(
+    error_information: Optional[StandardLoggingPayloadErrorInformation],
+) -> Optional[StandardLoggingPayloadErrorInformation]:
+    """
+    Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
+
+    Provider errors are stored verbatim via ``str(original_exception)``; those
+    strings can echo the full request body, producing multi-megabyte spend-log
+    rows.
+
+    - Always: cap ``error_message`` and ``traceback`` with the existing
+      ``MAX_STRING_LENGTH_PROMPT_IN_DB`` DB-storage safeguard.
+    - When ``store_prompts_in_spend_logs`` is False: additionally redact
+      ``'input'`` / ``'messages'`` / ``'prompt'`` values *and* Pydantic v2
+      ``input_value=...`` assignments inside both ``error_message`` and
+      ``traceback`` so prompts cannot leak through either field.
+
+    Scoped to the spend-log path — OTEL/Datadog/etc. callbacks still receive
+    the untruncated error per ``LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE``.
+    """
+    if error_information is None:
+        return None
+
+    sanitized = cast(dict, {**error_information})
+
+    if not _should_store_prompts_and_responses_in_spend_logs():
+        for field in ("error_message", "traceback"):
+            value = sanitized.get(field)
+            if isinstance(value, str):
+                sanitized[field] = _redact_prompt_leaks_in_error_string(value)
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
+    return cast(StandardLoggingPayloadErrorInformation, sanitized)
 
 
 def _convert_to_json_serializable_dict(

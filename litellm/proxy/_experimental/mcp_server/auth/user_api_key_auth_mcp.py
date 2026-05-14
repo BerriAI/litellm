@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
@@ -122,6 +123,24 @@ class MCPRequestHandler:
         # cannot be smuggled via query string, hostname, or a deeper URL segment.
         if request.url.path.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            not litellm_api_key
+            and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
+                path=request.url.path, mcp_servers=mcp_servers
+            )
+        ):
+            # Operator opted this oauth2 server into upstream-delegated auth
+            # (PKCE passthrough): skip LiteLLM API-key/SSO entirely so the
+            # client authenticates directly with the upstream MCP server.
+            # Fires ONLY when neither x-litellm-api-key nor Authorization is
+            # present. If any LiteLLM key is supplied (primary or secondary
+            # header), we fall through so user_id is resolved, spend/rate
+            # limiting apply, and any stored OAuth token can be retrieved
+            # and forwarded upstream. Gated by
+            # _target_servers_delegate_auth_to_upstream, which only returns
+            # True when EVERY target is auth_type=oauth2 AND has the
+            # delegate_auth_to_upstream flag set — fails closed otherwise.
+            validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally
             validated_user_api_key_auth = await user_api_key_auth(
@@ -181,23 +200,62 @@ class MCPRequestHandler:
     @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:
         """
-        Extract the target MCP server name from the standard MCP transport
-        URL patterns: ``/mcp/{server_name}[/...]`` and
+        Extract the target MCP server name(s) from the standard MCP transport
+        URL patterns: ``/mcp/{server_name_or_csv}[/...]`` and
         ``/{server_name}/mcp[/...]``. Returns ``[]`` for any other path so
         callers fail closed when the target cannot be resolved.
+
+        Mirrors the regex-based parser in ``server.py::_get_mcp_servers_in_path``
+        so the names used for auth gating match the names used for downstream
+        filtering. Without this alignment, an attacker could craft
+        ``/mcp/<delegated_server>/<garbage>`` so that auth treats the request
+        as targeting the delegate server (bypassing LiteLLM auth) while
+        downstream filtering sees a different (non-existent) target and falls
+        back to the caller's full allowed-server set.
 
         REST/admin endpoints, OAuth2 server endpoints
         (``/{server_name}/authorize``, ``/token`` etc.), and ``.well-known``
         discovery routes intentionally fall through — those flows do not need
         OAuth2 token passthrough. Clients aggregating multiple servers should
-        use ``x-mcp-servers``, which takes precedence over path parsing.
+        use ``x-mcp-servers`` on a path that does not encode a target.
         """
+        # ``/{server_name}/mcp[/...]`` form — single server. The literal
+        # ``mcp`` must be the second segment (not the first, which would be
+        # the ``/mcp/...`` form handled below). This branch must stay in sync
+        # with ``server.py::_get_mcp_servers_in_path``, which also accepts the
+        # un-rewritten form (some entry points may skip the
+        # ``dynamic_mcp_route`` rewrite).
         segments = [s for s in path.split("/") if s]
-        if len(segments) >= 2 and segments[0] == "mcp":
-            return [segments[1]]
-        if len(segments) >= 2 and segments[1] == "mcp":
+        if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
             return [segments[0]]
-        return []
+
+        # ``/mcp/...`` form — server name(s) may contain a slash (e.g.
+        # ``custom_solutions/user_123``) and may be a comma-separated list.
+        # Use the same parsing logic as ``_get_mcp_servers_in_path`` so the
+        # parsed names match downstream routing.
+        mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
+        if not mcp_path_match:
+            return []
+        servers_and_path = mcp_path_match.group(1)
+        if not servers_and_path:
+            return []
+
+        if "," in servers_and_path:
+            # Comma-separated servers, possibly followed by a trailing path.
+            path_match = re.search(r"/([^/,]+(?:/[^/,]+)*)$", servers_and_path)
+            if path_match:
+                servers_part = servers_and_path[: -(len(path_match.group(1)) + 1)]
+            else:
+                servers_part = servers_and_path
+            return [s.strip() for s in servers_part.split(",") if s.strip()]
+
+        # Single-server case — server name may contain at most one slash.
+        single_server_match = re.match(
+            r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+        )
+        if single_server_match:
+            return [single_server_match.group(1)]
+        return [servers_and_path]
 
     @staticmethod
     def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
@@ -217,13 +275,13 @@ class MCPRequestHandler:
         )
         from litellm.types.mcp import MCPAuth
 
-        # Use the x-mcp-servers header verbatim when present (including the
-        # explicitly-empty list, which means "no targets" → fail closed).
-        # Only fall back to path parsing when the header was absent entirely.
-        target_names = (
-            mcp_servers
-            if mcp_servers is not None
-            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        # Resolve the same target list downstream routing will use. For
+        # ``/mcp/...`` routes, ``extract_mcp_auth_context`` overrides the
+        # ``x-mcp-servers`` header with path-derived names, so we must mirror
+        # that here — otherwise a caller could set the header to a permissive
+        # server while the path targets a stricter one (header/path TOCTOU).
+        target_names = MCPRequestHandler._resolve_target_server_names(
+            path=path, mcp_servers_header=mcp_servers
         )
         if not target_names:
             return False
@@ -233,6 +291,78 @@ class MCPRequestHandler:
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
         return True
+
+    @staticmethod
+    def _target_servers_delegate_auth_to_upstream(
+        path: str, mcp_servers: Optional[List[str]]
+    ) -> bool:
+        """
+        True only when EVERY MCP server the request targets is configured for
+        ``auth_type == oauth2`` AND has ``delegate_auth_to_upstream=True``.
+        Fails closed when any target does not opt in or cannot be resolved.
+
+        Used by :meth:`process_mcp_request` to skip LiteLLM API-key/SSO auth
+        entirely (PKCE passthrough) so the client authenticates directly with
+        the upstream MCP server. Mixed-target requests (e.g. one delegated +
+        one non-delegated server) fall back to normal LiteLLM auth.
+        """
+        # Inline imports avoid a circular dependency: mcp_server_manager imports
+        # from this module.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        # See _target_servers_use_oauth2: must mirror the downstream
+        # header-vs-path override or an attacker could set
+        # ``x-mcp-servers`` to a delegate-enabled server while the URL path
+        # targets a non-delegate server, skipping LiteLLM auth for it.
+        target_names = MCPRequestHandler._resolve_target_server_names(
+            path=path, mcp_servers_header=mcp_servers
+        )
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+            # `is True` is intentional: opt-in must be an explicit boolean
+            # True. A MagicMock attribute (in tests) or any other truthy
+            # non-bool must not silently enable the bypass.
+            if getattr(server, "delegate_auth_to_upstream", False) is not True:
+                return False
+            if not getattr(server, "available_on_public_internet", True):
+                return False
+            # Never delegate for M2M (client_credentials) servers: LiteLLM
+            # fetches the upstream token automatically using stored credentials,
+            # so allowing anonymous bypass would let any external caller invoke
+            # tools authenticated as LiteLLM's service account.
+            if server.has_client_credentials:
+                return False
+        return True
+
+    @staticmethod
+    def _resolve_target_server_names(
+        path: str, mcp_servers_header: Optional[List[str]]
+    ) -> List[str]:
+        """
+        Resolve the target MCP server names exactly as downstream routing
+        does (``server.py::extract_mcp_auth_context``).
+
+        For ``/mcp/...`` paths, downstream routing **overrides** any
+        ``x-mcp-servers`` header value with the path-derived names. Mirror
+        that here so an attacker cannot use a permissive header value to
+        flip an auth gate while the path targets a stricter server
+        (header/path TOCTOU). For non-``/mcp/...`` paths (where the path
+        does not encode targets), fall back to the header.
+        """
+        path_targets = MCPRequestHandler._extract_target_server_names_from_path(path)
+        if path_targets:
+            return path_targets
+        # Path did not resolve to /mcp/... targets — trust the header
+        # (including an explicitly empty list, which means "no targets").
+        return mcp_servers_header if mcp_servers_header is not None else []
 
     @staticmethod
     def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:

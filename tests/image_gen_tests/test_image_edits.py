@@ -314,10 +314,13 @@ async def test_azure_image_edit_litellm_sdk():
         # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert "Authorization" in headers, "Authorization header should be present"
-        assert headers["Authorization"].startswith(
-            "Bearer "
-        ), "Authorization should be Bearer token"
+        assert (
+            "api-key" in headers
+        ), "Azure image edit must use the api-key header, not Authorization: Bearer"
+        assert headers["api-key"] == test_api_key
+        assert (
+            "Authorization" not in headers
+        ), "Azure image edit must not send an Authorization header when an api_key is provided"
 
         print("result from image edit", result)
 

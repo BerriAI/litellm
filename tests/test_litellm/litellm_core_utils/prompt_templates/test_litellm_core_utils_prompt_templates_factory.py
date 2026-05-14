@@ -91,6 +91,81 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     )
 
 
+def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
+    """
+    Regression: Claude Code (with extended thinking enabled) replays prior
+    assistant turns that include an empty thinking block alongside tool_use
+    blocks, e.g.
+
+        content=[
+            {"type": "text", "text": ""},
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "tool_use", ...},
+        ]
+
+    After the Anthropic→OpenAI adapter, this becomes assistant message with
+    content="" and thinking_blocks=[{thinking:"", signature:""}] plus
+    tool_calls. The Bedrock Converse fallback for unsigned reasoning content
+    was emitting `BedrockContentBlock(text="")`, which Bedrock rejects with:
+
+        "The text field in the ContentBlock object at messages.X.content.0
+         is blank."
+
+    Verify no blank-text ContentBlocks are produced.
+    """
+    messages = [
+        {"role": "user", "content": "tell me about this repo"},
+        {
+            "role": "assistant",
+            "content": "",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "", "signature": ""},
+            ],
+            "tool_calls": [
+                {
+                    "id": "tooluse_aC8Izm8kl5DqVkgLA4XqcH",
+                    "type": "function",
+                    "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                },
+                {
+                    "id": "tooluse_31BEsgAjDwZxsUofwmdVPS",
+                    "type": "function",
+                    "function": {"name": "Bash", "arguments": '{"command": "pwd"}'},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_aC8Izm8kl5DqVkgLA4XqcH",
+            "content": "file1\nfile2",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_31BEsgAjDwZxsUofwmdVPS",
+            "content": "/repo",
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.anthropic.claude-opus-4-7",
+        llm_provider="bedrock",
+    )
+
+    assistant_blocks = [m for m in result if m["role"] == "assistant"]
+    assert len(assistant_blocks) == 1
+    for block in assistant_blocks[0]["content"]:
+        if "text" in block:
+            assert block[
+                "text"
+            ].strip(), (
+                f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
+            )
+    # toolUse blocks must still be present
+    tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
+    assert len(tool_use_blocks) == 2
+
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 

@@ -496,6 +496,45 @@ async def test_perform_health_check_filters_by_model_id():
 
 
 @pytest.mark.asyncio
+async def test_perform_health_check_skip_disabled_background_models():
+    from litellm.proxy.health_check import perform_health_check
+
+    model_list = [
+        {
+            "model_name": "a",
+            "model_info": {"id": "id-a"},
+            "litellm_params": {"model": "m-a", "api_key": "k1"},
+        },
+        {
+            "model_name": "b",
+            "model_info": {
+                "id": "id-b",
+                "disable_background_health_check": True,
+            },
+            "litellm_params": {"model": "m-b", "api_key": "k2"},
+        },
+    ]
+    captured = []
+
+    async def mock_inner(m_list, details=True, **kwargs):
+        captured.append(list(m_list))
+        return [], [], {}
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_inner,
+    ):
+        await perform_health_check(
+            model_list=model_list,
+            health_check_skip_disabled_background_models=True,
+        )
+
+    assert len(captured) == 1
+    assert len(captured[0]) == 1
+    assert captured[0][0]["model_name"] == "a"
+
+
+@pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
     """
     Test if _perform_health_check correctly uses `health_check_model` when model=`openai/*`:

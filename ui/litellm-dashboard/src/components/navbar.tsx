@@ -1,4 +1,4 @@
-import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -46,7 +46,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
   const { logoUrl } = useTheme();
-  const { data: healthData } = useHealthReadiness();
+  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
 

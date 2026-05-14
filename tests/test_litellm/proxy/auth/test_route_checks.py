@@ -2137,3 +2137,57 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
         )
         for k in registered:
             InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/credentials/by_name/openai",
+        "/credentials/openai",
+        "/credentials/azure",
+        "/credentials/by_name/anthropic",
+        "/model/delete/openai",
+        "/model/delete/anthropic-prod",
+        "/budget/update/bedrock",
+        "/user/delete/gemini-user",
+    ],
+)
+def test_provider_name_substring_not_classified_as_llm_route(route):
+    """
+    Regression: mapped_pass_through_routes used a substring check
+    (`_llm_passthrough_route in route`) so any admin-only path whose URL
+    happened to contain a provider name (openai, anthropic, azure, …) was
+    misclassified as an LLM API route and bypassed the admin gate.
+
+    The fix uses an exact/prefix match so only routes that actually *start*
+    with a passthrough prefix are allowed through.
+    """
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert RouteChecks.is_llm_api_route(route=route) is False, (
+        f"{route!r} should NOT be classified as an LLM API route — "
+        "provider-name substring match bypass"
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/chat/completions",
+        "/openai",
+        "/anthropic/v1/messages",
+        "/anthropic",
+        "/bedrock/invoke",
+        "/azure/openai/deployments/gpt-4/chat/completions",
+        "/gemini/v1/models",
+        "/vertex-ai/predict",
+        "/vertex_ai/predict",
+    ],
+)
+def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
+    """Legitimate passthrough routes must still pass is_llm_api_route."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert (
+        RouteChecks.is_llm_api_route(route=route) is True
+    ), f"{route!r} should be classified as an LLM API route"

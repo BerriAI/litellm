@@ -395,7 +395,9 @@ class RouteChecks:
             return True
 
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if _llm_passthrough_route in route:
+            if route == _llm_passthrough_route or route.startswith(
+                _llm_passthrough_route + "/"
+            ):
                 return True
         return False
 

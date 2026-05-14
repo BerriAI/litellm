@@ -202,6 +202,7 @@ export interface MCPServer {
   tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+  delegate_auth_to_upstream?: boolean;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;

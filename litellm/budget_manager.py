@@ -178,6 +178,18 @@ class BudgetManager:
         return list(self.user_dict.keys())
 
     def reset_cost(self, user):
+        """
+        Reset the tracked spend for a user back to zero.
+
+        Clears both the aggregate ``current_cost`` and the per-model
+        ``model_cost`` breakdown stored for the given user.
+
+        Args:
+            user: The user identifier whose cost should be reset.
+
+        Returns:
+            dict: ``{"user": <updated user record>}`` reflecting the reset state.
+        """
         self.user_dict[user]["current_cost"] = 0
         self.user_dict[user]["model_cost"] = {}
         return {"user": self.user_dict[user]}

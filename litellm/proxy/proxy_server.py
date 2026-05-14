@@ -253,7 +253,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     log_db_metrics,
 )
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy.auth.auth_utils import (
+    check_response_size_is_safe,
+    is_request_body_safe,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -314,7 +317,10 @@ from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
     initialize_guardrails,
 )
-from litellm.proxy.health_check import perform_health_check
+from litellm.proxy.health_check import (
+    health_check_filter_kwargs_from_general_settings,
+    perform_health_check,
+)
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -2733,29 +2739,44 @@ def _rss_mb_for_log() -> str:
     return f"{rss_mb:.2f}"
 
 
+def _is_unexpected_keyword_argument_type_error(exc: BaseException) -> bool:
+    """True when ``exc`` is a TypeError from passing a kwarg the callee does not accept."""
+    return isinstance(exc, TypeError) and (
+        "unexpected keyword argument" in str(exc).lower()
+    )
+
+
 async def _run_direct_health_check_with_instrumentation(
     model_list: list,
     details: Optional[bool],
     max_concurrency: Optional[int],
     instrumentation_context: dict,
 ):
-    try:
-        return await perform_health_check(
-            model_list=model_list,
-            details=details,
-            max_concurrency=max_concurrency,
-            instrumentation_context=instrumentation_context,
-        )
-    except TypeError as e:
-        if "instrumentation_context" not in str(e):
-            raise
-        # Backward compatibility for monkeypatched or wrapped callables
-        # that do not accept instrumentation_context.
-        return await perform_health_check(
-            model_list=model_list,
-            details=details,
-            max_concurrency=max_concurrency,
-        )
+    """Call ``perform_health_check``, retrying with fewer kwargs on unexpected-kw TypeErrors."""
+    _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
+    last_type_error: Optional[TypeError] = None
+    for extra_kwargs in (
+        {
+            "instrumentation_context": instrumentation_context,
+            **_hc_filter,
+        },
+        {"instrumentation_context": instrumentation_context},
+        dict(_hc_filter),
+        {},
+    ):
+        try:
+            return await perform_health_check(
+                model_list=model_list,
+                details=details,
+                max_concurrency=max_concurrency,
+                **extra_kwargs,
+            )
+        except TypeError as e:
+            if not _is_unexpected_keyword_argument_type_error(e):
+                raise
+            last_type_error = e
+    assert last_type_error is not None
+    raise last_type_error
 
 
 def _schedule_background_health_check_db_save(
@@ -3020,6 +3041,7 @@ async def _run_background_health_check():
         details_bool = (
             health_check_details if health_check_details is not None else True
         )
+        _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
 
         if shared_health_manager is not None:
             try:
@@ -3031,6 +3053,7 @@ async def _run_background_health_check():
                     model_list=_llm_model_list,
                     details=details_bool,
                     max_concurrency=health_check_concurrency,
+                    **_hc_filter,
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -3043,7 +3066,7 @@ async def _run_background_health_check():
                     _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
-                    health_check_details,
+                    details_bool,
                     health_check_concurrency,
                     instrumentation_context,
                 )
@@ -3054,7 +3077,7 @@ async def _run_background_health_check():
                 _exceptions_by_model_id,
             ) = await _run_direct_health_check_with_instrumentation(
                 _llm_model_list,
-                health_check_details,
+                details_bool,
                 health_check_concurrency,
                 instrumentation_context,
             )
@@ -3103,6 +3126,168 @@ async def _run_background_health_check():
 
 class StreamingCallbackError(Exception):
     pass
+
+
+# Fields in ``litellm_settings`` / ``general_settings`` whose values flow
+# into ``get_instance_fn`` during config load. Remote-URL values
+# (``s3://`` / ``gcs://``) are scrubbed from these when the value
+# originates from a DB-overlay merge: at the point ``get_instance_fn``
+# is invoked, ``config_file_path`` is non-None (the YAML load chain is
+# active), so the runtime gate cannot distinguish a YAML-sourced value
+# from a DB-sourced value. Scrubbing at the merge boundary closes that
+# gap without tracking source on every config dict entry.
+_DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "litellm_settings": ("post_call_rules",),
+    "general_settings": (
+        "custom_auth",
+        "custom_key_generate",
+        "custom_key_update",
+        "custom_sso",
+        "custom_ui_sso_sign_in_handler",
+    ),
+}
+_DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "litellm_settings": (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "audit_log_callbacks",
+    ),
+}
+
+
+def _is_remote_module_url(value: Any) -> bool:
+    return isinstance(value, str) and (
+        value.startswith("s3://") or value.startswith("gcs://")
+    )
+
+
+def _scrub_guardrail_inner(inner: Dict[str, Any]) -> None:
+    """Strip remote-URL entries from a guardrail's ``callbacks`` list
+    and ``guardrail`` (v2 module-path) field. Mutates in place."""
+    cbs = inner.get("callbacks")
+    if isinstance(cbs, list):
+        cleaned = [c for c in cbs if not _is_remote_module_url(c)]
+        if len(cleaned) != len(cbs):
+            verbose_proxy_logger.warning(
+                "Refused %d remote-URL entries from DB-overlay "
+                "litellm_settings.guardrails[...].callbacks",
+                len(cbs) - len(cleaned),
+            )
+            inner["callbacks"] = cleaned
+    if _is_remote_module_url(inner.get("guardrail")):
+        verbose_proxy_logger.warning(
+            "Refused remote-URL guardrail module from DB-overlay "
+            "litellm_settings.guardrails[...].guardrail: %r",
+            inner.get("guardrail"),
+        )
+        inner["guardrail"] = None
+
+
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
+    """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
+    fields whose contents reach ``get_instance_fn``. The same scheme is
+    allowed from a YAML config (the documented operator flow) but a
+    DB-overlay write would otherwise smuggle the same payload through
+    the YAML-load chain and reach ``_load_instance_from_remote_storage``."""
+    if not isinstance(db_value, dict):
+        return db_value
+    str_fields = _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS.get(section, ())
+    list_fields = _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS.get(section, ())
+    if not str_fields and not list_fields and section != "general_settings":
+        return db_value
+    sanitized = copy.deepcopy(db_value)
+    for field in str_fields:
+        v = sanitized.get(field)
+        if _is_remote_module_url(v):
+            verbose_proxy_logger.warning(
+                "Refused remote-URL value for DB-overlay %s.%s=%r; only "
+                "config.yaml entries may reference s3:// / gcs:// modules.",
+                section,
+                field,
+                v,
+            )
+            sanitized[field] = None
+    for field in list_fields:
+        v = sanitized.get(field)
+        if isinstance(v, list):
+            cleaned = [item for item in v if not _is_remote_module_url(item)]
+            if len(cleaned) != len(v):
+                verbose_proxy_logger.warning(
+                    "Refused %d remote-URL entries from DB-overlay %s.%s; "
+                    "only config.yaml entries may reference s3:// / gcs:// "
+                    "modules.",
+                    len(v) - len(cleaned),
+                    section,
+                    field,
+                )
+                sanitized[field] = cleaned
+    # ``custom_provider_map`` is a list of dicts with ``custom_handler`` —
+    # walk it explicitly.
+    if section == "litellm_settings":
+        cpm = sanitized.get("custom_provider_map")
+        if isinstance(cpm, list):
+            for item in cpm:
+                if isinstance(item, dict) and _is_remote_module_url(
+                    item.get("custom_handler")
+                ):
+                    verbose_proxy_logger.warning(
+                        "Refused remote-URL custom_handler from DB-overlay "
+                        "litellm_settings.custom_provider_map: %r",
+                        item.get("custom_handler"),
+                    )
+                    item["custom_handler"] = None
+    # ``litellm_settings.guardrails`` is a list of single-key dicts in
+    # v1 ({guardrail_name: {callbacks: [...], default_on: bool}}) or a
+    # list of v2 entries ({guardrail_name, litellm_params: {guardrail:
+    # "module.path", callbacks: [...]}}). Both shapes terminate in
+    # ``callbacks`` (a list) or ``guardrail`` (a single dotted name)
+    # that flow into ``get_instance_fn`` during config load.
+    if section == "litellm_settings":
+        guardrails = sanitized.get("guardrails")
+        if isinstance(guardrails, list):
+            for entry in guardrails:
+                if not isinstance(entry, dict):
+                    continue
+                for inner in entry.values():
+                    if not isinstance(inner, dict):
+                        continue
+                    _scrub_guardrail_inner(inner)
+                lp = entry.get("litellm_params")
+                if isinstance(lp, dict):
+                    _scrub_guardrail_inner(lp)
+
+    # ``general_settings.litellm_jwtauth.custom_validate`` is a nested
+    # string field.
+    if section == "general_settings":
+        jwt = sanitized.get("litellm_jwtauth")
+        if isinstance(jwt, dict) and _is_remote_module_url(jwt.get("custom_validate")):
+            verbose_proxy_logger.warning(
+                "Refused remote-URL custom_validate from DB-overlay "
+                "general_settings.litellm_jwtauth: %r",
+                jwt.get("custom_validate"),
+            )
+            jwt["custom_validate"] = None
+        # ``pass_through_endpoints`` is a list of dicts whose ``target``
+        # is passed through ``create_pass_through_route`` →
+        # ``get_instance_fn``. A DB-overlay ``target: "s3://attacker/m.i"``
+        # would otherwise reach the loader because the YAML-load chain
+        # has ``config_file_path`` set.
+        pte = sanitized.get("pass_through_endpoints")
+        if isinstance(pte, list):
+            for entry in pte:
+                if isinstance(entry, dict) and _is_remote_module_url(
+                    entry.get("target")
+                ):
+                    verbose_proxy_logger.warning(
+                        "Refused remote-URL target from DB-overlay "
+                        "general_settings.pass_through_endpoints "
+                        "(path=%r): %r",
+                        entry.get("path"),
+                        entry.get("target"),
+                    )
+                    entry["target"] = None
+    return sanitized
 
 
 class ProxyConfig:
@@ -3799,7 +3984,10 @@ class ProxyConfig:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
                             litellm.logging_callback_manager.add_litellm_success_callback(
-                                get_instance_fn(value=callback)
+                                get_instance_fn(
+                                    value=callback,
+                                    config_file_path=config_file_path,
+                                )
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
@@ -3827,7 +4015,10 @@ class ProxyConfig:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
                             litellm.logging_callback_manager.add_litellm_failure_callback(
-                                get_instance_fn(value=callback)
+                                get_instance_fn(
+                                    value=callback,
+                                    config_file_path=config_file_path,
+                                )
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
@@ -3848,7 +4039,10 @@ class ProxyConfig:
                     for callback in value:
                         if "." in callback:
                             litellm.audit_log_callbacks.append(
-                                get_instance_fn(value=callback)
+                                get_instance_fn(
+                                    value=callback,
+                                    config_file_path=config_file_path,
+                                )
                             )
                         else:
                             litellm.audit_log_callbacks.append(callback)
@@ -4086,7 +4280,8 @@ class ProxyConfig:
                     "pass_through_endpoints"
                 ]
                 await initialize_pass_through_endpoints(
-                    pass_through_endpoints=general_settings["pass_through_endpoints"]
+                    pass_through_endpoints=general_settings["pass_through_endpoints"],
+                    config_file_path=config_file_path,
                 )
 
             ## ADMIN UI ACCESS ##
@@ -4307,11 +4502,15 @@ class ProxyConfig:
         litellm.credential_list = credential_list_dict
 
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
-        await self._init_non_llm_configs(config=config)
+        await self._init_non_llm_configs(
+            config=config, config_file_path=config_file_path
+        )
 
         return router, router.get_model_list(), general_settings
 
-    async def _init_non_llm_configs(self, config: dict):
+    async def _init_non_llm_configs(
+        self, config: dict, config_file_path: Optional[str] = None
+    ):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
@@ -4322,7 +4521,9 @@ class ProxyConfig:
                 global_mcp_tool_registry,
             )
 
-            global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
+            global_mcp_tool_registry.load_tools_from_config(
+                mcp_tools_config, config_file_path=config_file_path
+            )
 
         ## AGENTS
         agent_config = config.get("agent_list", None)
@@ -5265,6 +5466,15 @@ class ProxyConfig:
                         stack.append((d[k], v))
                     else:
                         d[k] = v
+
+        # Strip remote-URL module loads from the DB-overlay before merge —
+        # the YAML-load callsites have ``config_file_path`` set, so a
+        # DB-sourced ``s3://`` value would otherwise reach
+        # ``_load_instance_from_remote_storage`` without going through
+        # the runtime gate.
+        db_param_value = _scrub_db_overlay_remote_module_loads(
+            section=param_name, db_value=db_param_value
+        )
 
         if param_name == "environment_variables":
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(
@@ -6758,7 +6968,15 @@ class ProxyStartupEvent:
             for k, v in general_settings["litellm_jwtauth"].items():
                 if isinstance(v, str) and v.startswith("os.environ/"):
                     general_settings["litellm_jwtauth"][k] = get_secret(v)
-            litellm_jwtauth = LiteLLM_JWTAuth(**general_settings["litellm_jwtauth"])
+            # ``user_config_file_path`` is set by ``ProxyConfig._get_config_from_file``
+            # during startup. Threading it through lets an operator-
+            # configured ``custom_validate: s3://...`` resolve through
+            # the runtime gate; admin-API JWT config writes (no config
+            # file context) hit the gate and refuse remote loads.
+            litellm_jwtauth = LiteLLM_JWTAuth(
+                config_file_path=user_config_file_path,
+                **general_settings["litellm_jwtauth"],
+            )
         else:
             litellm_jwtauth = LiteLLM_JWTAuth()
         jwt_handler.update_environment(
@@ -10082,6 +10300,16 @@ async def supported_openai_params(model: str):
 )
 async def transform_request(request: TransformRequestBody):
     from litellm.utils import return_raw_request
+
+    try:
+        is_request_body_safe(
+            request_body=request.request_body,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=request.request_body.get("model", ""),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
 
@@ -15006,8 +15234,17 @@ async def _stream_mcp_asgi_response(
     # If the handler task dies (exception or cancellation) without sending the EOF
     # sentinel, body_iter() would block forever on body_queue.get().  The callback
     # below guarantees the queue gets unblocked regardless of how the task ends.
+    # When this happens before response headers, propagate the original exception
+    # instead of waiting for the header timeout.
     def _ensure_eof(task: asyncio.Task) -> None:
-        if task.cancelled() or task.exception() is not None:
+        if task.cancelled():
+            body_queue.put_nowait(None)
+            return
+
+        task_exception = task.exception()
+        if task_exception is not None:
+            if not headers_ready.done():
+                headers_ready.set_exception(task_exception)
             body_queue.put_nowait(None)
 
     handler_task.add_done_callback(_ensure_eof)
@@ -15106,95 +15343,176 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+async def _mcp_forward_as_path(path_segment: str, request: Request):
+    """Rewrite path to /mcp/{path_segment} and stream the response."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+    )
+
+    scope = dict(request.scope)
+    scope["path"] = f"/mcp/{path_segment}"
+    return await _stream_mcp_asgi_response(
+        handle_streamable_http_mcp, scope, request.receive
+    )
+
+
+async def _resolve_mcp_csv_tokens(
+    csv_segment: str, client_ip: Optional[str]
+) -> List[str]:
+    """Validate a comma-separated ``/{name1,name2,...}/mcp`` segment.
+
+    For each token, check (in order) whether it is a registered MCP server
+    alias / name or an MCP access group tag (cached). Tokens are stripped,
+    deduped (exact-match, keeping first occurrence in original order), and
+    capped at ``DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS`` to bound the
+    per-request DB / cache fan-out an authenticated caller can trigger by
+    stuffing the path with tokens. Dedup is case-sensitive on purpose:
+    downstream resolvers may treat names case-sensitively, so collapsing
+    ``MyGroup`` and ``mygroup`` would risk dropping a valid distinct token.
+
+    Toolset names are intentionally NOT resolved here — toolsets bind a single
+    toolset id into request scope and have no defined semantics inside a
+    comma-separated server list.
+
+    Returns the subset of resolved tokens in original order. An empty list
+    means the segment did not resolve to any known server / group; the caller
+    should treat that as a 404 instead of forwarding it downstream (where an
+    all-unmatched server filter falls back to the full ``allowed_mcp_servers``
+    list and silently broadens the request scope).
+    """
+    from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    seen: set = set()
+    deduped: List[str] = []
+    for raw in csv_segment.split(","):
+        token = raw.strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+        if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
+            break
+
+    resolved: List[str] = []
+    for token in deduped:
+        if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
+            resolved.append(token)
+            continue
+        if await _is_mcp_access_group_cached(token):
+            resolved.append(token)
+    return resolved
+
+
+async def _is_mcp_access_group_cached(name: str) -> bool:
+    """Return True if *name* is a known MCP access group tag.
+
+    Positive results are cached for ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
+    seconds. Negative results are cached for a short
+    ``DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL`` window so unauthenticated
+    callers cannot force a fresh DB lookup per request for unknown names, while
+    bounding staleness so a transient DB error (which surfaces as an empty
+    list) cannot hide a real group for long.
+    """
+    from litellm.constants import (
+        DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL,
+    )
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    cache_key = f"mcp_access_group_exists:{name}"
+    cached = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached is not None:
+        return bool(cached)
+    result = bool(await MCPRequestHandler._get_mcp_servers_from_access_groups([name]))
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=result,
+        ttl=(
+            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+            if result
+            else DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
+        ),
+    )
+    return result
+
+
 # Dynamic MCP server routes - handle /{mcp_server_name}/mcp
 @app.api_route(
     "/{mcp_server_name}/mcp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
-    """Handle dynamic MCP server routes like /github_mcp/mcp and toolset routes like /devtooling-prod/mcp"""
+    """Handle /{name}/mcp for MCP server aliases, toolsets, MCP access group tags, and comma-separated lists.
+
+    Resolution order:
+    1. Registered MCP server alias / name
+    2. Comma-separated list (short-circuits before any DB call)
+    3. Toolset name (DB lookup, cached)
+    4. MCP access group tag (DB lookup, cached)
+    """
     try:
-        # Validate that the MCP server exists
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-        from litellm.types.mcp import MCPAuth
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+
+        # 1. Registered MCP server alias
+        if global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
-        )
-        if mcp_server is None:
-            # Check if this is a toolset name — toolsets are accessible at /{name}/mcp
-            # the same way individual servers are, no separate /toolset/ prefix needed.
-            if prisma_client is not None:
-                from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                    global_mcp_server_manager,
-                )
-                from litellm.proxy._experimental.mcp_server.server import (
-                    _mcp_active_toolset_id,
-                    handle_streamable_http_mcp,
-                )
+        ):
+            return await _mcp_forward_as_path(mcp_server_name, request)
 
-                toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
-                    prisma_client, mcp_server_name
+        # 2. Comma-separated list — validate every token resolves to a known
+        # server alias or access group before forwarding. Bounds DB / cache
+        # fan-out and prevents the downstream filter from silently falling back
+        # to the full allowed_mcp_servers list when no token matches.
+        if "," in mcp_server_name:
+            resolved_tokens = await _resolve_mcp_csv_tokens(mcp_server_name, client_ip)
+            if not resolved_tokens:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No MCP server, toolset, or access group in "
+                        f"'{mcp_server_name}' resolved to a known target"
+                    ),
                 )
-                if toolset is not None:
-                    scope = dict(request.scope)
-                    scope["path"] = "/mcp"
+            return await _mcp_forward_as_path(",".join(resolved_tokens), request)
 
-                    token = _mcp_active_toolset_id.set(toolset.toolset_id)
-                    try:
-                        return await _stream_mcp_asgi_response(
-                            handle_streamable_http_mcp, scope, request.receive
-                        )
-                    finally:
-                        _mcp_active_toolset_id.reset(token)
-
-            raise HTTPException(
-                status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
+        # 3. Toolset name (cached)
+        if prisma_client is not None:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _mcp_active_toolset_id,
+                handle_streamable_http_mcp,
             )
 
-        # Create a new scope with the correct path format that the MCP handler expects
-        # Transform /{mcp_server_name}/mcp to /mcp/{mcp_server_name}
-        scope = dict(request.scope)
-        scope["path"] = f"/mcp/{mcp_server_name}"
+            toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+                prisma_client, mcp_server_name
+            )
+            if toolset is not None:
+                scope = dict(request.scope)
+                scope["path"] = "/mcp"
+                token = _mcp_active_toolset_id.set(toolset.toolset_id)
+                try:
+                    return await _stream_mcp_asgi_response(
+                        handle_streamable_http_mcp, scope, request.receive
+                    )
+                finally:
+                    _mcp_active_toolset_id.reset(token)
 
-        # Import the MCP handler
-        from litellm.proxy._experimental.mcp_server.server import (
-            handle_streamable_http_mcp,
-        )
+        # 4. MCP access group tag (cached)
+        if await _is_mcp_access_group_cached(mcp_server_name):
+            return await _mcp_forward_as_path(mcp_server_name, request)
 
-        # Create a custom send function to capture the response
-        response_started = False
-        response_body = b""
-        response_status = 200
-        response_headers = []
-
-        async def custom_send(message):
-            nonlocal response_started, response_body, response_status, response_headers
-            if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message.get("headers", [])
-            elif message["type"] == "http.response.body":
-                response_body += message.get("body", b"")
-
-        # Call the existing MCP handler
-        await handle_streamable_http_mcp(
-            scope, receive=request.receive, send=custom_send
-        )
-
-        # Return the response
-        from starlette.responses import Response
-
-        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-        return Response(
-            content=response_body,
-            status_code=response_status,
-            headers=headers_dict,
-            media_type=headers_dict.get("content-type", "application/json"),
+        raise HTTPException(
+            status_code=404,
+            detail=f"MCP server, toolset, or access group '{mcp_server_name}' not found",
         )
 
     except HTTPException as e:

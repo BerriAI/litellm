@@ -8800,6 +8800,7 @@ interface ExchangeMcpOAuthTokenParams {
   clientSecret?: string;
   codeVerifier: string;
   redirectUri: string;
+  accessToken?: string | null;
 }
 
 export const exchangeMcpOAuthToken = async ({
@@ -8809,6 +8810,7 @@ export const exchangeMcpOAuthToken = async ({
   clientSecret,
   codeVerifier,
   redirectUri,
+  accessToken,
 }: ExchangeMcpOAuthTokenParams) => {
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
@@ -8826,11 +8828,16 @@ export const exchangeMcpOAuthToken = async ({
   body.set("code_verifier", codeVerifier);
   body.set("redirect_uri", redirectUri);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: body.toString(),
   });
 

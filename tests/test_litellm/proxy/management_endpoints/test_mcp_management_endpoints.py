@@ -1646,6 +1646,108 @@ class TestTemporaryMCPSessionEndpoints:
         assert call_kwargs["api_key"] == "Bearer sk-header-key"
 
     @pytest.mark.asyncio
+    async def test_mcp_oauth_user_api_key_auth_requires_oauth2_for_delegate_bypass(
+        self,
+    ):
+        """Non-oauth2 servers must not get anonymous access from the delegate flag."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _mcp_oauth_user_api_key_auth,
+        )
+
+        expected_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_request.cookies = {}
+        mock_request.path_params = {"server_id": "server-1"}
+        non_oauth_server = MagicMock()
+        non_oauth_server.auth_type = MCPAuth.api_key
+        non_oauth_server.delegate_auth_to_upstream = True
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = non_oauth_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        fake_proxy_server = types.SimpleNamespace(master_key=None)
+
+        with (
+            patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_api_key_auth_builder",
+                AsyncMock(return_value=expected_auth),
+            ) as auth_builder_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.populate_request_with_path_params",
+                side_effect=lambda request_data, request: request_data,
+            ),
+        ):
+            result = await _mcp_oauth_user_api_key_auth(mock_request)
+
+        assert result is expected_auth
+        auth_builder_mock.assert_awaited_once()
+        _, call_kwargs = auth_builder_mock.call_args
+        assert call_kwargs["api_key"] == ""
+
+    @pytest.mark.asyncio
+    async def test_mcp_oauth_user_api_key_auth_requires_public_server_for_delegate_bypass(
+        self,
+    ):
+        """Internal-only delegate servers must still require LiteLLM auth."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _mcp_oauth_user_api_key_auth,
+        )
+
+        expected_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_request.cookies = {}
+        mock_request.path_params = {"server_id": "server-1"}
+        internal_server = MagicMock()
+        internal_server.auth_type = MCPAuth.oauth2
+        internal_server.delegate_auth_to_upstream = True
+        internal_server.available_on_public_internet = False
+        internal_server.has_client_credentials = False
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = internal_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        fake_proxy_server = types.SimpleNamespace(master_key=None)
+
+        with (
+            patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_api_key_auth_builder",
+                AsyncMock(return_value=expected_auth),
+            ) as auth_builder_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.populate_request_with_path_params",
+                side_effect=lambda request_data, request: request_data,
+            ),
+        ):
+            result = await _mcp_oauth_user_api_key_auth(mock_request)
+
+        assert result is expected_auth
+        auth_builder_mock.assert_awaited_once()
+        _, call_kwargs = auth_builder_mock.call_args
+        assert call_kwargs["api_key"] == ""
+
+    @pytest.mark.asyncio
     async def test_mcp_authorize_proxies_to_discoverable_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_authorize,

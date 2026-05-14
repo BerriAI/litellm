@@ -10,7 +10,7 @@ search_tools:
       search_provider: "perplexity"
 
 litellm_settings:
-  success_callback: ["websearch_interception"]
+  callbacks: ["websearch_interception"]
   websearch_interception_params:
     enabled_providers: ["bedrock"]
     search_tool_name: "my-perplexity-search"
