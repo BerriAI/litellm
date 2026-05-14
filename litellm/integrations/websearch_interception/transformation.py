@@ -100,11 +100,14 @@ class WebSearchTransformation:
                 block_id = getattr(block, "id", None)
                 block_input = getattr(block, "input", {})
 
-            # Check for LiteLLM standard or legacy web search tools
-            # Handles: litellm_web_search, WebSearch, web_search
+            # Detect tool_use blocks that came from interception. After
+            # pre-request conversion the model always sees
+            # ``litellm_web_search``; the bare ``web_search`` entry handles
+            # callers that bypass our pre-request hooks (e.g. direct
+            # litellm.acompletion). "WebSearch" is intentionally omitted —
+            # see is_web_search_tool for the Cowork rationale.
             if block_type == "tool_use" and block_name in (
                 LITELLM_WEB_SEARCH_TOOL_NAME,
-                "WebSearch",
                 "web_search",
             ):
                 # Convert to dict for easier handling
@@ -190,10 +193,12 @@ class WebSearchTransformation:
                     getattr(function, "arguments", None) if function else None
                 )
 
-            # Check for LiteLLM standard or legacy web search tools
+            # Detect function-style web search tool_calls. ``WebSearch`` is
+            # intentionally omitted — see is_web_search_tool for the Cowork
+            # rationale (clients ship their own client-side ``WebSearch`` and
+            # we must not hijack it).
             if tool_type == "function" and function_name in (
                 LITELLM_WEB_SEARCH_TOOL_NAME,
-                "WebSearch",
                 "web_search",
             ):
                 # Parse arguments (might be JSON string)
