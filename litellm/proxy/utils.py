@@ -2409,10 +2409,12 @@ def jsonify_object(data: dict) -> dict:
     for k, v in db_data.items():
         if isinstance(v, dict):
             try:
-                db_data[k] = json.dumps(v)
+                db_data[k] = json.dumps(v).replace("\x00", "")
             except Exception:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
+        elif isinstance(v, str):
+            db_data[k] = v.replace("\x00", "")
     return db_data
 
 
