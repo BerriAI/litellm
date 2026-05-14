@@ -30,7 +30,7 @@ def test_chatgpt_image_generation_transforms_request(monkeypatch, tmp_path):
     request = config.transform_image_generation_request(
         model="gpt-image-2",
         prompt="draw a quiet harbor at sunrise",
-        optional_params={"size": "1024x1024", "quality": "high"},
+        optional_params={"size": "1024x1024", "output_format": "png"},
         litellm_params={"chatgpt_responses_model": "gpt-5.5"},
         headers={},
     )
@@ -54,7 +54,7 @@ def test_chatgpt_image_generation_transforms_request(monkeypatch, tmp_path):
             "type": "image_generation",
             "model": "gpt-image-2",
             "size": "1024x1024",
-            "quality": "high",
+            "output_format": "png",
         }
     ]
     assert request["tool_choice"] == {"type": "image_generation"}
@@ -75,7 +75,7 @@ def test_chatgpt_image_generation_does_not_add_openai_defaults(monkeypatch, tmp_
     assert request["tools"] == [{"type": "image_generation", "model": "gpt-image-2"}]
 
 
-def test_chatgpt_image_generation_forwards_official_generate_params(
+def test_chatgpt_image_generation_forwards_supported_generate_params(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
@@ -85,17 +85,8 @@ def test_chatgpt_image_generation_forwards_official_generate_params(
         model="gpt-image-2",
         prompt="draw a quiet harbor at sunrise",
         optional_params={
-            "background": "opaque",
-            "moderation": "low",
-            "n": 1,
-            "output_compression": 75,
             "output_format": "webp",
-            "partial_images": 2,
-            "quality": "medium",
-            "response_format": "b64_json",
             "size": "1536x1024",
-            "stream": True,
-            "user": "user-123",
         },
         litellm_params={"chatgpt_responses_model": "gpt-5.5"},
         headers={},
@@ -105,35 +96,16 @@ def test_chatgpt_image_generation_forwards_official_generate_params(
         {
             "type": "image_generation",
             "model": "gpt-image-2",
-            "background": "opaque",
             "output_format": "webp",
-            "quality": "medium",
             "size": "1536x1024",
         }
     ]
-    assert request["partial_images"] == 2
-    assert request["user"] == "user-123"
-    assert "response_format" not in request["tools"][0]
-    assert "stream" not in request["tools"][0]
-    assert "user" not in request["tools"][0]
 
 
 @pytest.mark.parametrize(
     "optional_params, error",
     [
-        ({"n": 0}, "n must be between 1 and 10"),
-        ({"n": 2}, "n > 1 is not supported for ChatGPT image generation"),
-        ({"quality": "hd"}, "quality must be one of low, medium, high, or auto"),
         ({"output_format": "jpg"}, "output_format must be one of png, jpeg, or webp"),
-        ({"output_compression": 101}, "output_compression must be between 0 and 100"),
-        ({"background": "transparent"}, "transparent backgrounds are not supported"),
-        (
-            {"background": "transparent", "output_format": "jpeg"},
-            "transparent backgrounds are not supported",
-        ),
-        ({"moderation": "strict"}, "moderation must be one of low or auto"),
-        ({"partial_images": 4}, "partial_images must be between 0 and 3"),
-        ({"response_format": "url"}, "response_format='url' is not supported"),
         ({"size": "1535x1024"}, "multiples of 16px"),
         ({"size": "4096x1024"}, "maximum edge length"),
         ({"size": "1024x256"}, "ratio must not exceed 3:1"),
@@ -166,11 +138,41 @@ def test_chatgpt_image_generation_config_registered(monkeypatch, tmp_path):
     assert isinstance(config, ChatGPTImageGenerationConfig)
 
 
+def test_chatgpt_image_generation_only_supports_prompt_output_format_and_size(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+
+    assert config.get_supported_openai_params("gpt-image-2") == [
+        "output_format",
+        "size",
+    ]
+
+
+def test_chatgpt_image_generation_rejects_unsupported_optional_params(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+
+    with pytest.raises(
+        ValueError, match="Parameters \\['quality'\\] are not supported"
+    ):
+        config.transform_image_generation_request(
+            model="gpt-image-2",
+            prompt="draw a cat",
+            optional_params={"quality": "high"},
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_chatgpt_image_generation_maps_supported_openai_params(monkeypatch, tmp_path):
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
     config = ChatGPTImageGenerationConfig()
 
-    optional_params = {"quality": "high"}
+    optional_params = {"output_format": "png"}
     result = config.map_openai_params(
         non_default_params={
             "quality": "low",
@@ -183,7 +185,7 @@ def test_chatgpt_image_generation_maps_supported_openai_params(monkeypatch, tmp_
     )
 
     assert result is optional_params
-    assert result == {"quality": "high", "size": "1024x1024"}
+    assert result == {"output_format": "png", "size": "1024x1024"}
 
 
 def test_chatgpt_image_generation_rejects_unsupported_openai_param(
@@ -328,7 +330,7 @@ def test_chatgpt_image_generation_extracts_b64_from_sse_completed_response(
         model_response=ImageResponse(),
         logging_obj=mock_logging(),
         request_data={"input": "draw a cat"},
-        optional_params={"size": "1024x1024", "quality": "high"},
+        optional_params={"size": "1024x1024"},
         litellm_params={},
         encoding=None,
     )
@@ -336,7 +338,7 @@ def test_chatgpt_image_generation_extracts_b64_from_sse_completed_response(
     assert response.data is not None
     assert response.data[0].b64_json == "b64-image-data"
     assert response.size == "1024x1024"
-    assert response.quality == "high"
+    assert response.quality is None
     assert response.output_format is None
     assert response.usage is None
     assert response._hidden_params is not None
@@ -379,16 +381,6 @@ def test_chatgpt_image_generation_uses_optional_responses_model_and_env(
         ("gpt-image-1.5", {"size": "auto"}, None),
         ("gpt-image-2", {"size": "auto"}, None),
         ("gpt-image-2", {"size": "bad-size"}, "size must be auto or WIDTHxHEIGHT"),
-        (
-            "gpt-image-1.5",
-            {"background": "transparent", "output_format": "jpeg"},
-            "transparent background requires output_format png or webp",
-        ),
-        (
-            "gpt-image-1.5",
-            {"background": "not-real"},
-            "background must be one of transparent, opaque, or auto",
-        ),
     ],
 )
 def test_chatgpt_image_generation_validates_additional_param_paths(
@@ -460,14 +452,14 @@ def test_chatgpt_image_generation_extracts_json_response(monkeypatch, tmp_path):
         model_response=ImageResponse(),
         logging_obj=mock_logging(),
         request_data={},
-        optional_params={"response_format": "b64_json"},
+        optional_params={"output_format": "png"},
         litellm_params={},
         encoding=None,
     )
 
     assert response.data is not None
     assert [item.b64_json for item in response.data] == ["b64-image-data"]
-    assert response.output_format == "b64_json"
+    assert response.output_format == "png"
     assert response.usage is not None
     assert response.usage.input_tokens == 11
     assert response.usage.input_tokens_details.image_tokens == 1

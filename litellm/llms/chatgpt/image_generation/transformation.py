@@ -40,10 +40,8 @@ GPT_IMAGE_2_MAX_PIXELS = 8_294_400
 GPT_IMAGE_2_MAX_EDGE = 3840
 GPT_IMAGE_2_MAX_RATIO = 3.0
 
-ALLOWED_BACKGROUNDS = {"transparent", "opaque", "auto"}
-ALLOWED_MODERATION_VALUES = {"low", "auto"}
 ALLOWED_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
-ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
+INTERNAL_OPTIONAL_PARAMS = {"chatgpt_responses_model"}
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -61,17 +59,8 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         return [
-            "background",
-            "moderation",
-            "n",
-            "output_compression",
             "output_format",
-            "partial_images",
-            "quality",
-            "response_format",
             "size",
-            "stream",
-            "user",
         ]
 
     def map_openai_params(
@@ -178,18 +167,11 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
 
         image_tool = request["tools"][0]
         for key in (
-            "background",
             "output_format",
-            "quality",
             "size",
         ):
             if optional_params.get(key) is not None:
                 image_tool[key] = optional_params[key]
-
-        if optional_params.get("partial_images") is not None:
-            request["partial_images"] = optional_params["partial_images"]
-        if optional_params.get("user") is not None:
-            request["user"] = optional_params["user"]
 
         return request
 
@@ -202,50 +184,21 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
                 "(for example gpt-image-1.5 or gpt-image-2)."
             )
 
-        if optional_params.get("response_format") == "url":
+        supported_params = set(self.get_supported_openai_params(model))
+        unsupported_params = [
+            key
+            for key in optional_params
+            if key not in supported_params and key not in INTERNAL_OPTIONAL_PARAMS
+        ]
+        if unsupported_params:
             raise ValueError(
-                "response_format='url' is not supported for GPT Image models. "
-                "GPT Image models always return base64-encoded images."
+                f"Parameters {unsupported_params} are not supported for model {model}. "
+                f"Supported parameters are {sorted(supported_params)}."
             )
-
-        n = optional_params.get("n")
-        if n is not None and not (1 <= int(n) <= 10):
-            raise ValueError("n must be between 1 and 10")
-        if n is not None and int(n) > 1:
-            raise ValueError(
-                "n > 1 is not supported for ChatGPT image generation. "
-                "Call image_generation multiple times to generate multiple images."
-            )
-
-        quality = optional_params.get("quality")
-        if quality is not None and quality not in ALLOWED_QUALITIES:
-            raise ValueError("quality must be one of low, medium, high, or auto")
 
         output_format = optional_params.get("output_format")
         if output_format is not None and output_format not in ALLOWED_OUTPUT_FORMATS:
             raise ValueError("output_format must be one of png, jpeg, or webp")
-
-        output_compression = optional_params.get("output_compression")
-        if output_compression is not None and not (0 <= int(output_compression) <= 100):
-            raise ValueError("output_compression must be between 0 and 100")
-
-        background = optional_params.get("background")
-        if background is not None and background not in ALLOWED_BACKGROUNDS:
-            raise ValueError("background must be one of transparent, opaque, or auto")
-        if model.startswith(GPT_IMAGE_2_MODEL_PREFIX) and background == "transparent":
-            raise ValueError("transparent backgrounds are not supported in gpt-image-2")
-        if background == "transparent" and output_format not in (None, "png", "webp"):
-            raise ValueError(
-                "transparent background requires output_format png or webp"
-            )
-
-        moderation = optional_params.get("moderation")
-        if moderation is not None and moderation not in ALLOWED_MODERATION_VALUES:
-            raise ValueError("moderation must be one of low or auto")
-
-        partial_images = optional_params.get("partial_images")
-        if partial_images is not None and not (0 <= int(partial_images) <= 3):
-            raise ValueError("partial_images must be between 0 and 3")
 
         size = optional_params.get("size")
         if size is not None and model.startswith(GPT_IMAGE_2_MODEL_PREFIX):
@@ -324,10 +277,7 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
         if image_usage is not None:
             response.usage = image_usage
         response.size = optional_params.get("size")
-        response.quality = optional_params.get("quality")
-        response.output_format = optional_params.get(
-            "output_format", optional_params.get("response_format")
-        )
+        response.output_format = optional_params.get("output_format")
         response._hidden_params["model"] = model
         return response
 
