@@ -2121,7 +2121,7 @@ def batch_cost_calculator(
         except Exception:
             model_info = None
     elif not any(
-        model_info.get(k)
+        model_info.get(k) is not None
         for k in (
             "input_cost_per_token_batches",
             "input_cost_per_token",
