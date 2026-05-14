@@ -1269,6 +1269,62 @@ async def test_can_key_call_model_denies_when_access_group_ids_resolve_no_models
         assert "resolved to no model permissions" in warning.call_args.args[0]
 
 
+@pytest.mark.asyncio
+async def test_can_key_call_model_denies_team_alias_outside_access_group_models():
+    """Team aliases do not bypass a key's access-group model allowlist."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+        team_model_aliases={"premium-alias": "claude-3"},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="premium-alias",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_allows_team_alias_inside_access_group_models():
+    """Team aliases remain usable when their target is in the key's access groups."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+        team_model_aliases={"premium-alias": "gpt-4"},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        await can_key_call_model(
+            model="premium-alias",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=None,
+        )
+
+
 # ---------------------------------------------------------------------------
 # _key_access_group_grants_model (key access group overriding team restriction)
 # ---------------------------------------------------------------------------
