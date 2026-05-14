@@ -32,6 +32,166 @@ BASE_AWS_LLM_PATH = os.path.join(
 )
 
 
+@pytest.fixture(autouse=True)
+def flush_shared_bedrock_iam_cache():
+    """Process-wide IAM cache must not leak static/env credential entries across tests."""
+    if hasattr(BaseAWSLLM, "_shared_iam_cache"):
+        BaseAWSLLM._shared_iam_cache.flush_cache()
+    yield
+
+
+def test_base_aws_llm_instances_share_process_wide_iam_cache():
+    """Regression LIT-2662: new instances must reuse iam_cache (Bedrock passthrough is per-request)."""
+    first = BaseAWSLLM()
+    second = BaseAWSLLM()
+    assert first.iam_cache is second.iam_cache
+    assert first.iam_cache is BaseAWSLLM._shared_iam_cache
+
+
+def test_static_access_key_credentials_use_iam_cache_across_calls():
+    """Static access-key path hits shared iam_cache; second identical call does not refetch."""
+    base = BaseAWSLLM()
+    fake_creds = MagicMock()
+
+    with patch.object(
+        base,
+        "_auth_with_access_key_and_secret_key",
+        return_value=(fake_creds, 3600),
+    ) as mock_static_auth:
+        base.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret",
+            aws_region_name="us-east-1",
+        )
+        base.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret",
+            aws_region_name="us-east-1",
+        )
+        mock_static_auth.assert_called_once()
+
+
+def _os_environ_without_aws_keys() -> Dict[str, str]:
+    """Strip AWS_* so get_credentials hits the ambient-env branch when no explicit keys are passed."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+
+
+def _get_header_value_case_insensitive(
+    headers: Dict[str, Any], header_name: str
+) -> Any:
+    for key, value in headers.items():
+        if key.lower() == header_name.lower():
+            return value
+    raise AssertionError(f"Missing header {header_name}; found {list(headers.keys())}")
+
+
+def test_ambient_env_credentials_use_iam_cache_across_instances():
+    """Else-branch env path uses shared iam_cache; second call on another instance does not refetch."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    fake_creds = MagicMock()
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
+        with patch.object(
+            BaseAWSLLM,
+            "_auth_with_env_vars",
+            return_value=(fake_creds, None),
+        ) as mock_env:
+            base_a.get_credentials()
+            base_b.get_credentials()
+            mock_env.assert_called_once()
+
+
+def test_static_access_key_path_boto3_session_constructed_once_when_cached():
+    """With real _auth_with_access_key_and_secret_key, boto3.Session is only built once per cache key."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    real_creds = Credentials("AKIAEXAMPLE", "secret-key-val", None)
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = real_creds
+    with patch("boto3.Session", return_value=mock_session_instance) as mock_session_cls:
+        base_a.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret-key-val",
+            aws_region_name="us-east-1",
+        )
+        base_b.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret-key-val",
+            aws_region_name="us-east-1",
+        )
+        mock_session_cls.assert_called_once()
+
+
+def test_ambient_env_path_boto3_session_constructed_once_when_cached():
+    """Else branch: boto3.Session() inside _auth_with_env_vars runs once for two cache hits."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    real_creds = Credentials("AKIAENV", "secret-env", None)
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = real_creds
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
+        with patch(
+            "boto3.Session", return_value=mock_session_instance
+        ) as mock_session_cls:
+            base_a.get_credentials()
+            base_b.get_credentials()
+            mock_session_cls.assert_called_once()
+
+
+def test_explicit_session_token_tuple_not_cached_in_iam_cache():
+    """Temporary key+secret+session paths must not use process-wide iam_cache between calls."""
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_aws_session_token",
+        return_value=(
+            Credentials("ak", "sk", "token"),
+            None,
+        ),
+    ) as mock_sess:
+        base.get_credentials(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="sec",
+            aws_session_token="tok",
+        )
+        base.get_credentials(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="sec",
+            aws_session_token="tok",
+        )
+        assert mock_sess.call_count == 2
+
+
+def test_aws_profile_path_not_cached_in_iam_cache():
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("prof-ak", "prof-sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name="my-profile")
+        base.get_credentials(aws_profile_name="my-profile")
+        assert mock_profile.call_count == 2
+
+
+def test_web_identity_path_not_cached_in_iam_cache():
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_web_identity_token",
+        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), None),
+    ) as mock_wi:
+        kwargs = dict(
+            aws_web_identity_token="jwt-token",
+            aws_role_name="arn:aws:iam::123456789012:role/WebIdentity",
+            aws_session_name="web-id-session",
+        )
+        base.get_credentials(**kwargs)
+        base.get_credentials(**kwargs)
+        assert mock_wi.call_count == 2
+
+
+
 def test_boto3_init_tracer_wrapping():
     """
     Test that all boto3 initializations are wrapped in tracer.trace or @tracer.wrap
@@ -253,6 +413,73 @@ def test_sign_request_with_sigv4():
         assert result_headers["Authorization"] != "Bearer test_token"
         assert result_headers["Content-Type"] == "application/json"
         assert result_body == mock_request.body
+
+
+def test_sign_request_replays_only_unsigned_original_headers():
+    llm = BaseAWSLLM()
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    stale_authorization = (
+        "AWS4-HMAC-SHA256 Credential=old, "
+        "SignedHeaders=content-type;host;x-amz-date, Signature=old"
+    )
+    stale_amz_date = "19990101T000000Z"
+    stale_security_token = "old_token"
+    headers = {
+        "Authorization": stale_authorization,
+        "x-amz-date": stale_amz_date,
+        "x-amz-security-token": stale_security_token,
+        "X-Forwarded-For": "203.0.113.10",
+        "X-Custom-Header": "caller-value",
+    }
+
+    with (
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret_str", return_value=None),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-west-2"),
+    ):
+        result_headers, result_body = llm._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params={
+                "aws_access_key_id": "test_key",
+                "aws_secret_access_key": "test_secret",
+                "aws_region_name": "us-west-2",
+            },
+            request_data={"prompt": "test"},
+            api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+        )
+
+    authorization = _get_header_value_case_insensitive(result_headers, "authorization")
+    amz_date = _get_header_value_case_insensitive(result_headers, "x-amz-date")
+    security_token = _get_header_value_case_insensitive(
+        result_headers, "x-amz-security-token"
+    )
+
+    assert authorization != stale_authorization
+    assert authorization.startswith("AWS4-HMAC-SHA256")
+    assert "SignedHeaders=" in authorization
+    assert "x-amz-date" in authorization
+    assert "x-amz-security-token" in authorization
+    assert amz_date != stale_amz_date
+    assert security_token != stale_security_token
+    assert all(
+        value != stale_authorization
+        for key, value in result_headers.items()
+        if key.lower() == "authorization"
+    )
+    assert all(
+        value != stale_amz_date
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-date"
+    )
+    assert all(
+        value != stale_security_token
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-security-token"
+    )
+    assert result_headers["X-Forwarded-For"] == "203.0.113.10"
+    assert result_headers["X-Custom-Header"] == "caller-value"
+    assert result_body is not None
 
 
 def test_sign_request_with_api_key_bearer_token():
