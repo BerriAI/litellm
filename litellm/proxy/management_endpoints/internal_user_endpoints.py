@@ -1152,6 +1152,44 @@ def _update_internal_user_params(
     return non_default_values
 
 
+async def _schedule_user_update_audit_log(
+    response: Dict[str, Any],
+    existing_user_row: Optional[BaseModel],
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        updated_user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": response["user_id"]}
+        )
+        if updated_user_row:
+            user_row_typed = LiteLLM_UserTable(
+                **updated_user_row.model_dump(exclude_none=True)
+            )
+            asyncio.create_task(
+                UserManagementEventHooks.create_internal_user_audit_log(
+                    user_id=user_row_typed.user_id,
+                    action="updated",
+                    litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    before_value=(
+                        existing_user_row.model_dump_json(exclude_none=True)
+                        if existing_user_row
+                        else None
+                    ),
+                    after_value=user_row_typed.model_dump_json(exclude_none=True),
+                )
+            )
+    except Exception as audit_error:
+        verbose_proxy_logger.warning(
+            f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
+        )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1299,39 +1337,14 @@ async def _update_single_user_helper(
                 data=non_default_values, table_name="user"
             )
 
-    # Create audit log for successful update
     if response is not None:
-        try:
-            updated_user_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
-            )
-
-            if updated_user_row:
-                user_row_typed = LiteLLM_UserTable(
-                    **updated_user_row.model_dump(exclude_none=True)
-                )
-
-                # Create audit log asynchronously
-                asyncio.create_task(
-                    UserManagementEventHooks.create_internal_user_audit_log(
-                        user_id=user_row_typed.user_id,
-                        action="updated",
-                        litellm_changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=(
-                            existing_user_row.model_dump_json(exclude_none=True)
-                            if existing_user_row
-                            else None
-                        ),
-                        after_value=user_row_typed.model_dump_json(exclude_none=True),
-                    )
-                )
-        except Exception as audit_error:
-            verbose_proxy_logger.warning(
-                f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
-            )
+        await _schedule_user_update_audit_log(
+            response=response,
+            existing_user_row=existing_user_row,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
 
     if response is None:
         raise HTTPException(
