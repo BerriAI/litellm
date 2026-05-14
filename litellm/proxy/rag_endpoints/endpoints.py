@@ -384,6 +384,41 @@ async def parse_rag_ingest_request(
             },
         )
 
+    # Credential fields must come from server configuration, not user requests.
+    # Accepting user-supplied credentials (e.g. vertex_credentials with
+    # type=external_account + credential_source.file=/proc/1/environ) allows
+    # any authenticated user to exfiltrate host secrets via SSRF through
+    # google-auth's identity_pool credential refresh.
+    # api_base is also blocked: a user-controlled base URL causes the server
+    # to send its configured provider credentials to an attacker endpoint.
+    _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS = {
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "azure_ad_token",
+        "api_key",
+        "api_base",
+    }
+    vector_store_opts = ingest_options.get("vector_store", {})
+    if isinstance(vector_store_opts, dict):
+        for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
+            if field in vector_store_opts:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"'{field}' cannot be set in ingest_options.vector_store. "
+                        "Credentials must be configured server-side."
+                    },
+                )
+
     return ingest_options, file_data, file_url, file_id
 
 

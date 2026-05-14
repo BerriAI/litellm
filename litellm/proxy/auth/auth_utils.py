@@ -502,18 +502,24 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        if hasattr(request, "base_url") and request.url.path.startswith(
-            request.base_url.path
-        ):
-            # remove base_url from path
-            return request.url.path[len(request.base_url.path) - 1 :]
-        else:
-            return request.url.path
+        scope = request.scope
+        if not isinstance(scope, dict):
+            return str(request.url.path)
+        raw_path: str = str(scope.get("path", request.url.path))
+        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        if not isinstance(raw_path, str):
+            return str(request.url.path)
+        # Only strip root_path when it is a meaningful prefix (not bare "/").
+        # Stripping bare "/" would remove the leading slash from every path
+        # e.g. "/team/new" → "team/new", breaking route matching.
+        if root_path and root_path != "/" and raw_path.startswith(root_path):
+            return raw_path[len(root_path) :]
+        return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
             f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
         )
-        return request.url.path
+        return str(request.url.path)
 
 
 @lru_cache(maxsize=256)
