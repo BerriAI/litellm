@@ -2120,11 +2120,11 @@ def batch_cost_calculator(
             )
         except Exception:
             model_info = None
-    elif not (
-        model_info.get("input_cost_per_token_batches")
-        or model_info.get("input_cost_per_token")
-        or model_info.get("output_cost_per_token_batches")
-        or model_info.get("output_cost_per_token")
+    elif (
+        model_info.get("input_cost_per_token_batches") is None
+        and model_info.get("input_cost_per_token") is None
+        and model_info.get("output_cost_per_token_batches") is None
+        and model_info.get("output_cost_per_token") is None
     ):
         # model_info was provided (e.g. deployment metadata with only id/db_model)
         # but carries no pricing fields. Fall back to the global pricing table so
