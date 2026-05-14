@@ -606,9 +606,11 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             data=data,
             call_type="",
         )
-        assert (
-            data.get(TPM_RESERVED_TOKENS_KEY) == 1
-        ), "Contentless request should reserve the floor of 1 token"
+        assert (data.get("metadata") or {}).get(TPM_RESERVED_TOKENS_KEY) == 1, (
+            "Contentless request should reserve the floor of 1 token "
+            "(stash lives in metadata channel — never on data top level, "
+            "which would leak into the upstream request body)"
+        )
 
     counter_after_two = int(
         await cache.async_get_cache(key=counter_key, local_only=True) or 0
@@ -701,7 +703,7 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         data=data,
         call_type="",
     )
-    reserved = data[TPM_RESERVED_TOKENS_KEY]
+    reserved = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
     assert reserved > 0
 
     counter_key = handler.create_rate_limit_keys(
@@ -726,9 +728,10 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         f"Reservation leaked: counter={counter_after_release} after "
         f"proxy-level rejection refund (expected 0)."
     )
-    assert data.get(TPM_RESERVATION_RELEASED_KEY) is True, (
-        "Released marker must be stamped to prevent async_log_failure_event "
-        "from double-refunding."
+    assert (data.get("metadata") or {}).get(TPM_RESERVATION_RELEASED_KEY) is True, (
+        "Released marker must be stamped in the metadata channel to prevent "
+        "async_log_failure_event from double-refunding. (Top-level data is "
+        "intentionally not written — those keys leak into provider bodies.)"
     )
 
 
@@ -757,13 +760,11 @@ async def test_reservation_release_idempotent(rate_limiter):
     # request_data["metadata"] and kwargs["litellm_params"]["metadata"] —
     # the post-call-failure-hook stamps the released marker there, and the
     # log-failure-event reads it.
+    # Stash keys live in the metadata channel only — they must NEVER appear
+    # at the top level of request_data (those would leak into the upstream
+    # provider request body and be rejected with 400/429).
     shared_metadata = {
         "user_api_key_hash": api_key,
-        TPM_RESERVED_TOKENS_KEY: 100,
-    }
-
-    request_data = {
-        "metadata": shared_metadata,
         TPM_RESERVED_TOKENS_KEY: 100,
         "_litellm_rate_limit_descriptors": [
             {
@@ -772,6 +773,10 @@ async def test_reservation_release_idempotent(rate_limiter):
                 "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
             }
         ],
+    }
+
+    request_data = {
+        "metadata": shared_metadata,
     }
 
     await handler.async_post_call_failure_hook(
