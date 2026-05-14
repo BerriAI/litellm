@@ -19,3 +19,17 @@ paths-ignore:
   - tests
   - docs
   - "**/*.md"
+  # py/weak-sensitive-data-hashing (CWE-328): the OCI signing call at
+  # litellm/llms/oci/common_utils.py hashes the HTTP request body to produce
+  # the x-content-sha256 header required by the OCI HTTP signing spec — a
+  # content-integrity hash, not a password or secret hash. SHA-256 is mandated
+  # by Oracle for this header; see
+  # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
+  #
+  # CodeQL has no native per-query path-scope filter and GitHub Code Scanning
+  # ignores `# lgtm[...]` / `# codeql[...]` inline comments, so path-ignoring
+  # this single file is the narrowest available suppression. The `usedforsecurity=False`
+  # flag on the hashlib.sha256 call already declares non-security intent but
+  # CodeQL's taint flow still re-fires when callers further up the stack are
+  # modified.
+  - litellm/llms/oci/common_utils.py
