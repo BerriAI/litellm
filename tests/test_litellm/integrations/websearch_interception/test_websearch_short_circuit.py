@@ -30,7 +30,8 @@ class TestTryShortCircuitSearch:
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
             mock_search.return_value = (
-                "Title: Result\nURL: https://example.com\nSnippet: test"
+                "Title: Result\nURL: https://example.com\nSnippet: test",
+                None,
             )
 
             result = await logger.try_short_circuit_search(
@@ -183,7 +184,7 @@ class TestTryShortCircuitSearch:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "search results here"
+            mock_search.return_value = ("search results here", None)
 
             result = await logger.try_short_circuit_search(
                 model="github_copilot/claude-sonnet-4",
@@ -246,7 +247,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "results"
+            mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
                     model="github_copilot/claude-sonnet-4",
@@ -273,7 +274,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "streaming results"
+            mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
                     model="github_copilot/claude-sonnet-4",
@@ -338,7 +339,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "streaming results"
+            mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate what anthropic_messages() does: original_stream=True
                 # is passed to the short-circuit, even though the hook would have
@@ -368,7 +369,7 @@ class TestShortCircuitEntryPoint:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "results"
+            mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate the caller having derived custom_llm_provider from
                 # the model string before calling _try_websearch_short_circuit
