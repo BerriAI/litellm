@@ -2180,23 +2180,23 @@ async def _validate_update_key_data(
     # - max_budget / spend: always require the admin check, even for the
     #   key owner or a team member (matches the existing admin-only
     #   budget semantics).
-    is_key_owner = (
-        user_api_key_dict.user_id is not None
-        and existing_key_row.user_id == user_api_key_dict.user_id
-    )
     _is_budget_change = (
         data.max_budget is not None and data.max_budget != existing_key_row.max_budget
     ) or (
         data.spend is not None
         and data.spend != getattr(existing_key_row, "spend", None)
     )
-    is_team_key = existing_key_row.team_id is not None
-    can_skip_admin_check_for_non_budget = is_key_owner or is_team_key
-    if (
-        (not _is_proxy_admin)
-        and prisma_client is not None
-        and (_is_budget_change or not can_skip_admin_check_for_non_budget)
-    ):
+
+    # Only the key creator (created_by == caller) may edit their own key
+    # without admin authorization, and only for non-budget fields.
+    # Anyone else — including users merely assigned the key — must pass
+    # _check_key_admin_access.
+    caller_is_creator = (
+        user_api_key_dict.user_id is not None
+        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
+    )
+    can_skip_admin_check = caller_is_creator and not _is_budget_change
+    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
         hashed_key = existing_key_row.token
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,

@@ -9069,6 +9069,172 @@ class TestLIT1884KeyUpdateValidation:
         )
 
 
+class TestKeyOwnerPrivilegeEscalation:
+    """
+    Policy:
+    - created_by == caller → can edit any non-budget field without admin
+    - created_by != caller (assigned user) → must pass admin check for any edit
+    - budget changes (max_budget/spend) → always require admin
+    - PROXY_ADMIN → unrestricted
+    """
+
+    def _make_existing_key(self, user_id="creator-123", created_by="creator-123"):
+        row = MagicMock()
+        # user_id must be set explicitly — MagicMock auto-attrs are not None and
+        # trip the _is_allowed_to_make_key_request assert before our check runs.
+        row.user_id = user_id
+        row.created_by = created_by
+        row.token = "hashed_token"
+        row.team_id = None
+        row.max_budget = None
+        row.spend = 0.0
+        row.organization_id = None
+        row.project_id = None
+        return row
+
+    def _make_auth(self, user_id="creator-123"):
+        return UserAPIKeyAuth(
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    @pytest.mark.asyncio
+    async def test_assigned_user_blocked_from_any_edit(self):
+        """User who did not create the key cannot edit it at all."""
+        data = UpdateKeyRequest(key="sk-test", key_alias="hacked")
+        # user_id matches caller so _is_allowed_to_make_key_request passes,
+        # but created_by != caller so our creator check requires admin.
+        existing = self._make_existing_key(
+            user_id="assigned-user", created_by="admin-456"
+        )
+        auth = self._make_auth(user_id="assigned-user")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        assert exc_info.value.status_code == 403
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_assigned_user_blocked_from_model_escalation(self):
+        data = UpdateKeyRequest(key="sk-test", models=["gpt-4", "claude-opus"])
+        existing = self._make_existing_key(
+            user_id="assigned-user", created_by="admin-456"
+        )
+        auth = self._make_auth(user_id="assigned-user")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException):
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_creator_can_edit_own_key(self):
+        """Key creator can update any non-budget field without admin."""
+        data = UpdateKeyRequest(
+            key="sk-test", models=["gpt-4"], rpm_limit=500, key_alias="my-key"
+        )
+        existing = self._make_existing_key(created_by="creator-123")
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        mock_check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_creator_cannot_change_own_budget(self):
+        """Budget changes require admin even for the key creator."""
+        data = UpdateKeyRequest(key="sk-test", max_budget=9999.0)
+        existing = self._make_existing_key(created_by="creator-123")
+        existing.max_budget = 10.0
+        auth = self._make_auth(user_id="creator-123")
+
+        mock_check = AsyncMock(
+            side_effect=HTTPException(status_code=403, detail="Not authorized")
+        )
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            with pytest.raises(HTTPException):
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing,
+                    user_api_key_dict=auth,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+        mock_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_update_any_field(self):
+        data = UpdateKeyRequest(key="sk-test", models=["gpt-4"], max_budget=999.0)
+        existing = self._make_existing_key(created_by="someone-else")
+        existing.max_budget = 1.0
+        auth = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_check = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            mock_check,
+        ):
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=auth,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        mock_check.assert_not_called()
+
+
 class TestKeyAliasSkipValidationOnUnchanged:
     """
     Test that updating/regenerating a key without changing its key_alias
