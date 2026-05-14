@@ -352,8 +352,8 @@ def is_request_body_safe(
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
-        nested = request_body.get(nested_key)
-        if isinstance(nested, dict):
+        nested = _coerce_metadata_to_dict(request_body.get(nested_key))
+        if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))

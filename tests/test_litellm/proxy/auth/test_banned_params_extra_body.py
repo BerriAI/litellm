@@ -80,3 +80,25 @@ def test_admin_opt_in_still_permits_extra_body_credentials():
         llm_router=None,
         model="openai/gpt-4",
     )
+
+
+def test_banned_param_under_stringified_extra_body_is_rejected():
+    # Raw-HTTP and multipart/form-data clients can send ``extra_body`` as
+    # a JSON-encoded string rather than an object. An ``isinstance(...,
+    # dict)`` guard on the nested descent would skip such payloads,
+    # leaving the banned-key check bypassed. Coercion via
+    # ``_coerce_metadata_to_dict`` closes that variant.
+    import json
+
+    body = {
+        "model": "bedrock/anthropic.claude-v2",
+        "messages": [{"role": "user", "content": "x"}],
+        "extra_body": json.dumps({"aws_web_identity_token": "anything"}),
+    }
+    with pytest.raises(ValueError, match="not allowed in request body"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="bedrock/anthropic.claude-v2",
+        )
