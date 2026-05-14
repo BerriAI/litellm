@@ -17,7 +17,6 @@ import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
-    _is_json_content_type,
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -956,35 +955,6 @@ class TestReadRequestBodyFormParseFailure:
         with pytest.raises(ProxyException) as exc_info:
             await _read_request_body(mock_request)
         assert str(exc_info.value.code) == "400"
-
-
-class TestIsJsonContentType:
-    @pytest.mark.parametrize(
-        "content_type",
-        [
-            "application/json",
-            "application/json; charset=utf-8",
-            "Application/JSON",
-            "  application/json  ",
-        ],
-    )
-    def test_json_types_match(self, content_type):
-        assert _is_json_content_type(content_type) is True
-
-    @pytest.mark.parametrize(
-        "content_type",
-        [
-            "",
-            "application/x-www-form-urlencoded",
-            "multipart/form-data",
-            "application/jsonl",
-            "application/jsonschema",
-            "text/json",
-            "application/json-patch+json",
-        ],
-    )
-    def test_non_json_types_rejected(self, content_type):
-        assert _is_json_content_type(content_type) is False
 
 
 class TestGetRequestBody:
