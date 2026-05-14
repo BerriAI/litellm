@@ -43,10 +43,34 @@ def test_should_register_rate_limit_label_names_on_enum():
 
 
 def test_should_include_rate_limit_labels_on_failed_requests_metric():
+    import litellm
+
+    original = litellm.prometheus_emit_rate_limit_labels
+    try:
+        litellm.prometheus_emit_rate_limit_labels = True
+        labels = PrometheusMetricLabels.get_labels(
+            "litellm_proxy_failed_requests_metric"
+        )
+        assert "rate_limit_category" in labels
+        assert "rate_limit_type" in labels
+        # These must coexist with the legacy exception labels (back-compat).
+        assert "exception_class" in labels
+        assert "exception_status" in labels
+    finally:
+        litellm.prometheus_emit_rate_limit_labels = original
+
+
+def test_should_omit_rate_limit_labels_by_default_for_back_compat():
+    """Default-off preserves the metric's historical label set so existing
+    dashboards / recording rules keyed on `litellm_proxy_failed_requests_metric`
+    keep matching after upgrade."""
+    import litellm
+
+    assert litellm.prometheus_emit_rate_limit_labels is False
     labels = PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
-    assert "rate_limit_category" in labels
-    assert "rate_limit_type" in labels
-    # These must coexist with the legacy exception labels (back-compat).
+    assert "rate_limit_category" not in labels
+    assert "rate_limit_type" not in labels
+    # Pre-PR labels must still be present.
     assert "exception_class" in labels
     assert "exception_status" in labels
 

@@ -338,12 +338,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
-        # Surfaced from RateLimitError.category / .rate_limit_type when the
-        # underlying exception is a rate-limit error; ``None`` otherwise. Lets
-        # dashboards split 429s into vendor vs. litellm and by exceeded
-        # dimension (RPM/TPM/concurrent/budget) without parsing error text.
-        UserAPIKeyLabelNames.RATE_LIMIT_CATEGORY.value,
-        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+        # ``rate_limit_category`` / ``rate_limit_type`` are appended in
+        # ``get_labels()`` when ``litellm.prometheus_emit_rate_limit_labels``
+        # is True. Kept opt-in so existing dashboards keyed on this metric's
+        # historical label set keep matching after upgrade.
         UserAPIKeyLabelNames.ROUTE.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
@@ -739,6 +737,25 @@ class PrometheusMetricLabels:
             and UserAPIKeyLabelNames.STREAM.value not in default_labels
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
+        # Conditionally add unified rate-limit labels to
+        # litellm_proxy_failed_requests_metric. Off by default so the metric's
+        # historical label set is preserved across upgrade; enable via
+        # ``litellm.prometheus_emit_rate_limit_labels`` once downstream
+        # dashboards include the new labels in their matchers / aggregations.
+        if (
+            label_name == "litellm_proxy_failed_requests_metric"
+            and litellm.prometheus_emit_rate_limit_labels is True
+        ):
+            for _rate_limit_label in (
+                UserAPIKeyLabelNames.RATE_LIMIT_CATEGORY.value,
+                UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+            ):
+                if (
+                    _rate_limit_label not in default_labels
+                    and _rate_limit_label not in custom_labels
+                ):
+                    custom_labels.append(_rate_limit_label)
 
         if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in [

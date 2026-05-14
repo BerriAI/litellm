@@ -783,6 +783,11 @@ async def test_async_post_call_failure_hook(prometheus_logger):
 
     it should increment the litellm_proxy_failed_requests_metric and litellm_proxy_total_requests_metric
     """
+    # Opt into the unified rate-limit labels so this test exercises the
+    # full label set surfaced when `prometheus_emit_rate_limit_labels` is on.
+    original_emit = litellm.prometheus_emit_rate_limit_labels
+    litellm.prometheus_emit_rate_limit_labels = True
+
     # Mock the prometheus metrics
     prometheus_logger.litellm_proxy_failed_requests_metric = MagicMock()
     prometheus_logger.litellm_proxy_total_requests_metric = MagicMock()
@@ -804,34 +809,37 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         request_route="/chat/completions",
     )
 
-    # Call the function
-    await prometheus_logger.async_post_call_failure_hook(
-        request_data=request_data,
-        original_exception=original_exception,
-        user_api_key_dict=user_api_key_dict,
-    )
+    try:
+        # Call the function
+        await prometheus_logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-    # Assert failed requests metric was incremented with correct labels
-    prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
-        end_user=None,
-        user="test_user",
-        user_email=None,
-        hashed_api_key="test_key",
-        api_key_alias="test_alias",
-        team="test_team",
-        team_alias="test_team_alias",
-        org_id=None,
-        org_alias=None,
-        requested_model="gpt-3.5-turbo",
-        exception_status="429",
-        exception_class="Openai.RateLimitError",
-        rate_limit_category="vendor_rate_limit",
-        rate_limit_type=None,
-        route=user_api_key_dict.request_route,
-        model_id=None,
-        client_ip=None,
-        user_agent=None,
-    )
+        # Assert failed requests metric was incremented with correct labels
+        prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
+            end_user=None,
+            user="test_user",
+            user_email=None,
+            hashed_api_key="test_key",
+            api_key_alias="test_alias",
+            team="test_team",
+            team_alias="test_team_alias",
+            org_id=None,
+            org_alias=None,
+            requested_model="gpt-3.5-turbo",
+            exception_status="429",
+            exception_class="Openai.RateLimitError",
+            rate_limit_category="vendor_rate_limit",
+            rate_limit_type=None,
+            route=user_api_key_dict.request_route,
+            model_id=None,
+            client_ip=None,
+            user_agent=None,
+        )
+    finally:
+        litellm.prometheus_emit_rate_limit_labels = original_emit
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
     # Assert total requests metric was incremented with correct labels
