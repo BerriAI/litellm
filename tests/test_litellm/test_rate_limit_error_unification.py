@@ -1507,3 +1507,165 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         )
         info = StandardLoggingPayloadSetup.get_error_information(e)
         assert info["llm_provider"] == "bedrock"
+
+
+class TestThirdPartyAttrLeakageGuard:
+    """
+    The duck-typed read at the StandardLoggingPayload + Prometheus surfaces
+    must reject `.category` / `.rate_limit_type` strings set on unrelated
+    third-party exceptions. Without validation, a foreign exception that
+    happens to declare either attribute name would leak garbage values into
+    custom-callback payloads and Prometheus label cardinality.
+    """
+
+    def test_should_drop_unknown_category_string_on_third_party_exception(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        class Foreign(Exception):
+            category = "totally_not_a_real_category"
+
+        info = StandardLoggingPayloadSetup.get_error_information(Foreign("boom"))
+        assert info["error_rate_limit_category"] is None
+
+    def test_should_drop_unknown_rate_limit_type_string_on_third_party_exception(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        class Foreign(Exception):
+            rate_limit_type = "wat"
+
+        info = StandardLoggingPayloadSetup.get_error_information(Foreign("boom"))
+        assert info["error_rate_limit_type"] is None
+
+    def test_should_drop_non_string_garbage_attrs(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        class Foreign(Exception):
+            category = 42
+            rate_limit_type = {"lol": "no"}
+
+        info = StandardLoggingPayloadSetup.get_error_information(Foreign())
+        assert info["error_rate_limit_category"] is None
+        assert info["error_rate_limit_type"] is None
+
+    def test_should_drop_garbage_on_prometheus_label_extraction(self):
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        class Foreign(Exception):
+            category = "spam"
+            rate_limit_type = "spam"
+
+        category, rate_limit_type = PrometheusLogger._extract_rate_limit_labels(
+            Foreign()
+        )
+        assert category is None
+        assert rate_limit_type is None
+
+    def test_should_still_accept_legitimate_rate_limit_categories(self):
+        # The guard must not over-correct — every documented enum value
+        # is a valid string and must pass through.
+        from litellm.exceptions import (
+            validate_rate_limit_category,
+            validate_rate_limit_type,
+        )
+
+        for member in RateLimitErrorCategory:
+            assert validate_rate_limit_category(member.value) == member.value
+            assert validate_rate_limit_category(member) == member.value
+
+        for member in RateLimitType:
+            assert validate_rate_limit_type(member.value) == member.value
+            assert validate_rate_limit_type(member) == member.value
+
+
+@pytest.mark.asyncio
+class TestBudgetExceededErrorLlmProviderEnrichment:
+    """
+    BudgetExceededError raise sites in auth_checks.py are tenant-scoped
+    (key / team / org / tag) and cannot see the request model. To still
+    populate `llm_provider` on the StandardLoggingPayload — which is what
+    custom-callback consumers attribute spend to — the central
+    UserAPIKeyAuthExceptionHandler enriches the exception from
+    `request_data["model"]` before post_call_failure_hook fires.
+    """
+
+    async def _run_handler_and_capture_exception_seen_by_callback(
+        self, exception: Exception, request_data: dict
+    ):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy.auth.auth_exception_handler import (
+            UserAPIKeyAuthExceptionHandler,
+        )
+
+        captured: dict = {}
+
+        async def fake_post_call_failure_hook(**kwargs):
+            captured["exception"] = kwargs["original_exception"]
+            return None
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                MagicMock(
+                    post_call_failure_hook=AsyncMock(
+                        side_effect=fake_post_call_failure_hook
+                    )
+                ),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"use_x_forwarded_for": False},
+            ),
+            patch(
+                "litellm.proxy.auth.auth_exception_handler._get_request_ip_address",
+                return_value="127.0.0.1",
+            ),
+        ):
+            try:
+                await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                    e=exception,
+                    request=MagicMock(),
+                    request_data=request_data,
+                    route="/v1/chat/completions",
+                    parent_otel_span=None,
+                    api_key="sk-test",
+                )
+            except Exception:
+                pass
+        return captured.get("exception")
+
+    async def test_should_resolve_llm_provider_from_request_data_when_unset(self):
+        err = litellm.BudgetExceededError(current_cost=100, max_budget=10)
+        assert err.llm_provider == ""
+        seen = await self._run_handler_and_capture_exception_seen_by_callback(
+            err, {"model": "openai/gpt-4o-mini"}
+        )
+        assert seen is not None
+        assert seen.llm_provider == "openai"
+
+    async def test_should_not_overwrite_llm_provider_when_caller_set_it(self):
+        err = litellm.BudgetExceededError(
+            current_cost=100, max_budget=10, llm_provider="anthropic"
+        )
+        seen = await self._run_handler_and_capture_exception_seen_by_callback(
+            err, {"model": "openai/gpt-4o-mini"}
+        )
+        assert seen.llm_provider == "anthropic"
+
+    async def test_should_fall_back_to_litellm_proxy_when_model_missing(self):
+        err = litellm.BudgetExceededError(current_cost=100, max_budget=10)
+        seen = await self._run_handler_and_capture_exception_seen_by_callback(err, {})
+        assert seen.llm_provider == "litellm_proxy"
+
+    async def test_should_not_enrich_non_budget_exceptions(self):
+        err = ValueError("unrelated")
+        seen = await self._run_handler_and_capture_exception_seen_by_callback(
+            err, {"model": "openai/gpt-4o-mini"}
+        )
+        assert not hasattr(seen, "llm_provider") or seen.llm_provider != "openai"

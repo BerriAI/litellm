@@ -106,6 +106,21 @@ class UserAPIKeyAuthExceptionHandler:
                 api_key=api_key,
                 request_route=route,
             )
+
+            # Budget checks live in tenant-scoped helpers (key / team / org / tag)
+            # that don't see the request model, so the BudgetExceededError they
+            # raise carries `llm_provider=""`. Resolve it here off `request_data`
+            # so custom-callback consumers reading StandardLoggingPayload get
+            # the same `llm_provider` attribution as for RPM/TPM 429s.
+            if isinstance(e, litellm.BudgetExceededError) and not e.llm_provider:
+                from litellm.proxy.hooks.rate_limiter_utils import (
+                    resolve_llm_provider_for_rate_limit,
+                )
+
+                _, e.llm_provider = resolve_llm_provider_for_rate_limit(
+                    request_data.get("model")
+                )
+
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,

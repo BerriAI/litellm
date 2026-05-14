@@ -37,6 +37,10 @@ from litellm import (
     turn_off_message_logging,
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
+from litellm.exceptions import (
+    validate_rate_limit_category,
+    validate_rate_limit_type,
+)
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -5159,18 +5163,17 @@ class StandardLoggingPayloadSetup:
         # Get additional error details
         error_message = str(original_exception)
 
-        # Surface the unified `category` and `rate_limit_type` fields off any
-        # exception that opts in by setting them. Duck-typed rather than
-        # isinstance-gated on RateLimitError so bare-Exception subclasses like
+        # Duck-typed read so bare-Exception subclasses like
         # `litellm.BudgetExceededError` can participate without joining the
         # RateLimitError hierarchy (which would break `except BudgetExceededError`).
-        # Both RateLimitError and BudgetExceededError normalize their values to
-        # plain strings at construction.
-        rate_limit_category: Optional[str] = getattr(
-            original_exception, "category", None
+        # Validated against the enum value sets so a third-party exception that
+        # happens to declare a `.category` or `.rate_limit_type` string attribute
+        # can't leak garbage into the payload or Prometheus label cardinality.
+        rate_limit_category = validate_rate_limit_category(
+            getattr(original_exception, "category", None)
         )
-        rate_limit_type: Optional[str] = getattr(
-            original_exception, "rate_limit_type", None
+        rate_limit_type = validate_rate_limit_type(
+            getattr(original_exception, "rate_limit_type", None)
         )
 
         return StandardLoggingPayloadErrorInformation(

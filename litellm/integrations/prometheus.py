@@ -24,6 +24,10 @@ from typing import (
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.exceptions import (
+    validate_rate_limit_category,
+    validate_rate_limit_type,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
@@ -2686,23 +2690,18 @@ class PrometheusLogger(CustomLogger):
         """
         Pull the unified ``category`` / ``rate_limit_type`` fields off any
         exception that declares them (``litellm.RateLimitError`` and bare-
-        Exception subclasses like ``BudgetExceededError`` that set these
-        attributes directly) so Prometheus can split 429s by source +
-        dimension without the consumer parsing free-text error messages.
+        Exception subclasses like ``BudgetExceededError``).
 
-        Returns ``(None, None)`` for exceptions that don't declare these
-        fields. Both classes normalize their values to plain ``str`` at
-        construction, so this helper only needs to coerce defensively.
+        Values are validated against the :class:`RateLimitErrorCategory` /
+        :class:`RateLimitType` enums so unrelated third-party exceptions that
+        happen to declare ``.category`` / ``.rate_limit_type`` string attributes
+        can't leak garbage into Prometheus label cardinality.
         """
         if exception is None:
             return None, None
-
-        def _coerce(value: Any) -> Optional[str]:
-            return str(value) if value is not None else None
-
         return (
-            _coerce(getattr(exception, "category", None)),
-            _coerce(getattr(exception, "rate_limit_type", None)),
+            validate_rate_limit_category(getattr(exception, "category", None)),
+            validate_rate_limit_type(getattr(exception, "rate_limit_type", None)),
         )
 
     async def log_success_fallback_event(
