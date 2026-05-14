@@ -96,6 +96,7 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    DEEPKEEP = "deepkeep"
 
 
 class Role(Enum):
@@ -442,6 +443,18 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
+class DeepKeepGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the DeepKeep AI Firewall guardrail"""
+
+    deepkeep_firewall_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The DeepKeep Firewall ID to use for guardrail evaluation. "
+            "If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked."
+        ),
+    )
+
+
 class PillarGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
@@ -758,6 +771,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
+    DeepKeepGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,

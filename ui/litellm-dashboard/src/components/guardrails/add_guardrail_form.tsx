@@ -1,7 +1,12 @@
 import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings, modelAvailableCall } from "../networking";
+import {
+  createGuardrailCall,
+  getGuardrailProviderSpecificParams,
+  getGuardrailUISettings,
+  modelAvailableCall,
+} from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
   choiceToSkipSystemForCreate,
@@ -805,13 +810,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && !shouldRenderLLMJudgeFields(selectedProvider) && (
-          <GuardrailProviderFields
-            selectedProvider={selectedProvider}
-            accessToken={accessToken}
-            providerParams={providerParams}
-          />
-        )}
+        {!isToolPermissionProvider &&
+          !shouldRenderContentFilterConfigSettings(selectedProvider) &&
+          !shouldRenderLLMJudgeFields(selectedProvider) && (
+            <GuardrailProviderFields
+              selectedProvider={selectedProvider}
+              accessToken={accessToken}
+              providerParams={providerParams}
+            />
+          )}
       </>
     );
   };
@@ -979,8 +986,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       <div className="space-y-6">
         <div>
           <p className="text-sm text-gray-500">
-            Configure settings for a specific call type. Most guardrails don't need this — skip it
-            unless you're using a specific endpoint like <code>/v1/realtime</code>.
+            Configure settings for a specific call type. Most guardrails don't need this — skip it unless you're using a
+            specific endpoint like <code>/v1/realtime</code>.
           </p>
         </div>
 
@@ -1022,12 +1029,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             {endpointSettingsOpen && (
               <div className="space-y-5 px-4 py-4 border-t border-gray-200">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    End session after X violations
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">End session after X violations</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    Automatically close the session after this many guardrail violations. Leave
-                    empty to never auto-close.
+                    Automatically close the session after this many guardrail violations. Leave empty to never
+                    auto-close.
                   </p>
                   <input
                     type="number"
@@ -1035,18 +1040,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     placeholder="e.g. 3"
                     value={endSessionAfterNFails ?? ""}
                     onChange={(e) =>
-                      setEndSessionAfterNFails(
-                        e.target.value ? parseInt(e.target.value, 10) : undefined
-                      )
+                      setEndSessionAfterNFails(e.target.value ? parseInt(e.target.value, 10) : undefined)
                     }
                     className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    On violation
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">On violation</label>
                   <div className="space-y-2">
                     {(["warn", "end_session"] as const).map((opt) => (
                       <label key={opt} className="flex items-start gap-2 cursor-pointer">
@@ -1074,12 +1075,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Message the user hears
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Message the user hears</label>
                   <p className="text-xs text-gray-400 mb-2">
-                    What the bot says aloud when this guardrail fires. Falls back to the default
-                    violation message if empty.
+                    What the bot says aloud when this guardrail fires. Falls back to the default violation message if
+                    empty.
                   </p>
                   <textarea
                     rows={3}
@@ -1151,6 +1150,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           <Form
             form={form}
             layout="vertical"
+            preserve={true}
             initialValues={{
               mode: "pre_call",
               default_on: false,

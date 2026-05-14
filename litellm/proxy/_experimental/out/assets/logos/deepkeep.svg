@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="dkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a73e8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d47a1;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="20" ry="20" fill="url(#dkGrad)"/>
+  <!-- Shield outline -->
+  <path d="M50 15 L75 28 L75 52 C75 68 63 80 50 87 C37 80 25 68 25 52 L25 28 Z" fill="none" stroke="#ffffff" stroke-width="3"/>
+  <!-- Inner shield fill -->
+  <path d="M50 20 L71 31 L71 52 C71 65 61 76 50 82 C39 76 29 65 29 52 L29 31 Z" fill="rgba(255,255,255,0.15)"/>
+  <!-- Lock/key icon inside shield -->
+  <circle cx="50" cy="45" r="8" fill="none" stroke="#ffffff" stroke-width="2.5"/>
+  <rect x="43" y="50" width="14" height="12" rx="2" ry="2" fill="#ffffff"/>
+  <rect x="48" y="54" width="4" height="5" rx="1" ry="1" fill="#1a73e8"/>
+</svg>

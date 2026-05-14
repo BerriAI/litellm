@@ -52,6 +52,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Promptguard: "promptguard",
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
+  Deepkeep: "deepkeep",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -137,7 +138,8 @@ export const guardrailLogoMap: Record<string, string> = {
   XecGuard: `${asset_logos_folder}xecguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
-  "Akto": `${asset_logos_folder}akto.svg`,
+  Akto: `${asset_logos_folder}akto.svg`,
+  "DeepKeep AI Firewall": `${asset_logos_folder}deepkeep.svg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
