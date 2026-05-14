@@ -10103,21 +10103,8 @@ async def supported_openai_params(model: str):
     dependencies=[Depends(user_api_key_auth)],
     response_model=RawRequestTypedDict,
 )
-async def transform_request(
-    request: TransformRequestBody,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def transform_request(request: TransformRequestBody):
     from litellm.utils import return_raw_request
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "/utils/transform_request is restricted to proxy admins. "
-                "This endpoint accepts arbitrary provider configuration and must not "
-                "be exposed to non-admin users."
-            },
-        )
 
     try:
         is_request_body_safe(

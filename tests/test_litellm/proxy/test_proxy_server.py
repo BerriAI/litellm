@@ -6689,26 +6689,17 @@ def test_realtime_websocket_route_aliases_registered():
         )
 
 
-class TestTransformRequestAuth:
+class TestTransformRequestBannedParams:
     """
-    /utils/transform_request must be restricted to PROXY_ADMIN.
+    /utils/transform_request applies the same banned-param check as LLM endpoints.
 
-    Any authenticated non-admin user could supply arbitrary provider config
-    (aws_sts_endpoint, api_base, etc.) and have the server forward its
-    credentials to an attacker-controlled endpoint.
+    Without this check, any authenticated user could supply aws_sts_endpoint,
+    api_base, etc. and have the server forward its credentials to an
+    attacker-controlled endpoint during SDK credential resolution.
     """
-
-    def _client_for_role(self, role):
-        mock_auth = UserAPIKeyAuth(user_id="test-user", user_role=role)
-        original = app.dependency_overrides.copy()
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
-        try:
-            yield TestClient(app)
-        finally:
-            app.dependency_overrides = original
 
     @pytest.fixture
-    def internal_user_client(self):
+    def client(self):
         mock_auth = UserAPIKeyAuth(
             user_id="test-internal",
             user_role=LitellmUserRoles.INTERNAL_USER,
@@ -6720,63 +6711,28 @@ class TestTransformRequestAuth:
         finally:
             app.dependency_overrides = original
 
-    @pytest.fixture
-    def admin_client(self):
-        mock_auth = UserAPIKeyAuth(
-            user_id="test-admin",
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-        )
-        original = app.dependency_overrides.copy()
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
-        try:
-            yield TestClient(app)
-        finally:
-            app.dependency_overrides = original
-
-    def test_internal_user_blocked(self, internal_user_client):
-        """Non-admin callers must receive 403."""
-        response = internal_user_client.post(
-            "/utils/transform_request",
-            json={
-                "call_type": "completion",
-                "request_body": {"model": "gpt-3.5-turbo"},
-            },
-        )
-        assert (
-            response.status_code == 403
-        ), f"Expected 403 for internal_user, got {response.status_code}: {response.json()}"
-
-    def test_internal_user_cannot_inject_banned_params(self, internal_user_client):
-        """Banned params (aws_sts_endpoint, api_base) must be blocked regardless."""
-        for banned in ("aws_sts_endpoint", "api_base", "aws_web_identity_token"):
-            response = internal_user_client.post(
-                "/utils/transform_request",
-                json={
-                    "call_type": "completion",
-                    "request_body": {
-                        "model": "gpt-3.5-turbo",
-                        banned: "https://attacker.example",
-                    },
-                },
-            )
-            assert response.status_code == 403, (
-                f"Expected 403 for internal_user with '{banned}', "
-                f"got {response.status_code}: {response.json()}"
-            )
-
-    def test_admin_banned_params_rejected(self, admin_client):
-        """Even PROXY_ADMIN cannot pass banned params like aws_sts_endpoint."""
-        response = admin_client.post(
+    @pytest.mark.parametrize(
+        "banned",
+        [
+            "aws_sts_endpoint",
+            "api_base",
+            "aws_web_identity_token",
+            "vertex_credentials",
+        ],
+    )
+    def test_banned_params_rejected_for_all_users(self, client, banned):
+        """Banned params must be blocked for any authenticated user."""
+        response = client.post(
             "/utils/transform_request",
             json={
                 "call_type": "completion",
                 "request_body": {
                     "model": "gpt-3.5-turbo",
-                    "aws_sts_endpoint": "https://attacker.example/sts",
+                    banned: "https://attacker.example",
                 },
             },
         )
         assert response.status_code == 400, (
-            f"Expected 400 for banned param even for admin, "
+            f"Expected 400 for banned param '{banned}', "
             f"got {response.status_code}: {response.json()}"
         )
