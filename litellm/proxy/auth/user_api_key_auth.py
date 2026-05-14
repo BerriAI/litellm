@@ -90,7 +90,9 @@ except ImportError as e:
     verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
     enterprise_custom_auth = None
 
-user_api_key_service_logger_obj = ServiceLogging()  # used for service callback latency tracking
+user_api_key_service_logger_obj = (
+    ServiceLogging()
+)  # used for service callback latency tracking
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -2323,11 +2325,7 @@ async def _return_user_api_key_auth_obj(
             user_api_key_kwargs.update(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
             )
-            return UserAPIKeyAuth(**user_api_key_kwargs)
-        else:
-            return UserAPIKeyAuth(**user_api_key_kwargs)
-
-    raise RuntimeError("Failed to build UserAPIKeyAuth object")
+        return UserAPIKeyAuth(**user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(
