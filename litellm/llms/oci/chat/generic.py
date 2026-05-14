@@ -324,10 +324,17 @@ def handle_generic_response(
             )
 
     oci_usage = completion_response.chatResponse.usage
+    reasoning_tokens: Optional[int] = None
+    if (
+        oci_usage.completionTokensDetails
+        and oci_usage.completionTokensDetails.reasoningTokens
+    ):
+        reasoning_tokens = oci_usage.completionTokensDetails.reasoningTokens
     model_response.usage = Usage(  # type: ignore[attr-defined]
         prompt_tokens=oci_usage.promptTokens,
         completion_tokens=oci_usage.completionTokens or 0,
         total_tokens=oci_usage.totalTokens,
+        reasoning_tokens=reasoning_tokens,
     )
 
     return model_response

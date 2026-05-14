@@ -151,18 +151,20 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere param map differs from GENERIC in four ways:
+        # Cohere param map differs from GENERIC in three ways:
         # - tool_choice is unsupported
         # - stop sequences key is "stopSequences" not "stop"
         # - n (numGenerations) is GENERIC-only
-        # - reasoning_effort is GENERIC-only (CohereChatRequest v1 has no
-        #   reasoningEffort field; Cohere reasoning models like
-        #   command-a-reasoning use COHEREV2 which is a separate request type)
         self.openai_to_oci_cohere_param_map = {
             k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
-            if k not in ("tool_choice", "max_retries", "n", "reasoning_effort")
+            if k not in ("tool_choice", "max_retries", "n")
         }
+        # OCI Cohere models are not reasoning models; mark reasoning_effort
+        # explicitly unsupported so callers either get a clear error or have
+        # the param dropped under drop_params, rather than silently passing
+        # through and tripping Pydantic validation on CohereChatRequest.
+        self.openai_to_oci_cohere_param_map["reasoning_effort"] = False
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         param_map = (
@@ -320,6 +322,16 @@ class OCIChatConfig(BaseConfig):
                 and oci_value not in selected_params
             ):
                 selected_params[oci_value] = optional_params[oci_value]  # type: ignore[index]
+
+        # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
+        # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".
+        if "reasoningEffort" in selected_params:
+            effort = selected_params["reasoningEffort"]
+            if isinstance(effort, str):
+                normalized = effort.upper()
+                if normalized == "DISABLE":
+                    normalized = "NONE"
+                selected_params["reasoningEffort"] = normalized
 
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:

@@ -490,9 +490,10 @@ class TestOCIChatConfig:
         assert result.usage.prompt_tokens == 10  # type: ignore
         assert result.usage.completion_tokens == 20  # type: ignore
         assert result.usage.total_tokens == 30  # type: ignore
-        # These are not handled in the transformer, TBH no idea why they are here
-        # but, for now, they seem to be always None
-        assert result.usage.completion_tokens_details is None
+        # reasoningTokens from OCI's completionTokensDetails is surfaced on
+        # Usage.completion_tokens_details.reasoning_tokens.
+        assert result.usage.completion_tokens_details is not None
+        assert result.usage.completion_tokens_details.reasoning_tokens == 20
         assert result.usage.prompt_tokens_details is None
 
     def test_transform_response_with_tool_calls(self):
@@ -953,6 +954,172 @@ class TestOCICohereParamMapping:
         )
         assert result.get("maxTokens") == 200
         assert result.get("temperature") == 0.5
+
+
+class TestOCIReasoningEffort:
+    """
+    Reasoning-effort handling for GENERIC reasoning models:
+    - OpenAI clients send lowercase ("low"/"medium"/"high"); OCI requires uppercase.
+    - OpenAI's "disable" maps to OCI's "NONE".
+    - Cohere on OCI has no reasoning models — the param is unsupported there.
+    """
+
+    def _build_chat_request(self, model: str, optional_params: dict) -> dict:
+        """Drive optional params through map → _get_optional_params and read
+        the resulting chatRequest body via transform_request."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+        mapped = config.map_openai_params(
+            non_default_params=optional_params,
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        body = config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={**BASE_OCI_PARAMS, **mapped},
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]
+
+    def test_reasoning_effort_lowercase_uppercased(self):
+        chat_request = self._build_chat_request(
+            "xai.grok-4-fast-reasoning",
+            {"reasoning_effort": "low"},
+        )
+        assert chat_request.get("reasoningEffort") == "LOW"
+
+    def test_reasoning_effort_disable_mapped_to_none(self):
+        chat_request = self._build_chat_request(
+            "xai.grok-4-fast-reasoning",
+            {"reasoning_effort": "disable"},
+        )
+        assert chat_request.get("reasoningEffort") == "NONE"
+
+    def test_reasoning_effort_already_uppercase_preserved(self):
+        chat_request = self._build_chat_request(
+            "openai.gpt-5",
+            {"reasoning_effort": "HIGH"},
+        )
+        assert chat_request.get("reasoningEffort") == "HIGH"
+
+    def test_reasoning_effort_unsupported_on_cohere_dropped(self):
+        """drop_params=True → silently drop reasoning_effort for Cohere."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in result
+        assert "reasoningEffort" not in result
+
+    def test_reasoning_effort_unsupported_on_cohere_raises(self):
+        """drop_params=False → raise rather than ship a payload Cohere will reject."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+        from litellm.llms.oci.common_utils import OCIError
+
+        config = OCIChatConfig()
+        with pytest.raises(OCIError):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+
+    def test_reasoning_tokens_extracted_from_usage(self):
+        """OCI's completionTokensDetails.reasoningTokens flows into
+        Usage.completion_tokens_details.reasoning_tokens."""
+        from litellm.llms.oci.chat.generic import handle_generic_response
+
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        oci_response = {
+            "modelId": "xai.grok-4-fast-reasoning",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "ok"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 12,
+                    "totalTokens": 17,
+                    "completionTokensDetails": {"reasoningTokens": 7},
+                },
+            },
+        }
+        raw = httpx.Response(status_code=200, json=oci_response)
+        result = handle_generic_response(
+            json_data=oci_response,
+            model="xai.grok-4-fast-reasoning",
+            model_response=ModelResponse(),
+            raw_response=raw,
+        )
+        usage = result.usage  # type: ignore[attr-defined]
+        assert usage.completion_tokens_details is not None
+        assert usage.completion_tokens_details.reasoning_tokens == 7
+
+    def test_reasoning_tokens_absent_when_no_details(self):
+        """When OCI omits completionTokensDetails, Usage has no reasoning_tokens."""
+        from litellm.llms.oci.chat.generic import handle_generic_response
+
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        oci_response = {
+            "modelId": "xai.grok-4",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "ok"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 12,
+                    "totalTokens": 17,
+                },
+            },
+        }
+        raw = httpx.Response(status_code=200, json=oci_response)
+        result = handle_generic_response(
+            json_data=oci_response,
+            model="xai.grok-4",
+            model_response=ModelResponse(),
+            raw_response=raw,
+        )
+        usage = result.usage  # type: ignore[attr-defined]
+        assert usage.completion_tokens_details is None
 
 
 class TestOCIStreamingSignedBody:
