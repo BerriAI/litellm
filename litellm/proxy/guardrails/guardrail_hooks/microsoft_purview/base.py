@@ -317,6 +317,33 @@ class PurviewGuardrailBase:
     # Prompt text for DLP
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def completion_prompt_to_str(prompt: Any) -> Optional[str]:
+        """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
+
+        Supports string prompts and list-of-string prompts. List-of-token-id prompts
+        are skipped (no plaintext for Purview to evaluate).
+        """
+        if prompt is None:
+            return None
+        if isinstance(prompt, str):
+            stripped = prompt.strip()
+            return stripped or None
+        if isinstance(prompt, list) and prompt:
+            if all(isinstance(x, str) for x in prompt):
+                joined = "\n".join(s.strip() for s in prompt if isinstance(s, str))
+                return joined.strip() or None
+            if all(isinstance(x, int) for x in prompt):
+                verbose_proxy_logger.debug(
+                    "Purview DLP: completions prompt is token ids only; skipping text scan"
+                )
+                return None
+            str_parts = [x for x in prompt if isinstance(x, str)]
+            if str_parts:
+                joined = "\n".join(s.strip() for s in str_parts)
+                return joined.strip() or None
+        return None
+
     def get_prompt_text_for_dlp(self, messages: List["AllMessageValues"]) -> Optional[str]:
         """Concatenate text from every chat message (all roles) for pre-call DLP.
 

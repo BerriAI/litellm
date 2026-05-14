@@ -11,7 +11,7 @@ import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union, cast
 
 from fastapi import HTTPException
 
@@ -176,19 +176,23 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
             return data
 
+        prompt_text: Optional[str] = None
         messages: Optional[List] = data.get("messages")
-        if not messages:
+        if messages:
+            prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
+        elif call_type in ("text_completion", "atext_completion"):
+            prompt_text = self.completion_prompt_to_str(data.get("prompt"))
+
+        if not prompt_text:
             return data
 
-        prompt_text = self.get_prompt_text_for_dlp(messages)
-        if prompt_text:
-            await self._check_content(
-                user_id=user_id,
-                text=prompt_text,
-                activity="uploadText",
-                request_data=data,
-                block_on_violation=True,
-            )
+        await self._check_content(
+            user_id=user_id,
+            text=prompt_text,
+            activity="uploadText",
+            request_data=data,
+            block_on_violation=True,
+        )
         return None
 
     # ------------------------------------------------------------------
@@ -202,7 +206,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         response: Union[Any, "ModelResponse", "EmbeddingResponse", "ImageResponse"],
     ) -> Any:
         """Check LLM response against Purview DLP policies."""
-        from litellm.types.utils import Choices, ModelResponse
+        from litellm.types.utils import (
+            Choices,
+            ModelResponse,
+            TextChoices,
+            TextCompletionResponse,
+        )
 
         user_id = self._resolve_user_id(data, user_api_key_dict)
         if not user_id:
@@ -211,8 +220,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
             return response
 
-        if isinstance(response, ModelResponse) and response.choices:
-            parts: List[str] = []
+        parts: List[str] = []
+
+        if isinstance(response, TextCompletionResponse) and response.choices:
+            for choice in response.choices:
+                if not isinstance(choice, TextChoices):
+                    continue
+                raw = choice.get("text")
+                if isinstance(raw, str) and raw.strip():
+                    parts.append(raw)
+        elif isinstance(response, ModelResponse) and response.choices:
             for choice in response.choices:
                 if not isinstance(choice, Choices):
                     continue
@@ -224,15 +241,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
                 if isinstance(raw, str) and raw.strip():
                     parts.append(raw)
-            if parts:
-                combined = "\n\n---\n\n".join(parts)
-                await self._check_content(
-                    user_id=user_id,
-                    text=combined,
-                    activity="downloadText",
-                    request_data=data,
-                    block_on_violation=True,
-                )
+
+        if parts:
+            combined = "\n\n---\n\n".join(parts)
+            await self._check_content(
+                user_id=user_id,
+                text=combined,
+                activity="downloadText",
+                request_data=data,
+                block_on_violation=True,
+            )
         return response
 
     # ------------------------------------------------------------------
@@ -279,23 +297,39 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 return kwargs, result
 
             # Log prompt (uploadText)
+            prompt_text: Optional[str] = None
             messages = kwargs.get("messages")
             if messages:
-                prompt_text = self.get_prompt_text_for_dlp(messages)
-                if prompt_text:
-                    await self._check_content(
-                        user_id=user_id,
-                        text=prompt_text,
-                        activity="uploadText",
-                        request_data=kwargs,
-                        block_on_violation=False,
-                    )
+                prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
+            elif call_type in ("text_completion", "atext_completion"):
+                prompt_text = self.completion_prompt_to_str(kwargs.get("prompt"))
+
+            if prompt_text:
+                await self._check_content(
+                    user_id=user_id,
+                    text=prompt_text,
+                    activity="uploadText",
+                    request_data=kwargs,
+                    block_on_violation=False,
+                )
 
             # Log response (downloadText)
-            from litellm.types.utils import Choices, ModelResponse
+            from litellm.types.utils import (
+                Choices,
+                ModelResponse,
+                TextChoices,
+                TextCompletionResponse,
+            )
 
-            if isinstance(result, ModelResponse) and result.choices:
-                parts: List[str] = []
+            parts: List[str] = []
+            if isinstance(result, TextCompletionResponse) and result.choices:
+                for choice in result.choices:
+                    if not isinstance(choice, TextChoices):
+                        continue
+                    raw = choice.get("text")
+                    if isinstance(raw, str) and raw.strip():
+                        parts.append(raw)
+            elif isinstance(result, ModelResponse) and result.choices:
                 for choice in result.choices:
                     if not isinstance(choice, Choices):
                         continue
@@ -307,15 +341,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     )
                     if isinstance(raw, str) and raw.strip():
                         parts.append(raw)
-                if parts:
-                    combined = "\n\n---\n\n".join(parts)
-                    await self._check_content(
-                        user_id=user_id,
-                        text=combined,
-                        activity="downloadText",
-                        request_data=kwargs,
-                        block_on_violation=False,
-                    )
+
+            if parts:
+                combined = "\n\n---\n\n".join(parts)
+                await self._check_content(
+                    user_id=user_id,
+                    text=combined,
+                    activity="downloadText",
+                    request_data=kwargs,
+                    block_on_violation=False,
+                )
         except Exception as e:
             verbose_proxy_logger.error("Purview audit logging error: %s", e)
 
