@@ -486,7 +486,7 @@ async def test_parallel_request_limiter_v1_missing_model_falls_back():
 # ---------------------------------------------------------------------------
 
 
-def _v3_over_limit_response(rate_limit_type: str = "rpm") -> dict:
+def _v3_over_limit_response(rate_limit_type: str = "requests") -> dict:
     return {
         "overall_code": "OVER_LIMIT",
         "statuses": [
@@ -666,7 +666,7 @@ async def test_dynamic_rate_limiter_v3_model_capacity_path_populates_provider():
                     "descriptor_key": "model_saturation_check",
                     "current_limit": 100,
                     "limit_remaining": 0,
-                    "rate_limit_type": "rpm",
+                    "rate_limit_type": "requests",
                 }
             ],
         }
@@ -716,7 +716,7 @@ async def test_dynamic_rate_limiter_v3_unknown_descriptor_path_populates_provide
                     "descriptor_key": "something_we_dont_handle",
                     "current_limit": 1,
                     "limit_remaining": 0,
-                    "rate_limit_type": "rpm",
+                    "rate_limit_type": "requests",
                 }
             ],
         }
