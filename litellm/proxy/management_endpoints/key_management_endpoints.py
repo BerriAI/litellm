@@ -2187,13 +2187,14 @@ async def _validate_update_key_data(
         and data.spend != getattr(existing_key_row, "spend", None)
     )
 
-    # Only the key creator (created_by == caller) may edit their own key
-    # without admin authorization, and only for non-budget fields.
-    # Anyone else — including users merely assigned the key — must pass
-    # _check_key_admin_access.
+    # Personal-key bypass: the caller both created the key AND still owns it
+    # (user_id == caller).  Checking only created_by would let a demoted admin
+    # who originally created a key for another user continue editing it without
+    # admin authorization after the key was reassigned.
     caller_is_creator = (
         user_api_key_dict.user_id is not None
         and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
+        and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
     )
     # Team keys: can_team_member_execute_key_management_endpoint (called above)
     # already validated team membership + /key/update permission and would have

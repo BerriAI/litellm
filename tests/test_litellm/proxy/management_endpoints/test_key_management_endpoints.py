@@ -8563,6 +8563,68 @@ async def test_update_key_non_budget_rejects_cross_user_modification(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_update_key_creator_reassigned_key_blocked(monkeypatch):
+    """Regression: creator who no longer owns the key (user_id ≠ caller) must
+    not bypass _check_key_admin_access via the caller_is_creator shortcut."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    test_hashed_token = "aabbccdd" * 8
+    mock_prisma_client = AsyncMock()
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.created_by = "demoted-admin"  # creator
+    mock_existing_key.user_id = "victim-user"  # reassigned to someone else
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = "original"
+    mock_existing_key.models = []
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "victim-user",
+        "created_by": "demoted-admin",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.hash_token", lambda t: test_hashed_token
+    )
+
+    demoted_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-demoted",
+        user_id="demoted-admin",
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(Exception) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=test_hashed_token, key_alias="hijacked"),
+            user_api_key_dict=demoted_admin,
+            litellm_changed_by=None,
+        )
+    assert str(exc.value.code) == "403"
+
+
+@pytest.mark.asyncio
 async def test_update_key_team_member_with_permission_can_update_non_budget(
     monkeypatch,
 ):
