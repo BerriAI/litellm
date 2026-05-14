@@ -5540,6 +5540,9 @@ async def test_validate_max_budget():
         _validate_max_budget(-10.0)
 
     assert exc_info.value.status_code == 400
+    assert "max_budget must be a non-negative finite number" in str(
+        exc_info.value.detail
+    )
     assert "negative" in str(exc_info.value.detail)
 
 
@@ -10979,3 +10982,222 @@ async def test_regenerate_premium_gate_allows_actual_master_key_holder():
         )
 
     assert result.token == "sk-new-master"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for GHSA-q775-qw9r-2r4g: budget escalation via key/generate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_non_admin_unlimited_can_delegate_budget():
+    """
+    Non-admin caller with max_budget=None (unlimited) can legitimately create
+    budget-capped keys. Any finite budget is within an unlimited ceiling.
+    """
+    data = GenerateKeyRequest(max_budget=999999)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+        max_budget=None,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        result = await generate_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_non_admin_cannot_exceed_own_budget():
+    """
+    Non-admin caller with max_budget=100 must not be able to create a key
+    with max_budget=500.
+    """
+    data = GenerateKeyRequest(max_budget=500)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+        max_budget=100,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_non_admin_within_budget_allowed():
+    """
+    Non-admin caller with max_budget=100 can create a key with max_budget=50.
+    """
+    data = GenerateKeyRequest(max_budget=50)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+        max_budget=100,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        result = await generate_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_upperbound_default_not_rejected():
+    """
+    When upperbound_key_generate_params fills max_budget as a default, the
+    ceiling check must NOT fire — only explicitly requested budgets trigger it.
+    """
+    data = GenerateKeyRequest()
+    assert data.max_budget is None
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+        max_budget=None,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch(
+            "litellm.upperbound_key_generate_params",
+            MagicMock(max_budget=100.0),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        result = await generate_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_default_key_generate_params_not_rejected():
+    """
+    When default_key_generate_params fills max_budget, the ceiling check must
+    NOT fire — only caller-supplied budgets trigger it.
+    """
+    data = GenerateKeyRequest()
+    assert data.max_budget is None
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="user-1",
+        max_budget=None,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch(
+            "litellm.default_key_generate_params",
+            {"max_budget": 50.0},
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        result = await generate_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_admin_bypasses_budget_ceiling():
+    """
+    Admin caller can set any max_budget regardless of own budget.
+    """
+    data = GenerateKeyRequest(max_budget=999999)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin-1",
+        max_budget=None,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        result = await generate_key_fn(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+        assert result is not None

@@ -13,6 +13,7 @@ import asyncio
 import copy
 import inspect
 import json
+import math
 import os
 import re
 import secrets
@@ -608,6 +609,11 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
+_BUDGET_NUMERIC_KEYS = frozenset(
+    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"]
+)
+
+
 def _enforce_upperbound_key_params(
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     fill_defaults: bool = True,
@@ -618,6 +624,21 @@ def _enforce_upperbound_key_params(
     For key generation (fill_defaults=True): fills None values with upperbound defaults.
     For key update (fill_defaults=False): only validates explicitly provided values.
     """
+    # Always reject NaN / Inf regardless of whether an upperbound config is set
+    # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
+    # nan < 0 is False, and spend >= nan is always False, permanently disabling
+    # budget enforcement for any key that carries it.
+    for elem in data:
+        key, value = elem
+        if key in _BUDGET_NUMERIC_KEYS and value is not None:
+            if not math.isfinite(value):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} must be a finite number. Received: {value}"
+                    },
+                )
+
     if litellm.upperbound_key_generate_params is None:
         return
 
@@ -687,6 +708,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
+    # Capture the caller-supplied max_budget before any defaults or upperbound
+    # params can fill it, so the ceiling check only fires when the caller
+    # explicitly requested a budget.
+    _requested_max_budget = data.max_budget
+
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
         for elem in data:
@@ -709,6 +735,25 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
+
+    # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
+    # with an explicit budget cannot grant a key a higher budget than their own.
+    # Callers with max_budget=None (unlimited) can delegate any budget.
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and _requested_max_budget is not None
+        and user_api_key_dict.max_budget is not None
+        and _requested_max_budget > user_api_key_dict.max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
+                    f"own max_budget ({user_api_key_dict.max_budget})."
+                )
+            },
+        )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1416,19 +1461,24 @@ async def generate_key_fn(
 
         await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
 
-        # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        # Validate budget values are not negative and are finite numbers
+        # (GHSA-2rv4-xv66-fpjg): float('nan') passes `< 0` because nan < 0 is False.
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1880,10 +1930,12 @@ def _validate_max_budget(max_budget: Optional[float]) -> None:
     Raises:
         HTTPException: If max_budget is negative
     """
-    if max_budget is not None and max_budget < 0:
+    if max_budget is not None and (not math.isfinite(max_budget) or max_budget < 0):
         raise HTTPException(
             status_code=400,
-            detail={"error": f"max_budget cannot be negative. Received: {max_budget}"},
+            detail={
+                "error": f"max_budget must be a non-negative finite number. Received: {max_budget}"
+            },
         )
 
 
@@ -2422,12 +2474,14 @@ async def update_key_fn(  # noqa: PLR0915
     )
 
     try:
-        # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        # Validate budget values are not negative and are finite numbers
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
 
