@@ -737,33 +737,23 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     _enforce_upperbound_key_params(data, fill_defaults=True)
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
-    # cannot grant a key more budget than the caller's own key carries.  This
-    # prevents budget escalation when no upperbound_key_generate_params config
-    # is present.
+    # with an explicit budget cannot grant a key a higher budget than their own.
+    # Callers with max_budget=None (unlimited) can delegate any budget.
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and _requested_max_budget is not None
+        and user_api_key_dict.max_budget is not None
+        and _requested_max_budget > user_api_key_dict.max_budget
     ):
-        if user_api_key_dict.max_budget is None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Cannot set max_budget ({_requested_max_budget}) on a generated "
-                        "key because the caller's own key has no budget configured."
-                    )
-                },
-            )
-        if _requested_max_budget > user_api_key_dict.max_budget:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
-                        f"own max_budget ({user_api_key_dict.max_budget})."
-                    )
-                },
-            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
+                    f"own max_budget ({user_api_key_dict.max_budget})."
+                )
+            },
+        )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
