@@ -99,12 +99,17 @@ let mockUseAuthorizedImpl = () => ({
   premiumUser: false,
 });
 
+const useHealthReadinessDetailsSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => mockUseHealthReadinessDetailsImpl(),
+  useHealthReadinessDetails: (accessToken: string | null | undefined) => {
+    useHealthReadinessDetailsSpy(accessToken);
+    return mockUseHealthReadinessDetailsImpl();
+  },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -212,6 +217,22 @@ describe("Navbar", () => {
 
     // Reset mock
     mockUseHealthReadinessDetailsImpl = () => ({ data: null });
+  });
+
+  it("should forward accessToken to the readiness hook", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="my-token" />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token");
+  });
+
+  it("should forward a null accessToken to the readiness hook (disables the hook)", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken={null} />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
   });
 
   it("should use custom logo from theme context", () => {

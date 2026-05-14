@@ -54,5 +54,8 @@ export const useHealthReadinessDetails = (
     queryFn: () => fetchHealthReadinessDetails(accessToken!),
     enabled: Boolean(accessToken),
     staleTime: 5 * 60 * 1000,
+    // The response feeds a passive navbar tag and a debug banner — a failed
+    // call (e.g. expired token → 401) shouldn't fan out into three retries.
+    retry: false,
   });
 };
