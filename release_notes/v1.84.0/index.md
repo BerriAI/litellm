@@ -43,6 +43,23 @@ pip install litellm==1.84.0
 </TabItem>
 </Tabs>
 
+## Version naming change
+
+> **Starting with `v1.84.0`, LiteLLM versions follow [PEP 440](https://peps.python.org/pep-0440/).** Stable releases drop the `-stable` suffix — the Docker tag for this release is `litellm:1.84.0`, not `litellm:1.84.0-stable`. Every Docker tag is published in both bare and `v`-prefixed form (`litellm:1.84.0` and `litellm:v1.84.0` resolve to the same image), so existing pins that include the `v` prefix keep working. PyPI versions remain the bare PEP 440 form: `pip install litellm==1.84.0`. If you pin LiteLLM in deployment tooling (Helm values, `requirements.txt`, Renovate rules, etc.), update those pins to the PEP 440 form.
+
+Mapping from the legacy suffix scheme to the new PEP 440 scheme:
+
+| Channel | Legacy (≤ `v1.83.x`) | New (≥ `v1.84.0`) |
+| --- | --- | --- |
+| Stable | `vX.Y.Z-stable` | `vX.Y.Z` |
+| Stable patch | `vX.Y.Z-stable.patch.N` | `vX.Y.Z.postN` |
+| Release candidate | `vX.Y.Z.rc.N` / `vX.Y.Z-rc.N` | `vX.Y.ZrcN` |
+| Dev / nightly | `vX.Y.Z-nightly` / `vX.Y.Z.dev.N` | `vX.Y.Z.devN` |
+
+This is a naming change only — release cadence, stability guarantees, and image contents are unchanged. The `v1.84.0-rc.1` tag (cut before the switch) keeps the legacy form for historical continuity; every tag from `v1.84.0` onward uses the PEP 440 form.
+
+---
+
 > **Heads up — large bundle of behavioral changes.** This release consolidates a lot of reliability and hardening work that shipped in tight sequence. The **Important Behavior Changes** section below covers everything that changes a default, removes a configuration shortcut, or alters a request/response shape, with the opt-out you need to keep prior behavior. Read that section before upgrading a production deployment. If you already validated against `v1.84.0-rc.1`, see the **Changes since v1.84.0-rc.1** section for the post-rc delta.
 
 ## Key Highlights
