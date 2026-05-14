@@ -770,3 +770,53 @@ class TestAzureContainerKnownFailureRegressions:
         assert captured["data"]["container_id"] == "cntr_123"
         assert captured["data"]["custom_llm_provider"] == "azure"
         assert captured["data"]["model_id"] == "model_abc123"
+
+    @pytest.mark.asyncio
+    async def test_regression_native_azure_container_id_uses_forwarded_model_id(
+        self, monkeypatch
+    ):
+        """Native Azure container IDs (cntr_ + hex, no LiteLLM payload) must
+        still route through _ageneric_api_call_with_fallbacks using the
+        model_id forwarded from the proxy ownership check so that deployment
+        credentials (api_base) are applied."""
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        called_with: dict = {}
+
+        async def _mock_fallback(original_function, **kwargs):
+            called_with.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        native_azure_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+
+        async def _noop(**kwargs):
+            return {}
+
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            container_id=native_azure_id,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert called_with.get("model") == "deployment-uuid-123", (
+            "_ageneric_api_call_with_fallbacks must be called with the forwarded "
+            "model_id when the container_id carries no LiteLLM routing payload"
+        )
