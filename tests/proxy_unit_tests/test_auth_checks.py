@@ -1250,10 +1250,13 @@ async def test_can_key_call_model_denies_when_access_group_ids_resolve_no_models
         access_group_ids=["empty-group"],
     )
 
-    with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
-        new_callable=AsyncMock,
-        return_value=[],
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger.warning") as warning,
     ):
         with pytest.raises(ProxyException):
             await can_key_call_model(
@@ -1262,6 +1265,8 @@ async def test_can_key_call_model_denies_when_access_group_ids_resolve_no_models
                 valid_token=user_api_key_object,
                 llm_router=None,
             )
+        warning.assert_called_once()
+        assert "resolved to no model permissions" in warning.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------

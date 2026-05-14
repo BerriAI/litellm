@@ -2910,6 +2910,14 @@ async def can_key_call_model(
                 team_id=valid_token.team_id,
                 object_type="key",
             )
+        verbose_proxy_logger.warning(
+            "Key has access_group_ids=%s, but those access groups resolved to no model permissions. "
+            "Denying model=%s for key_alias=%s, team_id=%s.",
+            key_access_group_ids,
+            model,
+            valid_token.key_alias,
+            valid_token.team_id,
+        )
         raise ProxyException(
             message=f"key not allowed to access model. This key has access_group_ids={key_access_group_ids}, but those groups do not grant any models. Tried to access {model}",
             type=ProxyErrorTypes.key_model_access_denied,
