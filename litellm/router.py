@@ -10729,8 +10729,11 @@ class Router:
         """
         Filters out deployments that an admin has paused via `LiteLLM_ProxyModelTable.blocked`.
 
-        Applied alongside the cooldown filter on both the primary routing path and the
-        retry / health-check helpers so paused deployments never serve a request.
+        Applied alongside the cooldown filter on every routing entry point that calls
+        `_common_checks_available_deployment` directly — the primary sync/async path,
+        the sync pass-through path, and the retry / health-check helpers — so paused
+        deployments never serve a request. The async pass-through path inherits this
+        filter through its delegation to `async_get_healthy_deployments`.
         """
         return [
             deployment
