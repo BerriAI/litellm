@@ -14,7 +14,8 @@ from typing import (
     cast,
     overload,
 )
-
+import base64
+import secrets
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
@@ -129,6 +130,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         non_default_params["reasoning_effort"] = "low"
                     else:
                         non_default_params["reasoning_effort"] = "minimal"
+
+        cache_salt = optional_params.get("cache_salt")
+        if cache_salt is None or cache_salt == "":
+            cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
+        optional_params.setdefault("extra_body", {})["cache_salt"] = cache_salt
 
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params

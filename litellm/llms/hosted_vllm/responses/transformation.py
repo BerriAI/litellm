@@ -6,12 +6,17 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
-from typing import Optional
+from typing import Dict, Optional, Union
+import base64
+import hashlib
+import secrets
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import ResponseInputParam
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -27,6 +32,31 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        input = self._validate_input_param(input)
+        final_request_params = dict(
+            ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
+        )
+        # Generate cache_salt from API key for user-based cache isolation (CVE-2025-46570)
+        auth_header = headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:]
+        else:
+            api_key = ""
+        if api_key:
+            cache_salt = base64.b64encode(hashlib.sha256(api_key.encode()).digest()).decode()
+        else:
+            cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
+        final_request_params.setdefault("extra_body", {})["cache_salt"] = cache_salt
+        return final_request_params
 
     def validate_environment(
         self,
