@@ -851,6 +851,8 @@ def strip_empty_text_blocks_from_anthropic_messages(
 
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
+    The caller's list and its content blocks are never mutated; modified
+    messages are returned as shallow copies with a fresh content list.
     """
     out: List[Any] = []
     for m in messages:
