@@ -38,15 +38,3 @@ coverage:
       default:
         target: auto
         threshold: 0% # patch coverage should be 100%
-
-# pytest-cov runs with --cov=litellm, which stores file paths in the XML
-# relative to the litellm/ package root (e.g. proxy/proxy_server.py instead
-# of litellm/proxy/proxy_server.py). Codecov's auto-prefix heuristic only
-# resolves files whose basename is unique in the repo — files like
-# proxy_server.py (3 copies), router.py (2 copies), utils.py (20+ copies),
-# main.py (20+ copies), constants.py (2 copies) get silently dropped. The
-# rule below restores the litellm/ prefix on every uploaded path so they
-# resolve unambiguously. Safe because no current uploader emits paths that
-# already start with litellm/.
-fixes:
-  - "::litellm/"
