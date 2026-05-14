@@ -17,6 +17,7 @@ import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
+    _is_json_content_type,
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -927,3 +928,73 @@ class TestReadRequestBodyNonCanonicalContentType:
         result = await _read_request_body(mock_request)
         assert result == {"k": "v"}
         mock_request.form.assert_awaited_once()
+
+
+class TestIsJsonContentType:
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON",
+            "  application/json  ",
+        ],
+    )
+    def test_json_types_match(self, content_type):
+        assert _is_json_content_type(content_type) is True
+
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data",
+            "application/jsonl",
+            "application/jsonschema",
+            "text/json",
+            "application/json-patch+json",
+        ],
+    )
+    def test_non_json_types_rejected(self, content_type):
+        assert _is_json_content_type(content_type) is False
+
+
+class TestGetRequestBody:
+    @pytest.mark.asyncio
+    async def test_json_with_charset_param_parses_as_json(self):
+        payload = {"k": "v"}
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
+        mock_request.headers = {"content-type": "application/json; charset=utf-8"}
+        mock_request.scope = {}
+
+        result = await get_request_body(mock_request)
+        assert result == payload
+
+    @pytest.mark.asyncio
+    async def test_form_post_routes_to_form_data(self):
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
+        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.scope = {}
+
+        result = await get_request_body(mock_request)
+        assert result == {"k": "v"}
+
+    @pytest.mark.asyncio
+    async def test_substring_match_no_longer_accepted(self):
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/form-json"}
+        mock_request.scope = {}
+
+        with pytest.raises(ValueError, match="Unsupported content type"):
+            await get_request_body(mock_request)
+
+    @pytest.mark.asyncio
+    async def test_non_post_returns_empty(self):
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        assert await get_request_body(mock_request) == {}

@@ -18,6 +18,13 @@ _FORM_CONTENT_TYPES: frozenset[str] = frozenset(
 )
 
 
+def _normalize_media_type(content_type: str) -> str:
+    """Return the bare media type per RFC 7231: strip params, trim, lowercase."""
+    if not content_type:
+        return ""
+    return content_type.split(";", 1)[0].strip().lower()
+
+
 def _is_form_content_type(content_type: str) -> bool:
     """
     True iff Starlette's ``request.form()`` will actually parse this body.
@@ -26,10 +33,12 @@ def _is_form_content_type(content_type: str) -> bool:
     ``FormData`` for non-canonical types without consuming the body, leaving
     the auth-time pre-read and the handler's read seeing different payloads.
     """
-    if not content_type:
-        return False
-    media_type = content_type.split(";", 1)[0].strip().lower()
-    return media_type in _FORM_CONTENT_TYPES
+    return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
+
+
+def _is_json_content_type(content_type: str) -> bool:
+    """True iff the body should be parsed as JSON."""
+    return _normalize_media_type(content_type) == "application/json"
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -326,7 +335,7 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     """
     if request.method == "POST":
         content_type = request.headers.get("content-type", "")
-        if content_type.split(";", 1)[0].strip().lower() == "application/json":
+        if _is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
