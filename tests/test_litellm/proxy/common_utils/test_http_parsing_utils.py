@@ -16,6 +16,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _is_form_content_type,
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -853,3 +854,76 @@ class TestGetTagsFromRequestBodyStringCoerce:
 
         tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
         assert tags == ["x"]
+
+
+class TestIsFormContentType:
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "application/x-www-form-urlencoded",
+            "multipart/form-data",
+            "multipart/form-data; boundary=----WebKitFormBoundary",
+            "Application/X-WWW-Form-Urlencoded",
+            "  multipart/form-data  ",
+            "application/x-www-form-urlencoded; charset=utf-8",
+        ],
+    )
+    def test_form_types_match(self, content_type):
+        assert _is_form_content_type(content_type) is True
+
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "",
+            "application/json",
+            "application/json; charset=utf-8",
+            "application/form-json",
+            "multiform/anything",
+            "application/json; xform=1",
+            "application/xml-with-form-data-but-not-actually",
+            "text/plain",
+            "form",
+        ],
+    )
+    def test_non_form_types_rejected(self, content_type):
+        assert _is_form_content_type(content_type) is False
+
+
+class TestReadRequestBodyNonCanonicalContentType:
+    """A JSON body with a ``"form"``-substring Content-Type must parse as JSON."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "application/form-json",
+            "application/json; xform=1",
+            "multiform/anything",
+        ],
+    )
+    async def test_json_body_with_formlike_content_type_parses_as_json(
+        self, content_type
+    ):
+        payload = {"user_config": {"model_list": []}, "model": "x"}
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
+        mock_request.form = AsyncMock(return_value={})
+        mock_request.headers = {"content-type": content_type}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == payload
+        mock_request.form.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_real_form_post_still_parsed_as_form(self):
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == {"k": "v"}
+        mock_request.form.assert_awaited_once()

@@ -13,6 +13,25 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 
+_FORM_CONTENT_TYPES: frozenset[str] = frozenset(
+    {"application/x-www-form-urlencoded", "multipart/form-data"}
+)
+
+
+def _is_form_content_type(content_type: str) -> bool:
+    """
+    True iff Starlette's ``request.form()`` will actually parse this body.
+
+    Substring matching ``"form"`` is unsafe: ``request.form()`` returns empty
+    ``FormData`` for non-canonical types without consuming the body, leaving
+    the auth-time pre-read and the handler's read seeing different payloads.
+    """
+    if not content_type:
+        return False
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type in _FORM_CONTENT_TYPES
+
+
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
     Safely read the request body and parse it as JSON.
@@ -37,7 +56,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
 
-        if "form" in content_type:
+        if _is_form_content_type(content_type):
             parsed_body = dict(await request.form())
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
@@ -306,18 +325,13 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     Read the request body and parse it as JSON.
     """
     if request.method == "POST":
-        if request.headers.get("content-type", "") == "application/json":
+        content_type = request.headers.get("content-type", "")
+        if content_type.split(";", 1)[0].strip().lower() == "application/json":
             return await _read_request_body(request)
-        elif "multipart/form-data" in request.headers.get(
-            "content-type", ""
-        ) or "application/x-www-form-urlencoded" in request.headers.get(
-            "content-type", ""
-        ):
+        elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
-            raise ValueError(
-                f"Unsupported content type: {request.headers.get('content-type')}"
-            )
+            raise ValueError(f"Unsupported content type: {content_type}")
     return {}
 
 
