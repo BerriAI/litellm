@@ -735,23 +735,30 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # cannot grant a key more budget than the caller's own key carries.  This
     # prevents budget escalation when no upperbound_key_generate_params config
     # is present.
-    from litellm.proxy._types import LitellmUserRoles
-
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and data.max_budget is not None
-        and user_api_key_dict.max_budget is not None
-        and data.max_budget > user_api_key_dict.max_budget
     ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": (
-                    f"max_budget ({data.max_budget}) cannot exceed the caller's "
-                    f"own max_budget ({user_api_key_dict.max_budget})."
-                )
-            },
-        )
+        if user_api_key_dict.max_budget is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"Cannot set max_budget ({data.max_budget}) on a generated "
+                        "key because the caller's own key has no budget configured."
+                    )
+                },
+            )
+        if data.max_budget > user_api_key_dict.max_budget:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"max_budget ({data.max_budget}) cannot exceed the caller's "
+                        f"own max_budget ({user_api_key_dict.max_budget})."
+                    )
+                },
+            )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
