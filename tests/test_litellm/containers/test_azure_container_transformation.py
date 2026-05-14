@@ -882,6 +882,39 @@ class TestAzureContainerKnownFailureRegressions:
         assert captured["data"]["custom_llm_provider"] == "azure"
         assert captured["data"]["model_id"] == "model_abc123"
 
+    def test_regression_get_container_forwarding_params_sets_model_id_for_managed_id(
+        self,
+    ):
+        """get_container_forwarding_params must extract model_id from a
+        LiteLLM-managed encoded container ID and include it in the forwarding
+        dict.  This is the proxy-side half of the native-Azure-ID routing fix:
+        the router's _init_containers_api_endpoints reads kwargs["model_id"]
+        which is set here.
+        """
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+        )
+
+        params = get_container_forwarding_params(
+            container_id=encoded_id,
+            original_container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+            custom_llm_provider="azure",
+        )
+
+        assert params.get("model_id") == "deployment-uuid-123", (
+            "model_id must be forwarded to the router for managed container IDs"
+        )
+        assert params.get("container_id") == (
+            "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        )
+        assert params.get("custom_llm_provider") == "azure"
+
     @pytest.mark.asyncio
     async def test_regression_native_azure_container_id_uses_forwarded_model_id(
         self, monkeypatch
