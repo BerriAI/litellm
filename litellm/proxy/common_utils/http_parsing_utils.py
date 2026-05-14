@@ -66,7 +66,23 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         content_type = _request_headers.get("content-type", "")
 
         if _is_form_content_type(content_type):
-            parsed_body = dict(await request.form())
+            try:
+                form_data = await request.form()
+            except Exception as e:
+                # ``request.form()`` raises on malformed multipart (missing
+                # boundary, malformed chunk encoding, …). Surface as 400 so
+                # the auth-time pre-read does not silently cache ``{}`` while
+                # a later raw-body re-read sees the original payload —
+                # banned-param checks must see the same body the handler
+                # acts on.
+                verbose_proxy_logger.error(f"Invalid form payload: {e}")
+                raise ProxyException(
+                    message=f"Invalid form payload: {e}",
+                    type="invalid_request_error",
+                    param="request_body",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            parsed_body = dict(form_data)
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:

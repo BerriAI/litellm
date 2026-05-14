@@ -930,6 +930,34 @@ class TestReadRequestBodyNonCanonicalContentType:
         mock_request.form.assert_awaited_once()
 
 
+class TestReadRequestBodyFormParseFailure:
+    """
+    A failed ``request.form()`` parse (e.g. multipart with missing boundary)
+    must surface as a 400, not silently return ``{}`` — otherwise the
+    auth-time pre-read sees an empty body while a later raw-body re-read
+    sees the original payload, defeating every banned-param check.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised_exception",
+        [
+            ValueError("Missing boundary in multipart."),
+            AssertionError("malformed chunk"),
+            RuntimeError("form parser exploded"),
+        ],
+    )
+    async def test_form_parse_failure_raises_400(self, raised_exception):
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(side_effect=raised_exception)
+        mock_request.headers = {"content-type": "multipart/form-data"}
+        mock_request.scope = {}
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _read_request_body(mock_request)
+        assert str(exc_info.value.code) == "400"
+
+
 class TestIsJsonContentType:
     @pytest.mark.parametrize(
         "content_type",
