@@ -305,26 +305,28 @@ class LiteLLMOtelTracer:
             require_parent=require_parent,
             start_time_ns=start_time_ns,
         )
-        span.__enter__()
-        span.__exit__(None, None, None)
+        with span:
+            pass
 
 
 litellm_otel_tracer = LiteLLMOtelTracer()
 
 
 class _OtelFeatureGate:
-    enabled = os.getenv(
-        _ENABLE_EXPERIMENTAL_OTEL_SPANS_ENV_VAR, ""
-    ).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    enabled: Optional[bool] = None
 
     @classmethod
     def is_enabled(cls) -> bool:
-        return cls.enabled
+        if cls.enabled is not None:
+            return cls.enabled
+        return os.getenv(
+            _ENABLE_EXPERIMENTAL_OTEL_SPANS_ENV_VAR, ""
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
 
 class _OpenTelemetryLoggerResolver:

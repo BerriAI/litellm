@@ -173,6 +173,7 @@ from .initialize_dynamic_callback_params import (
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
+
 def _emit_litellm_logging_span(
     *,
     model_call_details: dict,
@@ -1241,7 +1242,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["original_response"] = original_response
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
-            self.model_call_details["api_call_end_time"] = datetime.datetime.now()
 
             if self.litellm_request_debug:
                 attr = "warning"

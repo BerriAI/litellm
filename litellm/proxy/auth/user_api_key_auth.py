@@ -2185,23 +2185,34 @@ async def user_api_key_auth(
     request_data: dict = {}
     user_api_key_auth_obj: Optional[UserAPIKeyAuth] = None
     with attach_otel_span(parent_otel_span):
-        async with litellm_otel_tracer.trace(
-            "proxy.auth.read_request_body",
-            service=ServiceTypes.AUTH,
-            parent_span=parent_otel_span,
-            attributes={"route": route},
-        ):
-            request_data = await _read_request_body(request=request)
+        try:
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.read_request_body",
+                service=ServiceTypes.AUTH,
+                parent_span=parent_otel_span,
+                attributes={"route": route},
+            ):
+                request_data = await _read_request_body(request=request)
 
-        with litellm_otel_tracer.trace(
-            "proxy.auth.populate_request_path_params",
-            service=ServiceTypes.AUTH,
-            parent_span=parent_otel_span,
-            attributes={"route": route},
-        ):
-            request_data = populate_request_with_path_params(
-                request_data=request_data, request=request
+            with litellm_otel_tracer.trace(
+                "proxy.auth.populate_request_path_params",
+                service=ServiceTypes.AUTH,
+                parent_span=parent_otel_span,
+                attributes={"route": route},
+            ):
+                request_data = populate_request_with_path_params(
+                    request_data=request_data, request=request
+                )
+        except Exception as e:
+            return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                e=e,
+                request=request,
+                request_data=request_data,
+                route=route,
+                parent_otel_span=parent_otel_span,
+                api_key=api_key,
             )
+
         ## CHECK IF ROUTE IS ALLOWED
 
         async with litellm_otel_tracer.trace(

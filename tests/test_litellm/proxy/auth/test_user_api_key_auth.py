@@ -158,6 +158,68 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
 
 
 @pytest.mark.asyncio
+async def test_should_handle_read_body_errors_with_parent_otel_span(monkeypatch):
+    parent_otel_span = MagicMock()
+    captured_error_context = {}
+
+    class _FakeOpenTelemetryLogger:
+        def create_litellm_proxy_request_started_span(self, start_time, headers):
+            return parent_otel_span
+
+    async def _raise_read_body_error(request):
+        raise ValueError("Unable to read body")
+
+    async def _fake_handle_authentication_error(
+        e,
+        request,
+        request_data,
+        route,
+        parent_otel_span,
+        api_key,
+    ):
+        captured_error_context.update(
+            e=e,
+            request_data=request_data,
+            route=route,
+            parent_otel_span=parent_otel_span,
+            api_key=api_key,
+        )
+        return UserAPIKeyAuth(api_key=api_key, parent_otel_span=parent_otel_span)
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.base_url.path = "/"
+    mock_request.headers = {"authorization": "Bearer sk-test"}
+    mock_request.query_params = {}
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "open_telemetry_logger",
+        _FakeOpenTelemetryLogger(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth._read_request_body",
+        _raise_read_body_error,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.UserAPIKeyAuthExceptionHandler._handle_authentication_error",
+        staticmethod(_fake_handle_authentication_error),
+    )
+
+    result = await user_api_key_auth(
+        request=mock_request,
+        api_key="Bearer sk-test",
+    )
+
+    assert result.parent_otel_span is parent_otel_span
+    assert isinstance(captured_error_context["e"], ValueError)
+    assert captured_error_context["request_data"] == {}
+    assert captured_error_context["route"] == "/v1/chat/completions"
+    assert captured_error_context["parent_otel_span"] is parent_otel_span
+    assert captured_error_context["api_key"] == "Bearer sk-test"
+
+
+@pytest.mark.asyncio
 async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
     request_data = {"model": "gpt-4o"}

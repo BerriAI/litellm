@@ -122,6 +122,19 @@ def test_litellm_otel_span_records_exception_and_propagates(monkeypatch) -> None
     assert get_current_otel_span() is None
 
 
+def test_otel_feature_gate_reads_env_each_call(monkeypatch) -> None:
+    monkeypatch.setattr(_OtelFeatureGate, "enabled", None)
+    monkeypatch.delenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", raising=False)
+
+    assert _OtelFeatureGate.is_enabled() is False
+
+    monkeypatch.setenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", "true")
+    assert _OtelFeatureGate.is_enabled() is True
+
+    monkeypatch.setenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", "false")
+    assert _OtelFeatureGate.is_enabled() is False
+
+
 @pytest.mark.asyncio
 async def test_litellm_otel_span_supports_async_context_manager(monkeypatch) -> None:
     monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
