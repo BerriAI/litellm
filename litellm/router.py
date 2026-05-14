@@ -491,6 +491,17 @@ class Router:
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
 
+        # Initialize cache attributes that ``_invalidate_model_group_info_cache``
+        # touches *before* the first ``set_model_list`` below (which calls
+        # that invalidation as part of building the model index).
+        self._access_groups_cache: Optional[Dict[str, List[str]]] = None
+        # Per-router cache for the proxy auth-layer "is this model explicitly
+        # zero-cost?" check. Lives on the router so it is invalidated alongside
+        # ``_cached_get_model_group_info`` and dies with the router (no
+        # ``id()``-reuse risk after GC). See
+        # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
+        self._zero_cost_cache: Dict[str, bool] = {}
+
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
@@ -502,8 +513,6 @@ class Router:
             self.model_list: List = (
                 []
             )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
-
-        self._access_groups_cache: Optional[Dict[str, List[str]]] = None
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -9228,8 +9237,13 @@ class Router:
         """Invalidate the cached model group info.
 
         Call this whenever self.model_list is modified to ensure the cache is rebuilt.
+        Also clears the auth-layer zero-cost cache, which depends on the same
+        ``ModelGroupInfo`` data — without this, an in-place pricing update on
+        an existing deployment (same model count) would keep a stale ``True``
+        result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self._zero_cost_cache.clear()
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.
