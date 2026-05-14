@@ -6,10 +6,10 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
-from typing import Dict, Optional, Union
 import base64
 import hashlib
 import secrets
+from typing import Dict, Optional, Union
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
