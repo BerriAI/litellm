@@ -180,11 +180,11 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not messages:
             return data
 
-        user_prompt = self.get_user_prompt(messages)
-        if user_prompt:
+        prompt_text = self.get_prompt_text_for_dlp(messages)
+        if prompt_text:
             await self._check_content(
                 user_id=user_id,
-                text=user_prompt,
+                text=prompt_text,
                 activity="uploadText",
                 request_data=data,
                 block_on_violation=True,
@@ -211,16 +211,24 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
             return response
 
-        if (
-            isinstance(response, ModelResponse)
-            and response.choices
-            and isinstance(response.choices[0], Choices)
-        ):
-            content = response.choices[0].message.content or ""
-            if content:
+        if isinstance(response, ModelResponse) and response.choices:
+            parts: List[str] = []
+            for choice in response.choices:
+                if not isinstance(choice, Choices):
+                    continue
+                msg = choice.message
+                if msg is None:
+                    continue
+                raw = msg.get("content") if isinstance(msg, dict) else getattr(
+                    msg, "content", None
+                )
+                if isinstance(raw, str) and raw.strip():
+                    parts.append(raw)
+            if parts:
+                combined = "\n\n---\n\n".join(parts)
                 await self._check_content(
                     user_id=user_id,
-                    text=content,
+                    text=combined,
                     activity="downloadText",
                     request_data=data,
                     block_on_violation=True,
@@ -264,10 +272,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         Errors are logged but never raised — this mode is non-blocking.
         """
         try:
-            metadata = kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
-            user_id = metadata.get(self.user_id_field) or kwargs.get(
-                "user_api_key_user_id"
-            )
+            user_id = self._resolve_user_id_from_logging_kwargs(kwargs)
 
             if not user_id:
                 verbose_proxy_logger.debug("Purview audit: no user_id, skipping")
@@ -276,11 +281,11 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             # Log prompt (uploadText)
             messages = kwargs.get("messages")
             if messages:
-                user_prompt = self.get_user_prompt(messages)
-                if user_prompt:
+                prompt_text = self.get_prompt_text_for_dlp(messages)
+                if prompt_text:
                     await self._check_content(
                         user_id=user_id,
-                        text=user_prompt,
+                        text=prompt_text,
                         activity="uploadText",
                         request_data=kwargs,
                         block_on_violation=False,
@@ -290,16 +295,27 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             from litellm.types.utils import Choices, ModelResponse
 
             if isinstance(result, ModelResponse) and result.choices:
-                if isinstance(result.choices[0], Choices):
-                    content = result.choices[0].message.content or ""
-                    if content:
-                        await self._check_content(
-                            user_id=user_id,
-                            text=content,
-                            activity="downloadText",
-                            request_data=kwargs,
-                            block_on_violation=False,
-                        )
+                parts: List[str] = []
+                for choice in result.choices:
+                    if not isinstance(choice, Choices):
+                        continue
+                    msg = choice.message
+                    if msg is None:
+                        continue
+                    raw = msg.get("content") if isinstance(msg, dict) else getattr(
+                        msg, "content", None
+                    )
+                    if isinstance(raw, str) and raw.strip():
+                        parts.append(raw)
+                if parts:
+                    combined = "\n\n---\n\n".join(parts)
+                    await self._check_content(
+                        user_id=user_id,
+                        text=combined,
+                        activity="downloadText",
+                        request_data=kwargs,
+                        block_on_violation=False,
+                    )
         except Exception as e:
             verbose_proxy_logger.error("Purview audit logging error: %s", e)
 

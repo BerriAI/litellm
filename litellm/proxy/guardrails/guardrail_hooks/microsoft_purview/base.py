@@ -1,11 +1,12 @@
 import time
 import uuid
 from collections import OrderedDict
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_last_user_message,
+    get_str_from_messages,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -252,20 +253,48 @@ class PurviewGuardrailBase:
     ) -> Optional[str]:
         """Resolve the Entra user object ID from request data or auth context.
 
-        Resolution order:
-            1. ``metadata[user_id_field]`` (explicit per-request mapping)
-            2. ``user_api_key_dict.user_id``
-            3. ``user_api_key_dict.end_user_id``
+        Trust order (strongest first) so client ``metadata[user_id_field]`` cannot
+        impersonate another Entra user for Purview ``protectionScopes`` / ``processContent``:
+
+            1. ``user_api_key_dict.user_id`` — LiteLLM key / internal user
+            2. ``user_api_key_dict.end_user_id`` — end-user on the API key
+            3. ``metadata["user_api_key_user_id"]`` — proxy-injected from the key (when present)
+            4. ``metadata[user_id_field]`` — caller-supplied; used only when none of the above apply
         """
         metadata = data.get("metadata") or data.get("litellm_metadata") or {}
-        uid = metadata.get(self.user_id_field)
-        if uid:
-            return str(uid)
+
         if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id:
             return str(user_api_key_dict.user_id)
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
+
+        uid = metadata.get("user_api_key_user_id")
+        if uid:
+            return str(uid)
+
+        uid = metadata.get(self.user_id_field)
+        if uid:
+            return str(uid)
+
         return None
+
+    @staticmethod
+    def _logging_kwargs_metadata(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Metadata dict from ``model_call_details`` / logging kwargs."""
+        litellm_params = kwargs.get("litellm_params") or {}
+        if not isinstance(litellm_params, dict):
+            return {}
+        md = litellm_params.get("metadata")
+        return md if isinstance(md, dict) else {}
+
+    def _resolve_user_id_from_logging_kwargs(self, kwargs: Dict[str, Any]) -> Optional[str]:
+        """Same trust order as ``_resolve_user_id`` for logging-only hooks (no ``UserAPIKeyAuth``)."""
+        md = self._logging_kwargs_metadata(kwargs)
+        shim = SimpleNamespace(
+            user_id=md.get("user_api_key_user_id") or kwargs.get("user_api_key_user_id"),
+            end_user_id=md.get("user_api_key_end_user_id"),
+        )
+        return self._resolve_user_id({"metadata": md}, shim)
 
     # ------------------------------------------------------------------
     # Policy action evaluation
@@ -285,9 +314,15 @@ class PurviewGuardrailBase:
         return False
 
     # ------------------------------------------------------------------
-    # User prompt extraction
+    # Prompt text for DLP
     # ------------------------------------------------------------------
 
-    def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
-        """Get the last consecutive block of user messages as a single string."""
-        return get_last_user_message(messages)
+    def get_prompt_text_for_dlp(self, messages: List["AllMessageValues"]) -> Optional[str]:
+        """Concatenate text from every chat message (all roles) for pre-call DLP.
+
+        Evaluates the same payload the model receives, not only the trailing user turn.
+        """
+        if not messages:
+            return None
+        text = get_str_from_messages(messages).strip()
+        return text or None
