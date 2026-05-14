@@ -107,9 +107,11 @@ class LiteLLMCommonStrings(Enum):
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
-class CostPerToken(TypedDict):
+class CostPerToken(TypedDict, total=False):
     input_cost_per_token: float
     output_cost_per_token: float
+    cache_read_input_token_cost: float
+    cache_creation_input_token_cost: float
 
 
 class ProviderField(TypedDict):
