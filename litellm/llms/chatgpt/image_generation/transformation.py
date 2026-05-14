@@ -1,0 +1,562 @@
+import json
+import os
+import re
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+import httpx
+
+from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.exceptions import AuthenticationError
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIImageGenerationOptionalParams,
+    ResponsesAPIStreamEvents,
+)
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
+from litellm.utils import CustomStreamWrapper
+
+from ..authenticator import Authenticator
+from ..common_utils import (
+    CHATGPT_API_BASE,
+    GetAccessTokenError,
+    ensure_chatgpt_session_id,
+    get_chatgpt_default_headers,
+    get_chatgpt_default_instructions,
+)
+
+GPT_IMAGE_MODEL_PREFIX = "gpt-image-"
+GPT_IMAGE_2_MODEL_PREFIX = "gpt-image-2"
+GPT_IMAGE_2_MIN_PIXELS = 655_360
+GPT_IMAGE_2_MAX_PIXELS = 8_294_400
+GPT_IMAGE_2_MAX_EDGE = 3840
+GPT_IMAGE_2_MAX_RATIO = 3.0
+
+ALLOWED_BACKGROUNDS = {"transparent", "opaque", "auto"}
+ALLOWED_MODERATION_VALUES = {"low", "auto"}
+ALLOWED_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
+ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
+    """
+    Bridge OpenAI-style Images API calls to ChatGPT/Codex Responses image generation.
+    """
+
+    def __init__(self) -> None:
+        self.authenticator = Authenticator()
+
+    def get_supported_openai_params(
+        self, model: str
+    ) -> List[OpenAIImageGenerationOptionalParams]:
+        return [
+            "background",
+            "moderation",
+            "n",
+            "output_compression",
+            "output_format",
+            "partial_images",
+            "quality",
+            "response_format",
+            "size",
+            "stream",
+            "user",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_params = self.get_supported_openai_params(model)
+        for key, value in non_default_params.items():
+            if key in optional_params:
+                continue
+            if key in supported_params:
+                optional_params[key] = value
+            elif drop_params:
+                continue
+            else:
+                raise ValueError(
+                    f"Parameter {key} is not supported for model {model}. "
+                    f"Supported parameters are {supported_params}. "
+                    "Set drop_params=True to drop unsupported parameters."
+                )
+        return optional_params
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        try:
+            access_token = self.authenticator.get_access_token()
+        except GetAccessTokenError as e:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="chatgpt",
+                message=str(e),
+            )
+
+        account_id = self.authenticator.get_account_id()
+        session_id = ensure_chatgpt_session_id(litellm_params)
+        default_headers = get_chatgpt_default_headers(
+            access_token, account_id, session_id
+        )
+        return {**default_headers, **headers}
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        api_base = self._canonicalize_codex_api_base(api_base)
+        return f"{api_base}/responses"
+
+    @staticmethod
+    def _canonicalize_codex_api_base(api_base: str) -> str:
+        api_base = api_base.rstrip("/")
+        if api_base.endswith("/responses"):
+            api_base = api_base[: -len("/responses")]
+        if api_base.endswith("/backend-api"):
+            return f"{api_base}/codex"
+        return api_base
+
+    def transform_image_generation_request(
+        self,
+        model: str,
+        prompt: str,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        self._validate_openai_image_generation_params(model, optional_params)
+
+        responses_model = (
+            optional_params.pop("chatgpt_responses_model", None)
+            or litellm_params.get("chatgpt_responses_model")
+            or os.getenv("CHATGPT_IMAGE_RESPONSES_MODEL")
+            or "gpt-5.5"
+        )
+        request: Dict[str, Any] = {
+            "model": responses_model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+            "instructions": get_chatgpt_default_instructions(),
+            "tools": [{"type": "image_generation", "model": model}],
+            "tool_choice": {"type": "image_generation"},
+            "stream": True,
+            "store": False,
+        }
+
+        image_tool = request["tools"][0]
+        for key in (
+            "background",
+            "output_format",
+            "quality",
+            "size",
+        ):
+            if optional_params.get(key) is not None:
+                image_tool[key] = optional_params[key]
+
+        if optional_params.get("partial_images") is not None:
+            request["partial_images"] = optional_params["partial_images"]
+        if optional_params.get("user") is not None:
+            request["user"] = optional_params["user"]
+
+        return request
+
+    def _validate_openai_image_generation_params(
+        self, model: str, optional_params: dict
+    ) -> None:
+        if not model.startswith(GPT_IMAGE_MODEL_PREFIX):
+            raise ValueError(
+                "ChatGPT image generation requires a GPT Image model "
+                "(for example gpt-image-1.5 or gpt-image-2)."
+            )
+
+        if optional_params.get("response_format") == "url":
+            raise ValueError(
+                "response_format='url' is not supported for GPT Image models. "
+                "GPT Image models always return base64-encoded images."
+            )
+
+        n = optional_params.get("n")
+        if n is not None and not (1 <= int(n) <= 10):
+            raise ValueError("n must be between 1 and 10")
+        if n is not None and int(n) > 1:
+            raise ValueError(
+                "n > 1 is not supported for ChatGPT image generation. "
+                "Call image_generation multiple times to generate multiple images."
+            )
+
+        quality = optional_params.get("quality")
+        if quality is not None and quality not in ALLOWED_QUALITIES:
+            raise ValueError("quality must be one of low, medium, high, or auto")
+
+        output_format = optional_params.get("output_format")
+        if output_format is not None and output_format not in ALLOWED_OUTPUT_FORMATS:
+            raise ValueError("output_format must be one of png, jpeg, or webp")
+
+        output_compression = optional_params.get("output_compression")
+        if output_compression is not None and not (0 <= int(output_compression) <= 100):
+            raise ValueError("output_compression must be between 0 and 100")
+
+        background = optional_params.get("background")
+        if background is not None and background not in ALLOWED_BACKGROUNDS:
+            raise ValueError("background must be one of transparent, opaque, or auto")
+        if model.startswith(GPT_IMAGE_2_MODEL_PREFIX) and background == "transparent":
+            raise ValueError("transparent backgrounds are not supported in gpt-image-2")
+        if background == "transparent" and output_format not in (None, "png", "webp"):
+            raise ValueError(
+                "transparent background requires output_format png or webp"
+            )
+
+        moderation = optional_params.get("moderation")
+        if moderation is not None and moderation not in ALLOWED_MODERATION_VALUES:
+            raise ValueError("moderation must be one of low or auto")
+
+        partial_images = optional_params.get("partial_images")
+        if partial_images is not None and not (0 <= int(partial_images) <= 3):
+            raise ValueError("partial_images must be between 0 and 3")
+
+        size = optional_params.get("size")
+        if size is not None and model.startswith(GPT_IMAGE_2_MODEL_PREFIX):
+            self._validate_gpt_image_2_size(size)
+
+    @staticmethod
+    def _parse_size(size: str) -> Optional[Tuple[int, int]]:
+        match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", size)
+        if not match:
+            return None
+        return int(match.group(1)), int(match.group(2))
+
+    def _validate_gpt_image_2_size(self, size: str) -> None:
+        if size == "auto":
+            return
+
+        parsed = self._parse_size(size)
+        if parsed is None:
+            raise ValueError("size must be auto or WIDTHxHEIGHT, for example 1024x1024")
+
+        width, height = parsed
+        max_edge = max(width, height)
+        min_edge = min(width, height)
+        total_pixels = width * height
+
+        if max_edge > GPT_IMAGE_2_MAX_EDGE:
+            raise ValueError("gpt-image-2 size maximum edge length must be <= 3840px")
+        if width % 16 != 0 or height % 16 != 0:
+            raise ValueError(
+                "gpt-image-2 size width and height must be multiples of 16px"
+            )
+        if max_edge / min_edge > GPT_IMAGE_2_MAX_RATIO:
+            raise ValueError("gpt-image-2 size ratio must not exceed 3:1")
+        if (
+            total_pixels < GPT_IMAGE_2_MIN_PIXELS
+            or total_pixels > GPT_IMAGE_2_MAX_PIXELS
+        ):
+            raise ValueError(
+                "gpt-image-2 total pixels must be between 655,360 and 8,294,400"
+            )
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ImageResponse:
+        logging_obj.post_call(
+            input=request_data.get("input", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=raw_response.text,
+        )
+
+        image_payloads = self._extract_image_payloads(raw_response)
+        if not image_payloads:
+            raise OpenAIError(
+                message="No image data found in ChatGPT image generation response",
+                status_code=raw_response.status_code,
+            )
+
+        response = ImageResponse(
+            data=[
+                ImageObject(b64_json=image_payload) for image_payload in image_payloads
+            ]
+        )
+        response.usage = None
+        image_usage = self._extract_image_usage(raw_response)
+        if image_usage is not None:
+            response.usage = image_usage
+        response.size = optional_params.get("size")
+        response.quality = optional_params.get("quality")
+        response.output_format = optional_params.get(
+            "output_format", optional_params.get("response_format")
+        )
+        response._hidden_params["model"] = model
+        return response
+
+    def _extract_image_payloads(self, raw_response: httpx.Response) -> List[str]:
+        content_type = raw_response.headers.get("content-type", "")
+        body_text = raw_response.text or ""
+        parsed_payloads: List[dict] = []
+
+        if "text/event-stream" in content_type.lower() or self._looks_like_sse(
+            body_text
+        ):
+            parsed_payloads = self._parse_sse_payloads(body_text)
+        else:
+            try:
+                response_json = raw_response.json()
+            except Exception:
+                response_json = {}
+            if isinstance(response_json, dict):
+                parsed_payloads = [response_json]
+
+        images: List[str] = []
+        partial_images: List[str] = []
+        for payload in parsed_payloads:
+            extracted_images, extracted_partial_images = (
+                self._extract_images_from_payload(payload)
+            )
+            images.extend(extracted_images)
+            partial_images.extend(extracted_partial_images)
+        return self._dedupe(images) or self._dedupe(partial_images)
+
+    def _extract_image_usage(
+        self, raw_response: httpx.Response
+    ) -> Optional[ImageUsage]:
+        parsed_payloads = self._get_parsed_payloads(raw_response)
+
+        for payload in parsed_payloads:
+            if payload.get("type") != ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                continue
+            image_gen_usage = self._get_image_generation_usage(payload)
+            if image_gen_usage is not None:
+                return self._transform_image_usage(image_gen_usage)
+
+        for payload in reversed(parsed_payloads):
+            image_gen_usage = self._get_image_generation_usage(payload)
+            if image_gen_usage is not None and not self._is_zero_image_usage(
+                image_gen_usage
+            ):
+                return self._transform_image_usage(image_gen_usage)
+        return None
+
+    def _get_parsed_payloads(self, raw_response: httpx.Response) -> List[dict]:
+        content_type = raw_response.headers.get("content-type", "")
+        body_text = raw_response.text or ""
+
+        if "text/event-stream" in content_type.lower() or self._looks_like_sse(
+            body_text
+        ):
+            return self._parse_sse_payloads(body_text)
+
+        try:
+            response_json = raw_response.json()
+        except Exception:
+            response_json = {}
+        if isinstance(response_json, dict):
+            return [response_json]
+        return []
+
+    @staticmethod
+    def _transform_image_usage(usage: dict) -> ImageUsage:
+        input_tokens_details = usage.get("input_tokens_details") or {}
+        return ImageUsage(
+            input_tokens=usage.get("input_tokens", 0),
+            input_tokens_details=ImageUsageInputTokensDetails(
+                image_tokens=input_tokens_details.get("image_tokens", 0),
+                text_tokens=input_tokens_details.get("text_tokens", 0),
+            ),
+            output_tokens=usage.get("output_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+        )
+
+    @staticmethod
+    def _get_image_generation_usage(response_payload: Any) -> Optional[dict]:
+        if not isinstance(response_payload, dict):
+            return None
+
+        response = response_payload.get("response")
+        if isinstance(response, dict):
+            image_gen_usage = ChatGPTImageGenerationConfig._get_image_generation_usage(
+                response
+            )
+            if image_gen_usage is not None:
+                return image_gen_usage
+
+        tool_usage = response_payload.get("tool_usage")
+        if not isinstance(tool_usage, dict):
+            return None
+
+        image_gen_usage = tool_usage.get("image_gen")
+        if not isinstance(image_gen_usage, dict):
+            return None
+
+        input_tokens = image_gen_usage.get("input_tokens")
+        output_tokens = image_gen_usage.get("output_tokens")
+        if input_tokens is None or output_tokens is None:
+            return None
+
+        normalized_usage = dict(image_gen_usage)
+        if normalized_usage.get("total_tokens") is None:
+            normalized_usage["total_tokens"] = input_tokens + output_tokens
+        return normalized_usage
+
+    @staticmethod
+    def _is_zero_image_usage(usage: dict) -> bool:
+        return (
+            (usage.get("input_tokens") or 0) == 0
+            and (usage.get("output_tokens") or 0) == 0
+            and (usage.get("total_tokens") or 0) == 0
+        )
+
+    @staticmethod
+    def _looks_like_sse(body_text: str) -> bool:
+        trimmed_body = body_text.lstrip()
+        return (
+            trimmed_body.startswith("event:")
+            or trimmed_body.startswith("data:")
+            or "\nevent:" in body_text
+            or "\ndata:" in body_text
+        )
+
+    @staticmethod
+    def _parse_sse_payloads(body_text: str) -> List[dict]:
+        payloads: List[dict] = []
+        for line in body_text.splitlines():
+            stripped_line = CustomStreamWrapper._strip_sse_data_from_chunk(line)
+            if not stripped_line:
+                continue
+            stripped_line = stripped_line.strip()
+            if not stripped_line or stripped_line == STREAM_SSE_DONE_STRING:
+                continue
+            try:
+                parsed = json.loads(stripped_line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+        return payloads
+
+    def _extract_images_from_payload(
+        self, payload: dict
+    ) -> Tuple[List[str], List[str]]:
+        event_type = payload.get("type")
+        if event_type in (
+            ResponsesAPIStreamEvents.RESPONSE_FAILED,
+            ResponsesAPIStreamEvents.ERROR,
+        ):
+            error_obj = payload.get("error") or (payload.get("response") or {}).get(
+                "error"
+            )
+            raise OpenAIError(message=str(error_obj or payload), status_code=400)
+
+        partial_images: List[str] = []
+        if event_type in (
+            ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE,
+            "response.image_generation_call.partial_image",
+        ):
+            partial_image_b64 = payload.get("partial_image_b64")
+            b64_json = payload.get("b64_json")
+            if isinstance(partial_image_b64, str):
+                partial_images.append(partial_image_b64)
+            if isinstance(b64_json, str):
+                partial_images.append(b64_json)
+            return [], partial_images
+
+        candidates: List[str] = []
+        if event_type == "image_generation.completed":
+            b64_json = payload.get("b64_json")
+            if isinstance(b64_json, str):
+                candidates.append(b64_json)
+
+        response_payload = payload.get("response")
+        if isinstance(response_payload, dict):
+            candidates.extend(self._extract_images_recursive(response_payload))
+
+        candidates.extend(self._extract_images_recursive(payload))
+        return self._dedupe(candidates), self._dedupe(partial_images)
+
+    def _extract_images_recursive(self, value: Any) -> List[str]:
+        images: List[str] = []
+        if isinstance(value, dict):
+            value_type = value.get("type")
+            if value_type in ("image_generation_call", "image_generation"):
+                images.extend(self._get_image_strings_from_dict(value))
+            elif isinstance(value.get("b64_json"), str):
+                images.append(value["b64_json"])
+
+            for child_value in value.values():
+                images.extend(self._extract_images_recursive(child_value))
+        elif isinstance(value, list):
+            for item in value:
+                images.extend(self._extract_images_recursive(item))
+        return self._dedupe(images)
+
+    @staticmethod
+    def _get_image_strings_from_dict(value: dict) -> List[str]:
+        images: List[str] = []
+        for key in ("result", "b64_json", "image"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                images.append(candidate)
+            elif isinstance(candidate, list):
+                images.extend(item for item in candidate if isinstance(item, str))
+        return images
+
+    @staticmethod
+    def _dedupe(values: List[str]) -> List[str]:
+        seen = set()
+        deduped: List[str] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> OpenAIError:
+        return OpenAIError(
+            message=error_message,
+            status_code=status_code,
+            headers=headers,
+        )
