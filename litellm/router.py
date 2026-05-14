@@ -10590,6 +10590,8 @@ class Router:
 
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             litellm_params = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
                 return healthy_deployments
@@ -10628,6 +10630,9 @@ class Router:
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
             cooldown_deployments=cooldown_deployments,
+        )
+        pass_through_deployments = self._filter_blocked_deployments(
+            pass_through_deployments
         )
 
         # 5. Apply pre-call checks (if enabled)

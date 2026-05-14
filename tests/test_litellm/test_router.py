@@ -3793,3 +3793,40 @@ def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
     router = _router_with_two_deployments([True, True])
     with pytest.raises(RouterRateLimitErrorBasic):
         router.get_available_deployment(model="dep-0", request_kwargs={})
+
+
+def _router_with_two_pass_through_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": f"openai/gpt-4o-{idx}",
+                    "api_key": "sk-fake-for-tests",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": f"pt-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_available_deployment_for_pass_through_skips_blocked():
+    router = _router_with_two_pass_through_deployments([True, False])
+    deployment = router.get_available_deployment_for_pass_through(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert deployment["model_info"]["id"] == "pt-1"
+
+
+def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
+    from litellm.types.router import RouterRateLimitErrorBasic
+
+    router = _router_with_two_pass_through_deployments([True, True])
+    with pytest.raises(RouterRateLimitErrorBasic):
+        router.get_available_deployment_for_pass_through(
+            model="pt-0", request_kwargs={}
+        )
