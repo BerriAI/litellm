@@ -133,15 +133,36 @@ class TestShouldBlock:
 
 
 class TestResolveUserId:
-    def test_from_metadata(self):
+    def test_from_metadata_when_no_auth_identity(self):
         guardrail = _make_guardrail()
         data = {"metadata": {"user_id": "entra-user-123"}}
-        assert guardrail._resolve_user_id(data, Mock()) == "entra-user-123"
+        auth = UserAPIKeyAuth(api_key="test-key-no-user")
+        assert guardrail._resolve_user_id(data, auth) == "entra-user-123"
 
-    def test_custom_field(self):
+    def test_authenticated_user_id_overrides_metadata(self):
+        """Key user_id must win over spoofed metadata[user_id_field]."""
+        guardrail = _make_guardrail()
+        data = {"metadata": {"user_id": "spoofed-entra-id"}}
+        auth = UserAPIKeyAuth(api_key="test", user_id="real-entra-id")
+        assert guardrail._resolve_user_id(data, auth) == "real-entra-id"
+
+    def test_user_api_key_metadata_before_custom_field(self):
+        """Proxy-injected user_api_key_user_id wins over arbitrary metadata field."""
+        guardrail = _make_guardrail(user_id_field="entra_id")
+        data = {
+            "metadata": {
+                "user_api_key_user_id": "from-proxy-111",
+                "entra_id": "metadata-222",
+            }
+        }
+        auth = UserAPIKeyAuth(api_key="test")
+        assert guardrail._resolve_user_id(data, auth) == "from-proxy-111"
+
+    def test_custom_field_when_no_stronger_source(self):
         guardrail = _make_guardrail(user_id_field="entra_id")
         data = {"metadata": {"entra_id": "custom-user-456"}}
-        assert guardrail._resolve_user_id(data, Mock()) == "custom-user-456"
+        auth = UserAPIKeyAuth(api_key="test")
+        assert guardrail._resolve_user_id(data, auth) == "custom-user-456"
 
     def test_from_user_api_key_dict_user_id(self):
         guardrail = _make_guardrail()
@@ -150,16 +171,20 @@ class TestResolveUserId:
 
     def test_from_end_user_id(self):
         guardrail = _make_guardrail()
-        auth = Mock()
-        auth.user_id = None
-        auth.end_user_id = "end-user-101"
+        auth = UserAPIKeyAuth(api_key="test", end_user_id="end-user-101")
         assert guardrail._resolve_user_id({}, auth) == "end-user-101"
+
+    def test_end_user_id_after_key_user_id(self):
+        """When both key user_id and end_user_id exist, key user_id is used first."""
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(
+            api_key="test", user_id="key-owner", end_user_id="end-user-101"
+        )
+        assert guardrail._resolve_user_id({}, auth) == "key-owner"
 
     def test_none_when_missing(self):
         guardrail = _make_guardrail()
-        auth = Mock()
-        auth.user_id = None
-        auth.end_user_id = None
+        auth = UserAPIKeyAuth(api_key="test")
         assert guardrail._resolve_user_id({}, auth) is None
 
 
@@ -255,6 +280,38 @@ class TestPreCallHook:
             mock_check.assert_not_called()
 
 
+class TestPreCallFullTranscript:
+    @pytest.mark.asyncio
+    async def test_pre_call_sends_all_message_roles_to_dlp(self):
+        """DLP text must include system / prior turns, not only the last user block."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={
+                    "messages": [
+                        {"role": "system", "content": "SYSTEM_SENSITIVE"},
+                        {"role": "user", "content": "EARLIER_USER"},
+                        {"role": "assistant", "content": "reply"},
+                        {"role": "user", "content": "final benign"},
+                    ]
+                },
+                call_type="completion",
+            )
+
+            mock_check.assert_called_once()
+            sent = mock_check.call_args.kwargs["text"]
+            assert "SYSTEM_SENSITIVE" in sent
+            assert "EARLIER_USER" in sent
+            assert "final benign" in sent
+
+
 # ---------------------------------------------------------------
 # Post-call hook
 # ---------------------------------------------------------------
@@ -345,6 +402,71 @@ class TestPostCallHook:
 
             mock_check.assert_not_called()
             assert result is response
+
+    @pytest.mark.asyncio
+    async def test_post_call_scans_all_choices(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0, message=Message(content="First completion", role="assistant")
+                ),
+                Choices(
+                    index=1,
+                    message=Message(content="Second completion body", role="assistant"),
+                ),
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_post_call_success_hook(
+                data={"metadata": {"user_id": "user-123"}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                response=response,
+            )
+
+            mock_check.assert_called_once()
+            combined = mock_check.call_args.kwargs["text"]
+            assert "First completion" in combined
+            assert "Second completion body" in combined
+
+
+# ---------------------------------------------------------------
+# Logging hook user resolution
+# ---------------------------------------------------------------
+
+
+class TestLoggingResolveUserId:
+    def test_logging_prefers_user_api_key_user_id_in_metadata(self):
+        guardrail = _make_guardrail()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": "trusted-from-proxy",
+                    "user_id": "metadata-spoof",
+                }
+            }
+        }
+        assert (
+            guardrail._resolve_user_id_from_logging_kwargs(kwargs)
+            == "trusted-from-proxy"
+        )
+
+    def test_logging_falls_back_to_user_id_field(self):
+        guardrail = _make_guardrail()
+        kwargs = {
+            "litellm_params": {"metadata": {"user_id": "only-metadata-user"}}
+        }
+        assert (
+            guardrail._resolve_user_id_from_logging_kwargs(kwargs)
+            == "only-metadata-user"
+        )
 
 
 # ---------------------------------------------------------------
