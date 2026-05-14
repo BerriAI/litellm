@@ -457,6 +457,25 @@ class TestAuditIdentityFallback:
         results = {c.check_name: c.passed for c in checks}
         assert results["Audit record complete"] is True
 
+    def test_gdpr_audit_complete_with_only_user_id(self):
+        """Existing GDPR semantics preserved: user_id alone is still sufficient."""
+        data = ComplianceCheckRequest(
+            request_id="req-406",
+            user_id="key-owner-1",
+            end_user_id=None,
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii_detection",
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checks = ComplianceChecker(data).check_gdpr()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Audit record complete"] is True
+
     def test_eu_ai_act_audit_incomplete_when_both_user_fields_missing(self):
         """Both user_id and end_user_id absent → NON-COMPLIANT."""
         data = ComplianceCheckRequest(
