@@ -10,17 +10,10 @@ has already authenticated the user) and you need to extract user information fro
 custom headers or other request attributes.
 """
 
-from typing import TYPE_CHECKING, Dict, Optional, Union, cast
+from typing import cast
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
-
-if TYPE_CHECKING:
-    from fastapi_sso.sso.base import OpenID
-else:
-    from typing import Any as OpenID
-
-from litellm.proxy.management_endpoints.types import CustomOpenID
 
 
 class EnterpriseCustomSSOHandler:
@@ -60,8 +53,12 @@ class EnterpriseCustomSSOHandler:
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
         from litellm.proxy.proxy_server import (
             CommonProxyErrors,
+            general_settings,
             premium_user,
             user_custom_ui_sso_sign_in_handler,
+        )
+        from litellm.proxy.auth.trusted_proxy_utils import (
+            require_trusted_proxy_request,
         )
 
         if premium_user is not True:
@@ -71,6 +68,12 @@ class EnterpriseCustomSSOHandler:
             raise ValueError(
                 "custom_ui_sso_sign_in_handler is not configured. Please set it in general_settings."
             )
+
+        require_trusted_proxy_request(
+            request=request,
+            general_settings=general_settings,
+            feature_name="Custom UI SSO",
+        )
 
         custom_sso_login_handler = cast(
             CustomSSOLoginHandler, user_custom_ui_sso_sign_in_handler

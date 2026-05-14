@@ -1128,7 +1128,6 @@ def responses(
             )
         )
 
-        # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -1138,6 +1137,12 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
+                "model_info": kwargs.get("model_info"),
+                "metadata": (
+                    kwargs["litellm_metadata"]
+                    if "litellm_metadata" in kwargs
+                    else kwargs.get("metadata")
+                ),
             },
             custom_llm_provider=custom_llm_provider,
         )

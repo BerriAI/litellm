@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingForm } from "./OnboardingForm";
 
 const mockUseOnboardingCredentials = vi.fn();
@@ -36,14 +36,35 @@ vi.mock("./OnboardingErrorView", () => ({
 }));
 
 vi.mock("./OnboardingFormBody", () => ({
-  OnboardingFormBody: ({ variant, userEmail }: { variant: string; userEmail: string }) => (
+  OnboardingFormBody: ({
+    variant,
+    userEmail,
+    claimError,
+    onSubmit,
+  }: {
+    variant: string;
+    userEmail: string;
+    claimError: string | null;
+    onSubmit: (formValues: { password: string }) => void;
+  }) => (
     <div data-testid="form-body" data-variant={variant} data-email={userEmail}>
       Form Body
+      <button type="button" onClick={() => onSubmit({ password: "NewP@ssw0rd" })}>
+        Submit
+      </button>
+      {claimError ? <div data-testid="claim-error">{claimError}</div> : null}
     </div>
   ),
 }));
 
 describe("OnboardingForm", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/ui";
+    sessionStorage.clear();
+  });
+
   it("should render loading view when credentials are loading", () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: undefined,
@@ -91,5 +112,77 @@ describe("OnboardingForm", () => {
     render(<OnboardingForm variant="reset_password" />);
 
     expect(screen.getByTestId("form-body")).toHaveAttribute("data-variant", "reset_password");
+  });
+
+  it("should overwrite a prior admin sessionStorage token after successful claim", async () => {
+    // Simulate the prior admin session that the inviter left behind in the same tab.
+    sessionStorage.setItem("token", "ADMIN_SESSION_TOKEN");
+
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      options.onSuccess({ token: "NEW_USER_TOKEN" });
+    });
+
+    render(<OnboardingForm variant="signup" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    // After signup the new user's token must replace the admin's sessionStorage entry,
+    // otherwise the HttpOnly-fallback path in getCookie() keeps returning the admin token.
+    expect(sessionStorage.getItem("token")).toBe("NEW_USER_TOKEN");
+  });
+
+  it("should set the new token cookie at path=/ui after successful claim", async () => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      options.onSuccess({ token: "NEW_USER_TOKEN" });
+    });
+
+    const cookieSpy = vi.spyOn(document, "cookie", "set");
+    render(<OnboardingForm variant="signup" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    // The /ui path is what storeLoginToken writes to (and what LoginPage reads from);
+    // a cookie at path=/ alone leaves any pre-existing /ui-scoped admin cookie winning.
+    const newTokenCookieAtUiPath = cookieSpy.mock.calls.some(([value]) => {
+      const v = String(value);
+      return v.includes("token=NEW_USER_TOKEN") && v.includes("path=/ui");
+    });
+    expect(newTokenCookieAtUiPath).toBe(true);
+
+    cookieSpy.mockRestore();
+  });
+
+  it("should show claim error when claim response is missing final token", async () => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      options.onSuccess({});
+    });
+
+    render(<OnboardingForm variant="signup" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    expect(screen.getByTestId("claim-error")).toHaveTextContent("Failed to start session");
+    expect(document.cookie).not.toContain("fake-jwt-token");
   });
 });

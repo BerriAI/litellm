@@ -12,6 +12,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -97,8 +98,15 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
         agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
         session_id = self._get_session_id(optional_params)
+        encoded_agent_id = encode_url_path_segment(agent_id, field_name="agent_id")
+        encoded_agent_alias_id = encode_url_path_segment(
+            agent_alias_id, field_name="agent_alias_id"
+        )
+        encoded_session_id = encode_url_path_segment(
+            session_id, field_name="session_id"
+        )
 
-        endpoint_url = f"{endpoint_url}/agents/{agent_id}/agentAliases/{agent_alias_id}/sessions/{session_id}/text"
+        endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
 
         return endpoint_url
 
@@ -291,29 +299,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
     def _get_response_stream_shape(self):
-        """Get the response stream shape for parsing, reusing existing logic."""
-        try:
-            # Try to reuse the cached shape from the existing decoder
-            from litellm.llms.bedrock.chat.invoke_handler import (
-                get_response_stream_shape,
-            )
+        from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
-            return get_response_stream_shape()
-        except ImportError:
-            # Fallback: create our own shape
-            try:
-                from botocore.loaders import Loader
-                from botocore.model import ServiceModel
-
-                loader = Loader()
-                bedrock_service_dict = loader.load_service_model(
-                    "bedrock-runtime", "service-2"
-                )
-                bedrock_service_model = ServiceModel(bedrock_service_dict)
-                return bedrock_service_model.shape_for("ResponseStream")
-            except Exception as e:
-                verbose_logger.warning(f"Could not load response stream shape: {e}")
-                return None
+        return BEDROCK_RESPONSE_STREAM_SHAPE
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""

@@ -6,6 +6,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -334,9 +335,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         We'll retrieve the task and extract the video URL.
         """
         original_video_id = extract_original_video_id(video_id)
+        encoded_video_id = encode_url_path_segment(
+            original_video_id, field_name="video_id"
+        )
 
         # Get task status to retrieve video URL
-        url = f"{api_base}/tasks/{original_video_id}"
+        url = f"{api_base}/tasks/{encoded_video_id}"
 
         params: Dict[str, Any] = {}
 
@@ -495,9 +499,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         RunwayML uses task cancellation.
         """
         original_video_id = extract_original_video_id(video_id)
+        encoded_video_id = encode_url_path_segment(
+            original_video_id, field_name="video_id"
+        )
 
         # Construct the URL for task cancellation
-        url = f"{api_base}/tasks/{original_video_id}/cancel"
+        url = f"{api_base}/tasks/{encoded_video_id}/cancel"
 
         data: Dict[str, Any] = {}
 
@@ -533,9 +540,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         RunwayML uses GET /v1/tasks/{task_id} to retrieve task status.
         """
         original_video_id = extract_original_video_id(video_id)
+        encoded_video_id = encode_url_path_segment(
+            original_video_id, field_name="video_id"
+        )
 
         # Construct the full URL for task status retrieval
-        url = f"{api_base}/tasks/{original_video_id}"
+        url = f"{api_base}/tasks/{encoded_video_id}"
 
         # Empty dict for GET request (no body)
         data: Dict[str, Any] = {}

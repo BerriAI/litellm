@@ -53,6 +53,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
   Deepkeep: "deepkeep",
+  QostodianNexus: "qostodian_nexus",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -140,6 +141,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
   Akto: `${asset_logos_folder}akto.svg`,
   "DeepKeep AI Firewall": `${asset_logos_folder}deepkeep.svg`,
+  "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
@@ -175,6 +177,22 @@ export function skipSystemMessageToChoice(v: boolean | null | undefined): SkipSy
 
 /** Create flow: omit key when inheriting global default. */
 export function choiceToSkipSystemForCreate(choice: SkipSystemMessageChoice | undefined): boolean | undefined {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return undefined;
+}
+
+/** Tri-state UI value for `litellm_params.skip_tool_message_in_guardrail` (inherit = use global). */
+export type SkipToolMessageChoice = "inherit" | "yes" | "no";
+
+export function skipToolMessageToChoice(v: boolean | null | undefined): SkipToolMessageChoice {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "inherit";
+}
+
+/** Create flow: omit key when inheriting global default. */
+export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefined): boolean | undefined {
   if (choice === "yes") return true;
   if (choice === "no") return false;
   return undefined;

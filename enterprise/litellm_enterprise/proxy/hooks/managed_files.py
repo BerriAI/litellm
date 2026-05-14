@@ -15,6 +15,11 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.managed_resources.isolation import (
+    build_list_page,
+    build_owner_filter,
+    can_access_resource,
+)
 from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
@@ -99,6 +104,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_mappings=model_mappings,
                 flat_model_file_ids=list(model_mappings.values()),
                 created_by=user_api_key_dict.user_id,
+                team_id=user_api_key_dict.team_id,
                 updated_by=user_api_key_dict.user_id,
             )
             await self.internal_usage_cache.async_set_cache(
@@ -114,6 +120,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "model_mappings": json.dumps(model_mappings),
             "flat_model_file_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
+            "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -171,6 +178,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
+                    "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
@@ -229,15 +237,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def can_user_call_unified_file_id(
         self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        ## check if the user has access to the unified file id
-
-        user_id = user_api_key_dict.user_id
         managed_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
             where={"unified_file_id": unified_file_id}
         )
 
         if managed_file:
-            return managed_file.created_by == user_id
+            return can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            )
         raise HTTPException(
             status_code=404,
             detail=f"File not found: {unified_file_id}",
@@ -246,8 +255,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def can_user_call_unified_object_id(
         self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
-        ## check if the user has access to the unified object id
-        user_id = user_api_key_dict.user_id
         managed_object = (
             await self.prisma_client.db.litellm_managedobjecttable.find_first(
                 where={"unified_object_id": unified_object_id}
@@ -255,7 +262,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if managed_object:
-            return managed_object.created_by == user_id
+            return can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_object.created_by,
+                resource_team_id=managed_object.team_id,
+            )
         raise HTTPException(
             status_code=404,
             detail=f"Object not found: {unified_object_id}",
@@ -286,19 +297,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "Filtering by 'target_model_names' is not supported when using managed batches."
             )
 
-        where_clause: Dict[str, Any] = {"file_purpose": "batch"}
+        owner_filter = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return build_list_page([])
 
-        # Filter by user who created the batch
-        if user_api_key_dict.user_id:
-            where_clause["created_by"] = user_api_key_dict.user_id
+        where_clause: Dict[str, Any] = {"file_purpose": "batch", **owner_filter}
 
         if after:
             where_clause["id"] = {"gt": after}
 
-        # Fetch more than needed to allow for post-fetch filtering
         fetch_limit = limit or 20
         if target_model_names:
-            # Fetch extra to account for filtering
+            # Oversample so post-fetch model-name filtering still has enough rows.
             fetch_limit = max(fetch_limit * 3, 100)
 
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
@@ -329,26 +339,28 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
                 continue
 
-        return {
-            "object": "list",
-            "data": batch_objects,
-            "first_id": batch_objects[0].id if batch_objects else None,
-            "last_id": batch_objects[-1].id if batch_objects else None,
-            "has_more": len(batch_objects) == (limit or 20),
-        }
+        return build_list_page(
+            batch_objects, has_more=len(batch_objects) == (limit or 20)
+        )
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
     ) -> List[OpenAIFileObject]:
         """
-        Get all file ids created by the user for a list of model object ids
+        Get all file ids the caller is allowed to see for a list of model
+        object ids. Service-account keys (no user_id) are scoped to their
+        team via ``team_id``; admins see all matches.
 
         Returns:
          - List of OpenAIFileObject's
         """
+        owner_filter = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return []
+
         file_ids = await self.prisma_client.db.litellm_managedfiletable.find_many(
             where={
-                "created_by": user_api_key_dict.user_id,
+                **owner_filter,
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )

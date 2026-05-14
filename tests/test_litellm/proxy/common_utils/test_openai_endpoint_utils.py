@@ -104,7 +104,9 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     assert sanitized_config["litellm_params"]["access_token"] != "token-12345"
     assert "*" in sanitized_config["litellm_params"]["access_token"]
 
-    # With excluded_keys, litellm_credentials_name should NOT be masked (even if it would match patterns)
+    # With excluded_keys, litellm_credentials_name should NOT be masked.
+    # ``remove_sensitive_info_from_deployment`` mutates its input, so feed it
+    # a fresh copy rather than the already-sanitized one.
     sanitized_config = remove_sensitive_info_from_deployment(
         copy.deepcopy(base_config), excluded_keys={"litellm_credentials_name"}
     )
