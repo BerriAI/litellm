@@ -2839,3 +2839,57 @@ async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
     metadata = data.get("metadata") or {}
     assert metadata.get(TPM_RESERVED_TOKENS_KEY)
     assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_caller_supplied_stash_values():
+    """Caller cannot pre-populate stash keys in body metadata to drive a
+    later TPM refund against an arbitrary scope."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _LITELLM_STASH_KEYS,
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-no-limits"))
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    victim_descriptors = [
+        {
+            "key": "api_key",
+            "value": "victim-key-hash",
+            "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
+        }
+    ]
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        TPM_RESERVED_TOKENS_KEY: 9999,
+        RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        "metadata": {
+            TPM_RESERVED_TOKENS_KEY: 9999,
+            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        },
+        "litellm_metadata": {
+            TPM_RESERVED_TOKENS_KEY: 9999,
+            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        },
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    for channel in (
+        data,
+        data.get("metadata") or {},
+        data.get("litellm_metadata") or {},
+    ):
+        leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
+        assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"

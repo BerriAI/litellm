@@ -1903,6 +1903,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
+        # Reject caller-supplied stash values before any read/write. Otherwise
+        # a client can inject ``_litellm_rate_limit_descriptors`` /
+        # ``_litellm_tpm_reserved_tokens`` in body ``metadata`` and have
+        # ``async_post_call_failure_hook`` refund TPM counters against scopes
+        # they name (e.g. another tenant's api_key).
+        self._strip_stash_keys_from_all_channels(data)
+
         #########################################################
         # Check if the call type has a specific rate limiter
         # eg. for Batch APIs we need to use the batch rate limiter to read the input file and count the tokens and requests
@@ -2085,6 +2092,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         for stash_key in _LITELLM_STASH_KEYS:
             data.pop(stash_key, None)
+
+    @classmethod
+    def _strip_stash_keys_from_all_channels(cls, data: Any) -> None:
+        if not isinstance(data, dict):
+            return
+        cls._strip_stash_keys_from_top_level(data)
+        for channel in ("metadata", "litellm_metadata"):
+            channel_dict = data.get(channel)
+            if isinstance(channel_dict, dict):
+                for stash_key in _LITELLM_STASH_KEYS:
+                    channel_dict.pop(stash_key, None)
 
     def _create_pipeline_operations(
         self,
