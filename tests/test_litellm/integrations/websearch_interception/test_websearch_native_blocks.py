@@ -17,6 +17,7 @@ from litellm.integrations.websearch_interception.handler import (
 )
 from litellm.integrations.websearch_interception.tools import (
     is_anthropic_native_web_search_tool,
+    is_web_search_tool,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
@@ -82,6 +83,38 @@ class TestIsAnthropicNativeWebSearchTool:
 
     def test_handles_missing_type(self):
         assert not is_anthropic_native_web_search_tool({"name": "web_search"})
+
+
+class TestLegacyWebSearchNameGate:
+    """The bare ``WebSearch`` name is a legacy interception marker. Real
+    client-side ``WebSearch`` tools (Cowork, Claude Desktop) carry an
+    ``input_schema`` and must pass through untouched — otherwise the proxy
+    hijacks them server-side and the client's own tool handler never fires,
+    which means the separate ``web_search_20250305`` sub-request (where
+    citations actually flow) is never made."""
+
+    def test_bare_legacy_name_still_matched(self):
+        # Caller deliberately uses the bare-name interception marker —
+        # back-compat for anyone relying on the old shape.
+        assert is_web_search_tool({"name": "WebSearch"})
+
+    def test_real_client_tool_passes_through(self):
+        # Cowork's client-side WebSearch tool ships with input_schema.
+        cowork_tool = {
+            "name": "WebSearch",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+        assert not is_web_search_tool(cowork_tool)
+
+    def test_real_client_tool_with_description_passes_through(self):
+        # description-only client tools (no schema) are not valid Anthropic
+        # tools; only the schema-bearing shape is the disambiguator. This
+        # case stays matched on the assumption it's a legacy marker.
+        assert is_web_search_tool({"name": "WebSearch", "description": "search"})
 
 
 class TestBuildWebSearchToolResultBlock:
