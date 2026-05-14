@@ -96,6 +96,7 @@ class GCPIAMCredentialProvider(CredentialProvider):
         self._gcp_service_account = gcp_service_account
 
     def get_credentials(self) -> Tuple[str]:
+        """Return a single-element tuple containing a cached GCP IAM token."""
         token = _get_cached_gcp_iam_token(self._gcp_service_account)
         return (token,)
 
