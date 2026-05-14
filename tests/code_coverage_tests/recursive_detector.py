@@ -47,6 +47,7 @@ IGNORE_FUNCTIONS = [
     "_read_image_bytes",  # max depth set.
     "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
     "_redact_sensitive_litellm_params",  # max depth set (default 10).
+    "_walk_for_indirection",  # max depth set (default 10) via _INDIRECTION_CHECK_MAX_DEPTH.
 ]
 
 
