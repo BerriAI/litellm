@@ -1141,6 +1141,18 @@ class TestPassthroughAuthToken:
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid encrypted thinking signatures."""
 
+    def _invalid_thinking_signature_error(self):
+        import httpx
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        err_text = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
+            '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
+        )
+        resp = httpx.Response(400, request=req, text=err_text)
+        return httpx.HTTPStatusError("bad", request=req, response=resp)
+
     def test_is_anthropic_invalid_thinking_signature_error_positive(self):
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_signature_error,
@@ -1228,6 +1240,149 @@ class TestAnthropicThinkingSignatureSelfHeal:
         strip_thinking_blocks_from_anthropic_messages_request_dict(data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+    def test_anthropic_messages_retry_restores_enabled_thinking_for_clear_thinking(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "x",
+                            "signature": "y",
+                        },
+                        {"type": "text", "text": "answer"},
+                    ],
+                }
+            ],
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert data["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+        assert data["messages"][0]["content"] == [{"type": "text", "text": "answer"}]
+
+    def test_anthropic_messages_retry_restores_adaptive_thinking_without_budget(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "redacted_thinking",
+                            "data": "encrypted",
+                        },
+                        {"type": "text", "text": "answer"},
+                    ],
+                }
+            ],
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+            "thinking": {"type": "adaptive", "budget_tokens": 4096},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert data["thinking"] == {"type": "adaptive"}
+        assert data["messages"][0]["content"] == [{"type": "text", "text": "answer"}]
+
+    def test_anthropic_messages_retry_does_not_restore_disabled_thinking(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+            "thinking": {"type": "disabled"},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert "thinking" not in data
+
+    def test_anthropic_messages_retry_does_not_restore_missing_thinking(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert "thinking" not in data
+
+    def test_anthropic_messages_retry_does_not_restore_without_clear_thinking(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "adaptive"},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert "thinking" not in data
+
+    def test_anthropic_messages_retry_does_not_restore_for_non_adaptive_model(
+        self,
+    ):
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [{"role": "user", "content": "hi"}],
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+
+        AnthropicMessagesConfig().transform_anthropic_messages_request_on_http_error(
+            self._invalid_thinking_signature_error(), data
+        )
+
+        assert "thinking" not in data
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx

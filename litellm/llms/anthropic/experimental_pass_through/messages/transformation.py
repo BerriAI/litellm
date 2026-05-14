@@ -332,6 +332,48 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
         return dict(anthropic_messages_request)
 
+    def transform_anthropic_messages_request_on_http_error(
+        self, e: httpx.HTTPStatusError, request_data: dict
+    ) -> dict:
+        # The base retry removes invalid historical thinking blocks and also drops
+        # top-level thinking. Keep the caller's original mode so clear_thinking
+        # retries for Claude 4.6+ can still satisfy Anthropic's request contract.
+        original_thinking = request_data.get("thinking")
+        request_data = super().transform_anthropic_messages_request_on_http_error(
+            e=e, request_data=request_data
+        )
+        model = request_data.get("model")
+        context_management = request_data.get("context_management")
+        edits = (
+            context_management.get("edits")
+            if isinstance(context_management, dict)
+            else None
+        )
+        thinking = request_data.get("thinking")
+        has_active_thinking = isinstance(thinking, dict) and thinking.get("type") in (
+            "enabled",
+            "adaptive",
+        )
+        has_clear_thinking = isinstance(edits, list) and any(
+            isinstance(edit, dict) and edit.get("type") == "clear_thinking_20251015"
+            for edit in edits
+        )
+        if (
+            isinstance(model, str)
+            and isinstance(original_thinking, dict)
+            and original_thinking.get("type") in ("enabled", "adaptive")
+            and has_clear_thinking
+            and not has_active_thinking
+            and AnthropicModelInfo._is_adaptive_thinking_model(model)
+        ):
+            # clear_thinking edits still require active thinking on Claude 4.6+ retries.
+            restored_thinking = dict(original_thinking)
+            if restored_thinking.get("type") == "adaptive":
+                # Adaptive thinking chooses its budget server-side.
+                restored_thinking.pop("budget_tokens", None)
+            request_data["thinking"] = restored_thinking
+        return request_data
+
     def transform_anthropic_messages_response(
         self,
         model: str,
