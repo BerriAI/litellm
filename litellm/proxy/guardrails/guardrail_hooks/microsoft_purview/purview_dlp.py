@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GuardrailStatus
 
 from .base import PurviewGuardrailBase
 
@@ -113,7 +114,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             The processContent response dict.
         """
         start_time = datetime.now()
-        status = "success"
+        status: GuardrailStatus = "success"
         response: Dict[str, Any] = {}
 
         try:
