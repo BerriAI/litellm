@@ -492,8 +492,8 @@ def get_request_route(request: Request) -> str:
         scope = request.scope
         if not isinstance(scope, dict):
             return str(request.url.path)
-        raw_path: str = scope.get("path", request.url.path)
-        root_path: str = scope.get("app_root_path", scope.get("root_path", ""))
+        raw_path: str = str(scope.get("path", request.url.path))
+        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
         if not isinstance(raw_path, str):
             return str(request.url.path)
         if root_path and isinstance(root_path, str) and raw_path.startswith(root_path):
