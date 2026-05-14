@@ -556,6 +556,36 @@ class TestAzureContainerKnownFailureRegressions:
         assert qs.get("api-version") == ["v1"]
         assert qs.get("foo") == ["bar"]
 
+    def test_regression_httpx_empty_params_strips_query_string(self):
+        """httpx erases the URL query-string when params={} (empty dict) is passed.
+
+        Root cause of the Azure container 404s on POST/DELETE:
+          _build_query_params returns {} when the endpoint has no extra params;
+          passing that {} as params= to httpx wiped ?api-version=2025-04-01-preview.
+
+        Fix: every container httpx call now uses `params or None` so an empty
+        dict falls back to None, which tells httpx to leave the URL untouched.
+        """
+        url = (
+            "https://resource.cognitiveservices.azure.com"
+            "/openai/containers/cntr_123?api-version=2025-04-01-preview"
+        )
+        client = httpx.AsyncClient()
+
+        req_none = client.build_request("DELETE", url, params=None)
+        assert "api-version=2025-04-01-preview" in str(req_none.url)
+
+        req_empty = client.build_request("DELETE", url, params={})
+        assert "api-version" not in str(
+            req_empty.url
+        ), "Documents root cause: params={} strips the query string"
+
+        effective: dict = {}
+        req_guarded = client.build_request("DELETE", url, params=effective or None)
+        assert "api-version=2025-04-01-preview" in str(
+            req_guarded.url
+        ), "`params or None` must preserve ?api-version"
+
     def test_regression_proxy_resolves_azure_text_same_as_azure(self):
         """Router/proxy treat azure_text like azure for container config."""
         from litellm.proxy.container_endpoints.handler_factory import (
