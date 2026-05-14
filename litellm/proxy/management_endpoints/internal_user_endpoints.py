@@ -1187,7 +1187,9 @@ async def _schedule_user_update_audit_log(
     except Exception as audit_error:
         verbose_proxy_logger.warning(
             f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
-          
+        )
+
+
 def _check_user_update_authz(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
