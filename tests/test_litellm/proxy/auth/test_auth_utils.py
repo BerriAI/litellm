@@ -1514,3 +1514,62 @@ def test_observability_ban_covers_canonical_supported_callback_params():
             f"{param} is in _request_blocked_callback_params but is not banned "
             "at the proxy request-body boundary."
         )
+
+
+# ── pricing injection (global model cost registry poisoning) ──────────────────
+
+
+class TestPricingInjectionBlocked:
+    """Authenticated clients must not be able to mutate the global
+    litellm.model_cost registry by supplying pricing fields in the request
+    body.  Any CustomPricingLiteLLMParams field (input_cost_per_token etc.)
+    passed to completion() is forwarded to register_model(), which overwrites
+    the shared global dict for ALL users on the instance.
+
+    Fix: all CustomPricingLiteLLMParams fields are in _BANNED_REQUEST_BODY_PARAMS,
+    so is_request_body_safe() rejects them before they reach completion().
+    """
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("input_cost_per_token", -0.01),
+            ("output_cost_per_token", 0.0),
+            ("input_cost_per_second", 999.0),
+            ("output_cost_per_second", -1.0),
+            ("cache_read_input_token_cost", 0.0),
+            ("cache_creation_input_token_cost", -0.05),
+        ],
+    )
+    def test_pricing_field_rejected_by_default(self, field, value):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: value},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert field in str(exc.value)
+
+    def test_all_custom_pricing_fields_are_banned(self):
+        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
+        from litellm.types.utils import CustomPricingLiteLLMParams
+
+        banned = set(_BANNED_REQUEST_BODY_PARAMS)
+        for field in CustomPricingLiteLLMParams.model_fields:
+            assert field in banned, (
+                f"CustomPricingLiteLLMParams.{field} is not in "
+                "_BANNED_REQUEST_BODY_PARAMS — clients can poison the global "
+                "model cost registry by supplying it in the request body."
+            )
+
+    def test_pricing_field_allowed_with_admin_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "input_cost_per_token": 0.00001},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )

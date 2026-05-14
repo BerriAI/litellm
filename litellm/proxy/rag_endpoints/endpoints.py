@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
@@ -503,6 +504,16 @@ async def rag_ingest(
             payload=ingest_options,
             user_api_key_dict=user_api_key_dict,
         )
+
+        try:
+            is_request_body_safe(
+                request_body=ingest_options.get("vector_store", {}),
+                general_settings=general_settings,
+                llm_router=llm_router,
+                model="",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)})
 
         # Add litellm data
         request_data: Dict[str, Any] = {}
