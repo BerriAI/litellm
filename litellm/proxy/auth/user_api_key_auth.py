@@ -20,6 +20,7 @@ from fastapi.security.api_key import APIKeyHeader
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -88,6 +89,8 @@ try:
 except ImportError as e:
     verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
     enterprise_custom_auth = None
+
+user_api_key_service_logger_obj = ServiceLogging()  # used for service callback latency tracking
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -2273,6 +2276,22 @@ async def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
+    end_time = datetime.now()
+    asyncio.create_task(
+        user_api_key_service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.AUTH,
+            call_type=route,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time.timestamp() - start_time.timestamp(),
+            parent_otel_span=parent_otel_span,
+            event_metadata={
+                "span_name": "proxy.auth.user_api_key_auth",
+                "route": route,
+            },
+        )
+    )
+
     with litellm_otel_tracer.trace(
         "proxy.auth.user_api_key_auth",
         service=ServiceTypes.AUTH,

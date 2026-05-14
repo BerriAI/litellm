@@ -7,7 +7,7 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 import asyncio
 from datetime import datetime
 from functools import wraps
-from typing import Callable, Dict, Tuple
+from typing import Awaitable, Callable, Dict, ParamSpec, Tuple, TypeVar
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import (
@@ -16,7 +16,11 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 
 
-def log_db_metrics(func):
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def log_db_metrics(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """
     Decorator to log the duration of a DB related function to ServiceLogger()
 
@@ -35,7 +39,7 @@ def log_db_metrics(func):
     """
 
     @wraps(func)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         start_time: datetime = datetime.now()
 
         try:

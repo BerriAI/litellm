@@ -1625,7 +1625,7 @@ async def _cache_key_object(
     user_api_key_obj: UserAPIKeyAuth,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
-):
+) -> None:
     key = hashed_token
 
     ## CACHE REFRESH TIME
