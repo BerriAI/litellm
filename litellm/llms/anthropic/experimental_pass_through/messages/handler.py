@@ -191,7 +191,9 @@ async def anthropic_messages(
     **kwargs,
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
-    Async: Make llm api request in Anthropic /messages API spec
+    Async: Make llm api request in Anthropic /messages API spec.
+
+    Runs the empty-text-block sanitizer before any backend dispatch.
     """
     # Anthropic's API rejects requests containing empty / whitespace-only
     # text content blocks with "messages: text content blocks must be
