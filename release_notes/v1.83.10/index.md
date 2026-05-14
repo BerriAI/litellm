@@ -92,6 +92,14 @@ pip install litellm==1.83.10
 
   Existing keys/teams can be patched with `/key/update` or `/team/update` carrying the same `metadata` payload.
 
+#### `os.environ/…` values in the UI or API
+
+- **What changed:** Values such as `os.environ/OPENAI_API_KEY` (and other `os.environ/…` patterns) are no longer expanded when they come from **request-supplied** fields—including the Admin UI and the same proxy APIs the UI calls. — [PR #25592](https://github.com/BerriAI/litellm/pull/25592)
+
+- **Who is affected:** Anyone who entered literal `os.environ/SECRET_NAME` strings in the UI or API and expected the proxy to substitute the host environment at runtime.
+
+- **What to use instead:** Provider API keys and similar secrets should be stored with [**Reusable Credentials**](../../docs/proxy/ui_credentials.md) and attached to models (for example via `litellm_credential_name`). For observability callbacks (Langfuse, LangSmith, etc.), set keys and endpoints in proxy `config.yaml` or in environment variables the process reads at startup—not as `os.environ/…` strings inside per-request metadata.
+
 ---
 
 ## New Models / Updated Models
