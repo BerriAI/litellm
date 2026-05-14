@@ -120,7 +120,7 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        api_base = self.authenticator.get_api_base() or CHATGPT_API_BASE
         api_base = self._canonicalize_codex_api_base(api_base)
         return f"{api_base}/responses"
 

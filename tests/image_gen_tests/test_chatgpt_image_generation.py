@@ -254,7 +254,7 @@ def test_chatgpt_image_generation_validate_environment_auth_error(
 
 
 @pytest.mark.parametrize(
-    "api_base, expected",
+    "server_api_base, expected",
     [
         (
             "https://chatgpt.com/backend-api",
@@ -264,24 +264,57 @@ def test_chatgpt_image_generation_validate_environment_auth_error(
             "https://chatgpt.com/backend-api/responses",
             "https://chatgpt.com/backend-api/codex/responses",
         ),
-        ("https://example.test/custom/", "https://example.test/custom/responses"),
+        (
+            "https://example.test/custom/",
+            "https://example.test/custom/responses",
+        ),
     ],
 )
-def test_chatgpt_image_generation_get_complete_url_canonicalizes_api_base(
-    monkeypatch, tmp_path, api_base, expected
+def test_chatgpt_image_generation_get_complete_url_canonicalizes_server_api_base(
+    monkeypatch, tmp_path, server_api_base, expected
 ):
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
     config = ChatGPTImageGenerationConfig()
 
+    class FakeAuthenticator:
+        def get_api_base(self):
+            return server_api_base
+
+    config.authenticator = cast(Any, FakeAuthenticator())
+
     assert (
         config.get_complete_url(
-            api_base=api_base,
+            api_base=None,
             api_key=None,
             model="gpt-image-2",
             optional_params={},
             litellm_params={},
         )
         == expected
+    )
+
+
+def test_chatgpt_image_generation_get_complete_url_ignores_request_api_base(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+
+    class FakeAuthenticator:
+        def get_api_base(self):
+            return "https://chatgpt.com/backend-api"
+
+    config.authenticator = cast(Any, FakeAuthenticator())
+
+    assert (
+        config.get_complete_url(
+            api_base="https://attacker.test/collect",
+            api_key=None,
+            model="gpt-image-2",
+            optional_params={},
+            litellm_params={},
+        )
+        == "https://chatgpt.com/backend-api/codex/responses"
     )
 
 
