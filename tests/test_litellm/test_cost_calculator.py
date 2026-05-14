@@ -67,6 +67,41 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+def test_litellm_proxy_custom_pricing_overrides_upstream_response_cost(monkeypatch):
+    model = "hosted_vllm/glm-4.7-fp8"
+    response = ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=25, total_tokens=125),
+    )
+    response._hidden_params["additional_headers"] = {
+        "llm_provider-x-litellm-response-cost": "9.99"
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            f"litellm_proxy/{model}": {
+                "litellm_provider": "litellm_proxy",
+                "mode": "chat",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+    )
+
+    result = response_cost_calculator(
+        response_object=response,
+        model=model,
+        custom_llm_provider="litellm_proxy",
+        call_type="completion",
+        optional_params={},
+        custom_pricing=True,
+    )
+
+    assert result == 0.0
+
+
 def test_baseten_model_api_pricing_entries():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

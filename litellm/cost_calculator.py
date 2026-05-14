@@ -1753,7 +1753,14 @@ def response_cost_calculator(
                     provider_response_cost = get_response_cost_from_hidden_params(
                         response_object._hidden_params
                     )
-                    if provider_response_cost is not None:
+                    use_local_proxy_pricing = custom_pricing is True and (
+                        custom_llm_provider == "litellm_proxy"
+                        or str(model or "").startswith("litellm_proxy/")
+                    )
+                    if (
+                        provider_response_cost is not None
+                        and not use_local_proxy_pricing
+                    ):
                         return provider_response_cost
 
             response_cost = completion_cost(
