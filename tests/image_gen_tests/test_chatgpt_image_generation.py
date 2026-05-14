@@ -190,6 +190,21 @@ def test_chatgpt_image_generation_extracts_b64_from_sse_completed_response(
     assert response._hidden_params["model"] == "gpt-image-2"
 
 
+def test_chatgpt_image_generation_extracts_b64_from_deep_nested_payload(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+    nested_payload = {"type": "image_generation_call", "result": "b64-image-data"}
+    for _ in range(1200):
+        nested_payload = {"nested": [nested_payload]}
+
+    images, partial_images = config._extract_images_from_payload(nested_payload)
+
+    assert images == ["b64-image-data"]
+    assert partial_images == []
+
+
 def test_chatgpt_image_generation_extracts_tool_usage_from_completed_response(
     monkeypatch, tmp_path
 ):

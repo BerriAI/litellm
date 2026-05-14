@@ -509,25 +509,38 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
 
         response_payload = payload.get("response")
         if isinstance(response_payload, dict):
-            candidates.extend(self._extract_images_recursive(response_payload))
+            candidates.extend(self._extract_images_from_nested_value(response_payload))
 
-        candidates.extend(self._extract_images_recursive(payload))
+        candidates.extend(self._extract_images_from_nested_value(payload))
         return self._dedupe(candidates), self._dedupe(partial_images)
 
-    def _extract_images_recursive(self, value: Any) -> List[str]:
+    def _extract_images_from_nested_value(self, value: Any) -> List[str]:
         images: List[str] = []
-        if isinstance(value, dict):
-            value_type = value.get("type")
-            if value_type in ("image_generation_call", "image_generation"):
-                images.extend(self._get_image_strings_from_dict(value))
-            elif isinstance(value.get("b64_json"), str):
-                images.append(value["b64_json"])
+        values_to_visit = [value]
+        visited_container_ids = set()
 
-            for child_value in value.values():
-                images.extend(self._extract_images_recursive(child_value))
-        elif isinstance(value, list):
-            for item in value:
-                images.extend(self._extract_images_recursive(item))
+        while values_to_visit:
+            current_value = values_to_visit.pop()
+            if isinstance(current_value, dict):
+                container_id = id(current_value)
+                if container_id in visited_container_ids:
+                    continue
+                visited_container_ids.add(container_id)
+
+                value_type = current_value.get("type")
+                if value_type in ("image_generation_call", "image_generation"):
+                    images.extend(self._get_image_strings_from_dict(current_value))
+                elif isinstance(current_value.get("b64_json"), str):
+                    images.append(current_value["b64_json"])
+
+                values_to_visit.extend(reversed(list(current_value.values())))
+            elif isinstance(current_value, list):
+                container_id = id(current_value)
+                if container_id in visited_container_ids:
+                    continue
+                visited_container_ids.add(container_id)
+
+                values_to_visit.extend(reversed(current_value))
         return self._dedupe(images)
 
     @staticmethod
