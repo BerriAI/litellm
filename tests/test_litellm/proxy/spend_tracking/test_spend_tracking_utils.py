@@ -30,6 +30,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     _is_master_key,
+    _redact_prompt_leaks_in_error_string,
+    _sanitize_error_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -1587,3 +1589,423 @@ def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     ), "secret_fields must never appear in the spend-log proxy_server_request column"
     assert parsed["model"] == "gpt-4"
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
+
+
+# ---------------------------------------------------------------------------
+# LIT-2992: error_information sanitization for spend logs
+# ---------------------------------------------------------------------------
+
+
+def test_redact_prompt_leaks_strips_input_value_python_repr():
+    # OpenAI-style pydantic validation error: each entry carries its own
+    # 'input': [...] field echoing the full conversation.
+    error_text = (
+        "OpenAIException - {'error': {'message': \"1 validation error:\\n  "
+        "{'type': 'string_type', 'loc': ('body', 'input', 'str'), "
+        "'msg': 'Input should be a valid string', "
+        "'input': [{'role': 'user', 'content': 'super-secret-prompt'}]}"
+        '"}}'
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "super-secret-prompt" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+    # Surrounding context (error class, msg, loc) is preserved.
+    assert "string_type" in redacted
+    assert "Input should be a valid string" in redacted
+
+
+def test_redact_prompt_leaks_strips_input_value_json():
+    error_text = (
+        '{"error":{"message":"validation failed",'
+        '"input":[{"role":"user","content":"top-secret-content"}]}}'
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "top-secret-content" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_strips_messages_value():
+    error_text = '{"error":{"messages":[{"role":"user","content":"leak"}]}}'
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leak" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_preserves_prose_mentions():
+    # The word "input" / "messages" in prose (not as a key) must not be
+    # redacted — only quoted-key matches.
+    error_text = "Rate limit exceeded. Reduce input size and retry."
+    assert _redact_prompt_leaks_in_error_string(error_text) == error_text
+
+
+def test_redact_prompt_leaks_empty_string():
+    assert _redact_prompt_leaks_in_error_string("") == ""
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_redacts_when_not_storing_prompts(
+    mock_should_store,
+):
+    mock_should_store.return_value = False
+
+    error_info = {
+        "error_code": "429",
+        "error_class": "RateLimitError",
+        "llm_provider": "openai",
+        "traceback": "Traceback (most recent call last):\n  File ...",
+        "error_message": (
+            'OpenAIException - {"error":{"message":"validation failed",'
+            '"input":[{"role":"user","content":"leaked-prompt-content"}]}}'
+        ),
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert "leaked-prompt-content" not in sanitized["error_message"]
+    assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+    # Non-leaking fields untouched.
+    assert sanitized["error_code"] == "429"
+    assert sanitized["error_class"] == "RateLimitError"
+    assert sanitized["llm_provider"] == "openai"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_skips_redaction_when_storing_prompts(
+    mock_should_store,
+):
+    mock_should_store.return_value = True
+
+    error_info = {
+        "error_code": "429",
+        "error_class": "RateLimitError",
+        "llm_provider": "openai",
+        "traceback": "",
+        "error_message": (
+            'OpenAIException - {"error":{"input":[{"role":"user","content":"kept"}]}}'
+        ),
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    # User opted in via store_prompts_in_spend_logs — no key-level redaction.
+    assert "kept" in sanitized["error_message"]
+    assert REDACTED_BY_LITELM_STRING not in sanitized["error_message"]
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
+    mock_should_store,
+):
+    # The DB-storage cap must apply even when prompt storage is enabled, so a
+    # provider error that echoes a multi-MB body can't blow up a single row.
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+
+    huge_error = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB * 10)
+    error_info = {
+        "error_code": "500",
+        "error_class": "InternalServerError",
+        "llm_provider": "openai",
+        "traceback": "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB * 10),
+        "error_message": huge_error,
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert len(sanitized["error_message"]) < len(huge_error)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in sanitized["error_message"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in sanitized["traceback"]
+
+
+def test_sanitize_error_information_none_passthrough():
+    assert _sanitize_error_information_for_spend_logs(None) is None
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
+    # Mirrors the reproduced row body from LIT-2992 — a RateLimitError whose
+    # message embeds 178 pydantic validation errors, each carrying a full
+    # 'input': [...] echo of the conversation.
+    mock_should_store.return_value = False
+
+    huge_conversation_blob = "user-conversation-history-" * 5000
+    validation_entries = []
+    for _ in range(50):
+        validation_entries.append(
+            "{'type': 'string_type', 'loc': ('body', 'input', 'str'), "
+            "'msg': 'Input should be a valid string', "
+            f"'input': [{{'role': 'user', 'content': '{huge_conversation_blob}'}}]}}"
+        )
+    error_message = (
+        "litellm.RateLimitError: RateLimitError: OpenAIException - "
+        '{"error":{"message":"' + "\\n  ".join(validation_entries) + '"}}'
+    )
+
+    error_info = {
+        "error_code": "429",
+        "error_class": "RateLimitError",
+        "llm_provider": "openai",
+        "traceback": "",
+        "error_message": error_message,
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert huge_conversation_blob not in sanitized["error_message"]
+    # The structural fields that aid debugging remain.
+    assert "RateLimitError" in sanitized["error_message"]
+    assert "string_type" in sanitized["error_message"]
+
+
+def test_redact_prompt_leaks_handles_nested_multimodal_content():
+    # Multi-modal payload: 'content' is itself a list. The depth-1 regex
+    # would stop at the inner '['; the parser-based scanner must walk
+    # through balanced nested brackets.
+    error_text = (
+        '{"error":{"messages":[{"role":"user",'
+        '"content":[{"type":"text","text":"top-secret-multimodal"}]}]}}'
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "top-secret-multimodal" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_handles_bracket_in_prompt_text():
+    # Prompt text contains a literal '[' — the depth-1 regex would close
+    # the outer ']' prematurely. The parser must respect string quoting.
+    error_text = (
+        '{"error":{"input":[{"role":"user","content":"secret[123 still secret"}]}}'
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "secret[123" not in redacted
+    assert "still secret" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_handles_escaped_quote_in_prompt_text():
+    # Prompt with an escaped quote inside a JSON string must not break
+    # value scanning.
+    error_text = '{"error":{"input":[{"role":"user","content":"she said \\"hi[\\""}]}}'
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "she said" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_handles_nested_input_python_repr():
+    # Python dict-repr with nested list inside 'input' — single quotes.
+    error_text = (
+        "validation error: {'input': [{'role': 'user', "
+        "'content': [{'type': 'text', 'text': 'leaked-nested-text'}]}]}"
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leaked-nested-text" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_handles_unterminated_value():
+    # If a value never closes (malformed error string), redact through to
+    # the end rather than leaving the prompt content reachable.
+    error_text = '{"input":[{"role":"user","content":"never-closes-leaked'
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "never-closes-leaked" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
+    mock_should_store,
+):
+    # If a Python exception bubbles up with the request body embedded in
+    # its repr (e.g. ValueError(f"bad request: {body}")), the traceback
+    # column would carry the prompt unredacted. Verify the redaction
+    # covers the traceback field too.
+    mock_should_store.return_value = False
+
+    error_info = {
+        "error_code": "500",
+        "error_class": "ValueError",
+        "llm_provider": "",
+        "traceback": (
+            'Traceback (most recent call last):\n  File "x.py", line 1, in <module>\n'
+            '    raise ValueError({"input":[{"role":"user","content":"tb-leaked-prompt"}]})\n'
+            "ValueError: invalid request"
+        ),
+        "error_message": "invalid request",
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert "tb-leaked-prompt" not in sanitized["traceback"]
+    assert REDACTED_BY_LITELM_STRING in sanitized["traceback"]
+    # Surrounding traceback frames remain so the error stays debuggable.
+    assert "Traceback (most recent call last):" in sanitized["traceback"]
+    assert "ValueError: invalid request" in sanitized["traceback"]
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_skips_traceback_redaction_when_storing_prompts(
+    mock_should_store,
+):
+    mock_should_store.return_value = True
+
+    error_info = {
+        "error_code": "500",
+        "error_class": "ValueError",
+        "llm_provider": "",
+        "traceback": (
+            'raise ValueError({"input":[{"role":"user","content":"tb-kept"}]})'
+        ),
+        "error_message": "invalid request",
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert "tb-kept" in sanitized["traceback"]
+    assert REDACTED_BY_LITELM_STRING not in sanitized["traceback"]
+
+
+def test_redact_prompt_leaks_strips_prompt_key_completions_payload():
+    # /v1/completions echoes the user input under the top-level 'prompt' key
+    # rather than 'messages'. Without 'prompt' coverage the body would survive
+    # the redactor when store_prompts_in_spend_logs is False.
+    error_text = (
+        '{"error":{"message":"validation failed",'
+        '"prompt":"super-secret-completion-text"}}'
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "super-secret-completion-text" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_strips_prompt_key_python_repr():
+    error_text = (
+        "{'model': 'gpt-3.5-turbo-instruct', "
+        "'prompt': 'leaked-completion-prompt-body'}"
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leaked-completion-prompt-body" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_preserves_prompt_substring_keys():
+    # 'prompt_tokens' / 'prompt_token_count' / etc. are not the leak key —
+    # the matcher requires a closing quote before ':' so substrings shouldn't
+    # trigger redaction.
+    error_text = '{"usage":{"prompt_tokens":42,"completion_tokens":7}}'
+    assert _redact_prompt_leaks_in_error_string(error_text) == error_text
+
+
+def test_redact_prompt_leaks_strips_pydantic_input_value_list():
+    # Pydantic v2 validation error format — the offending value is rendered
+    # as a Python repr after `input_value=`. The full repr can carry the
+    # entire request body and must be redacted under the same gate as the
+    # quoted-key form.
+    error_text = (
+        "1 validation error for ChatCompletionRequest\n"
+        "messages\n"
+        "  Input should be a valid list "
+        "[type=list_type, input_value=['secret-pydantic-prompt'], input_type=str]"
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "secret-pydantic-prompt" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+    # Surrounding pydantic context is preserved so the error stays debuggable.
+    assert "list_type" in redacted
+    assert "input_type=str" in redacted
+
+
+def test_redact_prompt_leaks_strips_pydantic_input_value_dict():
+    error_text = (
+        "[type=dict_type, "
+        "input_value={'role': 'user', 'content': 'leaked-dict-content'}, "
+        "input_type=dict]"
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leaked-dict-content" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+    assert "input_type=dict" in redacted
+
+
+def test_redact_prompt_leaks_strips_pydantic_input_value_quoted_string():
+    error_text = "[type=string_type, input_value='leaked-string-value', input_type=str]"
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leaked-string-value" not in redacted
+    assert REDACTED_BY_LITELM_STRING in redacted
+
+
+def test_redact_prompt_leaks_pydantic_input_value_scalar_left_intact():
+    # Bare numeric / bool / None scalars in input_value are not prompt
+    # carriers; leaving them untouched keeps the validation error readable.
+    error_text = "[type=int_type, input_value=42, input_type=int]"
+    assert _redact_prompt_leaks_in_error_string(error_text) == error_text
+
+
+def test_redact_prompt_leaks_input_value_substring_does_not_match():
+    # Word-boundary anchoring on `input_value` so similarly named keys (e.g.
+    # `my_input_value=` from another stack frame) are not mis-redacted.
+    error_text = "frame: my_input_value=42 elsewhere"
+    assert _redact_prompt_leaks_in_error_string(error_text) == error_text
+
+
+def test_redact_prompt_leaks_combined_quoted_key_and_pydantic_assignment():
+    # A real OpenAI/pydantic error often carries BOTH forms in the same
+    # string — quoted JSON 'input' echoed once, then pydantic 'input_value='
+    # echoed per validation entry. Both must be redacted in one pass.
+    error_text = (
+        '{"error":{"input":[{"role":"user","content":"leak-via-json"}]}} '
+        "[type=list_type, input_value=['leak-via-pydantic'], input_type=str]"
+    )
+    redacted = _redact_prompt_leaks_in_error_string(error_text)
+    assert "leak-via-json" not in redacted
+    assert "leak-via-pydantic" not in redacted
+    assert redacted.count(REDACTED_BY_LITELM_STRING) >= 2
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_sanitize_error_information_redacts_pydantic_assignment_form(
+    mock_should_store,
+):
+    # End-to-end: a pydantic-style error that lands in error_message must be
+    # redacted under the spend-log path, not just the regex-level helper.
+    mock_should_store.return_value = False
+
+    error_info = {
+        "error_code": "422",
+        "error_class": "ValidationError",
+        "llm_provider": "openai",
+        "traceback": "",
+        "error_message": (
+            "1 validation error for ChatCompletionRequest\n"
+            "messages\n"
+            "  Field required "
+            "[type=missing, input_value={'prompt': 'leaked-via-pydantic-msg'}, "
+            "input_type=dict]"
+        ),
+    }
+
+    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+
+    assert sanitized is not None
+    assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
+    assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
