@@ -1267,16 +1267,29 @@ async def _update_single_user_helper(
             **existing_user_row.model_dump(exclude_none=True)
         )
 
-    # Non-admins cannot modify budget-sensitive fields even on their own record
-    # (GHSA-wvg4-6222-3q4r).
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+    # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
+    # must not be able to raise their own budget/spend fields.
+    # can_user_call_user_update() already restricts non-admins to self-updates,
+    # so this guard only fires for self-escalation attempts.
+    _target_user_id = user_request.user_id or (
+        getattr(existing_user_row, "user_id", None)
+        if existing_user_row is not None
+        else None
+    )
+    _is_self_update = (
+        _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
+    )
+    if (
+        _is_self_update
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
         _protected_fields = ("max_budget", "soft_budget", "spend")
         for _field in _protected_fields:
             if _field in non_default_values:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "error": f"Non-admin users cannot modify '{_field}'. Contact your proxy admin."
+                        "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
                     },
                 )
 
