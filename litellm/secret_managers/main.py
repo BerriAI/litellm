@@ -181,7 +181,16 @@ _RESOLVER_INDIRECTION_DENYLIST: FrozenSet[str] = frozenset(
         "REDIS_PASSWORD",
         "HCP_VAULT_TOKEN",
         "SMTP_PASSWORD",
+        # Workload-identity tokens — listed so ``os.environ/<X>`` and
+        # ``oidc/env/<X>`` indirection can't smuggle them; the
+        # ``oidc/<provider>/...`` branches that legitimately read them
+        # don't go through this gate (legit operator config uses those
+        # branches).
+        "CIRCLE_OIDC_TOKEN",
+        "CIRCLE_OIDC_TOKEN_V2",
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "AZURE_FEDERATED_TOKEN_FILE",
     }
 )
 

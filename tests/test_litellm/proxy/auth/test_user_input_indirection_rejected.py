@@ -110,6 +110,25 @@ def test_is_request_body_safe_rejects_indirection_via_nested_metadata():
         )
 
 
+def test_is_request_body_safe_rejects_indirection_via_litellm_embedding_config():
+    # ``_NESTED_CONFIG_KEYS`` descent path — values inside
+    # ``litellm_embedding_config`` are walked one level deep for
+    # banned-key and indirection checks.
+    body = {
+        "model": "openai/gpt-4",
+        "litellm_embedding_config": {
+            "x-attacker-marker": "os.environ/LITELLM_MASTER_KEY",
+        },
+    }
+    with pytest.raises(ValueError, match="indirection"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="openai/gpt-4",
+        )
+
+
 def test_is_request_body_safe_allows_clean_body():
     body = {
         "model": "openai/gpt-4",
