@@ -45,6 +45,7 @@ def _build_payload(
     model_group: str = "bedrock-claude-group",
     custom_llm_provider: str = "bedrock",
     additional_headers: dict | None = None,
+    total_tokens: int = 10,
 ):
     return {
         "model_group": model_group,
@@ -52,6 +53,7 @@ def _build_payload(
         "model": "anthropic.claude-3-sonnet-20240229-v1:0",
         "model_id": "deployment-id-1",
         "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "total_tokens": total_tokens,
         "hidden_params": {
             "additional_headers": additional_headers or {},
         },
@@ -110,13 +112,17 @@ class TestRouterFallbackEmitsForBedrock:
         fake_router.get_remaining_model_group_usage.assert_awaited_once_with(
             "bedrock-claude-group"
         )
+        # Router returns pre-decrement counter (current request not yet
+        # counted by deployment_callback_on_success). Subtract in-flight
+        # delta so the value is comparable to vendor-header post-decrement
+        # semantics: 75 - 10 total_tokens = 65, 9 - 1 request = 8.
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once()
         prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
-            75
+            65
         )
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_called_once()
         prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
-            9
+            8
         )
 
 
@@ -152,10 +158,10 @@ class TestRouterFallbackEmitsForVertex:
             "vertex-gemini-group"
         )
         prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
-            12345
+            12335
         )
         prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
-            50
+            49
         )
 
 
@@ -215,9 +221,79 @@ class TestExistingHeadersShortCircuit:
             )
 
         prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
-            555
+            545
         )
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_not_called()
+
+
+class TestRouterFallbackInFlightAdjustment:
+    """
+    Router's TPM/RPM counter is incremented by
+    ``Router.deployment_callback_on_success``, which races with this
+    prometheus callback in the success-log fan-out. Prometheus wins the
+    race, so the router-derived value is pre-decrement for the current
+    request, while vendor-header values (OpenAI/Anthropic/Azure) are
+    post-decrement. The fallback subtracts the in-flight delta so both
+    paths report comparable values.
+    """
+
+    @pytest.mark.asyncio
+    async def test_should_subtract_total_tokens_and_one_request(
+        self, prometheus_logger
+    ):
+        payload = _build_payload(total_tokens=42)
+        fake_router = MagicMock()
+        fake_router.get_remaining_model_group_usage = AsyncMock(
+            return_value={
+                "x-ratelimit-remaining-tokens": 1000,
+                "x-ratelimit-remaining-requests": 100,
+            }
+        )
+
+        prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
+        prometheus_logger.litellm_remaining_requests_metric = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", fake_router, create=True):
+            await prometheus_logger._async_set_router_remaining_metrics(
+                standard_logging_payload=payload,
+                enum_values=_enum_values(),
+            )
+
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            958
+        )
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            99
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_treat_missing_total_tokens_as_zero(self, prometheus_logger):
+        payload = _build_payload()
+        payload.pop("total_tokens", None)
+
+        fake_router = MagicMock()
+        fake_router.get_remaining_model_group_usage = AsyncMock(
+            return_value={
+                "x-ratelimit-remaining-tokens": 1000,
+                "x-ratelimit-remaining-requests": 100,
+            }
+        )
+
+        prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
+        prometheus_logger.litellm_remaining_requests_metric = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", fake_router, create=True):
+            await prometheus_logger._async_set_router_remaining_metrics(
+                standard_logging_payload=payload,
+                enum_values=_enum_values(),
+            )
+
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            1000
+        )
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            99
+        )
 
 
 class TestRouterFallbackDefensivePaths:

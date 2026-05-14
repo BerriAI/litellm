@@ -2274,6 +2274,20 @@ class PrometheusLogger(CustomLogger):
             remaining_tokens = remaining_usage.get("x-ratelimit-remaining-tokens")
             remaining_requests = remaining_usage.get("x-ratelimit-remaining-requests")
 
+            # Router's TPM/RPM counter is incremented by
+            # Router.deployment_callback_on_success, which races with this
+            # prometheus callback in the success-log fan-out. Prometheus wins
+            # the race in practice, so the router value is pre-decrement for
+            # the current request. Vendor headers (OpenAI/Anthropic/Azure)
+            # are post-decrement — the vendor counted the current request
+            # before responding. Subtract the in-flight delta so both paths
+            # report comparable values.
+            in_flight_tokens = standard_logging_payload.get("total_tokens") or 0
+            if remaining_tokens is not None:
+                remaining_tokens = remaining_tokens - in_flight_tokens
+            if remaining_requests is not None:
+                remaining_requests = remaining_requests - 1
+
             if not already_have_tokens and remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(
