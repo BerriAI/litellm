@@ -291,6 +291,34 @@ class PurviewGuardrailBase:
         md = litellm_params.get("metadata")
         return md if isinstance(md, dict) else {}
 
+    def _resolve_trusted_user_id(
+        self, data: Dict[str, Any], user_api_key_dict: Any
+    ) -> Optional[str]:
+        """Resolve user ID from trusted (proxy-authenticated) sources only.
+
+        Identical trust order to ``_resolve_user_id`` levels 1-3, but intentionally
+        omits level 4 (``metadata[user_id_field]``) because that value is supplied
+        by the caller and can be forged.  Use this in blocking modes so that
+        content is always evaluated against the actual authenticated user's Purview
+        policy, not one chosen by the caller.
+
+        Returns ``None`` when no authenticated identity is available, even if a
+        caller-supplied value exists.  Callers should then decide whether to fail
+        open (skip) or fail closed (block).
+        """
+        metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+
+        if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id:
+            return str(user_api_key_dict.user_id)
+        if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
+            return str(user_api_key_dict.end_user_id)
+
+        uid = metadata.get("user_api_key_user_id")
+        if uid:
+            return str(uid)
+
+        return None
+
     def _resolve_user_id_from_logging_kwargs(
         self, kwargs: Dict[str, Any]
     ) -> Optional[str]:
@@ -299,7 +327,8 @@ class PurviewGuardrailBase:
         shim = SimpleNamespace(
             user_id=md.get("user_api_key_user_id")
             or kwargs.get("user_api_key_user_id"),
-            end_user_id=md.get("user_api_key_end_user_id"),
+            end_user_id=md.get("user_api_key_end_user_id")
+            or kwargs.get("user_api_key_end_user_id"),
         )
         return self._resolve_user_id({"metadata": md}, shim)
 

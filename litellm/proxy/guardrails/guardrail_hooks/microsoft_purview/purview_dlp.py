@@ -11,7 +11,18 @@ import asyncio
 import threading
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
@@ -25,6 +36,7 @@ from litellm.types.utils import (
     Choices,
     GuardrailStatus,
     ModelResponse,
+    ModelResponseStream,
     ResponsesAPIResponse,
     TextChoices,
     TextCompletionResponse,
@@ -233,6 +245,45 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             return None
 
     # ------------------------------------------------------------------
+    # Identity resolution for blocking modes
+    # ------------------------------------------------------------------
+
+    def _resolve_user_id_for_blocking(
+        self,
+        data: Dict[str, Any],
+        user_api_key_dict: Any,
+    ) -> Optional[str]:
+        """Resolve user ID for blocking (pre_call / post_call) DLP hooks.
+
+        Tries trusted sources first (``_resolve_trusted_user_id``).  When none
+        are available the method falls back to the full resolution (which
+        includes caller-supplied ``metadata[user_id_field]``) and logs a
+        **SECURITY WARNING** so operators know the DLP evaluation is tied to
+        an identity the caller could have forged.
+
+        Returns ``None`` (and logs a warning) when no identity at all can be
+        resolved — the calling hook should skip the DLP check in that case.
+        """
+        trusted_id = self._resolve_trusted_user_id(data, user_api_key_dict)
+        if trusted_id:
+            return trusted_id
+
+        caller_id = self._resolve_user_id(data, user_api_key_dict)
+        if caller_id:
+            verbose_proxy_logger.warning(
+                "Purview DLP [SECURITY]: no proxy-authenticated user identity found; "
+                "using caller-supplied user_id=%r for blocking DLP evaluation. "
+                "Bind a user_id to the API key to prevent identity spoofing.",
+                caller_id,
+            )
+            return caller_id
+
+        verbose_proxy_logger.warning(
+            "Purview DLP: no user_id resolved; skipping DLP check"
+        )
+        return None
+
+    # ------------------------------------------------------------------
     # Pre-call hook — DLP on prompts
     # ------------------------------------------------------------------
 
@@ -245,19 +296,28 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         call_type: "CallTypesLiteral",
     ) -> Optional[Dict[str, Any]]:
         """Check user prompt against Purview DLP policies before LLM call."""
-        user_id = self._resolve_user_id(data, user_api_key_dict)
+        user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
         if not user_id:
-            verbose_proxy_logger.warning(
-                "Purview DLP: No user_id found, skipping pre-call check"
-            )
             return data
 
         prompt_text: Optional[str] = None
+        is_text_completion = call_type in ("text_completion", "atext_completion")
         messages: Optional[List] = data.get("messages")
         if messages:
             prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
-        elif call_type in ("text_completion", "atext_completion"):
-            prompt_text = self.completion_prompt_to_str(data.get("prompt"))
+        elif is_text_completion:
+            raw_prompt = data.get("prompt")
+            prompt_text = self.completion_prompt_to_str(raw_prompt)
+            if raw_prompt is not None and prompt_text is None:
+                # Prompt was provided but resolved to None — the only case where
+                # completion_prompt_to_str returns None for non-empty input is a
+                # pure token-id array.  Token IDs cannot be scanned by Purview;
+                # pass through without DLP (content opaque at the text layer).
+                verbose_proxy_logger.warning(
+                    "Purview DLP: prompt is token-id array and cannot be scanned; "
+                    "request will proceed without DLP evaluation"
+                )
+                return data
         elif call_type in ("responses", "aresponses"):
             prompt_text = self._responses_api_input_to_str(data)
 
@@ -283,12 +343,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_api_key_dict: "UserAPIKeyAuth",
         response: Union[Any, ModelResponse, "EmbeddingResponse", "ImageResponse"],
     ) -> Any:
-        """Check LLM response against Purview DLP policies."""
-        user_id = self._resolve_user_id(data, user_api_key_dict)
+        """Check LLM response against Purview DLP policies (non-streaming only).
+
+        Streaming responses are handled by ``async_post_call_streaming_iterator_hook``
+        which buffers all chunks before scanning.  The proxy automatically skips
+        this hook for requests that have a streaming iterator hook defined.
+        """
+        user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
         if not user_id:
-            verbose_proxy_logger.warning(
-                "Purview DLP: No user_id found, skipping post-call check"
-            )
             return response
 
         parts = self._completion_response_text_parts(response)
@@ -303,6 +365,57 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 block_on_violation=True,
             )
         return response
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """Check streaming LLM responses against Purview DLP policies.
+
+        All chunks are buffered before the DLP scan so that no content is
+        delivered to the client if a policy violation is detected.  After a
+        clean scan the assembled response is re-yielded chunk-by-chunk via a
+        ``MockResponseIterator`` so the caller receives normal streaming output.
+
+        The proxy automatically skips ``async_post_call_success_hook`` for
+        guardrails that define this method, preventing duplicate scans.
+        """
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+
+        # Buffer the entire stream before any DLP scan.
+        all_chunks: List[ModelResponseStream] = []
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        assembled_response = stream_chunk_builder(chunks=all_chunks)
+
+        if not isinstance(assembled_response, ModelResponse):
+            # Non-chat response (e.g. embeddings) — pass through unchanged.
+            for chunk in all_chunks:
+                yield chunk
+            return
+
+        user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
+        if user_id:
+            parts = self._completion_response_text_parts(assembled_response)
+            if parts:
+                combined = "\n\n---\n\n".join(parts)
+                # Raises HTTPException(400) on violation — no chunks are yielded.
+                await self._check_content(
+                    user_id=user_id,
+                    text=combined,
+                    activity="downloadText",
+                    request_data=request_data,
+                    block_on_violation=True,
+                )
+
+        # DLP passed (or skipped) — re-yield chunks from the assembled response.
+        mock_response = MockResponseIterator(model_response=assembled_response)
+        async for chunk in mock_response:
+            yield chunk
 
     # ------------------------------------------------------------------
     # Logging-only hook — audit without blocking

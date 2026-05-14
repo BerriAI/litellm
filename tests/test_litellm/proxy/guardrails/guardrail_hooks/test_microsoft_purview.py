@@ -1671,6 +1671,340 @@ class TestCompletionResponseTextPartsToolCalls:
 
 
 # ---------------------------------------------------------------
+# _resolve_trusted_user_id
+# ---------------------------------------------------------------
+
+
+class TestResolveTrustedUserId:
+    def test_trusted_user_id_from_api_key_dict(self):
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test", user_id="auth-user-111")
+        assert guardrail._resolve_trusted_user_id({}, auth) == "auth-user-111"
+
+    def test_trusted_user_id_from_end_user_id(self):
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test", end_user_id="end-user-222")
+        assert guardrail._resolve_trusted_user_id({}, auth) == "end-user-222"
+
+    def test_trusted_user_id_from_proxy_injected_metadata(self):
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test")
+        data = {"metadata": {"user_api_key_user_id": "proxy-user-333"}}
+        assert guardrail._resolve_trusted_user_id(data, auth) == "proxy-user-333"
+
+    def test_trusted_user_id_returns_none_for_caller_supplied_only(self):
+        """Caller-supplied metadata must NOT be returned by _resolve_trusted_user_id."""
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test")
+        data = {"metadata": {"user_id": "caller-supplied-444"}}
+        assert guardrail._resolve_trusted_user_id(data, auth) is None
+
+    def test_trusted_prefers_key_user_id_over_end_user_id(self):
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(
+            api_key="test", user_id="key-owner", end_user_id="end-user"
+        )
+        assert guardrail._resolve_trusted_user_id({}, auth) == "key-owner"
+
+
+# ---------------------------------------------------------------
+# _resolve_user_id_from_logging_kwargs — end_user_id fallback
+# ---------------------------------------------------------------
+
+
+class TestLoggingEndUserIdFallback:
+    def test_end_user_id_from_metadata(self):
+        guardrail = _make_guardrail()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_end_user_id": "end-user-from-metadata",
+                }
+            }
+        }
+        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
+        assert result == "end-user-from-metadata"
+
+    def test_end_user_id_fallback_from_top_level_kwargs(self):
+        """end_user_id must fall back to kwargs-level key when absent from metadata."""
+        guardrail = _make_guardrail()
+        kwargs = {
+            "user_api_key_end_user_id": "end-user-from-kwargs",
+            "litellm_params": {"metadata": {}},
+        }
+        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
+        assert result == "end-user-from-kwargs"
+
+    def test_metadata_end_user_id_wins_over_kwargs_level(self):
+        """Metadata value must win over top-level kwargs when both exist."""
+        guardrail = _make_guardrail()
+        kwargs = {
+            "user_api_key_end_user_id": "kwargs-end-user",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_end_user_id": "metadata-end-user",
+                }
+            },
+        }
+        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
+        assert result == "metadata-end-user"
+
+
+# ---------------------------------------------------------------
+# _resolve_user_id_for_blocking — security warning path
+# ---------------------------------------------------------------
+
+
+class TestResolveUserIdForBlocking:
+    def test_trusted_id_returned_without_warning(self, caplog):
+        import logging
+
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test", user_id="trusted-111")
+        with caplog.at_level(logging.WARNING):
+            result = guardrail._resolve_user_id_for_blocking({}, auth)
+        assert result == "trusted-111"
+        assert "SECURITY" not in caplog.text
+
+    def test_caller_supplied_id_returns_with_security_warning(self, caplog):
+        import logging
+
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test")
+        data = {"metadata": {"user_id": "caller-supplied-999"}}
+        with caplog.at_level(logging.WARNING):
+            result = guardrail._resolve_user_id_for_blocking(data, auth)
+        assert result == "caller-supplied-999"
+        assert "SECURITY" in caplog.text
+
+    def test_no_id_returns_none(self, caplog):
+        import logging
+
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test")
+        with caplog.at_level(logging.WARNING):
+            result = guardrail._resolve_user_id_for_blocking({}, auth)
+        assert result is None
+
+
+# ---------------------------------------------------------------
+# Token-id prompt handling in pre_call blocking mode
+# ---------------------------------------------------------------
+
+
+class TestTokenIdPromptHandling:
+    @pytest.mark.asyncio
+    async def test_token_id_prompt_passes_through_with_warning(self, caplog):
+        """Pure token-id prompts cannot be scanned; they should pass through."""
+        import logging
+
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            with caplog.at_level(logging.WARNING):
+                result = await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
+                    cache=None,
+                    data={"prompt": [1, 2, 3, 100, 200]},
+                    call_type="text_completion",
+                )
+
+            mock_check.assert_not_called()
+            assert result is not None
+            assert "token-id" in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_missing_prompt_skips_without_warning(self, caplog):
+        """No prompt at all → silently skip (not a token-id bypass case)."""
+        import logging
+
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            with caplog.at_level(logging.WARNING):
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
+                    cache=None,
+                    data={},
+                    call_type="text_completion",
+                )
+
+            mock_check.assert_not_called()
+            assert "token-id" not in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_string_prompt_still_scanned(self):
+        """Normal string prompts must still be sent to Purview."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
+                cache=None,
+                data={"prompt": "sensitive text"},
+                call_type="text_completion",
+            )
+
+        mock_check.assert_called_once()
+        assert mock_check.call_args.kwargs["text"] == "sensitive text"
+
+
+# ---------------------------------------------------------------
+# Streaming iterator hook
+# ---------------------------------------------------------------
+
+
+class TestStreamingIteratorHook:
+    @pytest.mark.asyncio
+    async def test_streaming_clean_response_yields_all_chunks(self):
+        """Clean stream: all chunks must be re-yielded after DLP passes."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+
+        assembled_response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(content="safe response", role="assistant"),
+                )
+            ]
+        )
+
+        async def fake_response_stream():
+            yield assembled_response
+
+        with (
+            patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
+            patch(
+                "litellm.llms.base_llm.base_model_iterator.MockResponseIterator"
+            ) as mock_iterator_cls,
+            patch.object(
+                guardrail, "_check_content", new_callable=AsyncMock
+            ) as mock_check,
+        ):
+            mock_check.return_value = {"policyActions": []}
+
+            async def _iter_chunks():
+                yield assembled_response
+
+            mock_iterator_cls.return_value.__aiter__ = lambda s: _iter_chunks()
+
+            chunks = []
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                response=fake_response_stream(),
+                request_data={"metadata": {"user_id": "user-123"}},
+            ):
+                chunks.append(chunk)
+
+            mock_check.assert_called_once()
+            assert mock_check.call_args.kwargs["activity"] == "downloadText"
+            assert len(chunks) > 0
+
+    @pytest.mark.asyncio
+    async def test_streaming_violation_raises_before_any_chunk(self):
+        """A policy violation must raise HTTPException before yielding any chunk."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+
+        assembled_response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        content="SSN: 123-45-6789",
+                        role="assistant",
+                    ),
+                )
+            ]
+        )
+
+        async def fake_response_stream():
+            yield assembled_response
+
+        with (
+            patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
+            patch.object(
+                guardrail,
+                "_check_content",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Microsoft Purview DLP: Content blocked by policy"
+                    },
+                ),
+            ),
+        ):
+            chunks = []
+            with pytest.raises(HTTPException) as exc_info:
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", user_id="user-123"
+                    ),
+                    response=fake_response_stream(),
+                    request_data={"metadata": {"user_id": "user-123"}},
+                ):
+                    chunks.append(chunk)
+
+            assert exc_info.value.status_code == 400
+            assert len(chunks) == 0  # No chunks yielded before the block
+
+    @pytest.mark.asyncio
+    async def test_streaming_no_user_id_passes_through(self):
+        """No resolvable user_id → stream passes through without DLP scan."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = _make_guardrail()
+
+        assembled_response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(content="some content", role="assistant"),
+                )
+            ]
+        )
+
+        async def fake_response_stream():
+            yield assembled_response
+
+        with (
+            patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
+            patch(
+                "litellm.llms.base_llm.base_model_iterator.MockResponseIterator"
+            ) as mock_iterator_cls,
+            patch.object(
+                guardrail, "_check_content", new_callable=AsyncMock
+            ) as mock_check,
+        ):
+
+            async def _iter_chunks():
+                yield assembled_response
+
+            mock_iterator_cls.return_value.__aiter__ = lambda s: _iter_chunks()
+
+            chunks = []
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),  # no user_id
+                response=fake_response_stream(),
+                request_data={},
+            ):
+                chunks.append(chunk)
+
+            mock_check.assert_not_called()
+
+
+# ---------------------------------------------------------------
 # Auto-discovery registration
 # ---------------------------------------------------------------
 
