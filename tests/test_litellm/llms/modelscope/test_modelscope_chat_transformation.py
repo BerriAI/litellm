@@ -61,7 +61,7 @@ class TestModelScopeConfig:
         # Set up environment variables for the test
         api_key = "fake-modelscope-key"
         api_base = "https://api-inference.modelscope.cn/v1"
-        model = "Qwen/Qwen3-8B"
+        model = "modelscope/Qwen/Qwen3-8B"  # Use modelscope/ prefix to specify provider
         model_name = "Qwen3-8B"  # The actual model name without provider prefix
 
         # Mock the HTTP request to the ModelScope API

@@ -1085,33 +1085,45 @@ dashscope_models: set = set(
     ]
 )
 
+WANDB_MODELS: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        # zai-org models
+        "zai-org/GLM-4.5",
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+        "moonshotai/Kimi-K2.5",
+        # MiniMaxAI
+        "MiniMaxAI/MiniMax-M2.5",
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
+    ]
+)
+
 modelscope_models: List = [
+    # LLM-Research models
     "LLM-Research/c4ai-command-r-plus-08-2024",
+    "LLM-Research/Llama-4-Scout-17B-16E-Instruct",
+    "LLM-Research/Llama-4-Maverick-17B-128E-Instruct",
+    # Mistral models
     "mistralai/Mistral-Small-Instruct-2409",
     "mistralai/Ministral-8B-Instruct-2410",
     "mistralai/Mistral-Large-Instruct-2407",
-    "Qwen/Qwen2.5-Coder-32B-Instruct",
-    "Qwen/Qwen2.5-Coder-14B-Instruct",
-    "Qwen/Qwen2.5-Coder-7B-Instruct",
-    "Qwen/Qwen2.5-72B-Instruct",
-    "Qwen/Qwen2.5-32B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen/QwQ-32B-Preview",
-    "opencompass/CompassJudger-1-32B-Instruct",
-    "Qwen/QVQ-72B-Preview",
-    "Qwen/Qwen2-VL-7B-Instruct",
-    "Qwen/Qwen2.5-14B-Instruct-1M",
-    "Qwen/Qwen2.5-7B-Instruct-1M",
-    "Qwen/Qwen2.5-VL-3B-Instruct",
-    "Qwen/Qwen2.5-VL-7B-Instruct",
-    "Qwen/Qwen2.5-VL-72B-Instruct",
-    "deepseek-ai/DeepSeek-V3",
-    "Qwen/QwQ-32B",
-    "XGenerationLab/XiYanSQL-QwenCoder-32B-2412",
-    "Qwen/Qwen2.5-VL-32B-Instruct",
-    "LLM-Research/Llama-4-Scout-17B-16E-Instruct",
-    "LLM-Research/Llama-4-Maverick-17B-128E-Instruct",
+    # Qwen3 series
     "Qwen/Qwen3-0.6B",
     "Qwen/Qwen3-1.7B",
     "Qwen/Qwen3-4B",
@@ -1120,14 +1132,36 @@ modelscope_models: List = [
     "Qwen/Qwen3-30B-A3B",
     "Qwen/Qwen3-32B",
     "Qwen/Qwen3-235B-A22B",
-    "deepseek-ai/DeepSeek-R1-0528",
-    "MiniMax/MiniMax-M1-80k",
     "Qwen/Qwen3-235B-A22B-Instruct-2507",
     "Qwen/Qwen3-Coder-480B-A35B-Instruct",
     "Qwen/Qwen3-235B-A22B-Thinking-2507",
-    "ZhipuAI/GLM-4.5",
     "Qwen/Qwen3-30B-A3B-Thinking-2507",
     "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    # Qwen3.5 series (new)
+    "Qwen/Qwen3.5-0.6B",
+    "Qwen/Qwen3.5-1.7B",
+    "Qwen/Qwen3.5-3B",
+    "Qwen/Qwen3.5-7B",
+    "Qwen/Qwen3.5-14B",
+    "Qwen/Qwen3.5-30B-A3B",
+    "Qwen/Qwen3.5-32B",
+    "Qwen/Qwen3.5-235B-A22B",
+    "Qwen/Qwen3.5-235B-A22B-Instruct-2507",
+    "Qwen/Qwen3.5-Coder-480B-A35B-Instruct",
+    "Qwen/Qwen3.5-235B-A22B-Thinking-2507",
+    "Qwen/Qwen3.5-30B-A3B-Thinking-2507",
+    "Qwen/Qwen3.5-Coder-30B-A3B-Instruct",
+    # Other models
+    "Qwen/QwQ-32B-Preview",
+    "opencompass/CompassJudger-1-32B-Instruct",
+    "Qwen/QVQ-72B-Preview",
+    "Qwen/Qwen2-VL-7B-Instruct",
+    "deepseek-ai/DeepSeek-V3",
+    "Qwen/QwQ-32B",
+    "XGenerationLab/XiYanSQL-QwenCoder-32B-2412",
+    "deepseek-ai/DeepSeek-R1-0528",
+    "MiniMax/MiniMax-M1-80k",
+    "ZhipuAI/GLM-4.5",
 ]
 
 nebius_embedding_models: List = [
