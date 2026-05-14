@@ -19,6 +19,7 @@ SEARCH_PROVIDERS = [
     "duckduckgo",
     "searchapi",
     "serper",
+    "tinyfish",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [
