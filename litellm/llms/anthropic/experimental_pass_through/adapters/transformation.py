@@ -213,7 +213,7 @@ class AnthropicAdapter:
     def translate_completion_output_params_streaming(
         self,
         completion_stream: Any,
-        model: str,
+        model: str = '',
         tool_name_mapping: Optional[Dict[str, str]] = None,
     ) -> Union[AsyncIterator[bytes], None]:
         """
