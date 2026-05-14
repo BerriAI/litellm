@@ -4,6 +4,8 @@ Dynamic configuration class generator for JSON-based providers.
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -164,6 +166,61 @@ def create_config_class(provider: SimpleProviderConfig):
                 optional_params["temperature"] = temp
 
             return optional_params
+
+        def should_retry_llm_api_inside_llm_translation_on_http_error(
+            self, e: httpx.HTTPStatusError, litellm_params: dict
+        ) -> bool:
+            """
+            Retry on 422 UnprocessableEntity when drop_params is enabled.
+
+            OpenAI-compatible providers may reject unknown parameters.
+            When drop_params is set, strip the offending params and retry.
+            """
+            import litellm as _litellm
+
+            should_drop = litellm_params.get("drop_params") or _litellm.drop_params
+            if should_drop and e.response.status_code == 422:
+                error_text = e.response.text
+                if "Extra inputs are not permitted" in error_text:
+                    return True
+            return super().should_retry_llm_api_inside_llm_translation_on_http_error(
+                e=e, litellm_params=litellm_params
+            )
+
+        @property
+        def max_retry_on_unprocessable_entity_error(self) -> int:
+            return 2
+
+        def transform_request_on_unprocessable_entity_error(
+            self, e: httpx.HTTPStatusError, request_data: dict
+        ) -> dict:
+            """
+            On 422, attempt to extract the offending field name from the error
+            response and remove it from the request data before retrying.
+            """
+            import json as _json
+
+            try:
+                error_body = _json.loads(e.response.text)
+                error_msg = str(error_body)
+            except Exception:
+                error_msg = e.response.text
+
+            if "Extra inputs are not permitted" in error_msg:
+                # Try to extract field name from error message pattern like:
+                # "field_name: Extra inputs are not permitted"
+                for line in error_msg.split(","):
+                    line = line.strip()
+                    if "Extra inputs are not permitted" in line:
+                        field = line.split(":")[0].strip().strip("'\"{ ")
+                        if field and field in request_data:
+                            verbose_logger.debug(
+                                f"Removing unsupported param '{field}' from "
+                                f"request to {provider.slug} on retry"
+                            )
+                            request_data.pop(field, None)
+
+            return request_data
 
         @property
         def custom_llm_provider(self) -> Optional[str]:
