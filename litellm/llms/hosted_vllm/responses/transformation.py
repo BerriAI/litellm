@@ -45,17 +45,21 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         final_request_params = dict(
             ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
         )
-        # Generate cache_salt from API key for user-based cache isolation (CVE-2025-46570)
-        auth_header = headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            api_key = auth_header[7:]
-        else:
-            api_key = ""
-        if api_key:
-            cache_salt = base64.b64encode(hashlib.sha256(api_key.encode()).digest()).decode()
+
+        if final_request_params.get("cache_salt"):
+            return final_request_params
+
+        metadata = getattr(litellm_params, "metadata", {}) or {}
+        caller_id = (
+            metadata.get("user_api_key_user_id")
+            or metadata.get("user_api_key_team_id")
+            or metadata.get("user_api_key_end_user_id")
+        )
+        if caller_id:
+            cache_salt = base64.b64encode(hashlib.sha256(caller_id.encode()).digest()).decode()
         else:
             cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
-        final_request_params.setdefault("extra_body", {})["cache_salt"] = cache_salt
+        final_request_params["cache_salt"] = cache_salt
         return final_request_params
 
     def validate_environment(
