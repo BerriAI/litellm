@@ -1,5 +1,6 @@
 """Unit tests for the Microsoft Purview DLP guardrail."""
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -137,10 +138,7 @@ class TestCompletionPromptToStr:
         assert PurviewGuardrailBase.completion_prompt_to_str("  hi  ") == "hi"
 
     def test_list_of_strings(self):
-        assert (
-            PurviewGuardrailBase.completion_prompt_to_str(["a", "b"])
-            == "a\nb"
-        )
+        assert PurviewGuardrailBase.completion_prompt_to_str(["a", "b"]) == "a\nb"
 
     def test_token_ids_returns_none(self):
         assert PurviewGuardrailBase.completion_prompt_to_str([1, 2, 3]) is None
@@ -457,7 +455,8 @@ class TestPostCallHook:
         response = ModelResponse(
             choices=[
                 Choices(
-                    index=0, message=Message(content="First completion", role="assistant")
+                    index=0,
+                    message=Message(content="First completion", role="assistant"),
                 ),
                 Choices(
                     index=1,
@@ -595,9 +594,7 @@ class TestResponsesAPIHooks:
                 user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 cache=None,
                 data={
-                    "input": [
-                        {"role": "user", "content": "Secret phrase: alpha bravo"}
-                    ]
+                    "input": [{"role": "user", "content": "Secret phrase: alpha bravo"}]
                 },
                 call_type="responses",
             )
@@ -637,7 +634,9 @@ class TestResponsesAPIHooks:
                     "id": "msg-1",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "card 4111-1111-1111-1111"}],
+                    "content": [
+                        {"type": "output_text", "text": "card 4111-1111-1111-1111"}
+                    ],
                 }
             ],
         )
@@ -746,9 +745,7 @@ class TestLoggingResolveUserId:
 
     def test_logging_falls_back_to_user_id_field(self):
         guardrail = _make_guardrail()
-        kwargs = {
-            "litellm_params": {"metadata": {"user_id": "only-metadata-user"}}
-        }
+        kwargs = {"litellm_params": {"metadata": {"user_id": "only-metadata-user"}}}
         assert (
             guardrail._resolve_user_id_from_logging_kwargs(kwargs)
             == "only-metadata-user"
@@ -1014,7 +1011,9 @@ class TestScopeCaching:
             assert mock_post.call_count == 4
 
             assert "user-a" in guardrail._scope_cache, "user-a was wrongly evicted"
-            assert "user-b" not in guardrail._scope_cache, "user-b should have been evicted"
+            assert (
+                "user-b" not in guardrail._scope_cache
+            ), "user-b should have been evicted"
             assert "user-c" in guardrail._scope_cache
 
     @pytest.mark.asyncio
@@ -1040,6 +1039,124 @@ class TestScopeCaching:
 
             # Scope cache should be invalidated
             assert "user-1" not in guardrail._scope_cache
+
+
+# ---------------------------------------------------------------
+# get_prompt_text_for_dlp — message separator
+# ---------------------------------------------------------------
+
+
+class TestGetPromptTextForDlp:
+    def test_single_message_no_extra_separator(self):
+        """A single message is returned as-is (no leading/trailing separator)."""
+        guardrail = _make_guardrail()
+        result = guardrail.get_prompt_text_for_dlp(
+            [{"role": "user", "content": "Hello"}]
+        )
+        assert result == "Hello"
+
+    def test_messages_separated_by_double_newline(self):
+        """Adjacent messages must NOT be concatenated without a separator.
+
+        Before the fix, "end of msg1" + "start of msg2" became
+        "end of msg1start of msg2", mangling DLP pattern detection.
+        """
+        guardrail = _make_guardrail()
+        result = guardrail.get_prompt_text_for_dlp(
+            [
+                {"role": "system", "content": "end of msg1"},
+                {"role": "user", "content": "start of msg2"},
+            ]
+        )
+        assert result is not None
+        assert "end of msg1" in result
+        assert "start of msg2" in result
+        # Separator must be present between messages
+        assert "end of msg1start of msg2" not in result
+        assert "end of msg1\n\nstart of msg2" in result
+
+    def test_empty_messages_returns_none(self):
+        guardrail = _make_guardrail()
+        assert guardrail.get_prompt_text_for_dlp([]) is None
+
+    def test_whitespace_only_messages_skipped(self):
+        guardrail = _make_guardrail()
+        result = guardrail.get_prompt_text_for_dlp(
+            [
+                {"role": "system", "content": "   "},
+                {"role": "user", "content": "real content"},
+            ]
+        )
+        assert result == "real content"
+
+    def test_multi_role_conversation_preserves_all_content(self):
+        guardrail = _make_guardrail()
+        result = guardrail.get_prompt_text_for_dlp(
+            [
+                {"role": "system", "content": "SYSTEM"},
+                {"role": "user", "content": "USER1"},
+                {"role": "assistant", "content": "ASSISTANT"},
+                {"role": "user", "content": "USER2"},
+            ]
+        )
+        assert result is not None
+        for token in ("SYSTEM", "USER1", "ASSISTANT", "USER2"):
+            assert token in result
+
+
+# ---------------------------------------------------------------
+# logging_hook — non-blocking fire-and-forget
+# ---------------------------------------------------------------
+
+
+class TestLoggingHookNonBlocking:
+    @pytest.mark.asyncio
+    async def test_logging_hook_does_not_block_running_loop(self):
+        """logging_hook must return immediately without blocking the event loop.
+
+        Before the fix, logging_hook called future.result() which blocked the
+        event loop thread for the full round-trip of the two Graph API calls.
+        """
+        guardrail = _make_guardrail(logging_only=True)
+        call_count = 0
+
+        async def slow_async_hook(**_kwargs):
+            nonlocal call_count
+            await asyncio.sleep(0.05)
+            call_count += 1
+            return _kwargs.get("kwargs", {}), _kwargs.get("result")
+
+        with patch.object(guardrail, "async_logging_hook", side_effect=slow_async_hook):
+            # Call logging_hook from within a running event loop
+            result = guardrail.logging_hook(
+                kwargs={"messages": [{"role": "user", "content": "test"}]},
+                result=None,
+                call_type="completion",
+            )
+
+        # Must return (kwargs, result) unchanged without waiting for async work
+        assert result[0]["messages"][0]["content"] == "test"
+        assert result[1] is None
+
+    def test_logging_hook_returns_original_kwargs_and_result(self):
+        """Return value must be the original (kwargs, result) tuple unchanged."""
+        guardrail = _make_guardrail(logging_only=True)
+        kwargs = {"messages": [{"role": "user", "content": "hello"}]}
+        result_obj = {"some": "result"}
+
+        with patch.object(
+            guardrail,
+            "async_logging_hook",
+            new_callable=AsyncMock,
+            return_value=(kwargs, result_obj),
+        ):
+            out = guardrail.logging_hook(
+                kwargs=kwargs,
+                result=result_obj,
+                call_type="completion",
+            )
+
+        assert out == (kwargs, result_obj)
 
 
 # ---------------------------------------------------------------
