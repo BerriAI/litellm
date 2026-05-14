@@ -1,5 +1,9 @@
 """
 Test Claude Sonnet 4.6 model configurations for Bedrock cross-region inference.
+
+Pins the set of region-prefixed entries in model_prices_and_context_window.json
+so future drops of a region (or pricing drift between regions) is caught.
+
 https://github.com/BerriAI/litellm/issues/22972
 """
 
