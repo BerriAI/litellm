@@ -302,6 +302,103 @@ class TestPostHookInjectsBlocks:
         assert out.content[1]["type"] == "text"
 
 
+class TestShortCircuitEmitsNativeBlocks:
+    """Standalone /v1/messages sub-requests (Cowork's separate search call)
+    hit ``try_short_circuit_search``, which builds a synthetic response and
+    never enters the agentic loop. The native-block emission must happen
+    here too, otherwise the citations panel stays empty."""
+
+    @pytest.mark.asyncio
+    async def test_native_tool_short_circuit_emits_blocks(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger,
+            "_execute_search",
+            new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
+        ):
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 3,
+                    }
+                ],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        # Order matters: native clients expect tool_use before tool_result.
+        assert block_types == ["server_tool_use", "web_search_tool_result", "text"]
+        server_use, tool_result, _ = result["content"]
+        assert server_use["name"] == "web_search"
+        assert server_use["input"] == {"query": "search query"}
+        # tool_use_id must match between the server_tool_use and the
+        # web_search_tool_result block so the client can pair them.
+        assert server_use["id"].startswith("srvtoolu_")
+        assert tool_result["tool_use_id"] == server_use["id"]
+        # The actual search results carry through (urls + titles).
+        assert len(tool_result["content"]) == 2
+        assert tool_result["content"][0]["url"] == "https://docs.litellm.ai/"
+
+    @pytest.mark.asyncio
+    async def test_litellm_standard_tool_short_circuit_stays_text_only(self):
+        """Non-native tool → existing text-only short-circuit, no regression."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger,
+            "_execute_search",
+            new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
+        ):
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[
+                    {
+                        "name": "litellm_web_search",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                    }
+                ],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        assert block_types == ["text"]
+
+    @pytest.mark.asyncio
+    async def test_native_short_circuit_failure_still_emits_blocks(self):
+        """Search failure on native path: emit blocks with empty results +
+        the legacy text-error block, so the client gets a well-formed
+        response instead of a malformed half-shape."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(logger, "_execute_search", side_effect=RuntimeError("boom")):
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        block_types = [b["type"] for b in result["content"]]
+        assert block_types == ["server_tool_use", "web_search_tool_result", "text"]
+        tool_result = result["content"][1]
+        assert tool_result["content"] == []
+        text_block = result["content"][2]
+        assert "Search failed" in text_block["text"]
+
+
 class TestLegacyPathMatchesNewPath:
     """The legacy ``_execute_agentic_loop`` must inject blocks too."""
 
