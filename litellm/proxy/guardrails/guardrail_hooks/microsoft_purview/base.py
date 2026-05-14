@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Dict, List, MutableMapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -61,7 +61,9 @@ class PurviewGuardrailBase:
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: MutableMapping[str, Tuple[str, Dict, float]] = OrderedDict()
+        self._scope_cache: OrderedDict[str, Tuple[str, Dict[str, Any], float]] = (
+            OrderedDict()
+        )
         self._scope_cache_maxsize = 1000
 
     # ------------------------------------------------------------------
@@ -145,6 +147,7 @@ class PurviewGuardrailBase:
         now = time.time()
 
         if cached and (now - cached[2]) < SCOPE_CACHE_TTL_SECONDS:
+            self._scope_cache.move_to_end(user_id)
             return cached[0], cached[1]
 
         url = (
@@ -165,9 +168,9 @@ class PurviewGuardrailBase:
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
         self._scope_cache[user_id] = (etag, response_json, now)
-        # Evict oldest entry when cache exceeds max size.
+        # Evict least-recently-used entry when cache exceeds max size.
         while len(self._scope_cache) > self._scope_cache_maxsize:
-            self._scope_cache.popitem(last=False)  # type: ignore[attr-defined]
+            self._scope_cache.popitem(last=False)
         return etag, response_json
 
     # ------------------------------------------------------------------
