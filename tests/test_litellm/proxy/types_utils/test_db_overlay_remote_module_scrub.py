@@ -71,6 +71,35 @@ def test_custom_provider_map_custom_handler_stripped():
     assert cleaned["custom_provider_map"][1]["custom_handler"] is None
 
 
+def test_pass_through_endpoints_target_stripped():
+    overlay = {
+        "pass_through_endpoints": [
+            {"path": "/ok", "target": "my_module.legit_handler"},
+            {"path": "/bad-s3", "target": "s3://attacker/m.handler"},
+            {"path": "/bad-gcs", "target": "gcs://attacker/m.handler"},
+        ]
+    }
+    cleaned = _scrub_db_overlay_remote_module_loads("general_settings", overlay)
+    # Legit dotted-name target preserved
+    assert cleaned["pass_through_endpoints"][0]["target"] == "my_module.legit_handler"
+    # Both remote URLs stripped to None — entry remains so the path
+    # registration can still be skipped explicitly downstream
+    assert cleaned["pass_through_endpoints"][1]["target"] is None
+    assert cleaned["pass_through_endpoints"][2]["target"] is None
+    # Sibling fields preserved
+    assert cleaned["pass_through_endpoints"][0]["path"] == "/ok"
+    assert cleaned["pass_through_endpoints"][1]["path"] == "/bad-s3"
+
+
+def test_pass_through_endpoints_non_list_passthrough():
+    # If pass_through_endpoints is mistyped (not a list), the scrub
+    # must not raise.
+    cleaned = _scrub_db_overlay_remote_module_loads(
+        "general_settings", {"pass_through_endpoints": "not-a-list"}
+    )
+    assert cleaned["pass_through_endpoints"] == "not-a-list"
+
+
 def test_litellm_jwtauth_custom_validate_stripped():
     overlay = {
         "litellm_jwtauth": {

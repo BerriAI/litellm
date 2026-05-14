@@ -3203,6 +3203,25 @@ def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
                 jwt.get("custom_validate"),
             )
             jwt["custom_validate"] = None
+        # ``pass_through_endpoints`` is a list of dicts whose ``target``
+        # is passed through ``create_pass_through_route`` →
+        # ``get_instance_fn``. A DB-overlay ``target: "s3://attacker/m.i"``
+        # would otherwise reach the loader because the YAML-load chain
+        # has ``config_file_path`` set.
+        pte = sanitized.get("pass_through_endpoints")
+        if isinstance(pte, list):
+            for entry in pte:
+                if isinstance(entry, dict) and _is_remote_module_url(
+                    entry.get("target")
+                ):
+                    verbose_proxy_logger.warning(
+                        "Refused remote-URL target from DB-overlay "
+                        "general_settings.pass_through_endpoints "
+                        "(path=%r): %r",
+                        entry.get("path"),
+                        entry.get("target"),
+                    )
+                    entry["target"] = None
     return sanitized
 
 
