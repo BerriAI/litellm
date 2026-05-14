@@ -150,6 +150,9 @@ def update_db_model(
                 model_info[key] = value.isoformat()
         prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
 
+    if updated_patch.blocked is not None:
+        prisma_compatible_model_dict["blocked"] = updated_patch.blocked
+
     return prisma_compatible_model_dict
 
 

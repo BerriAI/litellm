@@ -323,6 +323,7 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
+    blocked: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 

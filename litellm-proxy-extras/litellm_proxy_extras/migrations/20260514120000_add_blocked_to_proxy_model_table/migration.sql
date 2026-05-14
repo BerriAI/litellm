@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "LiteLLM_ProxyModelTable" ADD COLUMN IF NOT EXISTS "blocked" BOOLEAN NOT NULL DEFAULT false;

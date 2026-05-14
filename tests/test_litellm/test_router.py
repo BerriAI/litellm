@@ -3697,3 +3697,66 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
         default_router.default_deployment["litellm_params"]["model"]
         == "openai/will-be-overridden"
     )
+
+
+def _router_with_two_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": f"openai/gpt-4o-{idx}"},
+                "model_info": {"id": f"dep-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_fully_blocked_model_names_marks_name_when_all_deployments_blocked():
+    router = _router_with_two_deployments([True, True])
+    assert router.get_fully_blocked_model_names() == {"gpt-4o"}
+
+
+def test_get_fully_blocked_model_names_keeps_name_when_partial_blocked():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_fully_blocked_model_names() == set()
+
+
+def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "dep-0"},
+            }
+        ]
+    )
+    assert router.get_fully_blocked_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_healthy_deployments_skips_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    healthy, all_dep = await router._async_get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" not in healthy_ids
+    assert "dep-1" in healthy_ids
+    assert len(all_dep) == 2
+
+
+def test_get_healthy_deployments_sync_skips_blocked_deployment():
+    router = _router_with_two_deployments([False, True])
+    healthy, all_dep = router._get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" in healthy_ids
+    assert "dep-1" not in healthy_ids
+    assert len(all_dep) == 2

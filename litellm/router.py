@@ -30,6 +30,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -6838,8 +6839,9 @@ class Router:
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
                 continue
-            else:
-                healthy_deployments.append(deployment)
+            if deployment.get("model_info", {}).get("blocked") is True:
+                continue
+            healthy_deployments.append(deployment)
 
         return healthy_deployments, _all_deployments
 
@@ -6869,8 +6871,11 @@ class Router:
         unhealthy_deployments_set = set(unhealthy_deployments)
         healthy_deployments: list = []
         for deployment in _all_deployments:
-            if deployment["model_info"]["id"] not in unhealthy_deployments_set:
-                healthy_deployments.append(deployment)
+            if deployment["model_info"]["id"] in unhealthy_deployments_set:
+                continue
+            if deployment.get("model_info", {}).get("blocked") is True:
+                continue
+            healthy_deployments.append(deployment)
         return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
@@ -9119,6 +9124,29 @@ class Router:
                 model_names.append(deployment.get("model_name", ""))
 
         return model_names
+
+    def get_fully_blocked_model_names(self) -> Set[str]:
+        """
+        Returns the set of model_names where every backing deployment has `blocked=True`.
+
+        Used by `/v1/models` to hide paused models from client listings while still
+        surfacing them on admin endpoints (e.g. `/model/info`). A model with at least
+        one non-blocked deployment is still serviceable and remains visible.
+        """
+        deployments = self.get_model_list() or []
+        blocked_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            name = deployment.get("model_name") or ""
+            if not name:
+                continue
+            is_blocked = (deployment.get("model_info") or {}).get("blocked") is True
+            if name in blocked_by_name:
+                blocked_by_name[name] = blocked_by_name[name] and is_blocked
+            else:
+                blocked_by_name[name] = is_blocked
+        return {
+            name for name, fully_blocked in blocked_by_name.items() if fully_blocked
+        }
 
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None

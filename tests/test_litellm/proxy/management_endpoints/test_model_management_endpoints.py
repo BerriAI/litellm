@@ -1446,3 +1446,77 @@ class TestGetTeamDeployments:
         result = await _get_team_deployments(team_id, prisma_client)
         assert len(result) == 1
         assert result[0] is dep1
+
+
+def _build_db_model_for_blocked_test():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+        model_info=ModelInfo(id="dep-0"),
+    )
+
+
+class TestUpdateDBModelBlocked:
+    """`update_db_model` must thread `blocked` through to the Prisma payload only
+    when the caller explicitly set it — PATCH semantics: an absent field means
+    "leave the stored value untouched"."""
+
+    def test_update_db_model_passes_blocked_true_to_db(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(blocked=True),
+        )
+        assert result["blocked"] is True
+
+    def test_update_db_model_passes_blocked_false_to_db(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(blocked=False),
+        )
+        assert result["blocked"] is False
+
+    def test_update_db_model_omits_blocked_when_patch_is_none(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(),
+        )
+        assert "blocked" not in result
+
+
+class TestGetModelInfoWithIdBlocked:
+    """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
+    column into the in-memory `model_info` dict so the router filter can read it."""
+
+    def test_get_model_info_with_id_propagates_blocked_true(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        model = MagicMock()
+        model.model_id = "dep-1"
+        model.model_info = {}
+        model.blocked = True
+        info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
+        assert info.id == "dep-1"
+        assert getattr(info, "blocked") is True
+
+    def test_get_model_info_with_id_defaults_blocked_to_false_when_missing(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        model = MagicMock(spec=["model_id", "model_info"])
+        model.model_id = "dep-2"
+        model.model_info = {}
+        info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
+        assert getattr(info, "blocked") is False
