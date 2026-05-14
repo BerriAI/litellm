@@ -152,14 +152,111 @@ def test_is_request_body_safe_rejects_indirection_via_litellm_embedding_config()
         )
 
 
+def test_is_request_body_safe_rejects_indirection_via_extra_body():
+    # ``extra_body`` is the OpenAI-SDK passthrough container. Provider
+    # modules (e.g. Azure paths that resolve ``extra_body.azure_ad_token``
+    # via ``get_secret``) read fields out of it directly, so an
+    # indirection string under ``extra_body`` is an env-var exfil
+    # primitive unless rejected at the boundary.
+    body = {
+        "model": "azure/gpt-4",
+        "extra_body": {
+            "azure_ad_token": "oidc/env/UI_PASSWORD",
+        },
+    }
+    with pytest.raises(ValueError, match="indirection"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="azure/gpt-4",
+        )
+
+
+def test_is_request_body_safe_rejects_indirection_deeply_nested():
+    # Recursive descent: an indirection string buried several levels
+    # deep is rejected. Provider modules that destructure nested config
+    # (e.g. ``tools[].function.parameters.credentials.api_key``) would
+    # otherwise pull the value out and pass it to ``get_secret`` without
+    # re-validating.
+    body = {
+        "model": "openai/gpt-4",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {
+                        "credentials": {
+                            "api_key": "os.environ/LITELLM_MASTER_KEY",
+                        },
+                    },
+                },
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="indirection"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="openai/gpt-4",
+        )
+
+
+def test_is_request_body_safe_rejects_indirection_inside_messages_list():
+    # Lists are walked too — an attacker can't hide an indirection
+    # string in a per-message field that a provider transformer later
+    # reads out.
+    body = {
+        "model": "openai/gpt-4",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "x-attacker-creds": "oidc/env/LITELLM_MASTER_KEY",
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="indirection"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="openai/gpt-4",
+        )
+
+
 def test_is_request_body_safe_allows_clean_body():
     body = {
         "model": "openai/gpt-4",
         "messages": [{"role": "user", "content": "tell me about os.environ"}],
         "max_tokens": 100,
     }
-    # Chat content mentioning "os.environ" must not trigger the check —
-    # only TOP-LEVEL keys' string values are walked.
+    # Chat content mentioning "os.environ" (no trailing slash) is not
+    # an indirection prefix — the recursive walk only rejects values
+    # that START WITH ``os.environ/`` or ``oidc/``.
+    assert is_request_body_safe(
+        request_body=body,
+        general_settings={},
+        llm_router=None,
+        model="openai/gpt-4",
+    )
+
+
+def test_is_request_body_safe_bounded_walk_does_not_recurse_forever():
+    # Synthesize a pathological depth-21 body. The walker bounds at
+    # depth 10, so this returns without raising (no indirection at
+    # depths 0-10) and without consuming unbounded stack.
+    body = {"model": "openai/gpt-4"}
+    leaf = body
+    for _ in range(21):
+        leaf["next"] = {}
+        leaf = leaf["next"]
+    leaf["api_key"] = "os.environ/LITELLM_MASTER_KEY"
+    # No raise: the deeply-nested indirection sits past the bound. This
+    # is acceptable because the walker's job is to defend the realistic
+    # reach of provider transformers, which never pull from depth 21+.
     assert is_request_body_safe(
         request_body=body,
         general_settings={},

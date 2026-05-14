@@ -173,8 +173,16 @@ def _allow_model_level_clientside_configurable_parameters(
 # by ``/utils/transform_request`` (``{call_type, request_body: {...}}``);
 # descending into it lets the banned-key and indirection checks see the
 # inner provider params regardless of whether the handler explicitly
-# unwraps before calling ``is_request_body_safe``.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "request_body")
+# unwraps before calling ``is_request_body_safe``. ``extra_body`` is the
+# OpenAI-SDK passthrough container: provider modules (e.g. Azure paths
+# that read ``extra_body.azure_ad_token`` and resolve it via
+# ``get_secret``) pull fields out without re-validating them, so the
+# banned-key and indirection checks have to apply there too.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = (
+    "litellm_embedding_config",
+    "request_body",
+    "extra_body",
+)
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -324,20 +332,63 @@ _USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES: Tuple[str, ...] = (
 )
 
 
+# Maximum nesting depth walked by ``_check_no_user_supplied_indirection``.
+# Provider request bodies in this codebase top out around 4-5 levels of
+# real nesting (e.g. ``messages[].content[].image_url.url``); 10 leaves
+# headroom for legitimate clients while bounding the walk so a deeply
+# nested attacker payload can't cause stack/CPU DoS.
+_INDIRECTION_CHECK_MAX_DEPTH: int = 10
+
+
 def _check_no_user_supplied_indirection(body: dict) -> None:
-    """Refuse ``os.environ/`` / ``oidc/`` indirection strings in user
-    input. ``_check_banned_params`` rejects KEYS in the blocklist; this
-    rejects VALUES that would resolve through ``get_secret`` regardless
-    of the key they're sent under."""
-    for key, value in body.items():
-        if isinstance(value, str) and value.startswith(
-            _USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES
-        ):
-            raise ValueError(
-                f"{key!r}={value!r} is rejected: server-side secret "
-                "indirection (os.environ/, oidc/) is not allowed in "
-                "request bodies."
-            )
+    """Refuse ``os.environ/`` / ``oidc/`` indirection strings anywhere in
+    a user-supplied body. ``_check_banned_params`` rejects KEYS in the
+    blocklist; this rejects VALUES that would resolve through
+    ``get_secret`` regardless of the key they're sent under.
+
+    Walks dicts and lists recursively up to ``_INDIRECTION_CHECK_MAX_DEPTH``
+    so an indirection string buried inside ``extra_body``,
+    ``messages[].metadata``, or any other nested container is rejected at
+    the boundary rather than reaching ``get_secret`` through some
+    provider module's nested-field resolution.
+    """
+    _walk_for_indirection(body, depth=0, path="")
+
+
+def _walk_for_indirection(node: Any, depth: int, path: str) -> None:
+    if depth > _INDIRECTION_CHECK_MAX_DEPTH:
+        # Bound the walk: at this depth no legitimate provider field
+        # exists, and continuing would let a pathological payload burn
+        # CPU. The outer container has already been checked; if a real
+        # field lives below the bound the operator should restructure
+        # the request rather than rely on the proxy to mine it.
+        return
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if isinstance(value, str) and value.startswith(
+                _USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES
+            ):
+                raise ValueError(
+                    f"{child_path!r}={value!r} is rejected: server-side "
+                    "secret indirection (os.environ/, oidc/) is not "
+                    "allowed in request bodies."
+                )
+            if isinstance(value, (dict, list)):
+                _walk_for_indirection(value, depth + 1, child_path)
+    elif isinstance(node, list):
+        for idx, item in enumerate(node):
+            child_path = f"{path}[{idx}]"
+            if isinstance(item, str) and item.startswith(
+                _USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES
+            ):
+                raise ValueError(
+                    f"{child_path!r}={item!r} is rejected: server-side "
+                    "secret indirection (os.environ/, oidc/) is not "
+                    "allowed in request bodies."
+                )
+            if isinstance(item, (dict, list)):
+                _walk_for_indirection(item, depth + 1, child_path)
 
 
 def is_request_body_safe(
@@ -363,23 +414,29 @@ def is_request_body_safe(
     has a single, predictable failure mode for missing entries (a 400),
     not a credential leak.
 
-    Iterative single-level descent into ``_NESTED_CONFIG_KEYS`` (rather
-    than recursion) covers nested-config attacks like Milvus's
-    ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
-    recursion-depth DoS surface.
+    Banned-key descent is one level into each entry in
+    ``_NESTED_CONFIG_KEYS`` / ``_NESTED_METADATA_KEYS`` — banned-key
+    detection compares against a fixed set of sink-named keys, and the
+    sinks that actually reach outbound calls live at those known
+    containers, so deeper recursion adds cost without coverage.
+
+    Indirection descent is recursive (bounded depth in
+    ``_walk_for_indirection``). A ``get_secret`` indirection string is
+    just a value, so an attacker can park it anywhere a provider module
+    later resolves a nested field — ``extra_body.azure_ad_token`` is the
+    motivating case but the same shape applies to any future nested
+    auth field a provider transformer adds.
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
-    _check_no_user_supplied_indirection(request_body)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = request_body.get(nested_key)
         if isinstance(nested, dict):
             _check_banned_params(nested, general_settings, llm_router, model)
-            _check_no_user_supplied_indirection(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
-            _check_no_user_supplied_indirection(metadata)
+    _check_no_user_supplied_indirection(request_body)
     return True
 
 
