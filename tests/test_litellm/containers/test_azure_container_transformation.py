@@ -556,6 +556,62 @@ class TestAzureContainerKnownFailureRegressions:
         assert qs.get("api-version") == ["v1"]
         assert qs.get("foo") == ["bar"]
 
+    @pytest.mark.asyncio
+    async def test_regression_no_container_id_does_not_use_user_supplied_model_id(
+        self, monkeypatch
+    ):
+        """Operations without container_id (create, list) must NOT route via
+        _ageneric_api_call_with_fallbacks using a caller-supplied model_id.
+
+        Security boundary: only the path that holds a validated container_id
+        is trusted to fall back to the forwarded model_id.  A caller setting
+        model_id without container_id on POST /v1/containers must not gain
+        access to an arbitrary deployment UUID.
+        """
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        fallback_called = {"called": False}
+
+        async def _mock_fallback(original_function, **kwargs):
+            fallback_called["called"] = True
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        original_called = {"called": False}
+
+        async def _noop(**kwargs):
+            original_called["called"] = True
+            return {}
+
+        # No container_id — simulates create/list; caller injects a model_id
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert not fallback_called["called"], (
+            "_ageneric_api_call_with_fallbacks must NOT be called when "
+            "container_id is absent, even if model_id is supplied"
+        )
+        assert original_called["called"], "original_function must be called directly"
+
     def test_regression_httpx_empty_params_strips_query_string(self):
         """httpx erases the URL query-string when params={} (empty dict) is passed.
 

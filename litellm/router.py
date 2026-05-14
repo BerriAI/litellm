@@ -5561,6 +5561,8 @@ class Router:
             if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
                 kwargs["custom_llm_provider"] = decoded_provider
             # Fall back to the model_id forwarded by the proxy when the container_id
+            # is a native upstream ID (e.g. Azure hex cntr_) that carries no LiteLLM
+            # routing payload, so deployment credentials (api_base, api_key) are applied.
             model_id = decoded.get("model_id") or (
                 _forwarded_model_id.strip()
                 if isinstance(_forwarded_model_id, str) and _forwarded_model_id.strip()
@@ -5572,12 +5574,6 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
-        elif isinstance(_forwarded_model_id, str) and _forwarded_model_id.strip():
-            kwargs["model"] = _forwarded_model_id.strip()
-            return await self._ageneric_api_call_with_fallbacks(
-                original_function=original_function,
-                **kwargs,
-            )
 
         return await original_function(**kwargs)
 
