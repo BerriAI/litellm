@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.otel_span import (
     _OtelFeatureGate,
     get_current_otel_span,
     litellm_otel_tracer,
+    set_litellm_otel_logger,
 )
 from litellm.types.services import ServiceTypes
 
@@ -77,6 +78,25 @@ def test_litellm_otel_span_sets_and_resets_current_span(monkeypatch) -> None:
         assert span_context.span.attributes["cache_hit"] is False
 
     assert get_current_otel_span() is None
+    assert logger.tracer.started_spans[0].end_time is not None
+
+
+def test_litellm_otel_span_uses_registered_logger(monkeypatch) -> None:
+    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+    logger = _FakeOpenTelemetryLogger()
+    set_litellm_otel_logger(logger)
+
+    try:
+        with litellm_otel_tracer.trace(
+            "proxy.auth.fetch.user",
+            service=ServiceTypes.AUTH,
+            require_parent=False,
+        ) as span_context:
+            assert span_context.span is not None
+            assert span_context.span.name == "proxy.auth.fetch.user"
+    finally:
+        set_litellm_otel_logger(None)
+
     assert logger.tracer.started_spans[0].end_time is not None
 
 

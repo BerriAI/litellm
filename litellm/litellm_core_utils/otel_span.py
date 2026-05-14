@@ -20,9 +20,14 @@ class _OtelSpan(Protocol):
     def record_exception(self, exception: BaseException) -> None: ...
 
 
+class _OtelLogger(Protocol):
+    tracer: Any
+
+
 _current_otel_span: ContextVar[Optional[_OtelSpan]] = ContextVar(
     "litellm_current_otel_span", default=None
 )
+_registered_otel_logger: Optional[_OtelLogger] = None
 _ENABLE_EXPERIMENTAL_OTEL_SPANS_ENV_VAR = "LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS"
 
 
@@ -30,6 +35,17 @@ def get_current_otel_span() -> Optional[_OtelSpan]:
     if not _OtelFeatureGate.is_enabled():
         return None
     return _current_otel_span.get()
+
+
+def set_litellm_otel_logger(otel_logger: Optional[_OtelLogger]) -> None:
+    """
+    Register the OpenTelemetry logger used by LiteLLM internal spans.
+
+    Keep this registry in core utils so SDK-only imports never need to import
+    the proxy server just to resolve an optional tracing dependency.
+    """
+    global _registered_otel_logger
+    _registered_otel_logger = otel_logger
 
 
 @contextmanager
@@ -313,17 +329,8 @@ class _OtelFeatureGate:
 
 class _OpenTelemetryLoggerResolver:
     @staticmethod
-    def get() -> Optional[Any]:
-        try:
-            from litellm.integrations.opentelemetry import OpenTelemetry
-            from litellm.proxy import proxy_server
-
-            open_telemetry_logger = getattr(proxy_server, "open_telemetry_logger", None)
-            if isinstance(open_telemetry_logger, OpenTelemetry):
-                return open_telemetry_logger
-        except Exception:
-            return None
-        return None
+    def get() -> Optional[_OtelLogger]:
+        return _registered_otel_logger
 
 
 class _OtelContext:
