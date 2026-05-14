@@ -785,8 +785,13 @@ async def test_async_post_call_failure_hook(prometheus_logger):
     """
     # Opt into the unified rate-limit labels so this test exercises the
     # full label set surfaced when `prometheus_emit_rate_limit_labels` is on.
+    # The logger caches each metric's label set at construction time (so the
+    # labels passed to ``counter.labels(...)`` stay in lock step with the
+    # labels used to register the metric), so we must invalidate the cache
+    # after flipping the toggle for the cache to pick up the new label set.
     original_emit = litellm.prometheus_emit_rate_limit_labels
     litellm.prometheus_emit_rate_limit_labels = True
+    prometheus_logger._cached_metric_labels.clear()
 
     # Mock the prometheus metrics
     prometheus_logger.litellm_proxy_failed_requests_metric = MagicMock()
@@ -840,6 +845,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         )
     finally:
         litellm.prometheus_emit_rate_limit_labels = original_emit
+        prometheus_logger._cached_metric_labels.clear()
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
     # Assert total requests metric was incremented with correct labels
