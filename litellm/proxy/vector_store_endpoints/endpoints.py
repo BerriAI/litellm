@@ -292,6 +292,9 @@ async def vector_store_retrieve(
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/retrieve
     """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+    )
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -307,6 +310,7 @@ async def vector_store_retrieve(
     )
 
     data = {"vector_store_id": vector_store_id}
+    data = populate_request_with_path_params(request_data=data, request=request)
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
@@ -358,6 +362,9 @@ async def vector_store_list(
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/list
     """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+    )
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -381,6 +388,8 @@ async def vector_store_list(
         data["limit"] = limit
     if order is not None:
         data["order"] = order
+
+    data = populate_request_with_path_params(request_data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -429,6 +438,9 @@ async def vector_store_update(
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/modify
     """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+    )
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,
@@ -447,6 +459,7 @@ async def vector_store_update(
     data = await _read_request_body(request=request)
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
+    data = populate_request_with_path_params(request_data=data, request=request)
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
@@ -499,6 +512,9 @@ async def vector_store_delete(
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/delete
     """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        populate_request_with_path_params,
+    )
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -514,6 +530,7 @@ async def vector_store_delete(
     )
 
     data = {"vector_store_id": vector_store_id}
+    data = populate_request_with_path_params(request_data=data, request=request)
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
