@@ -956,11 +956,24 @@ LITELLM_EXCEPTION_TYPES = [
 
 class BudgetExceededError(Exception):
     def __init__(
-        self, current_cost: float, max_budget: float, message: Optional[str] = None
+        self,
+        current_cost: float,
+        max_budget: float,
+        message: Optional[str] = None,
+        llm_provider: Optional[str] = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
         self.status_code = 429
+        self.llm_provider = llm_provider or ""
+        # Surface unified rate-limit fields without joining the RateLimitError
+        # hierarchy so existing `except BudgetExceededError:` handlers keep
+        # working; custom callbacks reading StandardLoggingPayload pick these
+        # up via the same `category` / `rate_limit_type` attributes the rest
+        # of the unified rate-limit error path uses. Stored as plain strings
+        # to match the normalization RateLimitError.__init__ performs.
+        self.category: str = RateLimitErrorCategory.LITELLM_RATE_LIMIT.value
+        self.rate_limit_type: str = RateLimitType.BUDGET.value
         message = (
             message
             or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"

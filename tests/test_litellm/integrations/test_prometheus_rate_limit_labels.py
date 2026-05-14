@@ -94,6 +94,20 @@ def test_should_return_none_for_none_exception():
     assert PrometheusLogger._extract_rate_limit_labels(None) == (None, None)
 
 
+def test_should_extract_budget_dimension_for_budget_exceeded_error():
+    # Virtual-key / team / org / end-user budget caps raise
+    # `litellm.BudgetExceededError` (a bare Exception subclass), which sets
+    # the same `.category` / `.rate_limit_type` attributes as the unified
+    # RateLimitError path so Prometheus can split budget 429s from other
+    # 429s without the customer parsing free-text error messages.
+    import litellm
+
+    err = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+    category, rate_limit_type = PrometheusLogger._extract_rate_limit_labels(err)
+    assert category == "litellm_rate_limit"
+    assert rate_limit_type == "budget"
+
+
 @pytest.mark.parametrize(
     "category_enum,rate_limit_enum,expected_category,expected_type",
     [

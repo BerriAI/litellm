@@ -1419,3 +1419,91 @@ class TestProxyHooksWireTypeCorrectly:
         e = exc_info.value
         assert e.rate_limit_type == "requests"
         assert e.category == RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT
+
+
+class TestBudgetExceededErrorSurfacesUnifiedFields:
+    """
+    The hot path for virtual-key / team / org / end-user max_budget caps
+    raises :class:`litellm.BudgetExceededError`, which historically had no
+    relationship to :class:`RateLimitError` and therefore left the unified
+    `error_rate_limit_category` / `error_rate_limit_type` fields empty.
+    Test 2 of the QA pass surfaced this gap; this class pins the fix.
+
+    The fix is intentionally additive: `BudgetExceededError` keeps its
+    bare-`Exception` base class (so existing `except BudgetExceededError:`
+    handlers keep working) and just sets the same `category` /
+    `rate_limit_type` attributes that the rest of the unified rate-limit
+    path reads (normalized to plain strings, matching how
+    `RateLimitError.__init__` stores its own values). Duck-typed dispatch
+    in `get_error_information` picks them up automatically.
+    """
+
+    def test_should_carry_litellm_rate_limit_category(self):
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        # Stored as the plain string value (matches RateLimitError behavior),
+        # but equality with the enum still works because the enum subclasses
+        # str.
+        assert e.category == "litellm_rate_limit"
+        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+
+    def test_should_carry_budget_rate_limit_type(self):
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        assert e.rate_limit_type == "budget"
+        assert e.rate_limit_type == RateLimitType.BUDGET
+
+    def test_should_default_llm_provider_to_empty_string(self):
+        # `llm_provider` is read off the exception in `get_error_information`
+        # — it must always be a string so the StandardLoggingPayload field
+        # stays serializable. Default to "" when no caller passes one.
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        assert e.llm_provider == ""
+
+    def test_should_accept_llm_provider_kwarg(self):
+        # Callers that have the resolved provider in scope (e.g. the
+        # auth-checks budget enforcement paths) can thread it through.
+        e = litellm.BudgetExceededError(
+            current_cost=0.5, max_budget=0.1, llm_provider="anthropic"
+        )
+        assert e.llm_provider == "anthropic"
+
+    def test_should_keep_existing_status_code_and_message(self):
+        # Backward-compat guard: existing callers depend on `status_code=429`
+        # and the canonical message format.
+        e = litellm.BudgetExceededError(current_cost=0.000109, max_budget=0.0001)
+        assert e.status_code == 429
+        assert "Current cost: 0.000109" in e.message
+        assert "Max budget: 0.0001" in e.message
+
+    def test_should_still_be_catchable_as_exception_not_rate_limit_error(self):
+        # Critical: we deliberately did NOT make BudgetExceededError a
+        # RateLimitError subclass. Existing `except BudgetExceededError:`
+        # handlers must keep catching it, and `except RateLimitError:`
+        # handlers must NOT start catching it (which would surprise callers
+        # who rely on the two being distinct).
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        assert isinstance(e, Exception)
+        assert isinstance(e, litellm.BudgetExceededError)
+        assert not isinstance(e, RateLimitError)
+
+    def test_should_propagate_category_to_standard_logging_payload(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        info = StandardLoggingPayloadSetup.get_error_information(e)
+        assert info["error_rate_limit_category"] == "litellm_rate_limit"
+        assert info["error_rate_limit_type"] == "budget"
+        assert info["error_code"] == "429"
+        assert info["error_class"] == "BudgetExceededError"
+
+    def test_should_propagate_llm_provider_to_standard_logging_payload(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        e = litellm.BudgetExceededError(
+            current_cost=0.5, max_budget=0.1, llm_provider="bedrock"
+        )
+        info = StandardLoggingPayloadSetup.get_error_information(e)
+        assert info["llm_provider"] == "bedrock"

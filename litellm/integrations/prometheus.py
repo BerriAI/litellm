@@ -2685,15 +2685,16 @@ class PrometheusLogger(CustomLogger):
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Pull the unified ``category`` / ``rate_limit_type`` fields off any
-        :class:`litellm.RateLimitError` (vendor-side or litellm-internal) so
-        Prometheus can split 429s by source + dimension without the consumer
-        parsing free-text error messages.
+        exception that declares them (``litellm.RateLimitError`` and bare-
+        Exception subclasses like ``BudgetExceededError`` that set these
+        attributes directly) so Prometheus can split 429s by source +
+        dimension without the consumer parsing free-text error messages.
 
-        Returns ``(None, None)`` for non-rate-limit exceptions. Both values are
-        sanitized to plain ``str`` so str-enum subclasses don't leak their
-        repr into the label.
+        Returns ``(None, None)`` for exceptions that don't declare these
+        fields. Both classes normalize their values to plain ``str`` at
+        construction, so this helper only needs to coerce defensively.
         """
-        if exception is None or not isinstance(exception, litellm.RateLimitError):
+        if exception is None:
             return None, None
 
         def _coerce(value: Any) -> Optional[str]:

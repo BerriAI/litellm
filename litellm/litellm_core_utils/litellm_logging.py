@@ -5159,22 +5159,18 @@ class StandardLoggingPayloadSetup:
         # Get additional error details
         error_message = str(original_exception)
 
-        # For rate-limit errors (litellm.RateLimitError + the proxy-side
-        # ProxyRateLimitError subclass), surface the unified `category` and
-        # `rate_limit_type` fields so callbacks can distinguish vendor vs.
-        # litellm rate limits AND split by the dimension that was exceeded
-        # (requests / tokens / concurrent_requests / budget / max_iterations)
-        # without reaching for the raw exception object.
-        is_rate_limit_error = isinstance(original_exception, litellm.RateLimitError)
-        rate_limit_category: Optional[str] = (
-            getattr(original_exception, "category", None)
-            if is_rate_limit_error
-            else None
+        # Surface the unified `category` and `rate_limit_type` fields off any
+        # exception that opts in by setting them. Duck-typed rather than
+        # isinstance-gated on RateLimitError so bare-Exception subclasses like
+        # `litellm.BudgetExceededError` can participate without joining the
+        # RateLimitError hierarchy (which would break `except BudgetExceededError`).
+        # Both RateLimitError and BudgetExceededError normalize their values to
+        # plain strings at construction.
+        rate_limit_category: Optional[str] = getattr(
+            original_exception, "category", None
         )
-        rate_limit_type: Optional[str] = (
-            getattr(original_exception, "rate_limit_type", None)
-            if is_rate_limit_error
-            else None
+        rate_limit_type: Optional[str] = getattr(
+            original_exception, "rate_limit_type", None
         )
 
         return StandardLoggingPayloadErrorInformation(
