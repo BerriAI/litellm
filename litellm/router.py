@@ -6835,13 +6835,11 @@ class Router:
         unhealthy_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments:
-                continue
-            if deployment.get("model_info", {}).get("blocked") is True:
-                continue
-            healthy_deployments.append(deployment)
+        unhealthy_set = set(unhealthy_deployments)
+        healthy_deployments: list = [
+            d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         return healthy_deployments, _all_deployments
 
@@ -6869,13 +6867,12 @@ class Router:
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set = set(unhealthy_deployments)
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments_set:
-                continue
-            if deployment.get("model_info", {}).get("blocked") is True:
-                continue
-            healthy_deployments.append(deployment)
+        healthy_deployments: list = [
+            d
+            for d in _all_deployments
+            if d["model_info"]["id"] not in unhealthy_deployments_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
@@ -10034,6 +10031,8 @@ class Router:
             )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             return healthy_deployments
 
         # Health-check-based filtering (before cooldown)
@@ -10066,6 +10065,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -10447,6 +10448,8 @@ class Router:
         )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             return healthy_deployments
 
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
@@ -10476,6 +10479,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -10711,6 +10716,21 @@ class Router:
             deployment
             for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
+        ]
+
+    def _filter_blocked_deployments(
+        self, healthy_deployments: List[Dict]
+    ) -> List[Dict]:
+        """
+        Filters out deployments that an admin has paused via `LiteLLM_ProxyModelTable.blocked`.
+
+        Applied alongside the cooldown filter on both the primary routing path and the
+        retry / health-check helpers so paused deployments never serve a request.
+        """
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if (deployment.get("model_info") or {}).get("blocked") is not True
         ]
 
     async def _async_filter_health_check_unhealthy_deployments(

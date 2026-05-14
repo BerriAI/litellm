@@ -3760,3 +3760,36 @@ def test_get_healthy_deployments_sync_skips_blocked_deployment():
     assert "dep-0" in healthy_ids
     assert "dep-1" not in healthy_ids
     assert len(all_dep) == 2
+
+
+def test_filter_blocked_deployments_drops_blocked_keeps_unblocked():
+    router = _router_with_two_deployments([True, False])
+    filtered = router._filter_blocked_deployments(router.get_model_list() or [])
+    ids = [d["model_info"]["id"] for d in filtered]
+    assert ids == ["dep-1"]
+
+
+@pytest.mark.asyncio
+async def test_public_async_get_healthy_deployments_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployments = await router.async_get_healthy_deployments(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert isinstance(deployments, list)
+    ids = [d["model_info"]["id"] for d in deployments]
+    assert "dep-0" not in ids
+    assert "dep-1" in ids
+
+
+def test_public_get_available_deployment_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployment = router.get_available_deployment(model="gpt-4o", request_kwargs={})
+    assert deployment["model_info"]["id"] == "dep-1"
+
+
+def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
+    from litellm.types.router import RouterRateLimitErrorBasic
+
+    router = _router_with_two_deployments([True, True])
+    with pytest.raises(RouterRateLimitErrorBasic):
+        router.get_available_deployment(model="dep-0", request_kwargs={})
