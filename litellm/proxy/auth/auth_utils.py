@@ -496,7 +496,10 @@ def get_request_route(request: Request) -> str:
         root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        if root_path and isinstance(root_path, str) and raw_path.startswith(root_path):
+        # Only strip root_path when it is a meaningful prefix (not bare "/").
+        # Stripping bare "/" would remove the leading slash from every path
+        # e.g. "/team/new" → "team/new", breaking route matching.
+        if root_path and root_path != "/" and raw_path.startswith(root_path):
             return raw_path[len(root_path) :]
         return raw_path
     except Exception as e:
