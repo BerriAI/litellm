@@ -6691,6 +6691,9 @@ def _restamp_streaming_chunk_model(
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
+    if downstream_model == requested_model_from_client:
+        return chunk, model_mismatch_logged
+
     if not model_mismatch_logged and downstream_model != requested_model_from_client:
         verbose_proxy_logger.debug(
             "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
@@ -6719,7 +6722,125 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
-async def async_data_generator(
+def _fast_serialize_simple_model_response_stream(
+    chunk: ModelResponseStream,
+) -> Optional[bytes]:
+    """
+    Serialize the common OpenAI text streaming chunk without the full Pydantic
+    serializer. Fall back for richer chunks so tool calls, logprobs, usage, and
+    provider-specific fields keep the canonical model_dump_json behavior.
+    """
+    if (
+        getattr(chunk, "provider_specific_fields", None) is not None
+        or getattr(chunk, "system_fingerprint", None) is not None
+        or getattr(chunk, "usage", None) is not None
+    ):
+        return None
+
+    choices = getattr(chunk, "choices", None)
+    if not isinstance(choices, list) or len(choices) != 1:
+        return None
+
+    choice = choices[0]
+    if (
+        getattr(choice, "logprobs", None) is not None
+        or getattr(choice, "enhancements", None) is not None
+    ):
+        return None
+
+    delta = getattr(choice, "delta", None)
+    if delta is None:
+        return None
+
+    unsupported_delta_fields = (
+        "function_call",
+        "tool_calls",
+        "audio",
+        "images",
+        "annotations",
+        "reasoning_content",
+        "thinking_blocks",
+        "provider_specific_fields",
+        "refusal",
+    )
+    if any(
+        getattr(delta, field, None) is not None for field in unsupported_delta_fields
+    ):
+        return None
+
+    delta_dict: dict = {}
+    role = getattr(delta, "role", None)
+    content = getattr(delta, "content", None)
+    if role is not None:
+        delta_dict["role"] = role
+    if content is not None:
+        delta_dict["content"] = content
+
+    choice_dict = {"index": getattr(choice, "index", 0), "delta": delta_dict}
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason is not None:
+        choice_dict["finish_reason"] = finish_reason
+
+    # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
+    # field is None, omit it entirely rather than emitting ``"key": null``.
+    # Strict OpenAI-compatible clients reject ``null`` for optional fields like
+    # ``model``, so diverging here would surface as a client-side regression
+    # only on the fast path. Fall back to the slow path if a required-looking
+    # top-level identifier is missing.
+    model = getattr(chunk, "model", None)
+    if model is None:
+        return None
+
+    payload: dict = {
+        "id": getattr(chunk, "id", None),
+        "object": getattr(chunk, "object", None),
+        "created": getattr(chunk, "created", None),
+        "model": model,
+        "choices": [choice_dict],
+    }
+    for top_level_key in ("id", "object", "created"):
+        if payload[top_level_key] is None:
+            payload.pop(top_level_key)
+    return orjson.dumps(payload)
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> Union[str, bytes]:
+    if isinstance(chunk, ModelResponseStream):
+        serialized_chunk = _fast_serialize_simple_model_response_stream(chunk)
+        if serialized_chunk is not None:
+            return serialized_chunk
+
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+
+
+async def _apply_streaming_chunk_hooks(
+    *,
+    chunk: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    str_so_far: str,
+) -> Tuple[Any, str]:
+    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=chunk,
+        data=request_data,
+        str_so_far=str_so_far if str_so_far else None,
+    )
+
+    if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+        response_str = litellm.get_response_string(response_obj=chunk)
+        str_so_far += response_str
+
+    return chunk, str_so_far
+
+
+def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
+    if isinstance(chunk, bytes):
+        return b"data: " + chunk + b"\n\n"
+    return f"data: {chunk}\n\n"
+
+
+async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
     verbose_proxy_logger.debug("inside generator")
@@ -6733,22 +6854,36 @@ async def async_data_generator(
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
         _str_so_far: str = ""
-        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_data=request_data,
-        ):
-            ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=chunk,
-                data=request_data,
-                str_so_far=_str_so_far if _str_so_far else None,
-            )
+        # Separate iterator-level vs per-chunk hook decisions. The iterator
+        # wrap is needed when any callback overrides
+        # ``async_post_call_streaming_iterator_hook`` or has
+        # ``apply_guardrail``; the per-chunk hook (which builds ``str_so_far``
+        # and calls ``async_post_call_streaming_hook``) is only needed when
+        # there is an active CustomGuardrail or a class that overrides the
+        # per-chunk hook. Coalescing them into a single flag forced wasted
+        # ``get_response_string`` work per chunk on every deployment that
+        # happened to ship a streaming-iterator override (the default).
+        needs_iterator_wrap = proxy_logging_obj.needs_iterator_wrap()
+        needs_per_chunk_hook = proxy_logging_obj.needs_per_chunk_streaming_hook()
 
-            if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                response_str = litellm.get_response_string(response_obj=chunk)
-                _str_so_far += response_str
+        if needs_iterator_wrap:
+            stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+            )
+        else:
+            stream_iterator = response
+
+        async for chunk in stream_iterator:
+            if needs_per_chunk_hook:
+                ### CALL HOOKS ### - modify outgoing data
+                chunk, _str_so_far = await _apply_streaming_chunk_hooks(
+                    chunk=chunk,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    str_so_far=_str_so_far,
+                )
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
@@ -6758,15 +6893,21 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
-                chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+                chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
 
             try:
-                yield f"data: {chunk}\n\n"
+                yield _format_streaming_sse_chunk(chunk=chunk)
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
+
+        if not needs_iterator_wrap:
+            # The iterator-wrap path fires deferred logging itself; fire it
+            # here for the no-wrap fast path so non-callback deployments
+            # still flush their post-stream logging.
+            ProxyLogging._fire_deferred_stream_logging(request_data)
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
