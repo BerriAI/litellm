@@ -311,6 +311,32 @@ def _check_banned_params(
         )
 
 
+# ``get_secret`` resolves these prefixes server-side (env vars / OIDC
+# providers / on-disk tokens). They're operator-config primitives and
+# must never originate from a request body, where an attacker would
+# name the source the proxy resolves on their behalf.
+_USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES: Tuple[str, ...] = (
+    "os.environ/",
+    "oidc/",
+)
+
+
+def _check_no_user_supplied_indirection(body: dict) -> None:
+    """Refuse ``os.environ/`` / ``oidc/`` indirection strings in user
+    input. ``_check_banned_params`` rejects KEYS in the blocklist; this
+    rejects VALUES that would resolve through ``get_secret`` regardless
+    of the key they're sent under."""
+    for key, value in body.items():
+        if isinstance(value, str) and value.startswith(
+            _USER_INPUT_FORBIDDEN_INDIRECTION_PREFIXES
+        ):
+            raise ValueError(
+                f"{key!r}={value!r} is rejected: server-side secret "
+                "indirection (os.environ/, oidc/) is not allowed in "
+                "request bodies."
+            )
+
+
 def is_request_body_safe(
     request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
 ) -> bool:
@@ -340,14 +366,17 @@ def is_request_body_safe(
     recursion-depth DoS surface.
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
+    _check_no_user_supplied_indirection(request_body)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = request_body.get(nested_key)
         if isinstance(nested, dict):
             _check_banned_params(nested, general_settings, llm_router, model)
+            _check_no_user_supplied_indirection(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+            _check_no_user_supplied_indirection(metadata)
     return True
 
 
