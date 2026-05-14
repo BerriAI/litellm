@@ -4,6 +4,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    filter_internal_params,
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
@@ -201,3 +202,64 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+def test_filter_internal_params_strips_client_metadata():
+    """``client_metadata`` must never leak into provider payloads.
+
+    Bedrock Converse with custom application inference profiles rejects any
+    field in ``additionalModelRequestFields`` that the inference profile
+    does not whitelist. Some clients (OpenAI Codex CLI, Claude Code, ...)
+    send a ``client_metadata`` field for run-level telemetry; ``drop_params``
+    does not cover it because it is not a known OpenAI param. Filtering it
+    here means every provider path sees the same sanitization.
+    """
+
+    data = {
+        "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "messages": [{"role": "user", "content": "hi"}],
+        "client_metadata": {"user_id": "u-123", "session_id": "s-456"},
+        "temperature": 0.2,
+    }
+
+    filtered = filter_internal_params(data)
+
+    assert "client_metadata" not in filtered
+    # Other parameters must be preserved untouched.
+    assert filtered["model"] == data["model"]
+    assert filtered["messages"] == data["messages"]
+    assert filtered["temperature"] == data["temperature"]
+
+
+def test_filter_internal_params_still_strips_known_internal_params():
+    """Regression guard: previously known internal params keep being filtered."""
+
+    data = {
+        "skip_mcp_handler": True,
+        "_skip_mcp_handler": True,
+        "mcp_handler_context": {"foo": "bar"},
+        "client_metadata": {"user_id": "u-1"},
+        "temperature": 0.1,
+    }
+
+    filtered = filter_internal_params(data)
+
+    assert filtered == {"temperature": 0.1}
+
+
+def test_filter_internal_params_supports_additional_internal_params():
+    """The ``additional_internal_params`` extension point must keep working."""
+
+    data = {
+        "client_metadata": {"user_id": "u-1"},
+        "extra_secret": "shhh",
+        "temperature": 0.1,
+    }
+
+    filtered = filter_internal_params(
+        data, additional_internal_params={"extra_secret"}
+    )
+
+    assert "client_metadata" not in filtered
+    assert "extra_secret" not in filtered
+    assert filtered == {"temperature": 0.1}
