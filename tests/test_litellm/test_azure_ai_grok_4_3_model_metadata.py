@@ -5,7 +5,6 @@ import pytest
 
 import litellm
 from litellm import get_model_info
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
@@ -21,7 +20,8 @@ def _load_model_cost(path: Path) -> dict:
 @pytest.fixture(autouse=True)
 def reload_model_costs():
     original_model_cost = litellm.model_cost
-    litellm.model_cost = get_model_cost_map(url=None)
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    litellm.model_cost = _load_model_cost(json_path)
     get_model_info.cache_clear()
     yield
     litellm.model_cost = original_model_cost
