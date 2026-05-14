@@ -697,6 +697,27 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return AgenticLoopPlan(run_agentic_loop=False)
 
+    async def async_post_agentic_loop_response_hook(
+        self,
+        response: Any,
+        plan: AgenticLoopPlan,
+        kwargs: Dict,
+    ) -> Any:
+        """
+        Post-process the response returned by the agentic-loop follow-up call.
+
+        Called after BaseLLMHTTPHandler executes ``AgenticLoopPlan.request_patch``
+        and receives the final response from the provider. Lets callbacks shape
+        what the client sees without bypassing the loop's safety / observability
+        machinery (depth tracking, fingerprinting, etc.).
+
+        Use ``plan.metadata`` to carry whatever the build step decided to expose
+        for post-processing (e.g. native tool_result blocks to inject).
+
+        Default returns ``response`` unchanged.
+        """
+        return response
+
     async def async_should_run_chat_completion_agentic_loop(
         self,
         response: Any,
