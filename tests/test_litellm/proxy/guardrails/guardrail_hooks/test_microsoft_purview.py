@@ -238,6 +238,29 @@ class TestPreCallHook:
             assert mock_check.call_args.kwargs["block_on_violation"] is True
 
     @pytest.mark.asyncio
+    async def test_pre_call_success_returns_request_data(self):
+        """After a successful DLP pass, the hook must return the same data dict (not None)."""
+        guardrail = _make_guardrail()
+        payload = {
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+            "litellm_call_id": "call-abc",
+        }
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            out = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data=payload,
+                call_type="completion",
+            )
+
+            assert out is payload
+
+    @pytest.mark.asyncio
     async def test_pre_call_block(self):
         guardrail = _make_guardrail()
 

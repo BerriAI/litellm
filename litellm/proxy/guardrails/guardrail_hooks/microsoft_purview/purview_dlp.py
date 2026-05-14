@@ -21,7 +21,13 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GuardrailStatus
+from litellm.types.utils import (
+    Choices,
+    GuardrailStatus,
+    ModelResponse,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 from .base import PurviewGuardrailBase
 
@@ -34,7 +40,6 @@ if TYPE_CHECKING:
         CallTypesLiteral,
         EmbeddingResponse,
         ImageResponse,
-        ModelResponse,
     )
 
 
@@ -78,7 +83,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         )
         self._logging_only = logging_only
         self.guardrail_provider = "microsoft_purview"
-        self._executor = ThreadPoolExecutor(max_workers=1)
         verbose_proxy_logger.info(
             "Initialized Microsoft Purview DLP Guardrail: %s (logging_only=%s)",
             guardrail_name,
@@ -156,6 +160,31 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         return response
 
+    @staticmethod
+    def _completion_response_text_parts(result: Any) -> List[str]:
+        """Collect non-empty assistant text segments from chat or text completions."""
+        parts: List[str] = []
+        if isinstance(result, TextCompletionResponse) and result.choices:
+            for choice in result.choices:
+                if not isinstance(choice, TextChoices):
+                    continue
+                raw = choice.get("text")
+                if isinstance(raw, str) and raw.strip():
+                    parts.append(raw)
+        elif isinstance(result, ModelResponse) and result.choices:
+            for choice in result.choices:
+                if not isinstance(choice, Choices):
+                    continue
+                msg = choice.message
+                if msg is None:
+                    continue
+                raw = msg.get("content") if isinstance(msg, dict) else getattr(
+                    msg, "content", None
+                )
+                if isinstance(raw, str) and raw.strip():
+                    parts.append(raw)
+        return parts
+
     # ------------------------------------------------------------------
     # Pre-call hook — DLP on prompts
     # ------------------------------------------------------------------
@@ -193,7 +222,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             request_data=data,
             block_on_violation=True,
         )
-        return None
+        return data
 
     # ------------------------------------------------------------------
     # Post-call hook — DLP on responses
@@ -203,16 +232,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
-        response: Union[Any, "ModelResponse", "EmbeddingResponse", "ImageResponse"],
+        response: Union[Any, ModelResponse, "EmbeddingResponse", "ImageResponse"],
     ) -> Any:
         """Check LLM response against Purview DLP policies."""
-        from litellm.types.utils import (
-            Choices,
-            ModelResponse,
-            TextChoices,
-            TextCompletionResponse,
-        )
-
         user_id = self._resolve_user_id(data, user_api_key_dict)
         if not user_id:
             verbose_proxy_logger.warning(
@@ -220,27 +242,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
             return response
 
-        parts: List[str] = []
-
-        if isinstance(response, TextCompletionResponse) and response.choices:
-            for choice in response.choices:
-                if not isinstance(choice, TextChoices):
-                    continue
-                raw = choice.get("text")
-                if isinstance(raw, str) and raw.strip():
-                    parts.append(raw)
-        elif isinstance(response, ModelResponse) and response.choices:
-            for choice in response.choices:
-                if not isinstance(choice, Choices):
-                    continue
-                msg = choice.message
-                if msg is None:
-                    continue
-                raw = msg.get("content") if isinstance(msg, dict) else getattr(
-                    msg, "content", None
-                )
-                if isinstance(raw, str) and raw.strip():
-                    parts.append(raw)
+        parts = self._completion_response_text_parts(response)
 
         if parts:
             combined = "\n\n---\n\n".join(parts)
@@ -277,8 +279,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         try:
             _ = asyncio.get_running_loop()
-            future = self._executor.submit(run_in_new_loop)
-            return future.result()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
         except RuntimeError:
             return run_in_new_loop()
 
@@ -314,33 +317,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 )
 
             # Log response (downloadText)
-            from litellm.types.utils import (
-                Choices,
-                ModelResponse,
-                TextChoices,
-                TextCompletionResponse,
-            )
-
-            parts: List[str] = []
-            if isinstance(result, TextCompletionResponse) and result.choices:
-                for choice in result.choices:
-                    if not isinstance(choice, TextChoices):
-                        continue
-                    raw = choice.get("text")
-                    if isinstance(raw, str) and raw.strip():
-                        parts.append(raw)
-            elif isinstance(result, ModelResponse) and result.choices:
-                for choice in result.choices:
-                    if not isinstance(choice, Choices):
-                        continue
-                    msg = choice.message
-                    if msg is None:
-                        continue
-                    raw = msg.get("content") if isinstance(msg, dict) else getattr(
-                        msg, "content", None
-                    )
-                    if isinstance(raw, str) and raw.strip():
-                        parts.append(raw)
+            parts = self._completion_response_text_parts(result)
 
             if parts:
                 combined = "\n\n---\n\n".join(parts)
