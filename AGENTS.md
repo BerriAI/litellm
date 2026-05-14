@@ -264,7 +264,7 @@ litellm_settings:
 uv run litellm --config config.yaml --port 4000
 ```
 
-The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health/liveliness` to return `"I'm alive!"` before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package. If a `DATABASE_URL` environment variable is set but points to an unreachable database (e.g. `localhost:5432` without a running PostgreSQL), unset it before starting: `unset DATABASE_URL`. Key management endpoints (`/key/generate`, etc.) require a working database connection.
 
 ### Running tests
 
