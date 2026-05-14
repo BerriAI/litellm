@@ -2697,12 +2697,7 @@ class PrometheusLogger(CustomLogger):
             return None, None
 
         def _coerce(value: Any) -> Optional[str]:
-            if value is None:
-                return None
-            inner = getattr(value, "value", None)
-            if isinstance(inner, str):
-                return inner
-            return str(value)
+            return str(value) if value is not None else None
 
         return (
             _coerce(getattr(exception, "category", None)),

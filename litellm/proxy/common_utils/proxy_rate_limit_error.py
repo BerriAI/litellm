@@ -67,6 +67,8 @@ def map_v3_rate_limit_type(
 
 def _coerce_message(detail: Any) -> str:
     """Best-effort, JSON-friendly stringification of an HTTPException-style detail."""
+    if detail is None:
+        return ""
     if isinstance(detail, str):
         return detail
     if isinstance(detail, Mapping):
