@@ -140,8 +140,15 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         ] = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         model: Optional[str] = None,
-        llm_provider: str = "litellm_proxy",
+        llm_provider: Optional[str] = "litellm_proxy",
     ):
+        # Normalize None → safe defaults so callers (and the resolver helper
+        # in `rate_limiter_utils`) can pass `None` without producing an
+        # instance whose `.llm_provider` attribute is `None` — that would
+        # break Prometheus' `_get_exception_class_name` (it calls
+        # `.capitalize()` on the provider string).
+        model = model or ""
+        llm_provider = llm_provider or "litellm_proxy"
         message = _coerce_message(detail)
         stringified_headers: Optional[Dict[str, str]] = (
             {k: str(v) for k, v in headers.items()} if headers else None

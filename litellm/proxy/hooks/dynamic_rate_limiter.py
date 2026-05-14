@@ -11,14 +11,16 @@ from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.exceptions import RateLimitType
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import (
+    convert_priority_to_percent,
+    resolve_llm_provider_for_rate_limit,
+)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_utc_datetime
-
-from .rate_limiter_utils import convert_priority_to_percent
 
 
 class DynamicRateLimiterCache:
@@ -218,6 +220,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    data.get("model")
+                )
                 raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available TPM={}. Model TPM={}, Active keys={}".format(
@@ -228,10 +233,14 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         )
                     },
                     rate_limit_type=RateLimitType.TOKENS,
-                    model=data.get("model"),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
             ### CHECK RPM ###
             elif available_rpm is not None and available_rpm == 0:
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    data.get("model")
+                )
                 raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available RPM={}. Model RPM={}, Active keys={}".format(
@@ -242,7 +251,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         )
                     },
                     rate_limit_type=RateLimitType.REQUESTS,
-                    model=data.get("model"),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
             elif available_rpm is not None or available_tpm is not None:
                 ## UPDATE CACHE WITH ACTIVE PROJECT

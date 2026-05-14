@@ -23,7 +23,10 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptorRateLimitObject,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
+from litellm.proxy.hooks.rate_limiter_utils import (
+    convert_priority_to_percent,
+    resolve_llm_provider_for_rate_limit,
+)
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
@@ -491,6 +494,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
             for status in atomic_response["statuses"]:
                 if status["code"] != "OVER_LIMIT":
                     continue
@@ -513,7 +517,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         rate_limit_type=map_v3_rate_limit_type(
                             status["rate_limit_type"]
                         ),
-                        model=model,
+                        model=resolved_model,
+                        llm_provider=llm_provider,
                     )
                 if descriptor_key == "priority_model":
                     verbose_proxy_logger.debug(
@@ -540,7 +545,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         rate_limit_type=map_v3_rate_limit_type(
                             status["rate_limit_type"]
                         ),
-                        model=model,
+                        model=resolved_model,
+                        llm_provider=llm_provider,
                     )
 
             # Fail-closed guard: overall_code says OVER_LIMIT but no status
@@ -570,11 +576,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 rate_limit_type=map_v3_rate_limit_type(
                     offending["rate_limit_type"] if offending else None
                 ),
-                model=model,
                 headers={
                     "retry-after": str(self.v3_limiter.window_size),
                     "x-litellm-priority": priority or "default",
                 },
+                model=resolved_model,
+                llm_provider=llm_provider,
             )
 
         # If priority is NOT enforced (saturation below threshold) but

@@ -36,6 +36,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import ModelResponse, Usage
@@ -1839,6 +1840,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         response: RateLimitResponse,
         descriptors: List[RateLimitDescriptor],
+        requested_model: Optional[str] = None,
     ) -> None:
         """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
@@ -1871,6 +1873,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    requested_model
+                )
                 raise ProxyRateLimitError(
                     detail=detail,
                     headers={
@@ -1879,6 +1884,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "reset_at": reset_time_formatted,
                     },
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
 
     async def async_pre_call_hook(
@@ -1979,6 +1986,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(
                     response=response,
                     descriptors=descriptors,
+                    requested_model=requested_model,
                 )
             else:
                 # add descriptors to request headers
@@ -2024,6 +2032,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
+                        requested_model=requested_model,
                     )
                 else:
                     data["_litellm_rate_limit_descriptors"] = descriptors

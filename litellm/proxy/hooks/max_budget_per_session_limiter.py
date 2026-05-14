@@ -20,9 +20,10 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.exceptions import RateLimitType
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -112,6 +113,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         )
 
         if current_spend >= max_budget:
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                data.get("model") if data else None
+            )
             raise ProxyRateLimitError(
                 detail=(
                     f"Session budget exceeded for session {session_id}. "
@@ -119,6 +123,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                     f"max_budget_per_session: ${max_budget:.2f}."
                 ),
                 rate_limit_type=RateLimitType.BUDGET,
+                model=resolved_model,
+                llm_provider=llm_provider,
             )
 
         return None

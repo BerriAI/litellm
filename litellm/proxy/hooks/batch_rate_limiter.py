@@ -33,6 +33,7 @@ from litellm.exceptions import RateLimitErrorCategory, RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -106,6 +107,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         descriptors: List["RateLimitDescriptor"],
         batch_usage: BatchFileUsage,
         limit_type: str,
+        requested_model: Optional[str] = None,
     ) -> NoReturn:
         """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
@@ -150,6 +152,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Limit resets at: {reset_time_formatted}"
             )
 
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+            requested_model
+        )
         raise ProxyRateLimitError(
             detail=detail,
             headers={
@@ -166,6 +171,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if limit_type == "tokens"
                 else RateLimitType.REQUESTS
             ),
+            model=resolved_model,
+            llm_provider=llm_provider,
         )
 
     async def _check_and_increment_batch_counters(
@@ -207,6 +214,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
 
         if rate_limit_response["overall_code"] == "OVER_LIMIT":
+            requested_model = data.get("model") if data else None
             for status in rate_limit_response["statuses"]:
                 if status["code"] == "OVER_LIMIT":
                     self._raise_rate_limit_error(
@@ -214,6 +222,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         descriptors,
                         batch_usage,
                         status["rate_limit_type"],
+                        requested_model=requested_model,
                     )
 
     async def count_input_file_usage(
