@@ -9646,6 +9646,7 @@ export interface ComplianceResponse {
 export interface ComplianceCheckRequest {
   request_id: string;
   user_id?: string;
+  end_user_id?: string;
   model?: string;
   timestamp?: string;
   guardrail_information?: Record<string, any>[];

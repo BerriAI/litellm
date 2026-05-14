@@ -186,6 +186,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
             logEntry={{
               request_id: logEntry.request_id,
               user: logEntry.user,
+              end_user: logEntry.end_user,
               model: logEntry.model,
               startTime: logEntry.startTime,
               metadata: logEntry.metadata,

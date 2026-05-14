@@ -63,6 +63,7 @@ interface GuardrailViewerProps {
   logEntry?: {
     request_id: string;
     user?: string;
+    end_user?: string;
     model?: string;
     startTime?: string;
     metadata?: Record<string, any>;

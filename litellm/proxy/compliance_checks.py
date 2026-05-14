@@ -91,8 +91,14 @@ class ComplianceChecker:
         )
 
     def _check_art_12_audit_complete(self) -> ComplianceCheckResult:
-        """Art. 12: Check if audit record is complete."""
-        has_user = bool(self.data.user_id)
+        """Art. 12: Check if audit record is complete.
+
+        EU AI Act Art. 12 requires traceability to the natural person being
+        processed. Either `user_id` (LiteLLM key owner) or `end_user_id`
+        (OpenAI-spec `user` field, identifies the data subject of the
+        request) is sufficient.
+        """
+        has_user = bool(self.data.user_id or self.data.end_user_id)
         has_model = bool(self.data.model)
         has_timestamp = bool(self.data.timestamp)
         has_guardrails = len(self.guardrails) > 0
@@ -100,7 +106,7 @@ class ComplianceChecker:
 
         missing = []
         if not has_user:
-            missing.append("user_id")
+            missing.append("user_id or end_user_id")
         if not has_model:
             missing.append("model")
         if not has_timestamp:
@@ -158,8 +164,14 @@ class ComplianceChecker:
         )
 
     def _check_art_30_audit_complete(self) -> ComplianceCheckResult:
-        """Art. 30: Check if audit record is complete."""
-        has_user = bool(self.data.user_id)
+        """Art. 30: Check if audit record is complete.
+
+        GDPR Art. 30 requires the categories of data subjects to be recorded.
+        Either `user_id` (LiteLLM key owner) or `end_user_id` (OpenAI-spec
+        `user` field, identifies the data subject of the request) is
+        sufficient.
+        """
+        has_user = bool(self.data.user_id or self.data.end_user_id)
         has_model = bool(self.data.model)
         has_timestamp = bool(self.data.timestamp)
         has_guardrails = len(self.guardrails) > 0
@@ -167,7 +179,7 @@ class ComplianceChecker:
 
         missing = []
         if not has_user:
-            missing.append("user_id")
+            missing.append("user_id or end_user_id")
         if not has_model:
             missing.append("model")
         if not has_timestamp:

@@ -12,6 +12,7 @@ interface CompliancePanelProps {
   logEntry: {
     request_id: string;
     user?: string;
+    end_user?: string;
     model?: string;
     startTime?: string;
     metadata?: Record<string, any>;
@@ -149,6 +150,7 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
     const payload: ComplianceCheckRequest = {
       request_id: logEntry.request_id,
       user_id: logEntry.user,
+      end_user_id: logEntry.end_user,
       model: logEntry.model,
       timestamp: logEntry.startTime,
       guardrail_information: logEntry.metadata?.guardrail_information,

@@ -385,3 +385,109 @@ class TestGdprCompliant:
         )
         checks = ComplianceChecker(data).check_gdpr()
         assert all(c.passed for c in checks)
+
+
+# ---------------------------------------------------------------------------
+# Audit identity fallback: end_user_id alone is sufficient
+# ---------------------------------------------------------------------------
+
+
+class TestAuditIdentityFallback:
+    """`user_id` (key owner) absent but `end_user_id` (OpenAI-spec user) present.
+
+    The OpenAI-spec `user` field on the request body identifies the natural
+    person being processed — exactly what EU AI Act Art. 12 and GDPR Art. 30
+    require for audit completeness. A request that carries `end_user_id`
+    must pass the audit check even when `user_id` is absent (common when the
+    upstream caller uses a team-shared virtual key whose `user_api_key_user_id`
+    is null).
+    """
+
+    _BASE_GUARDRAILS = [
+        {
+            "guardrail_name": "prohibited_practices",
+            "guardrail_status": "success",
+        }
+    ]
+
+    def test_eu_ai_act_audit_complete_with_only_end_user_id(self):
+        """EU AI Act Art. 12 must pass when only end_user_id is populated."""
+        data = ComplianceCheckRequest(
+            request_id="req-401",
+            user_id=None,
+            end_user_id="end-user-42",
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=self._BASE_GUARDRAILS,
+        )
+        checks = ComplianceChecker(data).check_eu_ai_act()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Audit record complete"] is True
+
+    def test_gdpr_audit_complete_with_only_end_user_id(self):
+        """GDPR Art. 30 must pass when only end_user_id is populated."""
+        data = ComplianceCheckRequest(
+            request_id="req-402",
+            user_id=None,
+            end_user_id="end-user-42",
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii_detection",
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checks = ComplianceChecker(data).check_gdpr()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Audit record complete"] is True
+
+    def test_eu_ai_act_audit_complete_with_only_user_id(self):
+        """Existing semantics preserved: user_id alone is still sufficient."""
+        data = ComplianceCheckRequest(
+            request_id="req-403",
+            user_id="key-owner-1",
+            end_user_id=None,
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=self._BASE_GUARDRAILS,
+        )
+        checks = ComplianceChecker(data).check_eu_ai_act()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Audit record complete"] is True
+
+    def test_eu_ai_act_audit_incomplete_when_both_user_fields_missing(self):
+        """Both user_id and end_user_id absent → NON-COMPLIANT."""
+        data = ComplianceCheckRequest(
+            request_id="req-404",
+            user_id=None,
+            end_user_id=None,
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=self._BASE_GUARDRAILS,
+        )
+        checks = ComplianceChecker(data).check_eu_ai_act()
+        audit_check = next(c for c in checks if c.check_name == "Audit record complete")
+        assert audit_check.passed is False
+        assert "user_id or end_user_id" in audit_check.detail
+
+    def test_gdpr_audit_incomplete_when_both_user_fields_missing(self):
+        """Both user_id and end_user_id absent → NON-COMPLIANT on GDPR."""
+        data = ComplianceCheckRequest(
+            request_id="req-405",
+            user_id=None,
+            end_user_id=None,
+            model="gpt-4",
+            timestamp="2026-02-17T00:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii_detection",
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checks = ComplianceChecker(data).check_gdpr()
+        audit_check = next(c for c in checks if c.check_name == "Audit record complete")
+        assert audit_check.passed is False
+        assert "user_id or end_user_id" in audit_check.detail
