@@ -169,9 +169,13 @@ def _allow_model_level_clientside_configurable_parameters(
 
 # Config dicts whose entries are spread as ``**dict`` into outbound LLM
 # API calls. ``litellm_embedding_config`` is consumed by the Milvus
-# vector store transformer; future nested-config keys with the same
-# threat shape should be added here.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+# vector store transformer. ``extra_body`` is the OpenAI-SDK passthrough
+# container: provider modules pull provider-auth fields out of it
+# (e.g. Azure's ``extra_body.azure_ad_token``, Bedrock's
+# ``extra_body.aws_web_identity_token``) without re-validating, so the
+# banned-key check has to descend into it the same way it descends into
+# ``litellm_embedding_config``.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -246,6 +250,13 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
+    # Azure managed-identity / federated-auth token. The Azure provider
+    # transformer reads ``azure_ad_token`` (top-level or via
+    # ``extra_body``) and resolves it through ``get_secret`` before
+    # passing it as the bearer token to the Azure endpoint, so a
+    # caller-supplied value is the same exfil shape as
+    # ``aws_web_identity_token`` on the Bedrock path.
+    "azure_ad_token",
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
