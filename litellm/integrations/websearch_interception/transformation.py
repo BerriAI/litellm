@@ -351,6 +351,57 @@ class WebSearchTransformation:
         return assistant_message, tool_messages
 
     @staticmethod
+    def build_web_search_tool_result_block(
+        tool_use_id: str,
+        search_response: Optional[SearchResponse],
+    ) -> Dict[str, Any]:
+        """
+        Build an Anthropic-native ``web_search_tool_result`` content block.
+
+        Native Anthropic clients (Claude Desktop, the Anthropic SDK, the
+        Anthropic Console) expect search-tool results to be returned as
+        structured ``web_search_tool_result`` blocks so that citations and
+        source links can be rendered. The agentic loop currently feeds the
+        model a flat text blob in the follow-up call (which is correct — the
+        model needs readable evidence). This helper produces the *additional*
+        block that should accompany the model's text reply when the original
+        request used a native ``web_search_*`` tool.
+
+        Spec reference:
+        https://docs.anthropic.com/en/api/web-search-tool
+
+        Args:
+            tool_use_id: The ``tool_use_id`` the model emitted on the first
+                turn. Must match exactly so the client can pair the result
+                with its tool_use block.
+            search_response: Structured ``SearchResponse`` from
+                ``litellm.asearch()``. If None or empty, the block is still
+                emitted with an empty result list (signals "search ran, no
+                results" rather than "search did not run").
+        """
+        items: List[Dict[str, Any]] = []
+        if search_response is not None:
+            results = getattr(search_response, "results", None) or []
+            for r in results:
+                url = getattr(r, "url", "") or ""
+                title = getattr(r, "title", "") or ""
+                page_age = getattr(r, "date", None) or getattr(r, "last_updated", None)
+                items.append(
+                    {
+                        "type": "web_search_result",
+                        "url": url,
+                        "title": title,
+                        "page_age": page_age,
+                        "encrypted_content": "",
+                    }
+                )
+        return {
+            "type": "web_search_tool_result",
+            "tool_use_id": tool_use_id,
+            "content": items,
+        }
+
+    @staticmethod
     def format_search_response(result: SearchResponse) -> str:
         """
         Format SearchResponse as text for tool_result content.
