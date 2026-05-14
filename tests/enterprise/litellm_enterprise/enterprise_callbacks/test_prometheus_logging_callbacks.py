@@ -1978,6 +1978,10 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
     # Set custom prometheus labels
     custom_labels = ["metadata.organization", "metadata.environment"]
     monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", custom_labels)
+    # Logger caches each metric's label set at construction time (fixture
+    # runs before this monkeypatch), so invalidate so the cached label set
+    # picks up the freshly-configured custom metadata labels.
+    prometheus_logger._cached_metric_labels.clear()
 
     # Create test team with custom metadata
     team = MagicMock(

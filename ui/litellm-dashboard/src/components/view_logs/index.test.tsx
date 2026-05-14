@@ -250,9 +250,14 @@ describe("SpendLogsTable", () => {
         diff = moment
           .utc(lastCall.end_date, "YYYY-MM-DD HH:mm:ss")
           .diff(moment.utc(lastCall.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
-        // start_date is rounded down to the minute boundary; end_date is current time
+        // start_date is rounded down to the minute boundary, end_date is the
+        // current wall-clock at queryFn time. The dropped sub-minute fraction
+        // on start_date can push the diff up to (minMinutes+1)*60 seconds
+        // exactly (e.g. click at HH:MM:59.9 → start floors to HH:MM:00 and
+        // queryFn fires just past HH:(MM+1):00), so allow equality on the
+        // upper bound.
         expect(diff).toBeGreaterThanOrEqual(minMinutes * 60);
-        expect(diff).toBeLessThan((minMinutes + 1) * 60);
+        expect(diff).toBeLessThanOrEqual((minMinutes + 1) * 60);
       });
       return diff;
     };
