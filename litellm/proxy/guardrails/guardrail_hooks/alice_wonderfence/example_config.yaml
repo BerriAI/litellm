@@ -9,9 +9,15 @@
 #   ALICE_CONNECTION_POOL_LIMIT    - Optional: HTTP pool size per client
 #   OPENAI_API_KEY                 - API key for OpenAI
 #
-# Per-request / per-key / per-team metadata keys:
+# Per-key / per-team metadata keys (admin-controlled):
 #   alice_wonderfence_api_key  - overrides default API key (optional)
-#   alice_wonderfence_app_id   - REQUIRED — must be set on request, key, or team
+#   alice_wonderfence_app_id   - REQUIRED — must be set on key or team
+#
+# Per-request metadata keys (caller-controlled, OFF by default):
+#   metadata.alice_wonderfence_api_key / metadata.alice_wonderfence_app_id are
+#   ignored unless allow_request_metadata_override is True on the guardrail.
+#   Even when enabled, key/team metadata still wins — request metadata is a
+#   last-resort source only.
 
 model_list:
   - model_name: gpt-4
@@ -22,7 +28,7 @@ model_list:
 guardrails:
 
   # Combined pre + post with advanced knobs
-  - guardrail_name: "alice-wonderfence-full-guard"
+  - guardrail_name: "alice-wonderfence"
     litellm_params:
       guardrail: alice_wonderfence
       mode: ["pre_call", "post_call"]
@@ -37,9 +43,41 @@ guardrails:
 
       # connection_pool_limit: 20
 
+      # Enable only for trusted-gateway deployments that need to forward a
+      # per-tenant app_id/api_key from the request body. Even with this on,
+      # admin-pinned key/team metadata still wins; request metadata is a
+      # last-resort source only. Default is False — leave it off unless your
+      # callers are themselves trusted infrastructure.
+      allow_request_metadata_override: true
+
 # Example usage
 #
-# 1. Request-level app_id override (every request must supply app_id somewhere):
+# 1. Per-API-key app_id (set at key creation — recommended default):
+#
+#    curl -X POST http://localhost:4000/key/generate \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "metadata": {
+#          "alice_wonderfence_app_id": "tenant-A-app",
+#          "alice_wonderfence_api_key": "wf-key-for-tenant-A"
+#        }
+#      }'
+#
+# 2. Per-team app_id (set at team creation):
+#
+#    curl -X POST http://localhost:4000/team/new \
+#      -H "Authorization: Bearer sk-admin" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "team_alias": "team-billing",
+#        "metadata": {
+#          "alice_wonderfence_app_id": "team-billing-app"
+#        }
+#      }'
+#
+# 3. Request-level app_id (only when allow_request_metadata_override: true on
+#    the guardrail config — and even then, key/team metadata still wins):
 #
 #    curl -X POST http://localhost:4000/chat/completions \
 #      -H "Authorization: Bearer sk-xxx" \
@@ -53,29 +91,7 @@ guardrails:
 #        }
 #      }'
 #
-# 2. Per-API-key app_id (set at key creation, no per-request metadata needed):
-#
-#    curl -X POST http://localhost:4000/key/generate \
-#      -H "Authorization: Bearer sk-admin" \
-#      -H "Content-Type: application/json" \
-#      -d '{
-#        "metadata": {
-#          "alice_wonderfence_app_id": "tenant-A-app",
-#          "alice_wonderfence_api_key": "wf-key-for-tenant-A"
-#        }
-#      }'
-#
-# 3. Per-team app_id (set at team creation):
-#
-#    curl -X POST http://localhost:4000/team/new \
-#      -H "Authorization: Bearer sk-admin" \
-#      -H "Content-Type: application/json" \
-#      -d '{
-#        "team_alias": "team-billing",
-#        "metadata": {
-#          "alice_wonderfence_app_id": "team-billing-app"
-#        }
-#      }'
-#
-# Resolution priority (highest first): request metadata > key metadata > team metadata > config default.
-# api_key falls back to config / ALICE_API_KEY env. app_id has NO default.
+# Resolution priority (highest first): key metadata > team metadata >
+# request metadata (only if allow_request_metadata_override=true) >
+# config default. api_key falls back to config / ALICE_API_KEY env;
+# app_id has NO default.

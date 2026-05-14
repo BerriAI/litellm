@@ -10,15 +10,25 @@ from .base import GuardrailConfigModel
 class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters for the Alice WonderFence guardrail.
 
-    Per-request ``api_key`` and ``app_id`` are read from request / API-key /
-    team metadata using these keys: ``alice_wonderfence_api_key``,
-    ``alice_wonderfence_app_id``. ``api_id`` has no default. ``api_key`` falls
-    back to the value below or the ``ALICE_API_KEY`` env var.
+    Resolution order for ``api_key`` and ``app_id`` (highest first):
+    API-key metadata → team metadata → request metadata (only when
+    ``allow_request_metadata_override`` is True) → ``api_key`` falls back to
+    the configured default below or the ``ALICE_API_KEY`` env var; ``app_id``
+    has no default.
+
+    By default, request-body metadata is ignored so a caller cannot bypass
+    an admin-pinned WonderFence ``app_id`` / ``api_key`` on their virtual
+    key. Enable ``allow_request_metadata_override`` for trusted-gateway
+    deployments that legitimately need request-level overrides.
     """
 
     api_key: Optional[str] = Field(
         default=None,
-        description="Default API key for WonderFence (overridable per request via metadata.alice_wonderfence_api_key). Env: ALICE_API_KEY.",
+        description="Default API key for WonderFence. Overridable via API-key / team metadata, or via request metadata (alice_wonderfence_api_key) only when allow_request_metadata_override is True. Env: ALICE_API_KEY.",
+    )
+    allow_request_metadata_override: Optional[bool] = Field(
+        default=False,
+        description="When True, allow alice_wonderfence_api_key and alice_wonderfence_app_id in request metadata as a last-resort source (after API-key and team metadata). Default False so caller-controlled request fields cannot bypass admin-pinned credentials.",
     )
     api_base: Optional[str] = Field(
         default=None,

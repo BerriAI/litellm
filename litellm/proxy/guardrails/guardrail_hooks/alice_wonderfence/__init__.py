@@ -46,6 +46,10 @@ def initialize_guardrail(
         init_kwargs["block_message"] = litellm_params.block_message
     if litellm_params.debug is not None:
         init_kwargs["debug"] = litellm_params.debug
+    if litellm_params.allow_request_metadata_override is not None:
+        init_kwargs["allow_request_metadata_override"] = (
+            litellm_params.allow_request_metadata_override
+        )
 
     wonderfence_guardrail = WonderFenceGuardrail(**init_kwargs)
 

@@ -56,9 +56,18 @@ def _make_guardrail(monkeypatch, **overrides):
 
 
 def _request_data(**overrides):
+    """Build a request-data dict.
+
+    Default metadata pins ``alice_wonderfence_app_id`` on
+    ``user_api_key_metadata`` (admin-controlled) so the request resolves
+    cleanly under the safe-by-default precedence model. Tests that want to
+    drive the value through request metadata must (a) construct a guardrail
+    with ``allow_request_metadata_override=True`` and (b) pass the value via
+    the ``metadata`` kwarg explicitly.
+    """
     metadata = overrides.pop("metadata", None)
     if metadata is None:
-        metadata = {"alice_wonderfence_app_id": "test-app"}
+        metadata = {"user_api_key_metadata": {"alice_wonderfence_app_id": "test-app"}}
     base = {"model": "gpt-4", "metadata": metadata}
     base.update(overrides)
     return base
@@ -67,10 +76,24 @@ def _request_data(**overrides):
 # ----------------------------- resolver tests -----------------------------
 
 
-def test_resolve_app_id_from_request_metadata(monkeypatch):
-    guardrail, _ = _make_guardrail(monkeypatch)
+def test_resolve_app_id_from_request_metadata_requires_override_flag(monkeypatch):
+    guardrail, _ = _make_guardrail(monkeypatch, allow_request_metadata_override=True)
     data = _request_data(metadata={"alice_wonderfence_app_id": "from-req"})
     assert guardrail._resolve_app_id(data) == "from-req"
+
+
+def test_resolve_app_id_request_metadata_ignored_when_override_disabled(monkeypatch):
+    """Request metadata is caller-controlled and must not satisfy app_id when
+    the override flag is off — otherwise a user could bypass admin-pinned
+    credentials by sending their own app_id in the request body."""
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.alice_wonderfence import (
+        WonderFenceMissingSecrets,
+    )
+
+    guardrail, _ = _make_guardrail(monkeypatch)  # override defaults False
+    data = _request_data(metadata={"alice_wonderfence_app_id": "from-req"})
+    with pytest.raises(WonderFenceMissingSecrets, match="alice_wonderfence_app_id"):
+        guardrail._resolve_app_id(data)
 
 
 def test_resolve_app_id_from_key_metadata(monkeypatch):
@@ -93,8 +116,10 @@ def test_resolve_app_id_from_team_metadata(monkeypatch):
     assert guardrail._resolve_app_id(data) == "from-team"
 
 
-def test_resolve_app_id_priority_request_over_key_over_team(monkeypatch):
-    guardrail, _ = _make_guardrail(monkeypatch)
+def test_resolve_app_id_key_beats_request_even_when_override_enabled(monkeypatch):
+    """With the override flag on, request metadata is still only a last-resort
+    source — admin-pinned key metadata wins."""
+    guardrail, _ = _make_guardrail(monkeypatch, allow_request_metadata_override=True)
     data = _request_data(
         metadata={
             "alice_wonderfence_app_id": "from-req",
@@ -102,7 +127,19 @@ def test_resolve_app_id_priority_request_over_key_over_team(monkeypatch):
             "user_api_key_team_metadata": {"alice_wonderfence_app_id": "from-team"},
         }
     )
-    assert guardrail._resolve_app_id(data) == "from-req"
+    assert guardrail._resolve_app_id(data) == "from-key"
+
+
+def test_resolve_app_id_team_beats_request_when_override_enabled(monkeypatch):
+    """Team metadata beats request metadata even with the override flag on."""
+    guardrail, _ = _make_guardrail(monkeypatch, allow_request_metadata_override=True)
+    data = _request_data(
+        metadata={
+            "alice_wonderfence_app_id": "from-req",
+            "user_api_key_team_metadata": {"alice_wonderfence_app_id": "from-team"},
+        }
+    )
+    assert guardrail._resolve_app_id(data) == "from-team"
 
 
 def test_resolve_app_id_priority_key_over_team(monkeypatch):
@@ -127,10 +164,35 @@ def test_resolve_app_id_missing_raises(monkeypatch):
         guardrail._resolve_app_id(data)
 
 
-def test_resolve_api_key_from_request_metadata(monkeypatch):
-    guardrail, _ = _make_guardrail(monkeypatch, api_key="default")
+def test_resolve_api_key_from_request_metadata_requires_override_flag(monkeypatch):
+    guardrail, _ = _make_guardrail(
+        monkeypatch, api_key="default", allow_request_metadata_override=True
+    )
     data = _request_data(metadata={"alice_wonderfence_api_key": "from-req"})
     assert guardrail._resolve_api_key(data) == "from-req"
+
+
+def test_resolve_api_key_request_metadata_ignored_when_override_disabled(monkeypatch):
+    """With override off, a caller-supplied api_key must not be honored;
+    falls back to the configured default instead."""
+    guardrail, _ = _make_guardrail(monkeypatch, api_key="default")
+    data = _request_data(metadata={"alice_wonderfence_api_key": "from-req"})
+    assert guardrail._resolve_api_key(data) == "default"
+
+
+def test_resolve_api_key_key_beats_request_even_when_override_enabled(monkeypatch):
+    """Admin-pinned key metadata wins over request metadata even with the
+    override flag enabled."""
+    guardrail, _ = _make_guardrail(
+        monkeypatch, api_key="default", allow_request_metadata_override=True
+    )
+    data = _request_data(
+        metadata={
+            "alice_wonderfence_api_key": "from-req",
+            "user_api_key_metadata": {"alice_wonderfence_api_key": "from-key"},
+        }
+    )
+    assert guardrail._resolve_api_key(data) == "from-key"
 
 
 def test_resolve_api_key_from_key_metadata(monkeypatch):
@@ -172,10 +234,15 @@ def test_resolve_api_key_missing_everywhere_raises(monkeypatch):
 
 
 def test_resolve_reads_litellm_metadata_when_metadata_absent(monkeypatch):
+    """``_get_metadata`` falls back to ``litellm_metadata`` when ``metadata``
+    is missing. Use admin-controlled key metadata so it resolves without
+    needing the request-override flag."""
     guardrail, _ = _make_guardrail(monkeypatch)
     data = {
         "model": "gpt-4",
-        "litellm_metadata": {"alice_wonderfence_app_id": "from-litellm-md"},
+        "litellm_metadata": {
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "from-litellm-md"}
+        },
     }
     assert guardrail._resolve_app_id(data) == "from-litellm-md"
 
@@ -487,7 +554,9 @@ async def test_apply_guardrail_passes_app_id_per_call(guardrail_and_client):
 
     await guardrail.apply_guardrail(
         inputs={"texts": ["hi"]},
-        request_data=_request_data(metadata={"alice_wonderfence_app_id": "tenant-A"}),
+        request_data=_request_data(
+            metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-A"}}
+        ),
         input_type="request",
     )
     kwargs = client.evaluate_prompt.call_args.kwargs
@@ -508,7 +577,9 @@ async def test_apply_guardrail_response_path_passes_app_id(monkeypatch):
 
     await guardrail.apply_guardrail(
         inputs={"texts": ["resp"]},
-        request_data=_request_data(metadata={"alice_wonderfence_app_id": "tenant-B"}),
+        request_data=_request_data(
+            metadata={"user_api_key_metadata": {"alice_wonderfence_app_id": "tenant-B"}}
+        ),
         input_type="response",
     )
     kwargs = client.evaluate_response.call_args.kwargs
@@ -660,7 +731,9 @@ async def test_post_call_recovers_app_id_via_logging_obj_stash(monkeypatch):
     """Reproduces the framework gap: request body metadata is dropped before
     post_call. The logging_obj stash from the prior `input_type="request"`
     call must be used to resolve app_id."""
-    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail, client = _make_guardrail(
+        monkeypatch, allow_request_metadata_override=True
+    )
     guardrail._client_cache["default-api-key"] = client
     request_obj = Mock()
     request_obj.action = "NO_ACTION"
@@ -702,7 +775,9 @@ async def test_post_call_recovers_app_id_via_logging_obj_stash(monkeypatch):
 async def test_post_call_prefers_request_data_over_stash(monkeypatch):
     """If post_call's request_data still resolves (e.g. app_id from key/team
     metadata), use it — don't fall back to the stash."""
-    guardrail, client = _make_guardrail(monkeypatch)
+    guardrail, client = _make_guardrail(
+        monkeypatch, allow_request_metadata_override=True
+    )
     guardrail._client_cache["default-api-key"] = client
     request_obj = Mock()
     request_obj.action = "NO_ACTION"
@@ -770,9 +845,17 @@ async def test_post_call_recovers_via_sibling_stash(monkeypatch):
     `guardrails` array, LiteLLM only invokes one's during_call — but every
     instance runs post_call. The instance whose during_call did NOT fire
     must recover the stash written by the sibling that did."""
-    g_writer, c_writer = _make_guardrail(monkeypatch, guardrail_name="writer")
+    g_writer, c_writer = _make_guardrail(
+        monkeypatch,
+        guardrail_name="writer",
+        allow_request_metadata_override=True,
+    )
     g_writer._client_cache["default-api-key"] = c_writer
-    g_reader, c_reader = _make_guardrail(monkeypatch, guardrail_name="reader")
+    g_reader, c_reader = _make_guardrail(
+        monkeypatch,
+        guardrail_name="reader",
+        allow_request_metadata_override=True,
+    )
     g_reader._client_cache["default-api-key"] = c_reader
     for c in (c_writer, c_reader):
         result = Mock()
@@ -807,9 +890,17 @@ async def test_post_call_recovers_via_sibling_stash(monkeypatch):
 async def test_stash_keyed_per_guardrail_name(monkeypatch):
     """Two alice_wonderfence instances on the same logging_obj must not
     overwrite each other's stash — they're keyed by guardrail_name."""
-    g1, c1 = _make_guardrail(monkeypatch, guardrail_name="alice-a")
+    g1, c1 = _make_guardrail(
+        monkeypatch,
+        guardrail_name="alice-a",
+        allow_request_metadata_override=True,
+    )
     g1._client_cache["default-api-key"] = c1
-    g2, c2 = _make_guardrail(monkeypatch, guardrail_name="alice-b")
+    g2, c2 = _make_guardrail(
+        monkeypatch,
+        guardrail_name="alice-b",
+        allow_request_metadata_override=True,
+    )
     g2._client_cache["default-api-key"] = c2
     for c in (c1, c2):
         result = Mock()
@@ -898,6 +989,7 @@ def test_initialize_guardrail_forwards_all_params(monkeypatch):
         debug=True,
         max_cached_clients=5,
         connection_pool_limit=20,
+        allow_request_metadata_override=True,
         default_on=True,
     )
     guardrail = {"guardrail_name": "wf-init-test"}
@@ -912,6 +1004,14 @@ def test_initialize_guardrail_forwards_all_params(monkeypatch):
     assert g.block_message == "custom block"
     assert g._client_cache_maxsize == 5
     assert g._connection_pool_limit == 20
+    assert g.allow_request_metadata_override is True
+
+
+def test_allow_request_metadata_override_defaults_false(monkeypatch):
+    """New flag must default to False so request-body metadata cannot
+    bypass admin-pinned credentials out of the box."""
+    guardrail, _ = _make_guardrail(monkeypatch)
+    assert guardrail.allow_request_metadata_override is False
 
 
 def test_initialize_guardrail_missing_name_raises(monkeypatch):

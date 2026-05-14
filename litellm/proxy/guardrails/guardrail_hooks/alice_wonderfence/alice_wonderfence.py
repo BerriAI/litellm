@@ -59,20 +59,27 @@ class WonderFenceBlockedError(Exception):
 class WonderFenceGuardrail(CustomGuardrail):
     """Alice WonderFence guardrail handler using the V2 SDK client.
 
-    ``api_key`` and ``app_id`` are resolved per request from request metadata,
-    API-key metadata, or team metadata. ``api_key`` falls back to a configured
-    default; ``app_id`` has no default and must be supplied per request.
+    ``api_key`` and ``app_id`` are resolved per request from API-key metadata,
+    team metadata, optionally request metadata, with ``api_key`` falling back
+    to a configured default. ``app_id`` has no default.
 
     Resolution order for ``api_key``:
-    1. Request metadata: ``metadata.alice_wonderfence_api_key``
-    2. API key metadata: ``user_api_key_metadata.alice_wonderfence_api_key``
-    3. Team metadata: ``user_api_key_team_metadata.alice_wonderfence_api_key``
+    1. API key metadata: ``user_api_key_metadata.alice_wonderfence_api_key``
+    2. Team metadata: ``user_api_key_team_metadata.alice_wonderfence_api_key``
+    3. Request metadata: ``metadata.alice_wonderfence_api_key`` (only when
+       ``allow_request_metadata_override=True``)
     4. Default: configured ``api_key`` or ``ALICE_API_KEY`` env var
 
     Resolution order for ``app_id`` (no default — error if missing):
-    1. Request metadata: ``metadata.alice_wonderfence_app_id``
-    2. API key metadata: ``user_api_key_metadata.alice_wonderfence_app_id``
-    3. Team metadata: ``user_api_key_team_metadata.alice_wonderfence_app_id``
+    1. API key metadata: ``user_api_key_metadata.alice_wonderfence_app_id``
+    2. Team metadata: ``user_api_key_team_metadata.alice_wonderfence_app_id``
+    3. Request metadata: ``metadata.alice_wonderfence_app_id`` (only when
+       ``allow_request_metadata_override=True``)
+
+    Admin-pinned credentials (key/team metadata) always win over request
+    metadata so a caller cannot bypass their assigned WonderFence app.
+    ``allow_request_metadata_override`` defaults to False; enable only for
+    trusted-gateway deployments that need request-level overrides.
 
     A V2 SDK client is cached per resolved ``api_key`` (LRU).
     """
@@ -89,6 +96,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         debug: bool = False,
         max_cached_clients: Optional[int] = None,
         connection_pool_limit: Optional[int] = None,
+        allow_request_metadata_override: bool = False,
         event_hook: Optional[
             Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
         ] = None,
@@ -113,6 +121,11 @@ class WonderFenceGuardrail(CustomGuardrail):
                 keyed by api_key). Default 10. Env: ALICE_MAX_CACHED_CLIENTS.
             connection_pool_limit: Max connections per SDK client HTTP pool.
                 Env: ALICE_CONNECTION_POOL_LIMIT.
+            allow_request_metadata_override: When True, allow per-request
+                ``metadata.alice_wonderfence_api_key`` /
+                ``metadata.alice_wonderfence_app_id`` as a last-resort source
+                (after API-key and team metadata). Defaults to False so
+                caller-controlled fields cannot bypass admin-pinned credentials.
             event_hook: Event hook mode.
             default_on: Whether the guardrail is enabled by default.
         """
@@ -142,6 +155,7 @@ class WonderFenceGuardrail(CustomGuardrail):
         self.platform = platform
         self.fail_open = fail_open
         self.block_message = block_message
+        self.allow_request_metadata_override = allow_request_metadata_override
 
         if debug:
             logger.setLevel(logging.DEBUG)
@@ -216,7 +230,13 @@ class WonderFenceGuardrail(CustomGuardrail):
         )
 
     def _resolve_api_key(self, request_data: dict) -> str:
-        """Resolve api_key from request → key → team metadata, falling back to default.
+        """Resolve api_key from key → team → (request, when opt-in) → default.
+
+        Admin-pinned sources (API-key and team metadata) take precedence over
+        request-body metadata so a caller cannot bypass their assigned
+        WonderFence credentials. Request metadata is consulted only when
+        ``allow_request_metadata_override`` is True, and even then only after
+        the admin-controlled sources.
 
         The LiteLLM framework copies key/team metadata from ``UserAPIKeyAuth``
         into ``data['metadata']`` under ``user_api_key_metadata`` and
@@ -224,10 +244,6 @@ class WonderFenceGuardrail(CustomGuardrail):
         ``request_data``.
         """
         metadata = self._get_metadata(request_data)
-
-        req_api_key = metadata.get("alice_wonderfence_api_key")
-        if req_api_key:
-            return req_api_key
 
         key_metadata = metadata.get("user_api_key_metadata") or {}
         if isinstance(key_metadata, dict) and key_metadata.get(
@@ -241,21 +257,28 @@ class WonderFenceGuardrail(CustomGuardrail):
         ):
             return team_metadata["alice_wonderfence_api_key"]
 
+        if self.allow_request_metadata_override:
+            req_api_key = metadata.get("alice_wonderfence_api_key")
+            if req_api_key:
+                return req_api_key
+
         if self.api_key:
             return self.api_key
 
         raise WonderFenceMissingSecrets(
-            "No alice_wonderfence_api_key found in request metadata, API-key "
-            "metadata, team metadata, or default config (ALICE_API_KEY)."
+            "No alice_wonderfence_api_key found in API-key metadata, team "
+            "metadata, request metadata (when allow_request_metadata_override "
+            "is enabled), or default config (ALICE_API_KEY)."
         )
 
     def _resolve_app_id(self, request_data: dict) -> str:
-        """Resolve app_id from request → key → team metadata. No default — raise if missing."""
-        metadata = self._get_metadata(request_data)
+        """Resolve app_id from key → team → (request, when opt-in). No default.
 
-        req_app_id = metadata.get("alice_wonderfence_app_id")
-        if req_app_id:
-            return req_app_id
+        Admin-pinned sources win over request-body metadata; request metadata
+        is only consulted when ``allow_request_metadata_override`` is True.
+        Raises ``WonderFenceMissingSecrets`` when nothing resolves.
+        """
+        metadata = self._get_metadata(request_data)
 
         key_metadata = metadata.get("user_api_key_metadata") or {}
         if isinstance(key_metadata, dict) and key_metadata.get(
@@ -269,9 +292,15 @@ class WonderFenceGuardrail(CustomGuardrail):
         ):
             return team_metadata["alice_wonderfence_app_id"]
 
+        if self.allow_request_metadata_override:
+            req_app_id = metadata.get("alice_wonderfence_app_id")
+            if req_app_id:
+                return req_app_id
+
         raise WonderFenceMissingSecrets(
-            "No alice_wonderfence_app_id found in request metadata, API-key "
-            "metadata, or team metadata. app_id must be provided per request."
+            "No alice_wonderfence_app_id found in API-key metadata, team "
+            "metadata, or request metadata (when allow_request_metadata_override "
+            "is enabled). app_id must be provided per request."
         )
 
     def _build_analysis_context(self, request_data: dict) -> Any:
