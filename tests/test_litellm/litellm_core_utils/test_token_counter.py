@@ -444,7 +444,28 @@ def test_gpt_4o_token_counter():
 def test_img_url_token_counter(img_url):
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
-    width, height = get_image_dimensions(data=img_url)
+    if img_url.startswith(("http://", "https://")):
+        # Create a minimal valid JPEG binary (1x1 pixel) to avoid real network calls
+        import struct
+
+        # Minimal JPEG: SOI, APP0, SOF0 (1x1), SOS, EOI
+        jpeg_bytes = (
+            b"\xff\xd8"  # SOI
+            b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"  # APP0
+            b"\xff\xc0\x00\x0b\x08\x00\x10\x00\x20\x01\x01\x11\x00"  # SOF0: h=16, w=32
+            b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\x00"  # SOS
+            b"\xff\xd9"  # EOI
+        )
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Length": str(len(jpeg_bytes))}
+        mock_response.read.return_value = jpeg_bytes
+        with patch(
+            "litellm.litellm_core_utils.token_counter.safe_get",
+            return_value=mock_response,
+        ):
+            width, height = get_image_dimensions(data=img_url)
+    else:
+        width, height = get_image_dimensions(data=img_url)
 
     print(width, height)
 

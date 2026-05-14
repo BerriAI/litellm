@@ -16,6 +16,8 @@ vi.mock("./networking", () => ({
   v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
+  vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -74,9 +76,9 @@ vi.mock("./ModelSelect/ModelSelect", () => {
           if (onChange) {
             const newVal = e.target.value
               ? e.target.value
-                .split(",")
-                .map((s: string) => s.trim())
-                .filter(Boolean)
+                  .split(",")
+                  .map((s: string) => s.trim())
+                  .filter(Boolean)
               : [];
             onChange(newVal);
           }
@@ -408,7 +410,9 @@ describe("OldTeams - empty state", () => {
     await waitFor(() => {
       expect(screen.getByText("No teams yet")).toBeInTheDocument();
     });
-    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Create your first team to organize members and manage access to models."),
+    ).toBeInTheDocument();
   });
 
   it("should display empty state message when teams is null", async () => {
@@ -427,7 +431,9 @@ describe("OldTeams - empty state", () => {
     await waitFor(() => {
       expect(screen.getByText("No teams yet")).toBeInTheDocument();
     });
-    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Create your first team to organize members and manage access to models."),
+    ).toBeInTheDocument();
   });
 
   it("should not display empty state when teams array has items", async () => {
@@ -462,7 +468,9 @@ describe("OldTeams - empty state", () => {
       expect(screen.getByText("Test Team")).toBeInTheDocument();
     });
     expect(screen.queryByText("No teams yet")).not.toBeInTheDocument();
-    expect(screen.queryByText("Create your first team to organize members and manage access to models.")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Create your first team to organize members and manage access to models."),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -788,7 +796,9 @@ describe("OldTeams - access_group_ids in team create", () => {
       members_with_roles: [],
       spend: 0,
     } as any);
-    mockUseOrganizations.mockReturnValue({ data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }] });
+    mockUseOrganizations.mockReturnValue({
+      data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
+    });
   });
 
   it("should pass access_group_ids to teamCreateCall when creating team", async () => {
@@ -831,7 +841,9 @@ describe("OldTeams - access_group_ids in team create", () => {
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     const createTeamSubmitButton = createTeamSubmitButtons[createTeamSubmitButtons.length - 1];
-    fireEvent.click(createTeamSubmitButton);
+    await act(async () => {
+      fireEvent.click(createTeamSubmitButton);
+    });
 
     await waitFor(() => {
       expect(teamCreateCall).toHaveBeenCalledWith(
