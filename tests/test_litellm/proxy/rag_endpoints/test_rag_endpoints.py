@@ -128,3 +128,66 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         f"internal_user should be allowed to create new vector stores. "
         f"Response: {response.json()}"
     )
+
+
+class TestRagIngestSSRFBlocked:
+    """
+    aws_sts_endpoint and related credential-redirect fields must be rejected
+    in ingest_options.vector_store. Without this guard, any authenticated
+    client can coerce the proxy to make a signed STS AssumeRole call to an
+    attacker-controlled server, leaking the instance profile credentials.
+    """
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("aws_sts_endpoint", "https://attacker.example/sts"),
+            ("aws_web_identity_token", "fake-token"),
+            ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
+        ],
+    )
+    def test_ssrf_field_in_vector_store_config_rejected(
+        self, field, value, client_internal_user
+    ):
+        payload = {
+            "file_url": "https://example.com/doc.pdf",
+            "ingest_options": {
+                "vector_store": {
+                    "custom_llm_provider": "bedrock",
+                    field: value,
+                }
+            },
+        }
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            json=payload,
+        )
+        assert response.status_code == 400, (
+            f"{field} in ingest_options.vector_store should be rejected (400), "
+            f"got {response.status_code}: {response.json()}"
+        )
+        body = response.json()
+        detail = body.get("detail", {})
+        error_text = (
+            detail.get("error", "") if isinstance(detail, dict) else str(detail)
+        )
+        assert field in error_text, f"Error should name the offending field: {error_text}"
+
+    def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
+        with patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new_callable=AsyncMock,
+            return_value={"vector_store_id": "vs_bedrock", "file_id": "file_123"},
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                json={
+                    "file_url": "https://example.com/doc.pdf",
+                    "ingest_options": {
+                        "vector_store": {"custom_llm_provider": "bedrock"}
+                    },
+                },
+            )
+        assert response.status_code != 400, (
+            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
+        )

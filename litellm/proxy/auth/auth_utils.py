@@ -13,6 +13,7 @@ from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.utils import CustomPricingLiteLLMParams
 
 
 def _get_request_ip_address(
@@ -276,6 +277,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # integrations are covered automatically. Sorted for stable iteration
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
+    *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
 
