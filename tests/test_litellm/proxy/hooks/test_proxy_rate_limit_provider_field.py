@@ -141,7 +141,10 @@ class TestResolveLLMProviderForRateLimit:
         # Must never raise — the resolver wraps `get_llm_provider` defensively
         # because raising here would mask the rate-limit error we're trying
         # to surface to the user.
-        resolved_model, provider = resolve_llm_provider_for_rate_limit(model)
+        # Pin llm_router to None so the alias-fallback path doesn't pick up
+        # a router left behind by another test in the session.
+        with patch("litellm.proxy.proxy_server.llm_router", None):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit(model)
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
         # Resolver returns the input model verbatim on the unknown branch so
         # the `.model` attribute is never silently swapped to a different one.
