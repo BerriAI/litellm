@@ -3096,28 +3096,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in rate limit success event: {str(e)}")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ):
         """
-        On failure: decrement max_parallel_requests and refund the upfront
-        TPM reservation only against the scopes the reservation actually
-        charged. Unreserved scopes were never incremented at pre-call, so
-        refunding them would drive their counter negative.
+        Decrement max_parallel_requests once per failed logical request and
+        refund the upfront TPM reservation only against the scopes the
+        reservation actually charged.
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(kwargs)
-            standard_logging_object = kwargs.get("standard_logging_object") or {}
+            litellm_parent_otel_span: Union[Span, None] = _get_parent_otel_span_from_kwargs(request_data)
+            standard_logging_object = request_data.get("standard_logging_object") or {}
             standard_logging_metadata = standard_logging_object.get("metadata") or {}
-            user_api_key = standard_logging_metadata.get("user_api_key_hash")
+            user_api_key = user_api_key_dict.api_key or standard_logging_metadata.get("user_api_key_hash")
 
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
-            is_centralized_redis_cache_incremented = kwargs.get(
-                "litellm_params", {}
-            ).get("is_centralized_redis_cache_incremented", False)
+            is_centralized_redis_cache_incremented = request_data.get(
+                "is_centralized_redis_cache_incremented",
+                request_data.get("litellm_params", {}).get("is_centralized_redis_cache_incremented", False),
+            )
             if user_api_key and is_centralized_redis_cache_incremented:
                 counter_key = self.create_rate_limit_keys(
                     key="api_key",
@@ -3137,14 +3143,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # here as an LLM-error callback). max_parallel_requests is its
             # own counter and is decremented only if pre-call incremented it.
             already_released = self._is_reservation_released(
-                kwargs=kwargs,
+                kwargs=request_data,
                 standard_logging_metadata=standard_logging_metadata,
             )
             reserved_tokens = (
                 0
                 if already_released
                 else self._get_reserved_tokens_from_kwargs(
-                    kwargs=kwargs,
+                    kwargs=request_data,
                     standard_logging_metadata=standard_logging_metadata,
                 )
             )
@@ -3158,7 +3164,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # set so we don't even need to re-collect them from
                 # metadata.
                 reserved_scopes = self._get_reserved_scopes_from_kwargs(
-                    kwargs=kwargs,
+                    kwargs=request_data,
                     standard_logging_metadata=standard_logging_metadata,
                 )
                 pipeline_operations.extend(
@@ -3176,9 +3182,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
             if reserved_tokens > 0:
-                self._mark_reservation_released(kwargs)
+                self._mark_reservation_released(request_data)
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error in rate limit failure event: {str(e)}")
+            verbose_proxy_logger.exception(f"Error in rate limit failure hook: {str(e)}")
 
     async def async_release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """
