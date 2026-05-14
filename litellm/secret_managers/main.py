@@ -191,6 +191,23 @@ _RESOLVER_INDIRECTION_DENYLIST: FrozenSet[str] = frozenset(
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
         "AZURE_FEDERATED_TOKEN_FILE",
+        # UI / SSO admin-authentication secrets. ``UI_PASSWORD`` gates
+        # the ``/login`` admin path; leaking it via indirection is a
+        # one-step internal_user → PROXY_ADMIN escalation.
+        "UI_PASSWORD",
+        "UI_USERNAME",
+        "PROXY_ADMIN_ID",
+        # OAuth / OIDC client secrets used by SSO integrations and
+        # provider-side auth flows.
+        "OAUTH_CLIENT_SECRET",
+        "OPENID_CLIENT_SECRET",
+        "GOOGLE_CLIENT_SECRET",
+        "MICROSOFT_CLIENT_SECRET",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_SENTINEL_CLIENT_SECRET",
+        "AZURE_STORAGE_CLIENT_SECRET",
+        "DATABRICKS_CLIENT_SECRET",
+        "GENERIC_CLIENT_SECRET",
     }
 )
 

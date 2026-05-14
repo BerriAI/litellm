@@ -169,9 +169,12 @@ def _allow_model_level_clientside_configurable_parameters(
 
 # Config dicts whose entries are spread as ``**dict`` into outbound LLM
 # API calls. ``litellm_embedding_config`` is consumed by the Milvus
-# vector store transformer; future nested-config keys with the same
-# threat shape should be added here.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+# vector store transformer. ``request_body`` is the wrapper shape used
+# by ``/utils/transform_request`` (``{call_type, request_body: {...}}``);
+# descending into it lets the banned-key and indirection checks see the
+# inner provider params regardless of whether the handler explicitly
+# unwraps before calling ``is_request_body_safe``.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "request_body")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
