@@ -825,6 +825,7 @@ API_ROUTE_TO_CALL_TYPES = {
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
+    "/openai/v1/realtime": [CallTypes.arealtime],
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -3247,6 +3248,7 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"

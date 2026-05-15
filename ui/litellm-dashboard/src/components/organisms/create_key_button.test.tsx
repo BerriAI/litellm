@@ -155,6 +155,15 @@ vi.mock("antd", () => {
   const Button = ({ children, htmlType, ...props }: { children?: any; htmlType?: string }) =>
     React.createElement("button", { ...props, type: htmlType ?? props.type }, children);
 
+  const Typography = ({ children, ...props }: { children?: any }) =>
+    React.createElement("div", props, children);
+  Typography.Text = ({ children, ...props }: { children?: any }) =>
+    React.createElement("span", props, children);
+  Typography.Paragraph = ({ children, ...props }: { children?: any }) =>
+    React.createElement("p", props, children);
+  Typography.Title = ({ children, ...props }: { children?: any }) =>
+    React.createElement("h1", props, children);
+
   return {
     Button,
     Form,
@@ -171,6 +180,7 @@ vi.mock("antd", () => {
     Switch,
     Tag,
     Tooltip,
+    Typography,
   };
 });
 

@@ -108,3 +108,5 @@ compat-results.json.shards/
 compat-rate-limit-summary.json
 # Matrix JSON produced by the daily-cron publisher (pushed to litellm-docs).
 compatibility-matrix.json
+
+.vscode

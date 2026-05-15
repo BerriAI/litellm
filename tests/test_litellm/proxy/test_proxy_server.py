@@ -23,6 +23,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -1726,6 +1727,67 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         assert call_args.kwargs["max_budget"] == 100.0
         assert call_args.kwargs["budget_duration"] == "30d"
         assert call_args.kwargs["query_type"] == "update_data"
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
+    """
+    Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
+    update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
+    rows that pre-existed without a reset schedule. Without this, the proxy
+    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    it (NULL < now() is unknown in SQL), so the global proxy budget never
+    resets.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock(return_value={"count": 1})
+
+    mock_generate_key_helper = AsyncMock(
+        return_value={
+            "user_id": litellm_proxy_budget_name,
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "spend": 0,
+            "models": [],
+        }
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            mock_generate_key_helper,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
+            litellm_proxy_budget_name
+        )
+
+    # Upsert ran with the configured budget
+    mock_generate_key_helper.assert_called_once()
+
+    # Backfill update_many ran with the conditional WHERE
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    backfill_call = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert backfill_call.kwargs["where"]["user_id"] == litellm_proxy_budget_name
+    assert backfill_call.kwargs["where"]["budget_reset_at"] is None
+
+    # The backfilled value must be a real future datetime — anything else and
+    # reset_budget_for_litellm_users would still skip the row.
+    from datetime import datetime, timezone
+
+    backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
+    assert isinstance(backfilled_reset_at, datetime)
+    assert backfilled_reset_at > datetime.now(timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -3788,6 +3850,65 @@ def test_update_config_fields_uppercases_env_vars(monkeypatch):
     assert os.environ.get("DD_SITE") == "us5.datadoghq.com"
 
 
+def test_encrypt_env_variables_for_db_is_idempotent(monkeypatch):
+    """
+    Regression: /config/update and save_config must not stack a second
+    encryption layer when a caller re-submits a value that is already
+    ciphertext (the Admin UI reads config back from /get/config/callbacks —
+    which returns the stored, still-encrypted value — and re-POSTs it on the
+    next save). _encrypt_env_variables_for_db must yield a value that decrypts
+    to the original plaintext in exactly ONE layer, no matter how many times
+    its own output is fed back in. It must also not mutate os.environ (write
+    path — loading into the process env is the read path's job).
+    """
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+
+    proxy_config = ProxyConfig()
+    plaintext = "pk-langfuse-secret-value"
+
+    # First write: plaintext in -> single-encrypted out.
+    enc1 = proxy_config._encrypt_env_variables_for_db(
+        {"LANGFUSE_PUBLIC_KEY": plaintext}
+    )
+    assert enc1["LANGFUSE_PUBLIC_KEY"] != plaintext
+    assert (
+        decrypt_value_helper(
+            value=enc1["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+        )
+        == plaintext
+    )
+
+    # UI round-trip: feed the ciphertext back in. Must NOT double-encrypt.
+    enc2 = proxy_config._encrypt_env_variables_for_db(enc1)
+    assert (
+        decrypt_value_helper(
+            value=enc2["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+        )
+        == plaintext
+    )
+
+    # And again, ×3 total ciphertext re-feeds — still exactly one layer,
+    # never stacked, no matter how many times the UI re-saves.
+    enc3 = proxy_config._encrypt_env_variables_for_db(enc2)
+    enc4 = proxy_config._encrypt_env_variables_for_db(enc3)
+    for stacked in (enc3, enc4):
+        assert (
+            decrypt_value_helper(
+                value=stacked["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+            )
+            == plaintext
+        )
+
+    # Write path must not leak the value into the process environment.
+    assert os.environ.get("LANGFUSE_PUBLIC_KEY") is None
+
+
 def test_get_prompt_spec_for_db_prompt_with_versions():
     """
     Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
@@ -4450,6 +4571,69 @@ async def test_async_data_generator_cleanup_on_early_exit():
         await gen.aclose()
 
     # Verify aclose was called on the response to release the HTTP connection
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_uses_direct_stream_fast_path_without_callbacks():
+    """
+    When there are no streaming callbacks, async_data_generator should avoid
+    per-chunk hook machinery and iterate the provider stream directly.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+    ]
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in mock_chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(
+            ProxyLogging, "_fire_deferred_stream_logging"
+        ) as mock_deferred_logging:
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert len([chunk for chunk in yielded_text if chunk.startswith("data: {")]) == 2
+    assert yielded_text[-1] == "data: [DONE]\n\n"
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook.assert_not_called()
+    mock_proxy_logging_obj.async_post_call_streaming_hook.assert_not_awaited()
+    mock_deferred_logging.assert_called_once_with(mock_request_data)
     mock_response.aclose.assert_awaited_once()
 
 
@@ -6104,6 +6288,70 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         restore()
 
 
+def test_update_config_env_var_round_trip_not_double_encrypted(
+    _update_config_setup, monkeypatch
+):
+    """Endpoint-level regression for the /config/update double-encryption bug.
+
+    The Admin UI reads config back via /get/config/callbacks (which returns
+    the stored, still-encrypted value) and re-POSTs it on the next save. The
+    handler must NOT stack a second encryption layer on the re-submitted
+    ciphertext, and must leave untouched keys byte-identical.
+
+    Uses an invertible fake encrypt/decrypt pair ("enc:" prefix) so the
+    decrypt-then-encrypt chokepoint round-trips faithfully. On the pre-fix
+    code this stored "enc:enc:..."; the assertions below would fail there.
+    """
+
+    def _fake_decrypt(
+        value, key=None, exception_type="error", return_original_value=False
+    ):
+        if isinstance(value, str) and value.startswith("enc:"):
+            return value[len("enc:") :]
+        return value if return_original_value else None
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper", _fake_decrypt
+    )
+
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"PREEXISTING_KEY": "enc:keepme"}}
+    )
+    try:
+        # First write: plaintext in -> single-encrypted at rest.
+        resp = client.post(
+            "/config/update",
+            json={"environment_variables": {"LANGFUSE_SECRET_KEY": "sk-secret"}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["environment_variables"]
+        assert stored["LANGFUSE_SECRET_KEY"] == "enc:sk-secret"
+
+        # UI round-trip: re-POST the stored ciphertext (no field change).
+        resp = client.post(
+            "/config/update",
+            json={
+                "environment_variables": {
+                    "LANGFUSE_SECRET_KEY": stored["LANGFUSE_SECRET_KEY"]
+                }
+            },
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["environment_variables"]
+
+        # The bug: this would be "enc:enc:sk-secret". The fix keeps it single.
+        assert stored["LANGFUSE_SECRET_KEY"] == "enc:sk-secret"
+        assert (
+            _fake_decrypt(stored["LANGFUSE_SECRET_KEY"], return_original_value=True)
+            == "sk-secret"
+        )
+
+        # Untouched key preserved byte-for-byte (only sent keys rewritten).
+        assert stored["PREEXISTING_KEY"] == "enc:keepme"
+    finally:
+        restore()
+
+
 def test_update_config_can_flip_store_model_in_db_when_currently_false(
     _update_config_setup,
 ):
@@ -6318,6 +6566,84 @@ class TestLazyFeatureMiddleware:
         assert loads == ["json"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_root_path,request_path,should_load,case",
+        [
+            # SERVER_ROOT_PATH set: incoming path includes prefix → strip and match.
+            ("/api/v1", "/api/v1/dummy/x", True, "root_path strip + match"),
+            # Trailing-slash env var must be normalized.
+            ("/api/v1/", "/api/v1/dummy/x", True, "trailing-slash env normalization"),
+            # Reverse proxy already stripped the prefix → original path still matches.
+            ("/api/v1", "/dummy/x", True, "pre-stripped path still loads"),
+            # No SERVER_ROOT_PATH set → unchanged behavior.
+            ("", "/dummy/x", True, "no root path"),
+            # SERVER_ROOT_PATH=/ must be a no-op (not strip every leading slash).
+            ("/", "/dummy/x", True, "root_path='/' is no-op"),
+            # Boundary check: /apiv2 must not match root /api.
+            ("/api", "/apiv2/foo", False, "boundary check prevents false match"),
+            # Genuine non-match under root_path.
+            ("/api/v1", "/api/v1/unrelated", False, "unrelated path under root"),
+        ],
+    )
+    async def test_root_path_handling(
+        self, monkeypatch, server_root_path, request_path, should_load, case
+    ):
+        """
+        The middleware must strip SERVER_ROOT_PATH before prefix-matching so
+        lazy features load under deployments that set a server root path,
+        while handling boundary, trailing-slash, and reverse-proxy edge cases
+        correctly.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name=f"dummy_{case}",
+            module_path="json",
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await mw(
+            {
+                "type": "http",
+                "path": request_path,
+                "method": "GET",
+                "headers": [],
+            },
+            receive,
+            send,
+        )
+        if should_load:
+            assert loads == ["json"], f"{case}: expected feature to load"
+        else:
+            assert loads == [], f"{case}: feature must not load"
+
+    @pytest.mark.asyncio
     async def test_concurrent_first_requests_only_register_once(self):
         """
         Two requests to the same prefix arriving in parallel must result in
@@ -6513,3 +6839,86 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
+
+
+def test_realtime_websocket_route_aliases_registered():
+    """Realtime sessions reach the proxy via three path aliases stacked on
+    `realtime_websocket_endpoint`. Dropping any of them silently 405s
+    WebSocket upgrades because the catch-all `/openai/{endpoint:path}`
+    HTTP passthrough only declares HTTP methods. The aliases must also be
+    in `LiteLLMRoutes.openai_routes` (so non-admin / team / key-scoped
+    auth allows them) and in `API_ROUTE_TO_CALL_TYPES` (so call-type-aware
+    logic such as guardrails can resolve the realtime call type)."""
+    from starlette.routing import WebSocketRoute
+
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.proxy_server import app
+    from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
+
+    websocket_paths = {
+        route.path for route in app.routes if isinstance(route, WebSocketRoute)
+    }
+    openai_routes = LiteLLMRoutes.openai_routes.value
+
+    for expected in ("/openai/v1/realtime", "/v1/realtime", "/realtime"):
+        assert expected in websocket_paths, (
+            f"{expected!r} missing from registered WebSocket routes; the "
+            f"realtime endpoint will 405 for clients hitting this path."
+        )
+        assert expected in openai_routes, (
+            f"{expected!r} missing from LiteLLMRoutes.openai_routes; "
+            f"non-admin / team / key-scoped users will get 403 on this path."
+        )
+        assert API_ROUTE_TO_CALL_TYPES.get(expected) == [CallTypes.arealtime], (
+            f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
+            f"resolution will return None and break call-type-aware features."
+        )
+
+
+class TestTransformRequestBannedParams:
+    """
+    /utils/transform_request applies the same banned-param check as LLM endpoints.
+
+    Without this check, any authenticated user could supply aws_sts_endpoint,
+    api_base, etc. and have the server forward its credentials to an
+    attacker-controlled endpoint during SDK credential resolution.
+    """
+
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(
+            user_id="test-internal",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    @pytest.mark.parametrize(
+        "banned",
+        [
+            "aws_sts_endpoint",
+            "api_base",
+            "aws_web_identity_token",
+            "vertex_credentials",
+        ],
+    )
+    def test_banned_params_rejected_for_all_users(self, client, banned):
+        """Banned params must be blocked for any authenticated user."""
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {
+                    "model": "gpt-3.5-turbo",
+                    banned: "https://attacker.example",
+                },
+            },
+        )
+        assert response.status_code == 400, (
+            f"Expected 400 for banned param '{banned}', "
+            f"got {response.status_code}: {response.json()}"
+        )
