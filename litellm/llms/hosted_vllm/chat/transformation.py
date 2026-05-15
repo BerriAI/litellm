@@ -147,6 +147,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> dict:
         request = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
+        if request.get("cache_salt"):
+            return request
+
         auth_header = headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             api_key = auth_header[7:]
@@ -156,7 +159,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             cache_salt = base64.b64encode(hashlib.sha256(api_key.encode()).digest()).decode()
         else:
             cache_salt = base64.b64encode(secrets.token_bytes(16)).decode()
-        request.setdefault("extra_body", {})["cache_salt"] = cache_salt
+        request["cache_salt"] = cache_salt
         return request
         
     def _get_openai_compatible_provider_info(
