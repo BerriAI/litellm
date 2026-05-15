@@ -189,7 +189,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         api_key = user_api_key_dict.api_key
         max_parallel_requests = user_api_key_dict.max_parallel_requests
         if max_parallel_requests is None:
-            max_parallel_requests = sys.maxsize
+            max_parallel_requests = (
+                litellm.default_key_generate_params.get(
+                    "max_parallel_requests", sys.maxsize
+                )
+                if litellm.default_key_generate_params is not None
+                else sys.maxsize
+            )
         if data is None:
             data = {}
         global_max_parallel_requests = data.get("metadata", {}).get(
