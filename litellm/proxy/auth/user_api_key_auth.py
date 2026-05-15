@@ -730,13 +730,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
+        response: Any = None
         if enterprise_custom_auth is not None:
-            with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
-                response = await enterprise_custom_auth(
-                    request=request, api_key=api_key, user_custom_auth=user_custom_auth
-                )
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.custom_auth",
+                service=ServiceTypes.AUTH,
+                parent_span=parent_otel_span,
+                attributes={"route": route, "enterprise_custom_auth": True},
+            ):
+                with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
+                    response = await enterprise_custom_auth(
+                        request=request,
+                        api_key=api_key,
+                        user_custom_auth=user_custom_auth,
+                    )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
+                validated.parent_otel_span = validated.parent_otel_span or parent_otel_span
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -750,8 +760,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.custom_auth",
+                service=ServiceTypes.AUTH,
+                parent_span=parent_otel_span,
+                attributes={"route": route, "enterprise_custom_auth": False},
+            ):
+                response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
+            validated.parent_otel_span = validated.parent_otel_span or parent_otel_span
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
