@@ -45,7 +45,8 @@ def is_domestic_model(model_name: Optional[str]) -> bool:
     if _is_domestic_compatibility_disabled():
         return False
 
-    if not model_name:
+    # 类型检查：只接受字符串类型，排除 mock 函数对象等
+    if not model_name or not isinstance(model_name, str):
         return False
 
     model_lower = model_name.lower()
@@ -79,7 +80,8 @@ def is_domestic_endpoint(api_base: Optional[str]) -> bool:
     if _is_domestic_compatibility_disabled():
         return False
 
-    if not api_base:
+    # 类型检查：只接受字符串类型，排除 mock 函数对象等
+    if not api_base or not isinstance(api_base, str):
         return False
 
     domestic_endpoints = [

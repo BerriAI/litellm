@@ -4028,6 +4028,8 @@ def get_optional_params(  # noqa: PLR0915
     from litellm.secret_managers.main import get_secret
 
     passed_params = locals().copy()
+    # Remove the function-scoped import from passed_params to prevent it being serialized
+    passed_params.pop("get_secret", None)
     special_params = passed_params.pop("kwargs")
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
