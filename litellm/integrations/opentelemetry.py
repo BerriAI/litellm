@@ -2271,7 +2271,11 @@ class OpenTelemetry(CustomLogger):
                 str(e),
             )
 
-    def _to_ns(self, dt):
+    def _to_ns(self, dt: Optional[Union[datetime, int, float]]):
+        if dt is None:
+            dt = datetime.now()
+        if isinstance(dt, (int, float)):
+            return int(dt * 1e9)
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):

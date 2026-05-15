@@ -16,6 +16,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
 )
 
 import httpx
@@ -1112,172 +1113,416 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        requested_model_from_client: Optional[str] = (
-            self.data.get("model") if isinstance(self.data.get("model"), str) else None
-        )
-        self._debug_log_request_payload()
-
+        requested_model_from_client: Optional[str] = None
         logging_obj: Optional[LiteLLMLoggingObj] = None
-        if skip_pre_call_logic:
-            logging_obj = self.data.get("litellm_logging_obj")
-            if logging_obj is None:
-                raise ValueError(
-                    "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
-                    "Ensure common_processing_pre_call_logic was called before using this parameter."
-                )
-        else:
-            async with litellm_otel_tracer.trace(
-                "proxy.chat.common_processing_pre_call_logic",
-                service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-                attributes={"route_type": route_type},
-            ):
-                self.data, logging_obj = await self.common_processing_pre_call_logic(
-                    request=request,
-                    general_settings=general_settings,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    version=version,
-                    proxy_config=proxy_config,
-                    user_model=user_model,
-                    user_temperature=user_temperature,
-                    user_request_timeout=user_request_timeout,
-                    user_max_tokens=user_max_tokens,
-                    user_api_base=user_api_base,
-                    model=model,
-                    route_type=route_type,
-                    llm_router=llm_router,
-                )
-        if logging_obj is None:
-            raise ValueError("Unable to initialize LiteLLM logging object")
-
-        # Defer async logging when post-call guardrails are configured so the
-        # StandardLoggingPayload is built after guardrails write to metadata.
-        # Cache the result to avoid scanning litellm.callbacks twice.
-        _post_call_guardrails_active = self._has_post_call_guardrails()
-
-        # Non-streaming: defer the create_task in wrapper_async so the
-        # SLP is built after guardrails write to metadata.  Streaming
-        # uses a separate closure mechanism (see below).
-        #
-        # Edge case: if _is_streaming_request is False but the response
-        # turns out to be a CustomStreamWrapper (rare provider behavior),
-        # wrapper_async exits early before the _defer_async_logging block
-        # so _enqueue_deferred_logging is never stored — the finally
-        # block is a no-op.  The CSW path handles this correctly via
-        # _on_deferred_stream_complete, which fires its own logging.
-        if _post_call_guardrails_active and not self._is_streaming_request(
-            data=self.data, is_streaming_request=is_streaming_request
+        _post_call_guardrails_active = False
+        responses: Any = None
+        llm_call: Any = None
+        tasks: list[Any] = []
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.pre_llm",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
         ):
-            logging_obj._defer_async_logging = True  # type: ignore
+            requested_model_from_client = (
+                self.data.get("model")
+                if isinstance(self.data.get("model"), str)
+                else None
+            )
+            self._debug_log_request_payload()
 
-        tasks = []
+            if skip_pre_call_logic:
+                logging_obj = self.data.get("litellm_logging_obj")
+                if logging_obj is None:
+                    raise ValueError(
+                        "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
+                        "Ensure common_processing_pre_call_logic was called before using this parameter."
+                    )
+            else:
+                async with litellm_otel_tracer.trace(
+                    "proxy.chat.common_processing_pre_call_logic",
+                    service=ServiceTypes.PROXY_PRE_CALL,
+                    attributes={"route_type": route_type},
+                    detailed=True,
+                ):
+                    self.data, logging_obj = (
+                        await self.common_processing_pre_call_logic(
+                            request=request,
+                            general_settings=general_settings,
+                            proxy_logging_obj=proxy_logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            version=version,
+                            proxy_config=proxy_config,
+                            user_model=user_model,
+                            user_temperature=user_temperature,
+                            user_request_timeout=user_request_timeout,
+                            user_max_tokens=user_max_tokens,
+                            user_api_base=user_api_base,
+                            model=model,
+                            route_type=route_type,
+                            llm_router=llm_router,
+                        )
+                    )
+            # Defer async logging when post-call guardrails are configured so the
+            # StandardLoggingPayload is built after guardrails write to metadata.
+            # Cache the result to avoid scanning litellm.callbacks twice.
+            _post_call_guardrails_active = self._has_post_call_guardrails()
 
-        # Start the moderation check (during_call_hook) as early as possible
-        # This gives it a head start to mask/validate input while the proxy handles routing
-        async def _run_during_call_hook_with_span() -> Any:
-            async with litellm_otel_tracer.trace(
-                "proxy.chat.during_call_hook",
-                service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-                attributes={"route_type": route_type},
+            # Non-streaming: defer the create_task in wrapper_async so the
+            # SLP is built after guardrails write to metadata.  Streaming
+            # uses a separate closure mechanism (see below).
+            #
+            # Edge case: if _is_streaming_request is False but the response
+            # turns out to be a CustomStreamWrapper (rare provider behavior),
+            # wrapper_async exits early before the _defer_async_logging block
+            # so _enqueue_deferred_logging is never stored — the finally
+            # block is a no-op.  The CSW path handles this correctly via
+            # _on_deferred_stream_complete, which fires its own logging.
+            if _post_call_guardrails_active and not self._is_streaming_request(
+                data=self.data, is_streaming_request=is_streaming_request
             ):
-                return await proxy_logging_obj.during_call_hook(
-                    data=self.data,
-                    user_api_key_dict=user_api_key_dict,
-                    call_type=route_type,  # type: ignore
+                logging_obj._defer_async_logging = True  # type: ignore
+
+            # Start the moderation check (during_call_hook) as early as possible
+            # This gives it a head start to mask/validate input while the proxy handles routing
+            tasks.append(
+                asyncio.create_task(
+                    proxy_logging_obj.during_call_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=route_type,  # type: ignore
+                    )
                 )
+            )
 
-        tasks.append(asyncio.create_task(_run_during_call_hook_with_span()))
+            # Pass contents if provided
+            if contents:
+                self.data["contents"] = contents
 
-        # Pass contents if provided
-        if contents:
-            self.data["contents"] = contents
-
+        logging_obj = cast(LiteLLMLoggingObj, logging_obj)
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
-        async def _run_route_request_with_span() -> Any:
-            async with litellm_otel_tracer.trace(
-                "proxy.chat.route_request",
-                service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-                attributes={"route_type": route_type},
-            ):
-                llm_call = await route_request(
-                    data=self.data,
-                    route_type=route_type,
-                    llm_router=llm_router,
-                    user_model=user_model,
-                    user_api_key_dict=user_api_key_dict,
-                )
-                if inspect.isawaitable(llm_call):
-                    return await llm_call
-                return llm_call
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.route_request",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+            detailed=True,
+        ):
+            llm_call = await route_request(
+                data=self.data,
+                route_type=route_type,
+                llm_router=llm_router,
+                user_model=user_model,
+                user_api_key_dict=user_api_key_dict,
+            )
 
-        tasks.append(asyncio.create_task(_run_route_request_with_span()))
+        tasks.append(llm_call)
 
         # wait for call to end
-        llm_responses = asyncio.gather(
+        responses = await asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
-
         response = responses[1]
 
-        _exception_raised = False
-        try:
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
-            model_id = self._get_model_id_from_response(hidden_params, self.data)
+        async with litellm_otel_tracer.trace(
+            "proxy.chat.post_llm",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={"route_type": route_type},
+        ):
+            _exception_raised = False
+            try:
+                hidden_params = getattr(response, "_hidden_params", {}) or {}
+                model_id = self._get_model_id_from_response(hidden_params, self.data)
 
-            cache_key, api_base, response_cost = (
-                hidden_params.get("cache_key", None) or "",
-                hidden_params.get("api_base", None) or "",
-                hidden_params.get("response_cost", None) or "",
-            )
-            fastest_response_batch_completion, additional_headers = (
-                hidden_params.get("fastest_response_batch_completion", None),
-                hidden_params.get("additional_headers", {}) or {},
-            )
+                cache_key, api_base, response_cost = (
+                    hidden_params.get("cache_key", None) or "",
+                    hidden_params.get("api_base", None) or "",
+                    hidden_params.get("response_cost", None) or "",
+                )
+                fastest_response_batch_completion, additional_headers = (
+                    hidden_params.get("fastest_response_batch_completion", None),
+                    hidden_params.get("additional_headers", {}) or {},
+                )
+                callback_headers: Optional[dict] = None
+
+                with litellm_otel_tracer.trace(
+                    "proxy.chat.deployment_and_status_update",
+                    service=ServiceTypes.PROXY_PRE_CALL,
+                    attributes={"route_type": route_type},
+                    detailed=True,
+                ):
+                    if llm_router is not None:
+                        self.data["deployment"] = llm_router.get_deployment(
+                            model_id=model_id
+                        )
+                    asyncio.create_task(
+                        proxy_logging_obj.update_request_status(
+                            litellm_call_id=self.data.get("litellm_call_id", ""),
+                            status="success",
+                        )
+                    )
+                if self._is_streaming_request(
+                    data=self.data, is_streaming_request=is_streaming_request
+                ) or self._is_streaming_response(
+                    response
+                ):  # use generate_responses to stream responses
+                    custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                        user_api_key_dict=user_api_key_dict,
+                        call_id=logging_obj.litellm_call_id,
+                        model_id=model_id,
+                        cache_key=cache_key,
+                        api_base=api_base,
+                        version=version,
+                        response_cost=response_cost,
+                        model_region=getattr(
+                            user_api_key_dict, "allowed_model_region", ""
+                        ),
+                        fastest_response_batch_completion=fastest_response_batch_completion,
+                        request_data=self.data,
+                        hidden_params=hidden_params,
+                        litellm_logging_obj=logging_obj,
+                        **additional_headers,
+                    )
+
+                    # Call response headers hook for streaming success
+                    callback_headers = (
+                        await proxy_logging_obj.post_call_response_headers_hook(
+                            data=self.data,
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_headers=dict(request.headers),
+                        )
+                    )
+                    if callback_headers:
+                        custom_headers.update(callback_headers)
+
+                    # Preserve the original client-requested model (pre-alias mapping) for downstream
+                    # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
+                    # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
+                    # what the client sent.
+                    if requested_model_from_client:
+                        self.data["_litellm_client_requested_model"] = (
+                            requested_model_from_client
+                        )
+
+                    # Streaming: attach a closure that fires after all guardrail
+                    # end-of-stream blocks complete.  CSW.__anext__ stores the
+                    # assembled response on logging_obj; the outer consumer
+                    # (ProxyLogging._fire_deferred_stream_logging) fires the
+                    # closure after the full streaming pipeline finishes.
+                    # The closure runs non-apply_guardrail hooks on the
+                    # assembled response, then fires both logging handlers.
+                    # Only for CustomStreamWrapper — raw async generators from
+                    # passthrough routes bypass CSW and would orphan the closure.
+                    from litellm.litellm_core_utils.streaming_handler import (
+                        CustomStreamWrapper,
+                    )
+
+                    if _post_call_guardrails_active and isinstance(
+                        response, CustomStreamWrapper
+                    ):
+                        # Intentionally a live reference (not a copy) — mirrors
+                        # ProxyLogging.post_call_success_hook which also mutates
+                        # data["guardrail_to_apply"] during iteration.
+                        _captured_data = self.data
+                        _captured_user_api_key_dict = user_api_key_dict
+                        _captured_logging_obj = logging_obj
+
+                        async def _on_deferred_stream_complete(
+                            assembled_response, cache_hit
+                        ):
+                            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                                captured_data=_captured_data,
+                                captured_user_api_key_dict=_captured_user_api_key_dict,
+                                captured_logging_obj=_captured_logging_obj,
+                                assembled_response=assembled_response,
+                                cache_hit=cache_hit,
+                            )
+
+                        logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
+
+                    if route_type == "allm_passthrough_route":
+                        # Check if response is an async generator
+                        if self._is_streaming_response(response):
+                            if asyncio.iscoroutine(response):
+                                generator = await response
+                            else:
+                                generator = response
+
+                            # For passthrough routes, stream directly without error parsing
+                            # since we're dealing with raw binary data (e.g., AWS event streams)
+                            return StreamingResponse(
+                                content=generator,  # type: ignore[arg-type]
+                                status_code=status.HTTP_200_OK,
+                                headers=custom_headers,
+                            )
+                        else:
+                            # Traditional HTTP response with aiter_bytes
+                            return StreamingResponse(
+                                content=response.aiter_bytes(),  # type: ignore[union-attr]
+                                status_code=response.status_code,  # type: ignore[union-attr]
+                                headers=custom_headers,
+                            )
+                    elif route_type == "anthropic_messages":
+                        # Check if response is actually a streaming response (async generator)
+                        # Non-streaming responses (dict) should be returned directly
+                        # This handles cases like websearch_interception agentic loop
+                        # which returns a non-streaming dict even for streaming requests
+                        if self._is_streaming_response(response):
+                            selected_data_generator = (
+                                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                                    response=response,
+                                    user_api_key_dict=user_api_key_dict,
+                                    request_data=self.data,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                )
+                            )
+                            return await create_response(
+                                generator=selected_data_generator,
+                                media_type="text/event-stream",
+                                headers=custom_headers,
+                            )
+                        # Non-streaming response - fall through to normal response handling
+                    elif select_data_generator:
+                        selected_data_generator = select_data_generator(
+                            response=response,
+                            user_api_key_dict=user_api_key_dict,
+                            request_data=self.data,
+                        )
+                        return await create_response(
+                            generator=selected_data_generator,
+                            media_type="text/event-stream",
+                            headers=custom_headers,
+                        )
+
+                ### CALL HOOKS ### - modify outgoing data
+                # If we reach here with a streaming closure still set, it means
+                # no early-return route consumed the CSW (hypothetical fallthrough).
+                # Clear the closure so guardrails run inline as before — this
+                # preserves blocking behavior and avoids double invocation.
+                if getattr(logging_obj, "_on_deferred_stream_complete", None):
+                    logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
+                async with litellm_otel_tracer.trace(
+                    "proxy.chat.post_call_success_hook",
+                    service=ServiceTypes.PROXY_PRE_CALL,
+                    attributes={"route_type": route_type},
+                    detailed=True,
+                ):
+                    response = await proxy_logging_obj.post_call_success_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,  # type: ignore[arg-type]
+                    )
+            except Exception:
+                _exception_raised = True
+                raise
+            finally:
+                with litellm_otel_tracer.trace(
+                    "proxy.chat.flush_deferred_async_logging",
+                    service=ServiceTypes.PROXY_PRE_CALL,
+                    attributes={"route_type": route_type},
+                    detailed=True,
+                ):
+                    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                        logging_obj=logging_obj,
+                        exception_raised=_exception_raised,
+                    )
+
+                # Streaming cleanup: if an exception occurred AND the deferred
+                # streaming closure is still set, no streaming route will
+                # consume the CSW — the closure is orphaned.  Clear it and
+                # fire logging directly to avoid silent loss.
+                #
+                # On normal streaming returns the closure must stay: CSW calls
+                # it at stream end.  _exception_raised is function-scoped and
+                # immune to outer exception context, avoiding false positives.
+                if _exception_raised:
+                    _deferred_fn = getattr(
+                        logging_obj, "_on_deferred_stream_complete", None
+                    )
+                    if _deferred_fn is not None:
+                        logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
+                        try:
+                            asyncio.create_task(
+                                logging_obj.async_success_handler(
+                                    response,
+                                    cache_hit=None,
+                                    start_time=None,
+                                    end_time=None,
+                                )
+                            )
+                        except Exception as e:
+                            verbose_proxy_logger.exception(
+                                "Error in orphaned streaming async logging: %s", e
+                            )
+                        try:
+                            from litellm.litellm_core_utils.thread_pool_executor import (
+                                executor as _exc,
+                            )
+
+                            _exc.submit(
+                                logging_obj.success_handler,
+                                response,
+                                cache_hit=None,
+                                start_time=None,
+                                end_time=None,
+                            )
+                        except Exception as e:
+                            verbose_proxy_logger.exception(
+                                "Error in orphaned streaming sync logging: %s", e
+                            )
+
+            # Always return the client-requested model name (not provider-prefixed internal identifiers)
+            # for OpenAI-compatible responses.
+            if requested_model_from_client:
+                _override_openai_response_model(
+                    response_obj=response,
+                    requested_model=requested_model_from_client,
+                    log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                )
+
+            hidden_params = (
+                getattr(response, "_hidden_params", {}) or {}
+            )  # get any updated response headers
+            additional_headers = hidden_params.get("additional_headers", {}) or {}
 
             with litellm_otel_tracer.trace(
-                "proxy.chat.deployment_and_status_update",
+                "proxy.chat.build_custom_response_headers",
                 service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
                 attributes={"route_type": route_type},
+                detailed=True,
             ):
-                if llm_router is not None:
-                    self.data["deployment"] = llm_router.get_deployment(
-                        model_id=model_id
+                fastapi_response.headers.update(
+                    ProxyBaseLLMRequestProcessing.get_custom_headers(
+                        user_api_key_dict=user_api_key_dict,
+                        call_id=logging_obj.litellm_call_id,
+                        model_id=model_id,
+                        cache_key=cache_key,
+                        api_base=api_base,
+                        version=version,
+                        response_cost=response_cost,
+                        model_region=getattr(
+                            user_api_key_dict, "allowed_model_region", ""
+                        ),
+                        fastest_response_batch_completion=fastest_response_batch_completion,
+                        request_data=self.data,
+                        hidden_params=hidden_params,
+                        litellm_logging_obj=logging_obj,
+                        **additional_headers,
                     )
-                asyncio.create_task(
-                    proxy_logging_obj.update_request_status(
-                        litellm_call_id=self.data.get("litellm_call_id", ""),
-                        status="success",
-                    )
-                )
-            if self._is_streaming_request(
-                data=self.data, is_streaming_request=is_streaming_request
-            ) or self._is_streaming_response(
-                response
-            ):  # use generate_responses to stream responses
-                custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                    user_api_key_dict=user_api_key_dict,
-                    call_id=logging_obj.litellm_call_id,
-                    model_id=model_id,
-                    cache_key=cache_key,
-                    api_base=api_base,
-                    version=version,
-                    response_cost=response_cost,
-                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                    fastest_response_batch_completion=fastest_response_batch_completion,
-                    request_data=self.data,
-                    hidden_params=hidden_params,
-                    litellm_logging_obj=logging_obj,
-                    **additional_headers,
                 )
 
-                # Call response headers hook for streaming success
+            # Call response headers hook for non-streaming success
+            async with litellm_otel_tracer.trace(
+                "proxy.chat.post_call_response_headers_hook",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                attributes={"route_type": route_type},
+                detailed=True,
+            ):
                 callback_headers = (
                     await proxy_logging_obj.post_call_response_headers_hook(
                         data=self.data,
@@ -1286,249 +1531,18 @@ class ProxyBaseLLMRequestProcessing:
                         request_headers=dict(request.headers),
                     )
                 )
-                if callback_headers:
-                    custom_headers.update(callback_headers)
+            if callback_headers:
+                fastapi_response.headers.update(callback_headers)
 
-                # Preserve the original client-requested model (pre-alias mapping) for downstream
-                # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
-                # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
-                # what the client sent.
-                if requested_model_from_client:
-                    self.data["_litellm_client_requested_model"] = (
-                        requested_model_from_client
-                    )
-
-                # Streaming: attach a closure that fires after all guardrail
-                # end-of-stream blocks complete.  CSW.__anext__ stores the
-                # assembled response on logging_obj; the outer consumer
-                # (ProxyLogging._fire_deferred_stream_logging) fires the
-                # closure after the full streaming pipeline finishes.
-                # The closure runs non-apply_guardrail hooks on the
-                # assembled response, then fires both logging handlers.
-                # Only for CustomStreamWrapper — raw async generators from
-                # passthrough routes bypass CSW and would orphan the closure.
-                from litellm.litellm_core_utils.streaming_handler import (
-                    CustomStreamWrapper,
-                )
-
-                if _post_call_guardrails_active and isinstance(
-                    response, CustomStreamWrapper
-                ):
-                    # Intentionally a live reference (not a copy) — mirrors
-                    # ProxyLogging.post_call_success_hook which also mutates
-                    # data["guardrail_to_apply"] during iteration.
-                    _captured_data = self.data
-                    _captured_user_api_key_dict = user_api_key_dict
-                    _captured_logging_obj = logging_obj
-
-                    async def _on_deferred_stream_complete(
-                        assembled_response, cache_hit
-                    ):
-                        await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
-                            captured_data=_captured_data,
-                            captured_user_api_key_dict=_captured_user_api_key_dict,
-                            captured_logging_obj=_captured_logging_obj,
-                            assembled_response=assembled_response,
-                            cache_hit=cache_hit,
-                        )
-
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
-
-                if route_type == "allm_passthrough_route":
-                    # Check if response is an async generator
-                    if self._is_streaming_response(response):
-                        if asyncio.iscoroutine(response):
-                            generator = await response
-                        else:
-                            generator = response
-
-                        # For passthrough routes, stream directly without error parsing
-                        # since we're dealing with raw binary data (e.g., AWS event streams)
-                        return StreamingResponse(
-                            content=generator,  # type: ignore[arg-type]
-                            status_code=status.HTTP_200_OK,
-                            headers=custom_headers,
-                        )
-                    else:
-                        # Traditional HTTP response with aiter_bytes
-                        return StreamingResponse(
-                            content=response.aiter_bytes(),  # type: ignore[union-attr]
-                            status_code=response.status_code,  # type: ignore[union-attr]
-                            headers=custom_headers,
-                        )
-                elif route_type == "anthropic_messages":
-                    # Check if response is actually a streaming response (async generator)
-                    # Non-streaming responses (dict) should be returned directly
-                    # This handles cases like websearch_interception agentic loop
-                    # which returns a non-streaming dict even for streaming requests
-                    if self._is_streaming_response(response):
-                        selected_data_generator = (
-                            ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                                response=response,
-                                user_api_key_dict=user_api_key_dict,
-                                request_data=self.data,
-                                proxy_logging_obj=proxy_logging_obj,
-                            )
-                        )
-                        return await create_response(
-                            generator=selected_data_generator,
-                            media_type="text/event-stream",
-                            headers=custom_headers,
-                        )
-                    # Non-streaming response - fall through to normal response handling
-                elif select_data_generator:
-                    selected_data_generator = select_data_generator(
-                        response=response,
-                        user_api_key_dict=user_api_key_dict,
-                        request_data=self.data,
-                    )
-                    return await create_response(
-                        generator=selected_data_generator,
-                        media_type="text/event-stream",
-                        headers=custom_headers,
-                    )
-
-            ### CALL HOOKS ### - modify outgoing data
-            # If we reach here with a streaming closure still set, it means
-            # no early-return route consumed the CSW (hypothetical fallthrough).
-            # Clear the closure so guardrails run inline as before — this
-            # preserves blocking behavior and avoids double invocation.
-            if getattr(logging_obj, "_on_deferred_stream_complete", None):
-                logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
             async with litellm_otel_tracer.trace(
-                "proxy.chat.post_call_success_hook",
+                "proxy.chat.check_response_size_is_safe",
                 service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
                 attributes={"route_type": route_type},
+                detailed=True,
             ):
-                response = await proxy_logging_obj.post_call_success_hook(
-                    data=self.data,
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,  # type: ignore[arg-type]
-                )
-        except Exception:
-            _exception_raised = True
-            raise
-        finally:
-            with litellm_otel_tracer.trace(
-                "proxy.chat.flush_deferred_async_logging",
-                service=ServiceTypes.PROXY_PRE_CALL,
-                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-                attributes={"route_type": route_type},
-            ):
-                ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-                    logging_obj=logging_obj,
-                    exception_raised=_exception_raised,
-                )
+                await check_response_size_is_safe(response=response)
 
-            # Streaming cleanup: if an exception occurred AND the deferred
-            # streaming closure is still set, no streaming route will
-            # consume the CSW — the closure is orphaned.  Clear it and
-            # fire logging directly to avoid silent loss.
-            #
-            # On normal streaming returns the closure must stay: CSW calls
-            # it at stream end.  _exception_raised is function-scoped and
-            # immune to outer exception context, avoiding false positives.
-            if _exception_raised:
-                _deferred_fn = getattr(
-                    logging_obj, "_on_deferred_stream_complete", None
-                )
-                if _deferred_fn is not None:
-                    logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
-                    try:
-                        asyncio.create_task(
-                            logging_obj.async_success_handler(
-                                response,
-                                cache_hit=None,
-                                start_time=None,
-                                end_time=None,
-                            )
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.exception(
-                            "Error in orphaned streaming async logging: %s", e
-                        )
-                    try:
-                        from litellm.litellm_core_utils.thread_pool_executor import (
-                            executor as _exc,
-                        )
-
-                        _exc.submit(
-                            logging_obj.success_handler,
-                            response,
-                            cache_hit=None,
-                            start_time=None,
-                            end_time=None,
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.exception(
-                            "Error in orphaned streaming sync logging: %s", e
-                        )
-
-        # Always return the client-requested model name (not provider-prefixed internal identifiers)
-        # for OpenAI-compatible responses.
-        if requested_model_from_client:
-            _override_openai_response_model(
-                response_obj=response,
-                requested_model=requested_model_from_client,
-                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-            )
-
-        hidden_params = (
-            getattr(response, "_hidden_params", {}) or {}
-        )  # get any updated response headers
-        additional_headers = hidden_params.get("additional_headers", {}) or {}
-
-        with litellm_otel_tracer.trace(
-            "proxy.chat.build_custom_response_headers",
-            service=ServiceTypes.PROXY_PRE_CALL,
-            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            attributes={"route_type": route_type},
-        ):
-            fastapi_response.headers.update(
-                ProxyBaseLLMRequestProcessing.get_custom_headers(
-                    user_api_key_dict=user_api_key_dict,
-                    call_id=logging_obj.litellm_call_id,
-                    model_id=model_id,
-                    cache_key=cache_key,
-                    api_base=api_base,
-                    version=version,
-                    response_cost=response_cost,
-                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                    fastest_response_batch_completion=fastest_response_batch_completion,
-                    request_data=self.data,
-                    hidden_params=hidden_params,
-                    litellm_logging_obj=logging_obj,
-                    **additional_headers,
-                )
-            )
-
-        # Call response headers hook for non-streaming success
-        callback_headers: Optional[dict] = None
-        async with litellm_otel_tracer.trace(
-            "proxy.chat.post_call_response_headers_hook",
-            service=ServiceTypes.PROXY_PRE_CALL,
-            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            attributes={"route_type": route_type},
-        ):
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_headers=dict(request.headers),
-            )
-        if callback_headers:
-            fastapi_response.headers.update(callback_headers)
-
-        async with litellm_otel_tracer.trace(
-            "proxy.chat.check_response_size_is_safe",
-            service=ServiceTypes.PROXY_PRE_CALL,
-            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            attributes={"route_type": route_type},
-        ):
-            await check_response_size_is_safe(response=response)
-
-        return response
+            return response
 
     async def base_passthrough_process_llm_request(
         self,
@@ -1592,6 +1606,10 @@ class ProxyBaseLLMRequestProcessing:
         This uses standard Python inspection to detect streaming/async iterator objects
         rather than relying on specific wrapper classes.
         """
+        # Check if it's an async generator (most reliable)
+        if inspect.isasyncgen(response):
+            return True
+
         # Check if it implements the async iterator protocol
         if isinstance(response, (AsyncIterator, AsyncGeneratorABC)):
             return True

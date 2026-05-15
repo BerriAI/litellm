@@ -2506,6 +2506,7 @@ class Router:
                     ),
                     "response_type": response_type,
                 },
+                detailed=True,
             ) as post_response_span:
                 try:
                     ## CHECK CONTENT FILTER ERROR ##
@@ -6375,6 +6376,7 @@ class Router:
             attributes={
                 "model_group": model_group,
             },
+            detailed=True,
         ) as set_response_headers_span:
             response = await self.set_response_headers(
                 response=response,
@@ -8963,6 +8965,7 @@ class Router:
                             self.get_model_list(model_name=model_group) or []
                         ),
                     },
+                    detailed=True,
                 ) as remaining_usage_span:
                     remaining_usage = await self.get_remaining_model_group_usage(
                         model_group

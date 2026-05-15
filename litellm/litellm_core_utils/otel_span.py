@@ -28,12 +28,10 @@ _current_otel_span: ContextVar[Optional[_OtelSpan]] = ContextVar(
     "litellm_current_otel_span", default=None
 )
 _registered_otel_logger: Optional[_OtelLogger] = None
-_ENABLE_EXPERIMENTAL_OTEL_SPANS_ENV_VAR = "LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS"
+_ENABLE_DETAILED_OTEL_SPANS_ENV_VAR = "LITELLM_ENABLE_DETAILED_OTEL_SPANS"
 
 
 def get_current_otel_span() -> Optional[_OtelSpan]:
-    if not _OtelFeatureGate.is_enabled():
-        return None
     return _current_otel_span.get()
 
 
@@ -57,7 +55,7 @@ def attach_otel_span(span: Optional[_OtelSpan]) -> Iterator[Optional[_OtelSpan]]
     spans opened with ``litellm_otel_tracer.trace(...)`` will use the attached
     span as their parent unless an explicit parent is provided.
     """
-    if span is None or not _OtelFeatureGate.is_enabled():
+    if span is None:
         yield None
         return
 
@@ -93,6 +91,7 @@ class LiteLLMOtelSpan:
         otel_logger: Optional[Any] = None,
         start_time_ns: Optional[int] = None,
         end_time_ns: Optional[int] = None,
+        detailed: bool = False,
     ) -> None:
         self.span_name = span_name
         self.service = service
@@ -102,6 +101,7 @@ class LiteLLMOtelSpan:
         self.otel_logger = otel_logger
         self.start_time_ns = start_time_ns
         self.end_time_ns = end_time_ns
+        self.detailed = detailed
 
         self.span: Optional[_OtelSpan] = None
         self._resolved_otel_logger: Optional[Any] = None
@@ -109,7 +109,7 @@ class LiteLLMOtelSpan:
         self._otel_context_token: Optional[Any] = None
 
     def __enter__(self) -> "LiteLLMOtelSpan":
-        if not _OtelFeatureGate.is_enabled() and self.otel_logger is None:
+        if self.detailed and not _DetailedOtelFeatureGate.is_enabled():
             return self
 
         parent_span = self.parent_span or get_current_otel_span()
@@ -245,7 +245,10 @@ class LiteLLMOtelSpan:
 
 class LiteLLMOtelTracer:
     def is_enabled(self) -> bool:
-        return _OtelFeatureGate.is_enabled()
+        return _OpenTelemetryLoggerResolver.get() is not None
+
+    def is_detailed_enabled(self) -> bool:
+        return _DetailedOtelFeatureGate.is_enabled()
 
     def trace(
         self,
@@ -256,6 +259,7 @@ class LiteLLMOtelTracer:
         attributes: Optional[Dict[str, Any]] = None,
         require_parent: bool = True,
         start_time: Optional[float] = None,
+        detailed: bool = False,
     ) -> LiteLLMOtelSpan:
         return LiteLLMOtelSpan(
             span_name=span_name,
@@ -264,6 +268,7 @@ class LiteLLMOtelTracer:
             attributes=attributes,
             require_parent=require_parent,
             start_time_ns=int(start_time * 1e9) if start_time is not None else None,
+            detailed=detailed,
         )
 
     async def trace_async(
@@ -275,16 +280,15 @@ class LiteLLMOtelTracer:
         parent_span: Optional[_OtelSpan] = None,
         attributes: Optional[Dict[str, Any]] = None,
         require_parent: bool = True,
+        detailed: bool = False,
     ) -> Any:
-        if not _OtelFeatureGate.is_enabled():
-            return await awaitable
-
         with self.trace(
             span_name=span_name,
             service=service,
             parent_span=parent_span,
             attributes=attributes,
             require_parent=require_parent,
+            detailed=detailed,
         ):
             return await awaitable
 
@@ -298,8 +302,9 @@ class LiteLLMOtelTracer:
         parent_span: Optional[_OtelSpan] = None,
         attributes: Optional[Dict[str, Any]] = None,
         require_parent: bool = True,
+        detailed: bool = False,
     ) -> None:
-        if not _OtelFeatureGate.is_enabled():
+        if detailed and not _DetailedOtelFeatureGate.is_enabled():
             return
 
         start_time_ns = int(start_time * 1e9)
@@ -312,6 +317,7 @@ class LiteLLMOtelTracer:
             require_parent=require_parent,
             start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
+            detailed=detailed,
         )
         with span:
             pass
@@ -320,16 +326,10 @@ class LiteLLMOtelTracer:
 litellm_otel_tracer = LiteLLMOtelTracer()
 
 
-class _OtelFeatureGate:
-    enabled: Optional[bool] = None
-
+class _DetailedOtelFeatureGate:
     @classmethod
     def is_enabled(cls) -> bool:
-        if cls.enabled is not None:
-            return cls.enabled
-        return os.getenv(
-            _ENABLE_EXPERIMENTAL_OTEL_SPANS_ENV_VAR, ""
-        ).strip().lower() in {
+        return os.getenv(_ENABLE_DETAILED_OTEL_SPANS_ENV_VAR, "").strip().lower() in {
             "1",
             "true",
             "yes",

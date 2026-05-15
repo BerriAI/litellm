@@ -11,7 +11,6 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.otel_span import litellm_otel_tracer
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -28,7 +27,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
-from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
@@ -199,50 +197,29 @@ class _ProxyDBLogger(CustomLogger):
                 f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
-            with litellm_otel_tracer.trace(
-                "proxy.cost_tracking.prepare",
-                service=ServiceTypes.BATCH_WRITE_TO_DB,
-                parent_span=parent_otel_span,
-            ) as cost_tracking_prepare_span:
-                litellm_params = kwargs.get("litellm_params", {}) or {}
-                end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
-                metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-                budget_reservation = _get_budget_reservation_from_metadata(
-                    metadata=metadata
-                )
-                user_id = cast(
-                    Optional[str], metadata.get("user_api_key_user_id", None)
-                )
-                team_id = cast(
-                    Optional[str], metadata.get("user_api_key_team_id", None)
-                )
-                org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
-                key_alias = cast(
-                    Optional[str], metadata.get("user_api_key_alias", None)
-                )
-                end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-                sl_object: Optional[StandardLoggingPayload] = kwargs.get(
-                    "standard_logging_object", None
-                )
-                response_cost = (
-                    sl_object.get("response_cost", None)
-                    if sl_object is not None
-                    else kwargs.get("response_cost", None)
-                )
-                tags = _get_request_tags_for_cost_tracking(
-                    sl_object=sl_object,
-                    metadata=metadata,
-                )
-                cost_tracking_prepare_span.set_attributes(
-                    {
-                        "has_response_cost": response_cost is not None,
-                        "has_budget_reservation": budget_reservation is not None,
-                        "team_id_present": team_id is not None,
-                        "end_user_id_present": end_user_id is not None,
-                        "tag_count": len(tags or []),
-                    }
-                )
-
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            budget_reservation = _get_budget_reservation_from_metadata(
+                metadata=metadata
+            )
+            user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
+            team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
+            org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
+            key_alias = cast(Optional[str], metadata.get("user_api_key_alias", None))
+            end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
+            sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+            response_cost = (
+                sl_object.get("response_cost", None)
+                if sl_object is not None
+                else kwargs.get("response_cost", None)
+            )
+            tags = _get_request_tags_for_cost_tracking(
+                sl_object=sl_object,
+                metadata=metadata,
+            )
             if response_cost is not None:
                 user_api_key = metadata.get("user_api_key", None)
                 if kwargs.get("cache_hit", False) is True:

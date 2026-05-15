@@ -1,10 +1,10 @@
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import pytest
 
 from litellm.litellm_core_utils.otel_span import (
     LiteLLMOtelSpan,
-    _OtelFeatureGate,
+    _DetailedOtelFeatureGate,
     get_current_otel_span,
     litellm_otel_tracer,
     set_litellm_otel_logger,
@@ -54,8 +54,7 @@ class _FakeOpenTelemetryLogger:
         span.set_attribute(key, value)
 
 
-def test_litellm_otel_span_sets_and_resets_current_span(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+def test_litellm_otel_span_sets_and_resets_current_span() -> None:
     logger = _FakeOpenTelemetryLogger()
 
     assert get_current_otel_span() is None
@@ -68,40 +67,38 @@ def test_litellm_otel_span_sets_and_resets_current_span(monkeypatch) -> None:
         otel_logger=logger,
     ) as span_context:
         assert span_context.span is not None
+        span = cast(_FakeSpan, span_context.span)
         assert get_current_otel_span() is span_context.span
-        assert span_context.span.name == "proxy.auth.read_request_body"
-        assert span_context.span.attributes["call_type"] == (
-            "proxy.auth.read_request_body"
-        )
-        assert span_context.span.attributes["service"] == ServiceTypes.AUTH.value
-        assert span_context.span.attributes["route"] == "/v1/chat/completions"
-        assert span_context.span.attributes["cache_hit"] is False
+        assert span.name == "proxy.auth.read_request_body"
+        assert span.attributes["call_type"] == ("proxy.auth.read_request_body")
+        assert span.attributes["service"] == ServiceTypes.AUTH.value
+        assert span.attributes["route"] == "/v1/chat/completions"
+        assert span.attributes["cache_hit"] is False
 
     assert get_current_otel_span() is None
     assert logger.tracer.started_spans[0].end_time is not None
 
 
-def test_litellm_otel_span_uses_registered_logger(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+def test_litellm_otel_span_uses_registered_logger() -> None:
     logger = _FakeOpenTelemetryLogger()
     set_litellm_otel_logger(logger)
 
     try:
         with litellm_otel_tracer.trace(
-            "proxy.auth.fetch.user",
+            "proxy.auth.fetch",
             service=ServiceTypes.AUTH,
             require_parent=False,
         ) as span_context:
             assert span_context.span is not None
-            assert span_context.span.name == "proxy.auth.fetch.user"
+            span = cast(_FakeSpan, span_context.span)
+            assert span.name == "proxy.auth.fetch"
     finally:
         set_litellm_otel_logger(None)
 
     assert logger.tracer.started_spans[0].end_time is not None
 
 
-def test_record_completed_span_uses_explicit_end_time(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+def test_record_completed_span_uses_explicit_end_time() -> None:
     logger = _FakeOpenTelemetryLogger()
     set_litellm_otel_logger(logger)
 
@@ -121,8 +118,7 @@ def test_record_completed_span_uses_explicit_end_time(monkeypatch) -> None:
     assert span.end_time == 2_000_000_000
 
 
-def test_litellm_otel_span_records_exception_and_propagates(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+def test_litellm_otel_span_records_exception_and_propagates() -> None:
     logger = _FakeOpenTelemetryLogger()
     raised = ValueError("boom")
 
@@ -143,22 +139,55 @@ def test_litellm_otel_span_records_exception_and_propagates(monkeypatch) -> None
     assert get_current_otel_span() is None
 
 
-def test_otel_feature_gate_reads_env_each_call(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", None)
-    monkeypatch.delenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", raising=False)
+def test_detailed_otel_feature_gate_reads_env_each_call(monkeypatch) -> None:
+    monkeypatch.delenv("LITELLM_ENABLE_DETAILED_OTEL_SPANS", raising=False)
 
-    assert _OtelFeatureGate.is_enabled() is False
+    assert _DetailedOtelFeatureGate.is_enabled() is False
 
-    monkeypatch.setenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", "true")
-    assert _OtelFeatureGate.is_enabled() is True
+    monkeypatch.setenv("LITELLM_ENABLE_DETAILED_OTEL_SPANS", "true")
+    assert _DetailedOtelFeatureGate.is_enabled() is True
 
-    monkeypatch.setenv("LITELLM_ENABLE_EXPERIMENTAL_OTEL_SPANS", "false")
-    assert _OtelFeatureGate.is_enabled() is False
+    monkeypatch.setenv("LITELLM_ENABLE_DETAILED_OTEL_SPANS", "false")
+    assert _DetailedOtelFeatureGate.is_enabled() is False
+
+
+def test_detailed_otel_span_is_skipped_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("LITELLM_ENABLE_DETAILED_OTEL_SPANS", raising=False)
+    logger = _FakeOpenTelemetryLogger()
+
+    with LiteLLMOtelSpan(
+        span_name="proxy.auth.fetch",
+        service=ServiceTypes.AUTH,
+        require_parent=False,
+        otel_logger=logger,
+        detailed=True,
+    ) as span_context:
+        assert span_context.span is None
+
+    assert logger.tracer.started_spans == []
+
+
+def test_detailed_otel_span_emits_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_DETAILED_OTEL_SPANS", "true")
+    logger = _FakeOpenTelemetryLogger()
+
+    with LiteLLMOtelSpan(
+        span_name="proxy.auth.fetch",
+        service=ServiceTypes.AUTH,
+        require_parent=False,
+        otel_logger=logger,
+        attributes={"fetch_label": "user"},
+        detailed=True,
+    ) as span_context:
+        assert span_context.span is not None
+        span = cast(_FakeSpan, span_context.span)
+        assert span.attributes["fetch_label"] == "user"
+
+    assert logger.tracer.started_spans[0].end_time is not None
 
 
 @pytest.mark.asyncio
-async def test_litellm_otel_span_supports_async_context_manager(monkeypatch) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+async def test_litellm_otel_span_supports_async_context_manager() -> None:
     logger = _FakeOpenTelemetryLogger()
 
     async with LiteLLMOtelSpan(
@@ -180,10 +209,8 @@ async def _return_value() -> str:
 
 
 @pytest.mark.asyncio
-async def test_litellm_otel_tracer_is_noop_when_feature_gate_is_disabled(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(_OtelFeatureGate, "enabled", False)
+async def test_litellm_otel_tracer_is_noop_without_registered_logger() -> None:
+    set_litellm_otel_logger(None)
 
     result = await litellm_otel_tracer.trace_async(
         _return_value(),

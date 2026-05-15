@@ -8282,6 +8282,7 @@ async def chat_completion(  # noqa: PLR0915
         "proxy.chat.read_request_body",
         service=ServiceTypes.PROXY_PRE_CALL,
         parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+        detailed=True,
     ):
         data = await _read_request_body(request=request)
     if user_api_key_dict is not None:
@@ -8351,6 +8352,7 @@ async def chat_completion(  # noqa: PLR0915
                 "choice_count": len(getattr(result, "choices", []) or []),
                 "has_usage": getattr(result, "usage", None) is not None,
             },
+            detailed=True,
         ):
             if is_base_model_response:
                 return model_dump_with_preserved_fields(result, exclude_unset=True)
