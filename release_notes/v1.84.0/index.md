@@ -97,7 +97,7 @@ Everything below landed on top of `v1.84.0-rc.1` and is included in `v1.84.0`. I
 
 ### MCP
 - **Forward configured `extra_headers` from the MCP client to upstream OpenAPI HTTP calls** (closes [#26794](https://github.com/BerriAI/litellm/issues/26794)) — [PR #27383](https://github.com/BerriAI/litellm/pull/27383)
-- **Static headers win over forwarded headers in OpenAPI MCP**
+- **On the same forwarding path, `static_headers` now win over caller-forwarded `extra_headers` on name conflict** (case-insensitive). See [Important Behavior Changes → MCP](#openapi-mcp-static_headers-now-win-over-caller-forwarded-extra_headers) below.
 
 ### Routing under `SERVER_ROOT_PATH`
 - **Lazy-feature loading under a non-empty `SERVER_ROOT_PATH`** no longer 404s on routes such as `/api/v1/policies/attachments/list`; strip the prefix before lazy-feature match and cache the normalized path at middleware init — [PR #27812](https://github.com/BerriAI/litellm/pull/27812)
@@ -228,6 +228,22 @@ This release tightens a number of defaults across auth, ingress, callbacks, MCP,
 #### MCP OAuth root endpoint resolves with request visibility rules
 - **What changed:** Root-endpoint fallback resolves the single OAuth2 server using the same visibility rules as explicit server-name lookup; non-visible servers are no longer selected via the fallback path. The callback redirect path validates the full client redirect URI carried in state and appends parameters without dropping an existing query string.
 - **Restore prior behavior:** None — adjust server visibility rather than relying on the fallback.
+
+#### OpenAPI MCP: `static_headers` now win over caller-forwarded `extra_headers`
+- **What changed:** v1.84.0 introduced header forwarding for OpenAPI-backed MCP servers (`spec_path:` configs) via [PR #27383](https://github.com/BerriAI/litellm/pull/27383), letting you allowlist caller request headers into upstream OpenAPI HTTP calls. When the same header name appears in both your YAML `static_headers` and the request-time `extra_headers` allowlist, the **`static_headers` value now wins**, with case-insensitive name comparison so `X-Tenant-Id` and `x-tenant-id` are treated as the same header. This matches how the managed MCP path has always behaved. `Authorization` is still overridden last by a BYOK `x-mcp-auth` token, if present.
+- **Example:** With
+  ```yaml
+  mcp_servers:
+    data_api:
+      spec_path: http://upstream-api.local/openapi.json
+      static_headers:
+        X-Tenant-Id: "acme-corp"
+      extra_headers:
+        - X-Tenant-Id
+  ```
+  a caller sending `X-Tenant-Id: evil-corp` will now have `X-Tenant-Id: acme-corp` sent upstream. Any header in `extra_headers` that does **not** collide with `static_headers` is still forwarded unchanged.
+- **Who is affected:** Operators who set the same header name in both `static_headers` and `extra_headers` on an OpenAPI MCP server, and who were relying on the caller's value taking effect. (Note: this only ever shipped in the v1.84.0 release-candidate cycle — no prior stable release forwarded `extra_headers` for OpenAPI MCPs at all.)
+- **Restore prior behavior:** None — if you actually want the caller to control a header, remove it from `static_headers` and keep it only in `extra_headers`, or use distinct names for the operator-pinned value and the caller-supplied value.
 
 ### UI / static assets
 
