@@ -134,9 +134,9 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-1",
-        name="knowledge_qa",
-        server_name="knowledge_qa",
-        alias="knowledge_qa",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -163,7 +163,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
     ):
         result = await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="knowledge_qa",
+            mcp_server_name="sample_docs",
             use_standard_pattern=True,
         )
 
@@ -171,7 +171,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
         "https://okta.example.com/oauth2/default"
     ]
     # resource is normalized to the gateway URL so bearers are sent back to us
-    assert result["resource"].endswith("/mcp/knowledge_qa")
+    assert result["resource"].endswith("/mcp/sample_docs")
     assert result["scopes_supported"] == ["openid", "profile"]
 
 
@@ -184,9 +184,9 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-2",
-        name="knowledge_qa",
-        server_name="knowledge_qa",
-        alias="knowledge_qa",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -209,15 +209,71 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
     ):
         await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="knowledge_qa",
+            mcp_server_name="sample_docs",
             use_standard_pattern=True,
         )
         await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="knowledge_qa",
+            mcp_server_name="sample_docs",
             use_standard_pattern=True,
         )
 
+    assert mock_client.get.await_count == 1
+
+
+def test_oauth_metadata_cache_prunes_to_max_size():
+    now = 1_000_000.0
+    max_size = discoverable_endpoints._OAUTH_METADATA_CACHE_MAX_SIZE
+
+    for index in range(max_size + 10):
+        _OAUTH_METADATA_CACHE[(f"server-{index}", f"https://upstream/{index}")] = (
+            now + index + 1,
+            {"index": index},
+        )
+
+    discoverable_endpoints._prune_oauth_metadata_cache(now)
+
+    assert len(_OAUTH_METADATA_CACHE) == max_size
+    assert ("server-0", "https://upstream/0") not in _OAUTH_METADATA_CACHE
+    assert (
+        f"server-{max_size + 9}",
+        f"https://upstream/{max_size + 9}",
+    ) in _OAUTH_METADATA_CACHE
+
+
+@pytest.mark.asyncio
+async def test_oauth_metadata_cache_expired_entry_is_refetched():
+    passthrough_server = MCPServer(
+        server_id="expired-cache-server",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        extra_headers=["Authorization"],
+    )
+    _OAUTH_METADATA_CACHE[(passthrough_server.server_id, passthrough_server.url)] = (
+        0,
+        {"authorization_servers": ["https://stale.example.com"]},
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "authorization_servers": ["https://fresh.example.com"],
+    }
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch.object(
+        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
+    ):
+        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(
+            passthrough_server
+        )
+
+    assert result == {"authorization_servers": ["https://fresh.example.com"]}
     assert mock_client.get.await_count == 1
 
 
@@ -230,9 +286,9 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-3",
-        name="knowledge_qa",
-        server_name="knowledge_qa",
-        alias="knowledge_qa",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -251,7 +307,7 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
         with pytest.raises(HTTPException) as exc_info:
             await _build_oauth_protected_resource_response(
                 request=_make_request(),
-                mcp_server_name="knowledge_qa",
+                mcp_server_name="sample_docs",
                 use_standard_pattern=True,
             )
 
@@ -262,9 +318,9 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
 async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_network_fail():
     passthrough_server = MCPServer(
         server_id="passthrough-partial-network",
-        name="knowledge_qa",
-        server_name="knowledge_qa",
-        alias="knowledge_qa",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -381,7 +437,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     manager = MCPServerManager()
     passthrough_server = MCPServer(
         server_id="p1",
-        name="knowledge_qa",
+        name="sample_docs",
         url="https://upstream/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -409,7 +465,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     assert exc_info.value.www_authenticate == (
         'Bearer resource_metadata="https://upstream"'
     )
-    assert exc_info.value.server_name == "knowledge_qa"
+    assert exc_info.value.server_name == "sample_docs"
     mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
@@ -418,7 +474,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     manager = MCPServerManager()
     passthrough_server = MCPServer(
         server_id="p1",
-        name="knowledge_qa",
+        name="sample_docs",
         url="https://upstream/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -492,12 +548,12 @@ def _make_scope(path: str, headers: list = None) -> dict:
     "route,expected_metadata_path",
     [
         (
-            "/mcp/knowledge_qa",
-            "/.well-known/oauth-protected-resource/mcp/knowledge_qa",
+            "/mcp/sample_docs",
+            "/.well-known/oauth-protected-resource/mcp/sample_docs",
         ),
         (
-            "/knowledge_qa/mcp",
-            "/.well-known/oauth-protected-resource/knowledge_qa/mcp",
+            "/sample_docs/mcp",
+            "/.well-known/oauth-protected-resource/sample_docs/mcp",
         ),
     ],
 )
@@ -517,9 +573,9 @@ async def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="pt-cold-start",
-        name="knowledge_qa",
-        server_name="knowledge_qa",
-        alias="knowledge_qa",
+        name="sample_docs",
+        server_name="sample_docs",
+        alias="sample_docs",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -534,18 +590,17 @@ async def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
     if route.startswith("/mcp/"):
         scope = _make_scope(route)
     else:
-        scope = _make_scope(f"/mcp/knowledge_qa")
+        scope = _make_scope("/mcp/sample_docs")
         scope["_original_path"] = route
 
     # Verify cold-start detection fires for this path
-    effective_path = scope.get("_original_path") or scope.get("path", "")
     servers = _parse_mcp_server_names_from_path(
         scope.get("path", "")  # always /mcp/{name} by the time admission runs
     )
-    assert _is_mcp_passthrough_cold_start(scope, servers) is True
+    assert _is_mcp_passthrough_cold_start(scope, servers, client_ip=None) is True
 
     # Verify resource_metadata_url form selection
-    server_name = "knowledge_qa"
+    server_name = "sample_docs"
     base_url = "http://localhost:4000"
     path = scope.get("_original_path") or scope.get("path", "") or ""
     if path.startswith(f"/{server_name}/mcp"):
@@ -594,7 +649,7 @@ def test_is_mcp_passthrough_cold_start_false_for_oauth2_server():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     scope = _make_scope("/mcp/keycloak_whoami")
-    result = _is_mcp_passthrough_cold_start(scope, ["keycloak_whoami"])
+    result = _is_mcp_passthrough_cold_start(scope, ["keycloak_whoami"], client_ip=None)
     assert result is False
 
 
@@ -605,8 +660,8 @@ def test_is_mcp_passthrough_cold_start_false_for_empty_servers():
     )
 
     scope = _make_scope("/mcp")
-    assert _is_mcp_passthrough_cold_start(scope, None) is False
-    assert _is_mcp_passthrough_cold_start(scope, []) is False
+    assert _is_mcp_passthrough_cold_start(scope, None, client_ip=None) is False
+    assert _is_mcp_passthrough_cold_start(scope, [], client_ip=None) is False
 
 
 # --------------------------------------------------------------------------
@@ -617,10 +672,10 @@ def test_is_mcp_passthrough_cold_start_false_for_empty_servers():
 @pytest.mark.parametrize(
     "path,expected",
     [
-        ("/mcp/knowledge_qa", ["knowledge_qa"]),
-        ("/mcp/knowledge_qa/tools/list", ["knowledge_qa"]),
-        ("/knowledge_qa/mcp", ["knowledge_qa"]),
-        ("/knowledge_qa/mcp/tools/list", ["knowledge_qa"]),
+        ("/mcp/sample_docs", ["sample_docs"]),
+        ("/mcp/sample_docs/tools/list", ["sample_docs"]),
+        ("/sample_docs/mcp", ["sample_docs"]),
+        ("/sample_docs/mcp/tools/list", ["sample_docs"]),
         ("/mcp", None),
         ("/mcp/", None),
         ("/other/path", None),

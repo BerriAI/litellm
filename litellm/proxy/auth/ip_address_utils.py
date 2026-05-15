@@ -153,8 +153,9 @@ class IPAddressUtils:
                 verbose_proxy_logger.warning(
                     "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges "
                     "is not configured. X-Forwarded-* headers will NOT be "
-                    "trusted, so MCP OAuth discovery URLs will use the proxy's "
-                    "literal base URL. Set mcp_trusted_proxy_ranges in "
+                    "trusted, so MCP OAuth discovery URLs and access-control "
+                    "client IPs will use the proxy's literal request values. "
+                    "Set mcp_trusted_proxy_ranges in "
                     "general_settings to your reverse-proxy CIDR(s) to allow "
                     "X-Forwarded-* through."
                 )
@@ -200,6 +201,11 @@ class IPAddressUtils:
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
             trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
+            if not trusted_ranges:
+                IPAddressUtils.is_request_from_trusted_proxy(
+                    request, general_settings=general_settings
+                )
+                return _get_request_ip_address(request, use_x_forwarded_for=False)
             if trusted_ranges:
                 # Validate direct connection is from trusted proxy
                 direct_ip = request.client.host if request.client else None

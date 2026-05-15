@@ -15,12 +15,15 @@ def set_request_from_trusted_proxy(mock_request):
 
 @pytest.fixture
 def trusted_proxy_origin_headers():
-    with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
-        return_value=True,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
-        return_value=True,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+            return_value=True,
+        ),
     ):
         yield
 
@@ -77,7 +80,7 @@ async def test_authorize_endpoint_includes_response_type():
             request=mock_request,
             client_id="test_client_id",
             mcp_server_name="test_oauth",
-                redirect_uri="http://127.0.0.1:60108/callback",
+            redirect_uri="http://127.0.0.1:60108/callback",
             state="test_state",
         )
 
@@ -175,7 +178,6 @@ async def test_token_endpoint_forwards_code_verifier():
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
         from litellm.proxy._types import MCPTransport
         from fastapi import Request
-        import httpx
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -490,7 +492,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto(
             request=mock_request,
             client_id="test_client_id",
             mcp_server_name="test_oauth",
-                redirect_uri="http://127.0.0.1:60108/callback",
+            redirect_uri="http://127.0.0.1:60108/callback",
             state="test_state",
         )
 
@@ -567,7 +569,7 @@ async def test_token_endpoint_respects_x_forwarded_proto(
         mock_get_client.return_value = mock_async_client
 
         # Call token endpoint
-        response = await token_endpoint(
+        await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
             code="test_code",
@@ -908,7 +910,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host(
             request=mock_request,
             client_id="test_client_id",
             mcp_server_name="test_oauth",
-                redirect_uri="http://127.0.0.1:60108/callback",
+            redirect_uri="http://127.0.0.1:60108/callback",
             state="test_state",
         )
 
@@ -989,7 +991,7 @@ async def test_token_endpoint_respects_x_forwarded_host(
         mock_get_client.return_value = mock_async_client
 
         # Call token endpoint
-        response = await token_endpoint(
+        await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
             code="test_code",
@@ -1224,14 +1226,17 @@ def test_validate_trusted_redirect_uri_rejects_spoofed_forwarded_host():
     mock_request.client = MagicMock()
     mock_request.client.host = "203.0.113.10"
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {
-            "use_x_forwarded_for": True,
-            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
-        },
-        create=True,
-    ), pytest.raises(HTTPException):
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+            },
+            create=True,
+        ),
+        pytest.raises(HTTPException),
+    ):
         validate_trusted_redirect_uri(
             mock_request,
             "https://attacker.example.com/callback",

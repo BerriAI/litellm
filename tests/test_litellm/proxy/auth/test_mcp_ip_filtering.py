@@ -5,8 +5,9 @@ Tests that internal callers see all MCP servers while
 external callers only see servers with available_on_public_internet=True.
 """
 
-import ipaddress
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from fastapi import Request
 
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -56,6 +57,53 @@ class TestIsInternalIp:
         assert IPAddressUtils.is_internal_ip("") is False
         assert IPAddressUtils.is_internal_ip(None) is False
         assert IPAddressUtils.is_internal_ip("not-an-ip") is False
+
+
+class TestMCPClientIPExtraction:
+    def test_ignores_xff_without_trusted_proxy_ranges(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "203.0.113.5"
+        request.headers = {"x-forwarded-for": "10.0.0.1"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        assert result == "203.0.113.5"
+
+    def test_honours_xff_from_trusted_proxy(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.5"
+        request.headers = {"x-forwarded-for": "192.168.1.10"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+        )
+
+        assert result == "192.168.1.10"
+
+    def test_ignores_xff_from_untrusted_direct_caller(self):
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "203.0.113.5"
+        request.headers = {"x-forwarded-for": "10.0.0.1"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+        )
+
+        assert result == "203.0.113.5"
 
 
 class TestMCPServerIPFiltering:

@@ -49,7 +49,7 @@ def trust_xff():
     ``test_get_request_base_url_xff_trust_gate``.
     """
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
         return_value=True,
     ):
         yield
@@ -1154,7 +1154,7 @@ def test_get_request_base_url_comprehensive(
     mock_request.headers.get = mock_get
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
         return_value=True,
     ):
         result = get_request_base_url(mock_request)
@@ -1312,17 +1312,118 @@ def test_validate_trusted_redirect_uri_rejects_spoofed_forwarded_host():
     mock_request.client = MagicMock()
     mock_request.client.host = "203.0.113.10"
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {
-            "use_x_forwarded_for": True,
-            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
-        },
-        create=True,
-    ), pytest.raises(HTTPException):
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+            },
+            create=True,
+        ),
+        pytest.raises(HTTPException),
+    ):
         validate_trusted_redirect_uri(
             mock_request,
             "https://attacker.example.com/callback",
+        )
+
+
+def test_validate_trusted_redirect_uri_rejects_raw_host_same_origin():
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP OAuth utilities not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://attacker.example.com/"
+    mock_request.headers = {}
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.10"
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+            return_value=False,
+        ),
+        pytest.raises(HTTPException),
+    ):
+        validate_trusted_redirect_uri(
+            mock_request,
+            "https://attacker.example.com/callback",
+        )
+
+
+def test_validate_trusted_redirect_uri_rejects_trusted_proxy_raw_host_fallback():
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP OAuth utilities not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://attacker.example.com/"
+    mock_request.headers = {"X-Forwarded-Proto": "https"}
+    mock_request.client = MagicMock()
+    mock_request.client.host = TRUSTED_PROXY_IP
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+            return_value=True,
+        ),
+        pytest.raises(HTTPException),
+    ):
+        validate_trusted_redirect_uri(
+            mock_request,
+            "https://attacker.example.com/callback",
+        )
+
+
+def test_validate_trusted_redirect_uri_allows_configured_proxy_base_url_origin():
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP OAuth utilities not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {}
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.10"
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
+            return_value="https://gateway.example.com",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+            return_value=False,
+        ),
+    ):
+        validate_trusted_redirect_uri(
+            mock_request,
+            "https://gateway.example.com/ui/mcp/oauth/callback",
         )
 
 

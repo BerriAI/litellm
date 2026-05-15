@@ -1715,9 +1715,7 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
     claims = await jwt_handler.auth_jwt(token=token)
 
     assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer_two
-    assert jwt_handler.get_user_id(token=claims, default_value=None) == (
-        "example-org"
-    )
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == ("example-org")
     assert jwt_handler.get_team_id(token=claims, default_value=None) == (
         "example-org/litellm-fork"
     )
@@ -1753,7 +1751,9 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
 
     claims = await jwt_handler.auth_jwt(token=token)
 
-    assert jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
+    assert (
+        jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
+    )
 
 
 @pytest.mark.asyncio

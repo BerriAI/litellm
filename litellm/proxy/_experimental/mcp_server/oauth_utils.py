@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request
 
 from litellm._logging import verbose_logger
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.utils import get_proxy_base_url
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.
@@ -96,7 +97,7 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
 
 
 def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
-    """Accept same-origin (proxy's own origin) OR loopback ``redirect_uri``.
+    """Accept trusted same-origin (proxy's own origin) OR loopback ``redirect_uri``.
 
     Same-origin is required for the LiteLLM UI's OAuth flow: the UI
     redirects to ``<proxy>/ui/mcp/oauth/callback`` which is not loopback
@@ -104,6 +105,10 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     host content on the proxy's own origin without already owning the
     proxy, so the open-redirect / code-theft primitive that motivated
     :func:`validate_loopback_redirect_uri` does not apply here.
+
+    The trusted origin must come from explicit ``PROXY_BASE_URL`` config or
+    from X-Forwarded-* headers supplied by a configured trusted proxy. The raw
+    Host / request base URL is intentionally not trusted for this decision.
 
     Loopback continues to be accepted for native MCP clients (per
     OAuth 2.1 §4.1.2.1 + RFC 8252 §7.3).
@@ -122,17 +127,32 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     if parsed.fragment:
         raise HTTPException(status_code=400, detail="invalid_request")
 
-    try:
-        proxy_base = urlparse(get_request_base_url(request))
+    configured_proxy_base_url = get_proxy_base_url()
+    if configured_proxy_base_url:
+        proxy_base = urlparse(configured_proxy_base_url)
         if (
             parsed.netloc
+            and proxy_base.scheme in ("http", "https")
             and parsed.scheme == proxy_base.scheme
             and parsed.netloc.lower() == proxy_base.netloc.lower()
         ):
             return
+
+    try:
+        if IPAddressUtils.is_request_from_trusted_proxy(
+            request
+        ) and request.headers.get("X-Forwarded-Host"):
+            proxy_base = urlparse(get_request_base_url(request))
+            if (
+                parsed.netloc
+                and proxy_base.scheme in ("http", "https")
+                and parsed.scheme == proxy_base.scheme
+                and parsed.netloc.lower() == proxy_base.netloc.lower()
+            ):
+                return
     except Exception as exc:
         verbose_logger.warning(
-            "validate_trusted_redirect_uri: could not determine proxy origin, "
+            "validate_trusted_redirect_uri: could not determine trusted proxy origin, "
             "falling back to loopback-only check. error=%s",
             exc,
         )

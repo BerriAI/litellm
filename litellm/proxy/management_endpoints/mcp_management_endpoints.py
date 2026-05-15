@@ -1595,12 +1595,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1640,12 +1640,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),

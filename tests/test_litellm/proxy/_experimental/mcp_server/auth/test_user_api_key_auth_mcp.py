@@ -1,12 +1,9 @@
 import json
 import os
 import sys
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import orjson
 import pytest
-from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -19,7 +16,6 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.mark.asyncio
@@ -342,7 +338,7 @@ class TestMCPRequestHandler:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth,
-        ) as mock_auth:
+        ):
             # Call the method
             (
                 auth_result,
@@ -886,6 +882,278 @@ class TestMCPPublicRouteGuard:
 
 
 @pytest.mark.asyncio
+class TestMCPPassthroughColdStartAdmission:
+    @staticmethod
+    def _make_passthrough_server():
+        server = MagicMock()
+        server.is_oauth_passthrough = True
+        return server
+
+    async def test_cold_start_ignores_header_without_path_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"x-mcp-servers", b"passthrough_server")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            mock_mgr.get_mcp_server_by_name.assert_not_called()
+
+    async def test_cold_start_rejects_server_specific_authorization_header(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [
+                (
+                    b"x-mcp-passthrough_server-authorization",
+                    b"Bearer upstream-token",
+                )
+            ],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+
+    async def test_cold_start_rejects_legacy_mcp_auth_header(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"x-mcp-auth", b"Bearer upstream-token")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+
+    async def test_cold_start_fails_closed_when_client_ip_hides_server(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.10",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "passthrough_server", client_ip="203.0.113.10"
+            )
+
+    async def test_cold_start_propagates_non_401_http_error(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_forbidden(api_key, request):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_forbidden,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 403
+
+    async def test_cold_start_propagates_non_auth_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_server_error(api_key, request):
+            raise ProxyException(
+                message="Internal error",
+                type="server_error",
+                param=None,
+                code=500,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_server_error,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(scope)
+
+    async def test_cold_start_allows_401_for_path_passthrough_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "passthrough_server", client_ip=""
+            )
+
+    async def test_cold_start_allows_proxy_exception_401_for_path_target(self):
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise ProxyException(
+                message="Authentication Error",
+                type="auth_error",
+                param="api_key",
+                code=401,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPPassthroughColdStartAdmission._make_passthrough_server()
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "passthrough_server", client_ip=""
+            )
+
+
+@pytest.mark.asyncio
 class TestMCPOAuth2FallbackTargetGating:
     """
     Regression tests for GHSA-h8fm-g6wc-j228 / HW6xR21d:
@@ -999,6 +1267,41 @@ class TestMCPOAuth2FallbackTargetGating:
             )
             (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
+
+    async def test_fallback_blocked_when_client_ip_hides_oauth2_target(self):
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/hidden_oauth2_server",
+            "headers": [(b"authorization", b"Bearer upstream-token")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.10",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+            assert exc_info.value.status_code == 401
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "hidden_oauth2_server", client_ip="203.0.113.10"
+            )
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
         """
@@ -1480,7 +1783,6 @@ class TestMCPAccessGroupsE2E:
             mock_auth.assert_called_once()
 
 
-@pytest.mark.asyncio
 def test_mcp_path_based_server_segregation(monkeypatch):
     # Import the MCP server FastAPI app and context getter
     from litellm.proxy._experimental.mcp_server.server import app, get_auth_context

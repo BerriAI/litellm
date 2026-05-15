@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
+    get_request_base_url,
     validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -30,55 +31,33 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 # Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
 _OAUTH_METADATA_CACHE: Dict[Tuple[str, str], Tuple[float, dict]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS = 300
+_OAUTH_METADATA_CACHE_MAX_SIZE = 128
 
 router = APIRouter(
     tags=["mcp"],
 )
 
 
-def get_request_base_url(request: Request) -> str:
-    """
-    Get the base URL for the request, considering X-Forwarded-* headers.
+def _prune_oauth_metadata_cache(now: Optional[float] = None) -> None:
+    now = now if now is not None else time.time()
+    expired_cache_keys = [
+        cache_key
+        for cache_key, (expires_at, _payload) in _OAUTH_METADATA_CACHE.items()
+        if expires_at <= now
+    ]
+    for cache_key in expired_cache_keys:
+        _OAUTH_METADATA_CACHE.pop(cache_key, None)
 
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
+    if len(_OAUTH_METADATA_CACHE) <= _OAUTH_METADATA_CACHE_MAX_SIZE:
+        return
 
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
-    """
-    base_url = str(request.base_url).rstrip("/")
-    parsed = urlparse(base_url)
-
-    if not IPAddressUtils.is_request_from_trusted_proxy(request):
-        return base_url
-
-    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
-    x_forwarded_host = request.headers.get("X-Forwarded-Host")
-    x_forwarded_port = request.headers.get("X-Forwarded-Port")
-
-    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
-
-    if x_forwarded_host:
-        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
-        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
-            netloc = x_forwarded_host
-        elif x_forwarded_port:
-            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
-        else:
-            netloc = x_forwarded_host
-    else:
-        netloc = parsed.netloc
-        if x_forwarded_port and ":" not in netloc:
-            netloc = f"{netloc}:{x_forwarded_port}"
-
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+    overflow = len(_OAUTH_METADATA_CACHE) - _OAUTH_METADATA_CACHE_MAX_SIZE
+    cache_keys_by_expiry = sorted(
+        _OAUTH_METADATA_CACHE,
+        key=lambda cache_key: _OAUTH_METADATA_CACHE[cache_key][0],
+    )
+    for cache_key in cache_keys_by_expiry[:overflow]:
+        _OAUTH_METADATA_CACHE.pop(cache_key, None)
 
 
 def encode_state_with_base_url(
@@ -438,6 +417,11 @@ async def exchange_token_with_server(
         headers={"Accept": "application/json"},
         data=token_data,
     )
+    if response is None:
+        raise HTTPException(
+            status_code=502,
+            detail="MCP upstream token endpoint returned no response",
+        )
 
     response.raise_for_status()
     token_response = response.json()
@@ -543,6 +527,11 @@ async def register_client_with_server(
         headers=headers,
         json=register_data,
     )
+    if response is None:
+        raise HTTPException(
+            status_code=502,
+            detail="MCP upstream registration endpoint returned no response",
+        )
     response.raise_for_status()
 
     token_response = response.json()
@@ -737,8 +726,10 @@ async def fetch_upstream_oauth_protected_resource(
         return None
 
     cache_key = (mcp_server.server_id, mcp_server.url)
+    now = time.time()
+    _prune_oauth_metadata_cache(now)
     cached = _OAUTH_METADATA_CACHE.get(cache_key)
-    if cached is not None and cached[0] > time.time():
+    if cached is not None and cached[0] > now:
         return cached[1]
 
     host_base = f"{upstream.scheme}://{upstream.netloc}"
@@ -769,10 +760,12 @@ async def fetch_upstream_oauth_protected_resource(
             except Exception:
                 continue
             if isinstance(payload, dict):
+                now = time.time()
                 _OAUTH_METADATA_CACHE[cache_key] = (
-                    time.time() + _OAUTH_METADATA_CACHE_TTL_SECONDS,
+                    now + _OAUTH_METADATA_CACHE_TTL_SECONDS,
                     payload,
                 )
+                _prune_oauth_metadata_cache(now)
                 return payload
 
     if len(network_errors) == len(candidates):

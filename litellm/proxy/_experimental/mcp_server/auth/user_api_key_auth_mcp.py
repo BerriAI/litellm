@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 
 def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
@@ -29,7 +30,7 @@ def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
 
 
 def _is_mcp_passthrough_cold_start(
-    scope: Scope, mcp_servers: Optional[List[str]]
+    scope: Scope, mcp_servers: Optional[List[str]], client_ip: Optional[str]
 ) -> bool:
     """True when the request targets a pass-through server with no auth headers —
     the cold-start OAuth discovery case per RFC 9728 / MCP Authorization spec.
@@ -42,10 +43,30 @@ def _is_mcp_passthrough_cold_start(
     )
 
     for name in mcp_servers:
-        server = global_mcp_server_manager.get_mcp_server_by_name(name)
+        server = global_mcp_server_manager.get_mcp_server_by_name(
+            name, client_ip=client_ip
+        )
         if server is not None and getattr(server, "is_oauth_passthrough", False):
             return True
     return False
+
+
+def _is_litellm_auth_admission_error(exc: Exception) -> bool:
+    if isinstance(exc, HTTPException):
+        return exc.status_code == 401
+    if isinstance(exc, ProxyException):
+        try:
+            return int(exc.code) == 401
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _has_client_supplied_mcp_auth(
+    mcp_auth_header: Optional[str],
+    mcp_server_auth_headers: Dict[str, Dict[str, str]],
+) -> bool:
+    return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
 
 
 class MCPRequestHandler:
@@ -188,7 +209,9 @@ class MCPRequestHandler:
                     "401",
                     "403",
                 ) and MCPRequestHandler._target_servers_use_oauth2(
-                    path=request.url.path, mcp_servers=mcp_servers
+                    path=request.url.path,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
                 ):
                     verbose_logger.debug(
                         "MCP OAuth2: target server is OAuth2-mode, treating "
@@ -202,15 +225,24 @@ class MCPRequestHandler:
                 validated_user_api_key_auth = await user_api_key_auth(
                     api_key=litellm_api_key, request=request
                 )
-            except (HTTPException, ProxyException):
+            except (HTTPException, ProxyException) as exc:
                 # Cold-start MCP OAuth discovery: RFC 9728 / MCP Authorization spec
                 # require unauthenticated requests to protected resources to receive
                 # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
                 # for pass-through servers instead of surfacing a generic admission error.
                 path = scope.get("path", "")
                 mcp_servers_from_path = _parse_mcp_server_names_from_path(path)
-                if _is_mcp_passthrough_cold_start(
-                    scope, mcp_servers_from_path or mcp_servers
+                client_ip = IPAddressUtils.get_mcp_client_ip(request)
+                if (
+                    mcp_servers_from_path is not None
+                    and not _has_client_supplied_mcp_auth(
+                        mcp_auth_header,
+                        mcp_server_auth_headers,
+                    )
+                    and _is_litellm_auth_admission_error(exc)
+                    and _is_mcp_passthrough_cold_start(
+                        scope, mcp_servers_from_path, client_ip=client_ip
+                    )
                 ):
                     verbose_logger.debug(
                         "MCP pass-through cold start: deferring admission to route 401 emitter"
@@ -250,7 +282,9 @@ class MCPRequestHandler:
         return []
 
     @staticmethod
-    def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
+    def _target_servers_use_oauth2(
+        path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
+    ) -> bool:
         """
         True only when EVERY MCP server the request targets is configured for
         ``auth_type == oauth2``. If any target is non-OAuth2 — or if the target
@@ -279,7 +313,9 @@ class MCPRequestHandler:
             return False
 
         for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                name, client_ip=client_ip
+            )
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
         return True
