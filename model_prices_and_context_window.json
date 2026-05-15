@@ -32009,8 +32009,8 @@
             "global"
         ],
         "supports_function_calling": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,
