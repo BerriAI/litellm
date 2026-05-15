@@ -419,11 +419,18 @@ def pytest_sessionfinish(session, exitstatus):
     unit-test trees (e.g. `_driver_unit_tests/`). Writing an empty
     artifact would silently overwrite a real artifact from a prior
     compat-test run on the same checkout.
+
+    The xdist controller hits this hook with `_COLLECTOR.items` empty
+    (it never executes tests itself) and `_is_xdist_worker` False, so
+    we additionally allow the merge step to run when worker shards
+    are already on disk — otherwise the canonical artifact would
+    never be produced under `pytest -n auto`.
     """
-    if not _COLLECTOR.items and not _is_xdist_worker(session):
-        return
     artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
     shard_dir = _shard_dir(artifact_path)
+    has_worker_shards = shard_dir.is_dir() and any(shard_dir.glob("*.json"))
+    if not _COLLECTOR.items and not _is_xdist_worker(session) and not has_worker_shards:
+        return
     shard_dir.mkdir(parents=True, exist_ok=True)
 
     worker_id = _xdist_worker_id(session) or "main"
