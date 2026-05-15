@@ -351,6 +351,11 @@ def anthropic_messages_handler(
     """
     from litellm.types.utils import LlmProviders
 
+    # Sanitize empty text blocks here too so the sync entry point
+    # (litellm.messages.create -> anthropic_messages_handler) gets the same
+    # protection as the async wrapper.  Idempotent when called twice.
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars = locals()
