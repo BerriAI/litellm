@@ -127,6 +127,51 @@ async def test_maybe_run_weighted_failover_returns_none_without_failed_id():
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_maybe_run_weighted_failover_persists_excluded_ids_to_kwargs(monkeypatch):
+    """Regression: writing to the metadata dict returned by `setdefault` must
+    update the dict in `kwargs` itself so the next hop sees prior exclusions.
+    Previously `setdefault(..., {}) or {}` returned a disconnected dict on the
+    first hop, dropping `_failover_excluded_ids` writes.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+    )
+
+    async def _stub_run_async_fallback(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr("litellm.router.run_async_fallback", _stub_run_async_fallback)
+
+    exc = Exception("fail")
+    exc.failed_deployment_id = "A"
+    kwargs: dict = {"metadata": {}}
+    await router._maybe_run_weighted_failover(
+        exception=exc,
+        original_model_group="test-model",
+        all_deployments=[_make_dep("A"), _make_dep("B")],
+        args=(),
+        kwargs=kwargs,
+        input_kwargs={},
+    )
+    # The dict inside kwargs must reflect the write — proves `meta` was the
+    # same object as kwargs["metadata"] (no disconnected copy).
+    assert kwargs["metadata"].get("_failover_excluded_ids") == ["A"]
+
+
 # ---------------------------------------------------------------------------
 # Integration tests for weighted-failover end-to-end via Router
 # ---------------------------------------------------------------------------
