@@ -13,6 +13,7 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 # must not be cached — both success and error bodies may reveal secrets.
 TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
+
 def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.

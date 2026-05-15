@@ -15276,7 +15276,8 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         # Create a new scope with the correct path format that the MCP handler expects
         # Transform /{mcp_server_name}/mcp to /mcp/{mcp_server_name}
         scope = dict(request.scope)
-        scope["_original_path"] = scope.get("path", "")  # preserve for 401 URL form selection
+        # Preserve the public request path for OAuth challenge URL selection.
+        scope["_original_path"] = scope.get("path", "")
         scope["path"] = f"/mcp/{mcp_server_name}"
 
         # Import the MCP handler
