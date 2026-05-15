@@ -313,6 +313,66 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_tpm_limit", None)
 
     @staticmethod
+    async def propagate_budget_update_to_member_rows(
+        team_id: str,
+        team_member_budget_id: str,
+        prisma_client: PrismaClient,
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+        team_member_budget_duration: Optional[str] = None,
+    ) -> None:
+        """
+        Propagate team_member_budget field changes to all member-cloned budget rows.
+
+        When a team's default member budget is updated via /team/update, members
+        who already have their own cloned budget rows (budget_id != team_member_budget_id)
+        do not automatically receive the update. This method finds those rows and
+        applies the same changes so budget_duration (and other limits) stay in sync.
+        """
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        update_data: dict = {}
+        if team_member_budget is not None:
+            update_data["max_budget"] = team_member_budget
+        if team_member_rpm_limit is not None:
+            update_data["rpm_limit"] = team_member_rpm_limit
+        if team_member_tpm_limit is not None:
+            update_data["tpm_limit"] = team_member_tpm_limit
+        if team_member_budget_duration is not None:
+            update_data["budget_duration"] = team_member_budget_duration
+            update_data["budget_reset_at"] = get_budget_reset_time(
+                team_member_budget_duration
+            )
+
+        if not update_data:
+            return
+
+        # Fetch all membership rows for the team; filter in Python to avoid
+        # Prisma null-filter edge cases on the budget_id column.
+        memberships = await prisma_client.db.litellm_teammembership.find_many(
+            where={"team_id": team_id}
+        )
+        member_budget_ids = [
+            m.budget_id
+            for m in memberships
+            if m.budget_id is not None and m.budget_id != team_member_budget_id
+        ]
+
+        if not member_budget_ids:
+            return
+
+        await prisma_client.db.litellm_budgettable.update_many(
+            where={"budget_id": {"in": member_budget_ids}},
+            data=update_data,
+        )
+        verbose_proxy_logger.info(
+            "Propagated budget update to %d member budget rows for team %s",
+            len(member_budget_ids),
+            team_id,
+        )
+
+    @staticmethod
     async def backfill_team_member_budget_entries(
         team_id: str,
         members_with_roles: List[Union[Member, dict]],
@@ -1792,6 +1852,20 @@ async def update_team(  # noqa: PLR0915
                     members_with_roles=existing_team_row.members_with_roles,
                     team_member_budget_id=_backfill_budget_id,
                     prisma_client=prisma_client,
+                )
+            # Propagate budget field changes to members who already have their
+            # own cloned budget rows (budget_id != team_member_budget_id).
+            # backfill_team_member_budget_entries only handles budget_id=NULL rows;
+            # cloned rows are invisible to it and would otherwise keep stale values.
+            if _backfill_budget_id:
+                await TeamMemberBudgetHandler.propagate_budget_update_to_member_rows(
+                    team_id=data.team_id,
+                    team_member_budget_id=_backfill_budget_id,
+                    prisma_client=prisma_client,
+                    team_member_budget=data.team_member_budget,
+                    team_member_rpm_limit=data.team_member_rpm_limit,
+                    team_member_tpm_limit=data.team_member_tpm_limit,
+                    team_member_budget_duration=data.team_member_budget_duration,
                 )
         else:
             TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
