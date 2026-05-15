@@ -3566,6 +3566,7 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

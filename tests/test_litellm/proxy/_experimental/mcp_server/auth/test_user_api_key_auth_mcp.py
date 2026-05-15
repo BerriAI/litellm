@@ -1099,6 +1099,35 @@ class TestMCPDelegateAuthToUpstream:
             delegate_auth_to_upstream=delegate_auth_to_upstream,
         )
 
+    def test_build_mcp_server_table_preserves_delegate_auth_to_upstream(self):
+        """Registry → API list rows must expose delegate_auth_to_upstream for the UI."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        delegated = MCPServer(
+            server_id="delegated-1",
+            name="delegated",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            available_on_public_internet=True,
+        )
+        assert (
+            manager._build_mcp_server_table(delegated).delegate_auth_to_upstream is True
+        )
+
+        not_delegated = delegated.model_copy(
+            update={"delegate_auth_to_upstream": False}
+        )
+        assert (
+            manager._build_mcp_server_table(not_delegated).delegate_auth_to_upstream
+            is False
+        )
+
     async def test_delegate_skips_litellm_auth_with_no_authorization(self):
         """
         oauth2 + delegate_auth_to_upstream=True, no Authorization header at
