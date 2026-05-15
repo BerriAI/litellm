@@ -3850,6 +3850,62 @@ def test_update_config_fields_uppercases_env_vars(monkeypatch):
     assert os.environ.get("DD_SITE") == "us5.datadoghq.com"
 
 
+def test_encrypt_env_variables_for_db_is_idempotent(monkeypatch):
+    """
+    Regression: /config/update and save_config must not stack a second
+    encryption layer when a caller re-submits a value that is already
+    ciphertext (the Admin UI reads config back from /get/config/callbacks —
+    which returns the stored, still-encrypted value — and re-POSTs it on the
+    next save). _encrypt_env_variables_for_db must yield a value that decrypts
+    to the original plaintext in exactly ONE layer, no matter how many times
+    its own output is fed back in. It must also not mutate os.environ (write
+    path — loading into the process env is the read path's job).
+    """
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+
+    proxy_config = ProxyConfig()
+    plaintext = "pk-langfuse-secret-value"
+
+    # First write: plaintext in -> single-encrypted out.
+    enc1 = proxy_config._encrypt_env_variables_for_db(
+        {"LANGFUSE_PUBLIC_KEY": plaintext}
+    )
+    assert enc1["LANGFUSE_PUBLIC_KEY"] != plaintext
+    assert (
+        decrypt_value_helper(
+            value=enc1["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+        )
+        == plaintext
+    )
+
+    # UI round-trip: feed the ciphertext back in. Must NOT double-encrypt.
+    enc2 = proxy_config._encrypt_env_variables_for_db(enc1)
+    assert (
+        decrypt_value_helper(
+            value=enc2["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+        )
+        == plaintext
+    )
+
+    # And again — still exactly one layer, never stacked.
+    enc3 = proxy_config._encrypt_env_variables_for_db(enc2)
+    assert (
+        decrypt_value_helper(
+            value=enc3["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+        )
+        == plaintext
+    )
+
+    # Write path must not leak the value into the process environment.
+    assert os.environ.get("LANGFUSE_PUBLIC_KEY") is None
+
+
 def test_get_prompt_spec_for_db_prompt_with_versions():
     """
     Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
