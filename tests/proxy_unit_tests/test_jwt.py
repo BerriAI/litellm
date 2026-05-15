@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import logging
 import os
 import random
 import sys
@@ -1736,6 +1737,7 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
                 "issuer": issuer,
                 "jwks_url": jwks_url,
                 "audience": None,
+                "disable_audience_validation": True,
                 "user_id_jwt_field": "kubernetes\\.io.namespace",
             }
         ],
@@ -1888,3 +1890,179 @@ async def test_multi_issuer_jwt_missing_mapped_claim_fails_closed(monkeypatch):
         await jwt_handler.auth_jwt(token=token)
 
     assert "missing required mapped claim: email" in str(exc.value)
+    assert "Validation fails" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
+    monkeypatch,
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="some-other-client",
+        kid="issuer-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "must configure audience" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    jwks_url = "https://global-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="email",
+            user_email_jwt_field="email",
+            team_id_jwt_field="team.id",
+            team_ids_jwt_field="teams",
+            org_id_jwt_field="org.id",
+            end_user_id_jwt_field="end_user.id",
+        ),
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://global-issuer.example.com",
+        audience="some-other-client",
+        kid="global-key",
+        extra_claims={
+            "email": "real-user@example.com",
+            "team": {"id": "real-team"},
+            "teams": ["real-team", "secondary-team"],
+            "org": {"id": "real-org"},
+            "end_user": {"id": "real-end-user"},
+            JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://issuer.example.com",
+            JWTHandler.LITELLM_USER_ID_CLAIM: "victim-user",
+            JWTHandler.LITELLM_USER_EMAIL_CLAIM: "victim@example.com",
+            JWTHandler.LITELLM_TEAM_ID_CLAIM: "victim-team",
+            JWTHandler.LITELLM_TEAM_IDS_CLAIM: ["victim-team"],
+            JWTHandler.LITELLM_ORG_ID_CLAIM: "victim-org",
+            JWTHandler.LITELLM_END_USER_ID_CLAIM: "victim-end-user",
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+    assert jwt_handler.get_team_id(token=claims, default_value=None) == "real-team"
+    assert jwt_handler.get_team_ids_from_jwt(token=claims) == [
+        "real-team",
+        "secondary-team",
+    ]
+    assert jwt_handler.get_org_id(token=claims, default_value=None) == "real-org"
+    assert jwt_handler.get_end_user_id(token=claims, default_value=None) == (
+        "real-end-user"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_strips_unmapped_internal_claims(monkeypatch):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_email_jwt_field": "email",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={
+            "email": "real-user@example.com",
+            JWTHandler.LITELLM_USER_ID_CLAIM: "victim-user",
+            JWTHandler.LITELLM_TEAM_ID_CLAIM: "victim-team",
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert JWTHandler.LITELLM_USER_ID_CLAIM not in claims
+    assert JWTHandler.LITELLM_TEAM_ID_CLAIM not in claims
+    assert jwt_handler.get_user_id(token=claims, default_value=None) is None
+    assert jwt_handler.get_team_id(token=claims, default_value=None) is None
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(
+    monkeypatch, caplog
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+    JWTHandler._unscoped_jwt_warning_emitted = False
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await jwt_handler.auth_jwt(token=token)
+
+    assert "Tokens minted by any application" not in caplog.text
+    assert JWTHandler._unscoped_jwt_warning_emitted is False

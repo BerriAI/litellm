@@ -99,6 +99,15 @@ class JWTHandler:
     LITELLM_TEAM_IDS_CLAIM = "_litellm_team_ids"
     LITELLM_ORG_ID_CLAIM = "_litellm_org_id"
     LITELLM_END_USER_ID_CLAIM = "_litellm_end_user_id"
+    LITELLM_INTERNAL_CLAIMS = (
+        LITELLM_JWT_ISSUER_CLAIM,
+        LITELLM_USER_ID_CLAIM,
+        LITELLM_USER_EMAIL_CLAIM,
+        LITELLM_TEAM_ID_CLAIM,
+        LITELLM_TEAM_IDS_CLAIM,
+        LITELLM_ORG_ID_CLAIM,
+        LITELLM_END_USER_ID_CLAIM,
+    )
 
     def __init__(
         self,
@@ -221,12 +230,27 @@ class JWTHandler:
             return True
         return False
 
+    def _is_trusted_issuer_normalized_token(self, token: dict) -> bool:
+        issuer = token.get(self.LITELLM_JWT_ISSUER_CLAIM)
+        if not isinstance(issuer, str) or not issuer:
+            return False
+
+        litellm_jwtauth = getattr(self, "litellm_jwtauth", None)
+        issuer_configs = getattr(litellm_jwtauth, "issuers", None) or []
+        return any(issuer_config.issuer == issuer for issuer_config in issuer_configs)
+
+    def _has_trusted_issuer_normalized_claim(self, token: dict, claim: str) -> bool:
+        return self._is_trusted_issuer_normalized_token(token=token) and claim in token
+
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        issuer_team_ids = token.get(self.LITELLM_TEAM_IDS_CLAIM)
-        if isinstance(issuer_team_ids, list):
-            return issuer_team_ids
-        if isinstance(issuer_team_ids, str):
-            return [issuer_team_ids]
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_TEAM_IDS_CLAIM
+        ):
+            issuer_team_ids = token.get(self.LITELLM_TEAM_IDS_CLAIM)
+            if isinstance(issuer_team_ids, list):
+                return issuer_team_ids
+            if isinstance(issuer_team_ids, str):
+                return [issuer_team_ids]
 
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
             team_ids: Optional[List[str]] = get_nested_value(
@@ -241,7 +265,9 @@ class JWTHandler:
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
-        if self.LITELLM_END_USER_ID_CLAIM in token:
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_END_USER_ID_CLAIM
+        ):
             return token.get(self.LITELLM_END_USER_ID_CLAIM)
 
         try:
@@ -285,7 +311,9 @@ class JWTHandler:
         return False
 
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
-        if self.LITELLM_TEAM_ID_CLAIM in token:
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_TEAM_ID_CLAIM
+        ):
             team_id = token.get(self.LITELLM_TEAM_ID_CLAIM)
             if isinstance(team_id, list):
                 return team_id[0] if team_id else default_value
@@ -364,7 +392,9 @@ class JWTHandler:
         return self.litellm_jwtauth.user_id_upsert
 
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
-        if self.LITELLM_USER_ID_CLAIM in token:
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_USER_ID_CLAIM
+        ):
             return token.get(self.LITELLM_USER_ID_CLAIM)
 
         try:
@@ -458,7 +488,9 @@ class JWTHandler:
     def get_user_email(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
-        if self.LITELLM_USER_EMAIL_CLAIM in token:
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_USER_EMAIL_CLAIM
+        ):
             return token.get(self.LITELLM_USER_EMAIL_CLAIM)
 
         try:
@@ -489,7 +521,9 @@ class JWTHandler:
         return object_id
 
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
-        if self.LITELLM_ORG_ID_CLAIM in token:
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_ORG_ID_CLAIM
+        ):
             return token.get(self.LITELLM_ORG_ID_CLAIM)
 
         try:
@@ -851,6 +885,10 @@ class JWTHandler:
     def _apply_issuer_claim_mappings(
         self, token: dict, issuer_config: JWTIssuerConfig
     ) -> dict:
+        source_token = {**token}
+        for claim in self.LITELLM_INTERNAL_CLAIMS:
+            token.pop(claim, None)
+
         token[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
         claim_mappings = [
             (issuer_config.user_id_jwt_field, self.LITELLM_USER_ID_CLAIM),
@@ -865,7 +903,7 @@ class JWTHandler:
             if source_claim is None:
                 continue
             token[normalized_claim] = self._get_claim_value_for_issuer_mapping(
-                token=token,
+                token=source_token,
                 claim_field=source_claim,
                 issuer=issuer_config.issuer,
             )
@@ -932,6 +970,14 @@ class JWTHandler:
     async def _auth_jwt_with_issuer(
         self, token: str, issuer_config: JWTIssuerConfig, kid: Optional[str]
     ) -> dict:
+        if (
+            issuer_config.audience is None
+            and not issuer_config.disable_audience_validation
+        ):
+            raise Exception(
+                f"JWT issuer {issuer_config.issuer} must configure audience or set disable_audience_validation=True"
+            )
+
         public_key = await self._get_public_key_from_jwks_url(
             jwks_url=self._get_jwks_url_for_issuer(issuer_config=issuer_config),
             kid=kid,
@@ -943,18 +989,17 @@ class JWTHandler:
                 audience=issuer_config.audience,
                 issuer=issuer_config.issuer,
             )
-            return self._apply_issuer_claim_mappings(
-                token=payload,
-                issuer_config=issuer_config,
-            )
         except jwt.ExpiredSignatureError:
             raise Exception("Token Expired")
         except Exception as e:
             raise Exception(f"Validation fails: {str(e)}")
 
-    async def auth_jwt(self, token: str) -> dict:
-        decode_kwargs = self._build_decode_kwargs()
+        return self._apply_issuer_claim_mappings(
+            token=payload,
+            issuer_config=issuer_config,
+        )
 
+    async def auth_jwt(self, token: str) -> dict:
         header = jwt.get_unverified_header(token)
 
         verbose_proxy_logger.debug("header: %s", header)
@@ -968,6 +1013,8 @@ class JWTHandler:
                 issuer_config=issuer_config,
                 kid=kid,
             )
+
+        decode_kwargs = self._build_decode_kwargs()
 
         public_key = await self.get_public_key(kid=kid)
 

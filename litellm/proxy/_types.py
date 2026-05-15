@@ -4348,7 +4348,11 @@ class JWTIssuerConfig(BaseModel):
     )
     audience: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="Expected token audience for this issuer. If omitted, audience validation is disabled for this issuer.",
+        description="Expected token audience for this issuer.",
+    )
+    disable_audience_validation: bool = Field(
+        default=False,
+        description="Explicitly disable audience validation for this issuer. Use only when the issuer cannot provide an audience suitable for LiteLLM.",
     )
     user_id_jwt_field: Optional[str] = Field(
         default=None,
