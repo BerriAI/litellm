@@ -17630,8 +17630,7 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
-        "supports_vision": true,
-        "supports_pdf_input": true
+        "supports_vision": true
     },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
