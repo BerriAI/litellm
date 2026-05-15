@@ -127,7 +127,7 @@ class ChunkProcessor:
             first_chunk_with_choices.get("choices")
             and len(first_chunk_with_choices["choices"]) > 0
         ):
-            role = first_chunk_with_choices["choices"][0].get("delta", {}).get("role", "assistant")
+            role = (first_chunk_with_choices["choices"][0].get("delta") or {}).get("role", "assistant")
         else:
             role = "assistant"
         finish_reason = "stop"
