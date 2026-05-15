@@ -1492,6 +1492,53 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
+        """
+        Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
+
+        Tries the Authorization header first. Falls back to decoding the UI
+        'token' session cookie (set by SSO login) to extract the API key, which
+        allows browser-based OAuth redirects to work without an explicit
+        Authorization header.
+        """
+        import jwt as _jwt
+
+        from litellm.proxy.proxy_server import master_key
+
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header  # _get_bearer_token will strip "Bearer " prefix
+
+        if not api_key:
+            token_cookie = request.cookies.get("token")
+            if token_cookie and master_key:
+                try:
+                    decoded = _jwt.decode(
+                        token_cookie,
+                        master_key,
+                        algorithms=["HS256"],
+                    )
+                    if decoded.get("login_method") in ("sso", "username_password"):
+                        cookie_key = decoded.get("key", "")
+                        if cookie_key:
+                            api_key = f"Bearer {cookie_key}"
+                except _jwt.InvalidTokenError:
+                    pass
+
+        request_data = await _read_request_body(request=request)
+        request_data = populate_request_with_path_params(
+            request_data=request_data, request=request
+        )
+
+        return await _user_api_key_auth_builder(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
