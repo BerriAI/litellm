@@ -32,16 +32,11 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         litellm_params: Optional[dict] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        if litellm_params is None:
-            litellm_params = GenericLiteLLMParams()
-        elif isinstance(litellm_params, dict):
-            litellm_params = GenericLiteLLMParams(**litellm_params)
-
-        if api_key and not litellm_params.api_key:
-            litellm_params.api_key = api_key
-
+        params = GenericLiteLLMParams(**(litellm_params or {}))
+        if api_key and not params.api_key:
+            params.api_key = api_key
         return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params
+            headers=headers, litellm_params=params
         )
 
     def get_complete_url(
