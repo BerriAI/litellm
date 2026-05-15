@@ -94,12 +94,6 @@ export const detectSSOProvider = (values: SSOSettingsValues): string | null => {
   if (values.google_client_id) return "google";
   if (values.microsoft_client_id) return "microsoft";
   if (values.okta_client_id) return "okta";
-  if (values.generic_client_id) {
-    // Backward compatibility: older Okta UI settings were stored as generic OIDC endpoints.
-    if (values.generic_authorization_endpoint?.includes("okta")) {
-      return "okta";
-    }
-    return "generic";
-  }
+  if (values.generic_client_id) return "generic";
   return null;
 };
