@@ -3415,20 +3415,18 @@ class ProxyConfig:
             # Make a copy to avoid mutating the original config
             config_to_save = new_config.copy()
 
-            # SECURITY: Always encrypt environment_variables before DB write
+            # SECURITY: Always encrypt environment_variables before DB write.
+            # _encrypt_env_variables_for_db is idempotent — a caller that
+            # already encrypted the values (or re-submitted ciphertext read
+            # back from the DB) will not get a stacked second layer.
             if (
                 "environment_variables" in config_to_save
                 and config_to_save["environment_variables"]
             ):
-                # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
-                decrypted_env_vars = self._decrypt_and_set_db_env_variables(
-                    environment_variables=config_to_save["environment_variables"],
-                    return_original_value=True,
-                )
-
-                # encrypt the environment_variables,
-                config_to_save["environment_variables"] = self._encrypt_env_variables(
-                    environment_variables=decrypted_env_vars
+                config_to_save["environment_variables"] = (
+                    self._encrypt_env_variables_for_db(
+                        environment_variables=config_to_save["environment_variables"]
+                    )
                 )
 
             config_to_save.pop("model_list", None)
@@ -5075,6 +5073,29 @@ class ProxyConfig:
             )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
+
+    def _encrypt_env_variables_for_db(
+        self, environment_variables: dict, new_encryption_key: Optional[str] = None
+    ) -> dict:
+        """
+        Idempotently encrypt environment variables for a DB write.
+
+        Config writers may pass either plaintext (first write) or values that
+        are already ciphertext — e.g. the Admin UI reads config back via
+        /get/config/callbacks (which returns the stored, still-encrypted
+        value) and re-POSTs it on the next save. Decrypt first so an
+        already-encrypted value is not stacked with a second encryption
+        layer, then encrypt exactly once.
+
+        Decryption here deliberately uses _decrypt_db_variables (not
+        _decrypt_and_set_db_env_variables): this is a write path, and
+        loading values into os.environ is the read path's responsibility.
+        """
+        decrypted_env_vars = self._decrypt_db_variables(environment_variables)
+        return self._encrypt_env_variables(
+            environment_variables=decrypted_env_vars,
+            new_encryption_key=new_encryption_key,
+        )
 
     @staticmethod
     def _parse_router_settings_value(value: Any) -> Optional[dict]:
@@ -13788,11 +13809,18 @@ async def update_config(  # noqa: PLR0915
                 existing[k] = v
             await _upsert_section("general_settings", existing)
 
-        # environment_variables: encrypt request values, then merge into existing.
+        # environment_variables: idempotently encrypt the request values
+        # (plaintext on first write, OR ciphertext the UI read back via
+        # /get/config/callbacks and re-submitted on save), then merge into
+        # existing. Only the sent keys are re-written; untouched keys keep
+        # their stored ciphertext byte-for-byte.
         if config_info.environment_variables is not None:
             existing = await _read_section("environment_variables")
-            for k, v in config_info.environment_variables.items():
-                existing[k] = encrypt_value_helper(value=v)
+            existing.update(
+                proxy_config._encrypt_env_variables_for_db(
+                    environment_variables=config_info.environment_variables
+                )
+            )
             await _upsert_section("environment_variables", existing)
 
         # litellm_settings: merge existing + request, request wins (matching
