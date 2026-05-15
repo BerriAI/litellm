@@ -762,12 +762,12 @@ class JWTHandler:
         When both are unset PyJWT only checks the signature and expiry, which
         is preserved for backward compatibility but logged once as a warning.
         """
-        audience = (
-            litellm_jwtauth.audience if litellm_jwtauth is not None else None
-        ) or os.getenv("JWT_AUDIENCE")
-        issuer = (
-            litellm_jwtauth.issuer if litellm_jwtauth is not None else None
-        ) or os.getenv("JWT_ISSUER")
+        audience = litellm_jwtauth.audience if litellm_jwtauth is not None else None
+        if audience is None:
+            audience = os.getenv("JWT_AUDIENCE")
+        issuer = litellm_jwtauth.issuer if litellm_jwtauth is not None else None
+        if issuer is None:
+            issuer = os.getenv("JWT_ISSUER")
 
         if (
             audience is None

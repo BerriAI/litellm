@@ -854,8 +854,8 @@ async def update_sso_settings(sso_config: SSOConfig):
     )
     existing_plain: dict = {}
     if existing_sso_record and existing_sso_record.sso_settings:
-        existing_plain = proxy_config._decrypt_and_set_db_env_variables(
-            environment_variables=dict(existing_sso_record.sso_settings)
+        existing_plain = proxy_config._decrypt_db_variables(
+            variables_dict=dict(existing_sso_record.sso_settings)
         )
 
     # Update environment variables in config and in memory

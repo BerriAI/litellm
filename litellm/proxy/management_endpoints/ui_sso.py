@@ -1796,6 +1796,11 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         access_token_payload=access_token_payload,
         jwt_handler=jwt_handler,
         return_to=cp_return_to,
+        env_prefix=_get_oidc_env_prefix(
+            _OIDC_PROVIDER_OKTA
+            if okta_client_id is not None and generic_client_id is None
+            else _OIDC_PROVIDER_GENERIC
+        ),
     )
 
 
@@ -2830,6 +2835,7 @@ class SSOAuthenticationHandler:
     def _get_user_email_and_id_from_result(
         result: Optional[Union[OpenID, dict]],
         generic_client_id: Optional[str] = None,
+        env_prefix: str = "GENERIC",
     ) -> ParsedOpenIDResult:
         """
         Gets the user email and id from the OpenID result after validating the email domain
@@ -2870,7 +2876,8 @@ class SSOAuthenticationHandler:
         # generic client id - override with custom attribute name if specified
         if generic_client_id is not None and result is not None:
             generic_user_role_attribute_name = os.getenv(
-                "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+                f"{env_prefix}_USER_ROLE_ATTRIBUTE",
+                os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role"),
             )
             user_id = getattr(result, "id", None)
             user_email = normalize_email(getattr(result, "email", None))
@@ -2908,6 +2915,7 @@ class SSOAuthenticationHandler:
         access_token_payload: Optional[dict] = None,
         jwt_handler: Optional[JWTHandler] = None,
         return_to: Optional[str] = None,
+        env_prefix: str = "GENERIC",
     ) -> RedirectResponse:
         import jwt
 
@@ -2931,7 +2939,9 @@ class SSOAuthenticationHandler:
         # User is Authe'd in - generate key for the UI to access Proxy
         parsed_openid_result = (
             SSOAuthenticationHandler._get_user_email_and_id_from_result(
-                result=result, generic_client_id=generic_client_id
+                result=result,
+                generic_client_id=generic_client_id,
+                env_prefix=env_prefix,
             )
         )
         user_email = parsed_openid_result.get("user_email")
