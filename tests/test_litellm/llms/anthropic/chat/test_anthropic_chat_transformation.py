@@ -97,6 +97,34 @@ def test_calculate_usage():
     assert usage._cache_read_input_tokens == 0
 
 
+def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 1},
+        reasoning_content="This reasoning text intentionally tokenizes above one output token.",
+    )
+
+    assert usage.completion_tokens == 1
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == usage.completion_tokens
+    assert usage.completion_tokens_details.text_tokens == 0
+
+
+def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": MagicMock()},
+        reasoning_content="mocked response reasoning",
+    )
+
+    assert usage.completion_tokens == 0
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 0
+
+
 @pytest.mark.parametrize(
     "usage_object,expected_usage",
     [
@@ -2105,6 +2133,53 @@ def test_validate_effort_for_model_centralises_per_model_gating(
         assert model in err
     else:
         assert err is None
+
+
+def test_transform_request_injects_dummy_tool_without_tools_param():
+    """
+    Anthropic rejects messages that contain tool turns when ``tools`` is omitted.
+    LiteLLM must inject a dummy tool without ``litellm.modify_params``.
+    """
+    config = AnthropicConfig()
+    prev_modify_params = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {
+                        "id": "toolu_test_dummy",
+                        "type": "function",
+                        "function": {"name": "get_x", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_test_dummy",
+                "content": "{}",
+            },
+        ]
+        result = config.transform_request(
+            model="claude-3-5-haiku-20241022",
+            messages=messages,
+            optional_params={"max_tokens": 256},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.modify_params = prev_modify_params
+
+    assert "tools" in result
+    names = [
+        t.get("name")
+        for t in result["tools"]
+        if isinstance(t, dict) and t.get("name") is not None
+    ]
+    assert "dummy_tool" in names
 
 
 def test_transform_request_uses_dynamic_max_tokens():

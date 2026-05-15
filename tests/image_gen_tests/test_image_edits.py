@@ -102,22 +102,47 @@ class BaseLLMImageEditTest(ABC):
 # Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
 
-TEST_IMAGES = [
-    open(os.path.join(pwd, "ishaan_github.png"), "rb"),
-    open(os.path.join(pwd, "litellm_site.png"), "rb"),
-]
 
-SINGLE_TEST_IMAGE = open(os.path.join(pwd, "ishaan_github.png"), "rb")
+# Image fixtures must be regenerated per access — module-level
+# ``open(...)`` handles get consumed after a single multipart upload, leaving
+# subsequent tests in the same process to send empty bodies. That non-determinism
+# (a) blows the recorded cassette past ``MAX_EPISODES_PER_CASSETTE`` so the
+# persister refuses to save (see ``tests/_vcr_redis_persister.py``), and
+# (b) re-bills the live image edit endpoint on every CI run.
+def _read_image_bytes(filename: str) -> bytes:
+    with open(os.path.join(pwd, filename), "rb") as f:
+        return f.read()
+
+
+_ISHAAN_GITHUB_BYTES = _read_image_bytes("ishaan_github.png")
+_LITELLM_SITE_BYTES = _read_image_bytes("litellm_site.png")
+
+
+def _make_test_images() -> list:
+    """Return a fresh pair of image streams seeded with the fixture bytes.
+
+    Use this everywhere you'd previously have used the module-level
+    ``TEST_IMAGES``. Each call returns brand new ``BytesIO`` objects whose
+    file pointers start at 0, so multipart uploads encode the full image
+    bytes on every test invocation. Parametrized and ``flaky``-retried
+    test methods call ``get_base_image_edit_call_args`` once per
+    invocation, so a fresh stream per call is sufficient — the factory
+    must not auto-rewind on EOF or the SDK's multipart writer will read
+    the same bytes forever (worker OOM).
+    """
+    return [
+        BytesIO(_ISHAAN_GITHUB_BYTES),
+        BytesIO(_LITELLM_SITE_BYTES),
+    ]
+
+
+def _make_single_test_image() -> BytesIO:
+    return BytesIO(_ISHAAN_GITHUB_BYTES)
 
 
 def get_test_images_as_bytesio():
     """Helper function to get test images as BytesIO objects"""
-    bytesio_images = []
-    for image_path in ["ishaan_github.png", "litellm_site.png"]:
-        with open(os.path.join(pwd, image_path), "rb") as f:
-            image_bytes = f.read()
-            bytesio_images.append(BytesIO(image_bytes))
-    return bytesio_images
+    return _make_test_images()
 
 
 class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
@@ -129,21 +154,7 @@ class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
         """Return base call args for OpenAI image edit"""
         return {
             "model": "gpt-image-1",
-            "image": TEST_IMAGES,
-        }
-
-
-class TestOpenAIImageEditDallE2(BaseLLMImageEditTest):
-    """
-    Concrete implementation of BaseLLMImageEditTest for OpenAI DALL-E-2 image edits.
-    DALL-E-2 only supports a single image (not an array).
-    """
-
-    def get_base_image_edit_call_args(self) -> dict:
-        """Return base call args for OpenAI DALL-E-2 image edit (single image only)"""
-        return {
-            "model": "dall-e-2",
-            "image": SINGLE_TEST_IMAGE,
+            "image": _make_test_images(),
         }
 
 
@@ -157,7 +168,7 @@ class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
         """Return base call args for Azure AI FLUX 2 image edit"""
         return {
             "model": "azure_ai/flux.2-pro",
-            "image": SINGLE_TEST_IMAGE,
+            "image": _make_single_test_image(),
             "api_base": os.getenv("AZURE_AI_API_BASE"),
             "api_key": os.getenv("AZURE_AI_API_KEY"),
             "api_version": "preview",
@@ -185,7 +196,7 @@ async def test_openai_image_edit_litellm_router():
         result = await router.aimage_edit(
             prompt=prompt,
             model="gpt-image-1",
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
         print("result from image edit", result)
 
@@ -289,7 +300,7 @@ async def test_azure_image_edit_litellm_sdk():
             api_base=test_api_base,
             api_key=test_api_key,
             api_version=test_api_version,
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
 
         # Verify the request was made correctly
@@ -328,10 +339,13 @@ async def test_azure_image_edit_litellm_sdk():
         # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert "Authorization" in headers, "Authorization header should be present"
-        assert headers["Authorization"].startswith(
-            "Bearer "
-        ), "Authorization should be Bearer token"
+        assert (
+            "api-key" in headers
+        ), "Azure image edit must use the api-key header, not Authorization: Bearer"
+        assert headers["api-key"] == test_api_key
+        assert (
+            "Authorization" not in headers
+        ), "Azure image edit must not send an Authorization header when an api_key is provided"
 
         print("result from image edit", result)
 
@@ -400,7 +414,7 @@ async def test_openai_image_edit_cost_tracking():
         result = await aimage_edit(
             prompt=prompt,
             model="openai/gpt-image-1",
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
 
         # Verify the request was made correctly
@@ -491,7 +505,7 @@ async def test_azure_image_edit_cost_tracking():
             prompt=prompt,
             model="azure/CUSTOM_AZURE_DEPLOYMENT_NAME",
             base_model="azure/gpt-image-1",
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
 
         # Verify the request was made correctly
@@ -539,7 +553,6 @@ async def test_recraft_image_edit_api():
     import requests
 
     litellm._turn_on_debug()
-    global TEST_IMAGES
     try:
         prompt = """
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
@@ -547,7 +560,7 @@ async def test_recraft_image_edit_api():
         result = await aimage_edit(
             prompt=prompt,
             model="recraft/recraftv3",
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
         print("result from image edit", result)
 
@@ -645,13 +658,13 @@ async def test_multiple_vs_single_image_edit(sync_mode):
             single_result = image_edit(
                 prompt=prompt,
                 model="gpt-image-1",
-                image=SINGLE_TEST_IMAGE,
+                image=_make_single_test_image(),
             )
         else:
             single_result = await aimage_edit(
                 prompt=prompt,
                 model="gpt-image-1",
-                image=SINGLE_TEST_IMAGE,
+                image=_make_single_test_image(),
             )
 
         print("Single image result:", single_result)
@@ -662,13 +675,13 @@ async def test_multiple_vs_single_image_edit(sync_mode):
             multiple_result = image_edit(
                 prompt=prompt,
                 model="gpt-image-1",
-                image=TEST_IMAGES,
+                image=_make_test_images(),
             )
         else:
             multiple_result = await aimage_edit(
                 prompt=prompt,
                 model="gpt-image-1",
-                image=TEST_IMAGES,
+                image=_make_test_images(),
             )
 
         print("Multiple images result:", multiple_result)
@@ -699,7 +712,7 @@ async def test_multiple_image_edit_with_different_formats():
 
         # Test with mixed BytesIO and file objects
         mixed_images = [
-            SINGLE_TEST_IMAGE,  # File object
+            _make_single_test_image(),  # File object
             get_test_images_as_bytesio()[1],  # BytesIO object
         ]
 
@@ -763,14 +776,14 @@ async def test_image_edit_array_handling():
         result1 = await aimage_edit(
             prompt=prompt,
             model="gpt-image-1",
-            image=SINGLE_TEST_IMAGE,
+            image=_make_single_test_image(),
         )
 
         # Test 2: Multiple images (already a list)
         result2 = await aimage_edit(
             prompt=prompt,
             model="gpt-image-1",
-            image=TEST_IMAGES,
+            image=_make_test_images(),
         )
 
         # Both valid calls should succeed

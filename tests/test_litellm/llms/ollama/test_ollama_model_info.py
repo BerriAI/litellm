@@ -73,7 +73,7 @@ class TestOllamaModelInfo:
         info = OllamaModelInfo()
         models = info.get_models()
         # Only 'alpha' and 'zeta' should be returned, sorted alphabetically
-        assert models == ["alpha", "zeta"]
+        assert models == ["ollama/alpha", "ollama/zeta"]
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
         assert call_headers and call_headers[0] == {}
@@ -122,7 +122,7 @@ class TestOllamaModelInfo:
         monkeypatch.setattr(httpx, "get", mock_get)
         info = OllamaModelInfo()
         models = info.get_models()
-        assert models == ["m1", "m2"]
+        assert models == ["ollama/m1", "ollama/m2"]
 
     def test_get_models_fallback_on_error(self, monkeypatch):
         """
@@ -138,6 +138,32 @@ class TestOllamaModelInfo:
         models = info.get_models()
         # Default static ollama_models is ['llama2'], so expect ['ollama/llama2']
         assert models == ["ollama/llama2"]
+
+    def test_get_models_no_double_prefix(self, monkeypatch):
+        """
+        Names that already carry the 'ollama/' prefix (or are returned by an
+        Ollama server that's been configured to emit them) should not be
+        prefixed a second time.
+        """
+        sample = {
+            "models": [
+                {"name": "ollama/already-prefixed"},
+                {"name": "fresh"},
+                {"name": "hf.co/Qwen/Qwen3-14B:latest"},
+            ]
+        }
+
+        def mock_get(url, headers):
+            return DummyResponse(sample, status_code=200)
+
+        monkeypatch.setattr(httpx, "get", mock_get)
+        info = OllamaModelInfo()
+        models = info.get_models()
+        assert models == [
+            "ollama/already-prefixed",
+            "ollama/fresh",
+            "ollama/hf.co/Qwen/Qwen3-14B:latest",
+        ]
 
 
 class TestOllamaGetModelInfo:
