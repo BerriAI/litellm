@@ -194,11 +194,7 @@ vi.mock("../utils", () => ({
     if (values.google_client_id) return "google";
     if (values.microsoft_client_id) return "microsoft";
     if (values.okta_client_id) return "okta";
-    if (values.generic_client_id) {
-      return values.generic_authorization_endpoint?.includes("okta")
-        ? "okta"
-        : "generic";
-    }
+    if (values.generic_client_id) return "generic";
     return null;
   }),
   processSSOSettingsPayload: vi.fn(),

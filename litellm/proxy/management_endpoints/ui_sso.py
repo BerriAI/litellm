@@ -401,6 +401,21 @@ def _is_oidc_pkce_enabled(provider: _OIDC_PROVIDER_NAMES) -> bool:
     return os.getenv(f"{env_prefix}_CLIENT_USE_PKCE", default_value).lower() == "true"
 
 
+def _get_oidc_attribute_env(
+    env_prefix: str, attribute_suffix: str, default: Optional[str] = None
+) -> Optional[str]:
+    """Resolve an OIDC attribute env var with provider-specific override.
+
+    For provider-specific prefixes (e.g. ``OKTA``), checks the provider-specific
+    var first then falls back to ``GENERIC_*``. For ``GENERIC`` itself, the
+    fallback is identical to the primary, so we only look up the variable once.
+    """
+    primary_var = f"{env_prefix}_{attribute_suffix}"
+    if env_prefix == "GENERIC":
+        return os.getenv(primary_var, default)
+    return os.getenv(primary_var, os.getenv(f"GENERIC_{attribute_suffix}", default))
+
+
 def normalize_email(email: Optional[str]) -> Optional[str]:
     """
     Normalize email address to lowercase for consistent storage and comparison.
@@ -748,41 +763,33 @@ def generic_response_convertor(  # noqa: PLR0915
     )
     provider_default = "iss" if provider == _OIDC_PROVIDER_OKTA else "provider"
 
-    generic_user_id_attribute_name = os.getenv(
-        f"{env_prefix}_USER_ID_ATTRIBUTE",
-        os.getenv("GENERIC_USER_ID_ATTRIBUTE", user_id_default),
+    generic_user_id_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_ID_ATTRIBUTE", user_id_default
     )
-    generic_user_display_name_attribute_name = os.getenv(
-        f"{env_prefix}_USER_DISPLAY_NAME_ATTRIBUTE",
-        os.getenv("GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", display_name_default),
+    generic_user_display_name_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_DISPLAY_NAME_ATTRIBUTE", display_name_default
     )
-    generic_user_email_attribute_name = os.getenv(
-        f"{env_prefix}_USER_EMAIL_ATTRIBUTE",
-        os.getenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email"),
+    generic_user_email_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_EMAIL_ATTRIBUTE", "email"
     )
 
-    generic_user_first_name_attribute_name = os.getenv(
-        f"{env_prefix}_USER_FIRST_NAME_ATTRIBUTE",
-        os.getenv("GENERIC_USER_FIRST_NAME_ATTRIBUTE", first_name_default),
+    generic_user_first_name_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_FIRST_NAME_ATTRIBUTE", first_name_default
     )
-    generic_user_last_name_attribute_name = os.getenv(
-        f"{env_prefix}_USER_LAST_NAME_ATTRIBUTE",
-        os.getenv("GENERIC_USER_LAST_NAME_ATTRIBUTE", last_name_default),
+    generic_user_last_name_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_LAST_NAME_ATTRIBUTE", last_name_default
     )
 
-    generic_provider_attribute_name = os.getenv(
-        f"{env_prefix}_USER_PROVIDER_ATTRIBUTE",
-        os.getenv("GENERIC_USER_PROVIDER_ATTRIBUTE", provider_default),
+    generic_provider_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_PROVIDER_ATTRIBUTE", provider_default
     )
 
-    generic_user_role_attribute_name = os.getenv(
-        f"{env_prefix}_USER_ROLE_ATTRIBUTE",
-        os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role"),
+    generic_user_role_attribute_name = _get_oidc_attribute_env(
+        env_prefix, "USER_ROLE_ATTRIBUTE", "role"
     )
 
-    generic_user_extra_attributes = os.getenv(
-        f"{env_prefix}_USER_EXTRA_ATTRIBUTES",
-        os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None),
+    generic_user_extra_attributes = _get_oidc_attribute_env(
+        env_prefix, "USER_EXTRA_ATTRIBUTES", None
     )
 
     verbose_proxy_logger.debug(
@@ -1338,6 +1345,30 @@ async def get_generic_sso_response(
             # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
             access_token_str: Optional[str] = combined_response.get("access_token")
         else:
+            # If we reach this branch with PKCE enabled but no verifier, the
+            # standard OAuth token exchange below requires a client_secret. For
+            # public PKCE clients (e.g. Okta SPAs) no secret is configured, so
+            # the request would fail deep inside fastapi-sso with an opaque
+            # error. Raise an actionable diagnostic instead.
+            if generic_client_secret is None and _is_oidc_pkce_enabled(provider):
+                env_prefix = _get_oidc_env_prefix(provider)
+                raise ProxyException(
+                    message=(
+                        f"PKCE is enabled ({env_prefix}_CLIENT_USE_PKCE=true) "
+                        "but the PKCE code_verifier could not be retrieved "
+                        "from cache, and no client_secret is configured to "
+                        "fall back to the standard OAuth token exchange. This "
+                        "typically happens when the PKCE verifier expired or "
+                        "the authorization and callback were handled by "
+                        "different proxy instances without a shared cache. "
+                        "Configure Redis so all instances share the PKCE "
+                        f"verifier, or set {env_prefix}_CLIENT_SECRET to "
+                        "enable a non-PKCE fallback."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
             result = await generic_sso.verify_and_process(
                 request,
                 params=token_exchange_params,
