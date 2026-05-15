@@ -76,6 +76,58 @@ class TestGetExcludedFilteredDeployments:
 
 
 # ---------------------------------------------------------------------------
+# Router helpers (router_code_coverage.py requires these names in a *router* test file)
+# ---------------------------------------------------------------------------
+
+
+def test_set_failed_deployment_id_on_exception():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+    exc = Exception("fail")
+    dep = _make_dep("dep-a")
+    router._set_failed_deployment_id_on_exception(exc, dep)
+    assert getattr(exc, "failed_deployment_id", None) == "dep-a"
+    router._set_failed_deployment_id_on_exception(exc, _make_dep("dep-b"))
+    assert exc.failed_deployment_id == "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_weighted_failover_returns_none_without_failed_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key", "weight": 1},
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+    )
+    result = await router._maybe_run_weighted_failover(
+        exception=Exception("fail"),
+        original_model_group="test-model",
+        all_deployments=[_make_dep("A"), _make_dep("B")],
+        args=(),
+        kwargs={"metadata": {}},
+        input_kwargs={},
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Integration tests for weighted-failover end-to-end via Router
 # ---------------------------------------------------------------------------
 
