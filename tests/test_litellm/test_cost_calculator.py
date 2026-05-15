@@ -22,13 +22,13 @@ from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
 
 
-def test_cost_per_token_duplicate_openai_prefix_matches_model_cost():
+def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     """
     Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
     resolve to model_prices keys (e.g. gpt-5.5), not fail or multiply prefixes.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     prompt_usd, completion_usd = cost_per_token(
         model="openai/openai/gpt-5.5",
