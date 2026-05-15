@@ -50,7 +50,7 @@ class TestAnthropicAPIToolSearch(BaseAnthropicMessagesToolSearchTest):
 #     """
 
 #     def get_model(self) -> str:
-#         return "azure/claude-sonnet-4-20250514"
+#         return "azure/claude-sonnet-4-5-20250929"
 
 
 # class TestVertexAIToolSearch(BaseAnthropicMessagesToolSearchTest):

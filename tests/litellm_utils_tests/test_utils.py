@@ -385,14 +385,14 @@ def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
 
 def test_bad_key():
     key = "bad-key"
-    response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+    response = check_valid_key(model="gpt-5-mini", api_key=key)
     print(response, key)
     assert response == False
 
 
 def test_good_key():
     key = os.environ["OPENAI_API_KEY"]
-    response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+    response = check_valid_key(model="gpt-5-mini", api_key=key)
     assert response == True
 
 
@@ -406,7 +406,7 @@ def test_validate_environment_empty_model():
 
 
 def test_validate_environment_api_key():
-    response_obj = validate_environment(model="gpt-3.5-turbo", api_key="sk-my-test-key")
+    response_obj = validate_environment(model="gpt-5-mini", api_key="sk-my-test-key")
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
@@ -598,7 +598,7 @@ def test_get_chat_completion_prompt():
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -610,7 +610,7 @@ def test_get_chat_completion_prompt():
     updated_message = "hello world"
 
     litellm_logging_obj.get_chat_completion_prompt(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": updated_message}],
         non_default_params={},
         prompt_id="1234",
@@ -649,7 +649,7 @@ def test_redact_msgs_from_logs():
     )
 
     litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -700,14 +700,14 @@ def test_redact_embedding_response():
     ]
 
     response_obj = litellm.EmbeddingResponse(
-        model="text-embedding-ada-002",
+        model="text-embedding-3-small",
         data=original_data,
         usage=original_usage,
         object="list",
     )
 
     litellm_logging_obj = Logging(
-        model="text-embedding-ada-002",
+        model="text-embedding-3-small",
         messages=[{"role": "user", "content": "test input"}],
         stream=False,
         call_type="embedding",
@@ -724,13 +724,13 @@ def test_redact_embedding_response():
     # Assert the original response_obj is NOT modified
     assert response_obj.data == original_data
     assert response_obj.usage == original_usage
-    assert response_obj.model == "text-embedding-ada-002"
+    assert response_obj.model == "text-embedding-3-small"
     assert response_obj.object == "list"
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
     assert (
-        _redacted_response_obj.model == "text-embedding-ada-002"
+        _redacted_response_obj.model == "text-embedding-3-small"
     )  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
@@ -775,7 +775,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     )
 
     litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -934,7 +934,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     litellm.success_callback = ["langfuse"]
     litellm_call_id = "my-unique-call-id"
     litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -951,7 +951,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
         metadata["existing_trace_id"] = langfuse_existing_trace_id
 
     litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hey how's it going?"}],
         mock_response="Hey!",
         litellm_logging_obj=litellm_logging_obj,
@@ -1633,7 +1633,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
         "object": "list",
         "data": [
             {
-                "id": "gpt-4o",
+                "id": "gpt-5.5",
                 "object": "model",
                 "created": 1686935002,
                 "owned_by": "organization-owner",
@@ -1650,7 +1650,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
-        assert "litellm_proxy/gpt-4o" in valid_models
+        assert "litellm_proxy/gpt-5.5" in valid_models
 
 
 def test_get_valid_models_fireworks_ai(monkeypatch):
@@ -1807,7 +1807,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
     curr_len_failure_callback = len(litellm.failure_callback)
 
     litellm.completion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Testing langfuse",
     )
@@ -1922,7 +1922,7 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates(
 
     # Make a completion call
     await litellm.acompletion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Testing duplicate callbacks",
     )
@@ -1961,7 +1961,7 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_succ
 
     # Make a completion call
     await litellm.acompletion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Testing duplicate callbacks",
     )
@@ -1996,7 +1996,7 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
 
     # Make a completion call
     await litellm.acompletion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Testing duplicate callbacks",
     )
@@ -2011,7 +2011,7 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
 
     for _ in range(10):
         await litellm.acompletion(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="Testing duplicate callbacks",
         )
@@ -2040,7 +2040,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     curr_len_failure_callback = len(litellm.failure_callback)
 
     litellm.completion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Testing langfuse",
     )
@@ -2069,7 +2069,7 @@ async def test_wrapper_kwargs_passthrough():
         return await mock_original(**kwargs)
 
     # Test kwargs
-    test_kwargs = {"base_model": "gpt-4o-mini"}
+    test_kwargs = {"base_model": "gpt-5-mini"}
 
     # Call decorated function
     await test_function(**test_kwargs)
@@ -2089,7 +2089,7 @@ async def test_wrapper_kwargs_passthrough():
     # get base model
     assert (
         litellm_logging_obj.model_call_details["litellm_params"]["base_model"]
-        == "gpt-4o-mini"
+        == "gpt-5-mini"
     )
 
 
@@ -2327,15 +2327,15 @@ def test_get_valid_models_from_provider():
 
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
-    assert "gpt-4o-mini" in valid_models
+    assert "gpt-5-mini" in valid_models
 
     print("Valid models: ", valid_models)
-    valid_models.remove("gpt-4o-mini")
-    assert "gpt-4o-mini" not in valid_models
+    valid_models.remove("gpt-5-mini")
+    assert "gpt-5-mini" not in valid_models
 
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
-    assert "gpt-4o-mini" in valid_models
+    assert "gpt-5-mini" in valid_models
 
 
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
@@ -2347,7 +2347,7 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
     _model_cache.set_cached_model_info(
-        "openai", litellm_params=None, available_models=["gpt-4o-mini"]
+        "openai", litellm_params=None, available_models=["gpt-5-mini"]
     )
     monkeypatch.delenv("OPENAI_API_KEY")
 
@@ -2471,10 +2471,10 @@ def test_get_base_model_from_metadata():
 
     # Test 1: base_model in metadata (Chat Completions API pattern)
     model_call_details_with_metadata = {
-        "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-4"}}}
+        "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-5.5"}}}
     }
     result = _get_base_model_from_metadata(model_call_details_with_metadata)
-    assert result == "azure/gpt-4", f"Expected 'azure/gpt-4', got {result}"
+    assert result == "azure/gpt-5.5", f"Expected 'azure/gpt-5.5', got {result}"
 
     # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
     model_call_details_with_litellm_metadata = {
@@ -2487,12 +2487,12 @@ def test_get_base_model_from_metadata():
 
     # Test 3: base_model in litellm_params (direct base_model)
     model_call_details_with_direct_base_model = {
-        "litellm_params": {"base_model": "azure/gpt-3.5-turbo"}
+        "litellm_params": {"base_model": "azure/gpt-5-mini"}
     }
     result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
     assert (
-        result == "azure/gpt-3.5-turbo"
-    ), f"Expected 'azure/gpt-3.5-turbo', got {result}"
+        result == "azure/gpt-5-mini"
+    ), f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 4: metadata takes precedence over litellm_metadata
     model_call_details_with_both = {
