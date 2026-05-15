@@ -4107,3 +4107,18 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_normalize_array_of_strings_in_content():
+    from litellm.utils import validate_and_fix_openai_messages
+
+    messages = [
+        {
+            "role": "user",
+            "content": ["what is the capital of France?"],
+        }
+    ]
+    result = validate_and_fix_openai_messages(messages=messages)
+    assert result[0]["content"] == [
+        {"type": "text", "text": "what is the capital of France?"},
+    ]
