@@ -5,6 +5,7 @@ Test for response_format to text.format conversion in completion -> responses br
 import pytest
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
+    OpenAiResponsesToChatCompletionStreamIterator,
 )
 
 
@@ -230,3 +231,116 @@ def test_transform_request_drops_user_metadata_with_additional_drop_params():
 
     assert "metadata" not in result
     assert result["litellm_metadata"]["internal_key"] == "secret"
+
+
+# ---------------------------------------------------------------------------
+# Tests for OpenAiResponsesToChatCompletionStreamIterator.chunk_parser
+# (specifically the no-delta / .done-only tool-call path fixed in #27797)
+# ---------------------------------------------------------------------------
+
+
+def _make_iterator() -> OpenAiResponsesToChatCompletionStreamIterator:
+    """Return a fresh iterator with an empty (no-op) underlying stream."""
+    return OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+    )
+
+
+def test_chunk_parser_done_without_delta_emits_arguments():
+    """Models that never send .delta (e.g. gpt-5.3-codex-spark) deliver the
+    full function arguments only in the .done event.  chunk_parser must emit a
+    tool-call chunk carrying those arguments rather than silently dropping them
+    (which would produce arguments='{}' in the reconstructed response)."""
+    iterator = _make_iterator()
+    arguments_json = '{"city": "Paris"}'
+
+    done_chunk = {
+        "type": "response.function_call_arguments.done",
+        "output_index": 0,
+        "arguments": arguments_json,
+    }
+
+    result = iterator.chunk_parser(done_chunk)
+
+    assert result.choices is not None and len(result.choices) == 1
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0].function.arguments == arguments_json
+
+
+def test_chunk_parser_done_after_delta_is_skipped():
+    """When .delta chunks were already streamed for an output_index, the .done
+    event must NOT re-emit arguments (they are already accumulated by the
+    standard delta path, and duplicating them would corrupt the response)."""
+    iterator = _make_iterator()
+    output_index = 2
+
+    # Simulate receiving a delta first
+    delta_chunk = {
+        "type": "response.function_call_arguments.delta",
+        "output_index": output_index,
+        "delta": '{"city":',
+    }
+    iterator.chunk_parser(delta_chunk)  # records output_index in _seen_arg_delta_idxs
+
+    # Now send the corresponding .done — it should delegate to the static
+    # translator, which returns a non-tool-call chunk (no tool_calls in delta).
+    done_chunk = {
+        "type": "response.function_call_arguments.done",
+        "output_index": output_index,
+        "arguments": '{"city": "Paris"}',
+    }
+    result = iterator.chunk_parser(done_chunk)
+
+    # The static translator does not handle .done → no tool_calls emitted
+    delta = result.choices[0].delta
+    assert not delta.tool_calls
+
+
+def test_chunk_parser_done_without_delta_uses_output_index():
+    """The tool-call chunk emitted for the .done-only path must carry the
+    correct output_index so the caller can reassemble multi-tool responses."""
+    iterator = _make_iterator()
+    output_index = 3
+
+    done_chunk = {
+        "type": "response.function_call_arguments.done",
+        "output_index": output_index,
+        "arguments": "{}",
+    }
+
+    result = iterator.chunk_parser(done_chunk)
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None
+    assert tool_calls[0].index == output_index
+
+
+def test_chunk_parser_seen_delta_idxs_tracked_per_index():
+    """Delta tracking must be per output_index: a delta for index 0 must not
+    suppress the .done emission for index 1."""
+    iterator = _make_iterator()
+
+    # Delta only for index 0
+    iterator.chunk_parser(
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": "x",
+        }
+    )
+
+    # .done for index 1 (no delta seen → should emit)
+    arguments_json = '{"q": 42}'
+    result = iterator.chunk_parser(
+        {
+            "type": "response.function_call_arguments.done",
+            "output_index": 1,
+            "arguments": arguments_json,
+        }
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0].function.arguments == arguments_json
+    assert tool_calls[0].index == 1
