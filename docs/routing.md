@@ -1056,6 +1056,105 @@ model_list:
 </TabItem>
 </Tabs>
 
+### Weighted Failover
+
+By default, when a deployment in a model group fails, the router moves on to the next entry in `fallbacks` (a different model group). With `enable_weighted_failover`, the router first retries **inside the same model group** by re-picking a different deployment using the existing weights, and only escalates to cross-group fallbacks once every deployment in the group has been tried.
+
+This is useful when you have multiple regional copies of the same model (e.g. Azure `eastus2` + `swedencentral`) and want a failed region to fail over to a healthy peer with the same `model_name`, instead of immediately switching to a different model.
+
+**Behavior**
+
+- Only active when `routing_strategy="simple-shuffle"` (the default).
+- On a retryable failure, the failing deployment ID is excluded and a new deployment is picked from the remaining peers in the same model group, respecting `weight` / `rpm` / `tpm`.
+- Exclusions accumulate across hops: each retry adds the previous failure to the exclusion set, so a deployment that just failed is never picked again in the same request chain.
+- Capped by `max_fallbacks` (default `5`).
+- Not triggered for `ContextWindowExceededError` or `ContentPolicyViolationError` — those keep their dedicated fallback paths.
+- Async-only: honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls through to regular fallbacks.
+- Cooldowns still apply: a deployment that crosses `allowed_fails` is cooled down independently of weighted failover.
+
+**Order vs. weight**
+
+If the same group also uses `order`, the order filter runs **before** the weighted pick. So weighted failover re-picks only among the deployments in the current minimum-order tier. Promotion to the next order tier happens through the existing order-based fallback path.
+
+**Config**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+model_list = [
+    {
+        "model_name": "gpt-4.1-mini",
+        "litellm_params": {
+            "model": "azure/gpt-4.1-mini",
+            "api_base": "https://eastus2.example.azure.com",
+            "api_key": os.getenv("AZURE_EASTUS2_KEY"),
+            "weight": 1,
+        },
+    },
+    {
+        "model_name": "gpt-4.1-mini",
+        "litellm_params": {
+            "model": "azure/gpt-4.1-mini",
+            "api_base": "https://swedencentral.example.azure.com",
+            "api_key": os.getenv("AZURE_SWEDEN_KEY"),
+            "weight": 1,
+        },
+    },
+]
+
+router = Router(
+    model_list=model_list,
+    routing_strategy="simple-shuffle",
+    enable_weighted_failover=True,  # 👈 retry within the same model group on failure
+)
+
+response = await router.acompletion(
+    model="gpt-4.1-mini",
+    messages=[{"role": "user", "content": "Hey"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: azure/gpt-4.1-mini
+      api_base: https://eastus2.example.azure.com
+      api_key: os.environ/AZURE_EASTUS2_KEY
+      weight: 1
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: azure/gpt-4.1-mini
+      api_base: https://swedencentral.example.azure.com
+      api_key: os.environ/AZURE_SWEDEN_KEY
+      weight: 1
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_weighted_failover: true  # 👈 retry within the same model group on failure
+```
+
+</TabItem>
+</Tabs>
+
+**Walkthrough**
+
+With the config above and a request to `gpt-4.1-mini`:
+
+1. `simple-shuffle` picks one of the two deployments using `weight`.
+2. If the picked deployment raises a provider error (e.g. `RateLimitError`, `InternalServerError`), its deployment ID is added to `metadata._failover_excluded_ids`.
+3. The router re-enters `simple-shuffle` with the failed deployment excluded and weights renormalized over what's left.
+4. Steps 2–3 repeat until a deployment succeeds, every peer has been excluded, or `max_fallbacks` is reached.
+5. Only after all peers are exhausted does the router fall through to any `fallbacks` configured for the group.
+
+See [`enable_weighted_failover`](./proxy/config_settings#router_settings---reference) in the router settings reference for the flag.
+
 ### Max Parallel Requests (ASYNC)
 
 Used in semaphore for async requests on router. Limit the max concurrent calls made to a deployment. Useful in high-traffic scenarios. 
