@@ -100,6 +100,27 @@ def test_litellm_otel_span_uses_registered_logger(monkeypatch) -> None:
     assert logger.tracer.started_spans[0].end_time is not None
 
 
+def test_record_completed_span_uses_explicit_end_time(monkeypatch) -> None:
+    monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
+    logger = _FakeOpenTelemetryLogger()
+    set_litellm_otel_logger(logger)
+
+    try:
+        litellm_otel_tracer.record_completed_span(
+            span_name="litellm.logging.async_callback_dispatch",
+            service=ServiceTypes.LITELLM,
+            start_time=1.0,
+            end_time=2.0,
+            require_parent=False,
+        )
+    finally:
+        set_litellm_otel_logger(None)
+
+    span = logger.tracer.started_spans[0]
+    assert span.start_time == 1_000_000_000
+    assert span.end_time == 2_000_000_000
+
+
 def test_litellm_otel_span_records_exception_and_propagates(monkeypatch) -> None:
     monkeypatch.setattr(_OtelFeatureGate, "enabled", True)
     logger = _FakeOpenTelemetryLogger()

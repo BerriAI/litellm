@@ -92,6 +92,7 @@ class LiteLLMOtelSpan:
         require_parent: bool = True,
         otel_logger: Optional[Any] = None,
         start_time_ns: Optional[int] = None,
+        end_time_ns: Optional[int] = None,
     ) -> None:
         self.span_name = span_name
         self.service = service
@@ -100,6 +101,7 @@ class LiteLLMOtelSpan:
         self.require_parent = require_parent
         self.otel_logger = otel_logger
         self.start_time_ns = start_time_ns
+        self.end_time_ns = end_time_ns
 
         self.span: Optional[_OtelSpan] = None
         self._resolved_otel_logger: Optional[Any] = None
@@ -154,7 +156,10 @@ class LiteLLMOtelSpan:
         try:
             if span is not None:
                 self._set_status(exc_value=exc_value)
-                span.end(end_time=time.time_ns())
+                end_time_ns = (
+                    self.end_time_ns if self.end_time_ns is not None else time.time_ns()
+                )
+                span.end(end_time=end_time_ns)
         except Exception as exc:
             verbose_logger.debug(
                 "LiteLLMOtelSpan: failed to end span %s: %s",
@@ -289,6 +294,7 @@ class LiteLLMOtelTracer:
         span_name: str,
         service: ServiceTypes,
         start_time: float,
+        end_time: Optional[float] = None,
         parent_span: Optional[_OtelSpan] = None,
         attributes: Optional[Dict[str, Any]] = None,
         require_parent: bool = True,
@@ -297,6 +303,7 @@ class LiteLLMOtelTracer:
             return
 
         start_time_ns = int(start_time * 1e9)
+        end_time_ns = int(end_time * 1e9) if end_time is not None else None
         span = LiteLLMOtelSpan(
             span_name=span_name,
             service=service,
@@ -304,6 +311,7 @@ class LiteLLMOtelTracer:
             attributes=attributes,
             require_parent=require_parent,
             start_time_ns=start_time_ns,
+            end_time_ns=end_time_ns,
         )
         with span:
             pass

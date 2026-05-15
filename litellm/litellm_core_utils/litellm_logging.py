@@ -179,13 +179,16 @@ def _emit_litellm_logging_span(
     model_call_details: dict,
     span_name: str,
     start_time: float,
+    end_time: Optional[float] = None,
     event_metadata: Optional[dict] = None,
 ) -> None:
+    span_end_time = end_time if end_time is not None else time.time()
     parent_otel_span = _get_parent_otel_span_from_kwargs(model_call_details)
     litellm_otel_tracer.record_completed_span(
         span_name=span_name,
         service=ServiceTypes.LITELLM,
         start_time=start_time,
+        end_time=span_end_time,
         parent_span=parent_otel_span,
         attributes=event_metadata,
     )
