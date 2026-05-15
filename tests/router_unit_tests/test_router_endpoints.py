@@ -38,9 +38,9 @@ def model_list():
             },
         },
         {
-            "model_name": "gpt-5",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-5",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },

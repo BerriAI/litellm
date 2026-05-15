@@ -143,9 +143,9 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GOOGLE_API_KEY
-  - model_name: gpt-5
+  - model_name: gpt-5.5
     litellm_params:
-      model: gpt-5
+      model: gpt-5.5
       api_key: os.environ/OPENAI_API_KEY
 
 

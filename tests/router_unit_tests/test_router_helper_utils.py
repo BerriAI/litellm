@@ -33,9 +33,9 @@ def model_list():
             },
         },
         {
-            "model_name": "gpt-5",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-5",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -64,8 +64,8 @@ def model_list():
 
 
 def test_validate_fallbacks(model_list):
-    router = Router(model_list=model_list, fallbacks=[{"gpt-5": "gpt-5-mini"}])
-    router.validate_fallbacks(fallback_param=[{"gpt-5": "gpt-5-mini"}])
+    router = Router(model_list=model_list, fallbacks=[{"gpt-5.5": "gpt-5-mini"}])
+    router.validate_fallbacks(fallback_param=[{"gpt-5.5": "gpt-5-mini"}])
 
 
 def test_routing_strategy_init(model_list):
@@ -460,8 +460,8 @@ def test_get_fallback_model_group_from_fallbacks(model_list):
     """Test if the '_get_fallback_model_group_from_fallbacks' function is working correctly"""
     router = Router(model_list=model_list)
     fallback_model_group_name = router._get_fallback_model_group_from_fallbacks(
-        model_group="gpt-5",
-        fallbacks=[{"gpt-5": "gpt-5-mini"}],
+        model_group="gpt-5.5",
+        fallbacks=[{"gpt-5.5": "gpt-5-mini"}],
     )
     assert fallback_model_group_name == "gpt-5-mini"
 
@@ -635,7 +635,7 @@ def test_should_raise_content_policy_error(
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
     router = Router(
         model_list=model_list,
-        default_fallbacks=["gpt-5"] if fallback_type == "default" else None,
+        default_fallbacks=["gpt-5.5"] if fallback_type == "default" else None,
     )
 
     assert (
@@ -653,7 +653,7 @@ def test_should_raise_content_policy_error(
             ),
             kwargs={
                 "content_policy_fallbacks": (
-                    [{"gpt-5-mini": "gpt-5"}]
+                    [{"gpt-5-mini": "gpt-5.5"}]
                     if fallback_type == "model-specific"
                     else None
                 )
@@ -823,7 +823,7 @@ def test_upsert_deployment(model_list):
     deployment = router.get_deployment_by_model_group_name(
         model_group_name="gpt-5-mini"
     )
-    deployment.litellm_params.model = "gpt-5"
+    deployment.litellm_params.model = "gpt-5.5"
     router.upsert_deployment(deployment=deployment)
     assert len(router.model_list) == len(model_list)
 
@@ -859,7 +859,7 @@ def test_get_model_group(model_list):
     assert model_group[0]["model_name"] == "gpt-5-mini"
 
 
-@pytest.mark.parametrize("user_facing_model_group_name", ["gpt-5-mini", "gpt-5"])
+@pytest.mark.parametrize("user_facing_model_group_name", ["gpt-5-mini", "gpt-5.5"])
 def test_set_model_group_info(model_list, user_facing_model_group_name):
     """Test if the 'set_model_group_info' function is working correctly"""
     router = Router(model_list=model_list)
@@ -1170,9 +1170,9 @@ def test_get_model_from_alias(model_list):
     """Test if the 'get_model_from_alias' function is working correctly"""
     router = Router(
         model_list=model_list,
-        model_group_alias={"gpt-5": "gpt-5-mini"},
+        model_group_alias={"gpt-5.5": "gpt-5-mini"},
     )
-    model = router._get_model_from_alias(model="gpt-5")
+    model = router._get_model_from_alias(model="gpt-5.5")
     assert model == "gpt-5-mini"
 
 

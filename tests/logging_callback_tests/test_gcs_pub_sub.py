@@ -204,7 +204,7 @@ async def test_async_gcs_pub_sub():
 
     # Make the completion call
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="hi",
     )
@@ -261,7 +261,7 @@ async def test_async_gcs_pub_sub_v1():
 
     # Make the completion call
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="hi",
     )

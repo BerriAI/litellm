@@ -112,7 +112,7 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
-            "model": "openai/gpt-4o-mini",
+            "model": "openai/gpt-5-mini",
             "client": None,
         }
 
@@ -121,7 +121,7 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
         """
         This is the model name that is expected to be in the logging payload
         """
-        return "gpt-4o-mini"
+        return "gpt-5-mini"
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_litellm_router_streaming_with_logging(self):
@@ -871,7 +871,7 @@ def test_sync_openai_messages():
     litellm._turn_on_debug()
     response = litellm.anthropic.messages.create(
         messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
-        model="openai/gpt-4o-mini",
+        model="openai/gpt-5-mini",
         max_tokens=100,
     )
     print("ANT response", response)

@@ -136,19 +136,19 @@ class TestRouterIndexManagement:
             "model_info": {
                 "id": "dep-1",
                 "team_id": "team-abc",
-                "team_public_model_name": "gpt-5",
+                "team_public_model_name": "gpt-5.5",
             },
         }
         router._update_team_model_index(model, 0)
-        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5")] == [0]
+        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [0]
         router._update_team_model_index(model, 2)
-        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5")] == [0, 2]
+        assert router.team_model_to_deployment_indices[("team-abc", "gpt-5.5")] == [0, 2]
 
         router._update_team_model_index(
             {"model_name": "x", "model_info": {"id": "dep-2"}}, 5
         )
         assert router.team_model_to_deployment_indices == {
-            ("team-abc", "gpt-5"): [0, 2],
+            ("team-abc", "gpt-5.5"): [0, 2],
         }
 
     def test_has_model_id(self, router):
