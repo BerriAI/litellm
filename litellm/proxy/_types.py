@@ -2438,7 +2438,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
-        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
+        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",
     )
     trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
@@ -4333,6 +4333,53 @@ class JWTRoutingOverride(BaseModel):
     }
 
 
+class JWTIssuerConfig(BaseModel):
+    """
+    Issuer-bound JWT validation configuration.
+
+    When configured, LiteLLM selects this issuer by the token's unverified `iss`
+    claim, then validates the token only against this issuer's JWKS and audience.
+    """
+
+    issuer: str = Field(description="Exact expected JWT issuer (`iss`) value.")
+    jwks_url: Optional[str] = Field(
+        default=None,
+        description="Issuer JWKS URL. If omitted, LiteLLM uses the issuer's OIDC discovery document.",
+    )
+    audience: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Expected token audience for this issuer. If omitted, audience validation is disabled for this issuer.",
+    )
+    user_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's user id.",
+    )
+    user_email_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's user email.",
+    )
+    team_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's team id.",
+    )
+    team_ids_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's team ids.",
+    )
+    org_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's organization id.",
+    )
+    end_user_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
+    )
+
+    model_config = {
+        "extra": "forbid",
+    }
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4436,6 +4483,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
+    )
+    issuers: Optional[List[JWTIssuerConfig]] = Field(
+        default=None,
+        description="Optional issuer-bound JWT validation rules. When set, tokens must match one configured issuer by exact `iss` claim before JWKS lookup.",
     )
     #########################################################
 
