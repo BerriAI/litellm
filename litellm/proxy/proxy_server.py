@@ -4008,13 +4008,26 @@ class ProxyConfig:
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
-            use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+            generic_use_pkce = (
+                os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+            )
+            # Okta defaults PKCE to enabled when OKTA_CLIENT_ID is configured.
+            okta_use_pkce = (
+                os.getenv("OKTA_CLIENT_ID") is not None
+                and os.getenv("OKTA_CLIENT_USE_PKCE", "true").lower() == "true"
+            )
+            use_pkce = generic_use_pkce or okta_use_pkce
             if use_pkce and redis_usage_cache is None:
                 global _pkce_no_redis_warning_emitted
                 if not _pkce_no_redis_warning_emitted:
                     _pkce_no_redis_warning_emitted = True
+                    pkce_env_var = (
+                        "GENERIC_CLIENT_USE_PKCE=true"
+                        if generic_use_pkce
+                        else "OKTA_CLIENT_USE_PKCE defaults to true when OKTA_CLIENT_ID is set"
+                    )
                     verbose_proxy_logger.warning(
-                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                        f"{pkce_env_var} but Redis is not configured for LiteLLM caching. "
                         "PKCE verifiers will not be shared across instances — callbacks may land on a "
                         "different pod than the login request and fail silently. "
                         "Configure Redis via the 'cache' section in your proxy config, "

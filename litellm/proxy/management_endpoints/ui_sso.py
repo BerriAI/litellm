@@ -1080,7 +1080,10 @@ def _parse_generic_sso_headers(
     provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
 ) -> dict:
     """Parse comma-separated *_SSO_HEADERS env var into a dict."""
-    raw = os.getenv(f"{_get_oidc_env_prefix(provider)}_SSO_HEADERS", None)
+    raw = os.getenv(
+        f"{_get_oidc_env_prefix(provider)}_SSO_HEADERS",
+        os.getenv("GENERIC_SSO_HEADERS", None),
+    )
     if raw is None:
         return {}
     result: Dict[str, str] = {}
