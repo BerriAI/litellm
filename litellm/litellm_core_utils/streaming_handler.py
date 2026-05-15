@@ -269,6 +269,11 @@ class CustomStreamWrapper:
         if len(self.chunks) < 2:
             return
 
+        # Guard against chunks with empty choices (e.g. Gemini Flash metadata-only
+        # chunks during web_search streaming)
+        if not self.chunks[-1].choices or not self.chunks[-2].choices:
+            return
+
         last_content = self.chunks[-1].choices[0].delta.content
 
         if (
