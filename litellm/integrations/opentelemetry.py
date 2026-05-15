@@ -1,7 +1,7 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,6 +10,12 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
+    OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
+    OTELGenAISemconvMixin,
+    OTELSemconvCategory,
+    parse_semconv_opt_in,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
@@ -85,6 +91,7 @@ class OpenTelemetryConfig:
     # Programmatic override for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
     # One of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT (or "true" as legacy alias).
     capture_message_content: Optional[str] = None
+    semconv_stability_opt_in: Set[OTELSemconvCategory] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -110,6 +117,11 @@ class OpenTelemetryConfig:
             self.ignore_context_propagation = str_to_bool(
                 os.getenv("OTEL_IGNORE_CONTEXT_PROPAGATION")
             )
+        # Resolve the env opt-in once here so self.semconv_stability_opt_in is the
+        # single source of truth: the union of programmatic and env categories.
+        self.semconv_stability_opt_in |= parse_semconv_opt_in(
+            os.getenv(OTEL_SEMCONV_STABILITY_OPT_IN_ENV)
+        )
 
     @classmethod
     def from_env(cls):
@@ -157,7 +169,7 @@ class OpenTelemetryConfig:
         )
 
 
-class OpenTelemetry(CustomLogger):
+class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def __init__(
         self,
         config: Optional[OpenTelemetryConfig] = None,
@@ -976,13 +988,14 @@ class OpenTelemetry(CustomLogger):
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
 
-        # Always create a new span
-        # The parent relationship is preserved through the context parameter
-        span = otel_tracer.start_span(
-            name=self._get_span_name(kwargs),
-            start_time=self._to_ns(start_time),
-            context=context,
-        )
+        span_kwargs: Dict[str, Any] = {
+            "name": self._get_span_name(kwargs),
+            "start_time": self._to_ns(start_time),
+            "context": context,
+        }
+        if self._gen_ai_semconv_latest_experimental:
+            span_kwargs["kind"] = self.span_kind.CLIENT
+        span = otel_tracer.start_span(**span_kwargs)
 
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
@@ -994,6 +1007,10 @@ class OpenTelemetry(CustomLogger):
     ):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
+
+        # raw_gen_ai_request is non-standard in semconv mode.
+        if self._gen_ai_semconv_latest_experimental:
+            return
 
         if not self._capture_in_span():
             return
@@ -1020,7 +1037,11 @@ class OpenTelemetry(CustomLogger):
         provider = params.get("custom_llm_provider", "Unknown")
 
         common_attrs = {
-            "gen_ai.operation.name": "chat",
+            "gen_ai.operation.name": (
+                self._gen_ai_operation_name(kwargs)
+                if self._gen_ai_semconv_latest_experimental
+                else "chat"
+            ),
             "gen_ai.system": provider,
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
@@ -1243,6 +1264,24 @@ class OpenTelemetry(CustomLogger):
                 response_duration_seconds, attributes=common_attrs
             )
 
+    @staticmethod
+    def _otel_log_types():
+        """Resolve ``(LogRecord, SeverityNumber)`` across OTEL SDK versions.
+
+        ``LogRecord`` moved out of ``opentelemetry.sdk._logs`` in OTEL >= 1.39.0
+        (open-telemetry/opentelemetry-python#4676). Imports stay function-local
+        because the SDK is an optional dependency.
+        """
+        from opentelemetry._logs import SeverityNumber
+
+        try:
+            from opentelemetry.sdk._logs import LogRecord  # OTEL < 1.39.0
+        except ImportError:
+            from opentelemetry.sdk._logs._internal import (  # OTEL >= 1.39.0
+                LogRecord,
+            )
+        return LogRecord, SeverityNumber
+
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
             return
@@ -1256,16 +1295,7 @@ class OpenTelemetry(CustomLogger):
         # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
-        from opentelemetry._logs import SeverityNumber
-
-        try:
-            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
-                LogRecord as SdkLogRecord,
-            )
-        except ImportError:
-            from opentelemetry.sdk._logs._internal import (
-                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL >= 1.39.0
-            )
+        SdkLogRecord, SeverityNumber = self._otel_log_types()
 
         # Resolve through the handler's own LoggerProvider (which may be a
         # private one when skip_set_global=True) rather than the module-level
@@ -1276,6 +1306,16 @@ class OpenTelemetry(CustomLogger):
         provider = (kwargs.get("litellm_params") or {}).get(
             "custom_llm_provider", "Unknown"
         )
+
+        if self._gen_ai_semconv_latest_experimental:
+            self._emit_inference_details_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                provider=provider,
+                otel_logger=otel_logger,
+                parent_ctx=parent_ctx,
+            )
+            return
 
         # per-message events
         for msg in kwargs.get("messages", []):
@@ -1493,11 +1533,14 @@ class OpenTelemetry(CustomLogger):
         if should_create_primary_span:
             # Span 1: Request sent to litellm SDK
             otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-            span = otel_tracer.start_span(
-                name=self._get_span_name(kwargs),
-                start_time=self._to_ns(start_time),
-                context=_parent_context,
-            )
+            span_kwargs: Dict[str, Any] = {
+                "name": self._get_span_name(kwargs),
+                "start_time": self._to_ns(start_time),
+                "context": _parent_context,
+            }
+            if self._gen_ai_semconv_latest_experimental:
+                span_kwargs["kind"] = self.span_kind.CLIENT
+            span = otel_tracer.start_span(**span_kwargs)
             span.set_status(Status(StatusCode.ERROR))
             self.set_attributes(span, kwargs, response_obj)
 
@@ -1779,11 +1822,21 @@ class OpenTelemetry(CustomLogger):
             )
 
             # The Generative AI Provider: Azure, OpenAI, etc.
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider", "Unknown"),
-            )
+            provider_name = litellm_params.get("custom_llm_provider", "Unknown")
+            # Latest-experimental semconv replaced gen_ai.system with
+            # gen_ai.provider.name; emit only the conformant key in that mode.
+            if self._gen_ai_semconv_latest_experimental:
+                self.safe_set_attribute(
+                    span=span,
+                    key="gen_ai.provider.name",
+                    value=provider_name,
+                )
+            else:
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_SYSTEM.value,
+                    value=provider_name,
+                )
 
             # The maximum number of tokens the LLM generates for a request.
             if optional_params.get("max_tokens"):
@@ -1809,11 +1862,17 @@ class OpenTelemetry(CustomLogger):
                     value=optional_params.get("top_p"),
                 )
 
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.LLM_IS_STREAMING.value,
-                value=str(optional_params.get("stream", False)),
-            )
+            if self._gen_ai_semconv_latest_experimental:
+                # Semconv emits gen_ai.request.stream (only when streaming) via
+                # _set_semconv_request_attributes; skip the legacy llm.is_streaming.
+                self._set_semconv_request_attributes(span, optional_params)
+                self._set_semconv_cache_token_attributes(span, standard_logging_payload)
+            else:
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_IS_STREAMING.value,
+                    value=str(optional_params.get("stream", False)),
+                )
 
             if optional_params.get("user"):
                 self.safe_set_attribute(
@@ -1910,14 +1969,18 @@ class OpenTelemetry(CustomLogger):
                     value=safe_dumps(transformed_system_instructions),
                 )
 
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
-                value=(
+            if self._gen_ai_semconv_latest_experimental:
+                operation_name = self._gen_ai_operation_name(kwargs)
+            else:
+                operation_name = (
                     "chat"
                     if standard_logging_payload.get("call_type") == "completion"
                     else standard_logging_payload.get("call_type") or "chat"
-                ),
+                )
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
+                value=operation_name,
             )
 
             if standard_logging_payload.get("request_id"):
@@ -2130,6 +2193,10 @@ class OpenTelemetry(CustomLogger):
 
         if generation_name:
             return generation_name
+
+        if self._gen_ai_semconv_latest_experimental:
+            model = kwargs.get("model") or "unknown"
+            return f"{self._gen_ai_operation_name(kwargs)} {model}"
 
         return LITELLM_REQUEST_SPAN_NAME
 
