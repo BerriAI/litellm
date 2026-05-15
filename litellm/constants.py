@@ -1085,6 +1085,12 @@ dashscope_models: set = set(
     ]
 )
 
+nebius_embedding_models: List = [
+    "BAAI/bge-en-icl",
+    "BAAI/bge-multilingual-gemma2",
+    "intfloat/e5-mistral-7b-instruct",
+]
+
 WANDB_MODELS: set = set(
     [
         # openai models
@@ -1115,15 +1121,7 @@ WANDB_MODELS: set = set(
 )
 
 modelscope_models: List = [
-    # LLM-Research models
-    "LLM-Research/c4ai-command-r-plus-08-2024",
-    "LLM-Research/Llama-4-Scout-17B-16E-Instruct",
-    "LLM-Research/Llama-4-Maverick-17B-128E-Instruct",
-    # Mistral models
-    "mistralai/Mistral-Small-Instruct-2409",
-    "mistralai/Ministral-8B-Instruct-2410",
-    "mistralai/Mistral-Large-Instruct-2407",
-    # Qwen3 series
+    # Qwen series models
     "Qwen/Qwen3-0.6B",
     "Qwen/Qwen3-1.7B",
     "Qwen/Qwen3-4B",
@@ -1133,41 +1131,33 @@ modelscope_models: List = [
     "Qwen/Qwen3-32B",
     "Qwen/Qwen3-235B-A22B",
     "Qwen/Qwen3-235B-A22B-Instruct-2507",
-    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
     "Qwen/Qwen3-235B-A22B-Thinking-2507",
     "Qwen/Qwen3-30B-A3B-Thinking-2507",
     "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-    # Qwen3.5 series (new)
-    "Qwen/Qwen3.5-0.6B",
-    "Qwen/Qwen3.5-1.7B",
-    "Qwen/Qwen3.5-3B",
-    "Qwen/Qwen3.5-7B",
-    "Qwen/Qwen3.5-14B",
-    "Qwen/Qwen3.5-30B-A3B",
-    "Qwen/Qwen3.5-32B",
-    "Qwen/Qwen3.5-235B-A22B",
-    "Qwen/Qwen3.5-235B-A22B-Instruct-2507",
-    "Qwen/Qwen3.5-Coder-480B-A35B-Instruct",
-    "Qwen/Qwen3.5-235B-A22B-Thinking-2507",
-    "Qwen/Qwen3.5-30B-A3B-Thinking-2507",
-    "Qwen/Qwen3.5-Coder-30B-A3B-Instruct",
-    # Other models
-    "Qwen/QwQ-32B-Preview",
-    "opencompass/CompassJudger-1-32B-Instruct",
-    "Qwen/QVQ-72B-Preview",
-    "Qwen/Qwen2-VL-7B-Instruct",
-    "deepseek-ai/DeepSeek-V3",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "Qwen/Qwen3-Next-80B-A3B-Thinking",
+    "Qwen/Qwen3-VL-235B-A22B-Instruct",
+    "Qwen/Qwen3-VL-8B-Instruct",
+    "Qwen/Qwen3-VL-8B-Thinking",
+    "Qwen/Qwen3.5-122B-A10B",
+    "Qwen/Qwen3.5-27B",
+    "Qwen/Qwen3.5-35B-A3B",
+    "Qwen/Qwen3.5-397B-A17B",
     "Qwen/QwQ-32B",
-    "XGenerationLab/XiYanSQL-QwenCoder-32B-2412",
+    "Qwen/QwQ-32B-Preview",
+    "Qwen/QVQ-72B-Preview",
+    "Qwen/Qwen-Image-Edit",
+    # DeepSeek series models
     "deepseek-ai/DeepSeek-R1-0528",
-    "MiniMax/MiniMax-M1-80k",
-    "ZhipuAI/GLM-4.5",
-]
-
-nebius_embedding_models: List = [
-    "BAAI/bge-en-icl",
-    "BAAI/bge-multilingual-gemma2",
-    "intfloat/e5-mistral-7b-instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "deepseek-ai/DeepSeek-V3.2",
+    "deepseek-ai/DeepSeek-V4-Flash",
 ]
 
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
