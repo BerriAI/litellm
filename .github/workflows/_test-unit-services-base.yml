@@ -32,11 +32,6 @@ on:
         required: false
         type: boolean
         default: false
-      enable-redis:
-        description: "Expose the REDIS_* secrets to the test step (uses external Redis, not a service container)"
-        required: false
-        type: boolean
-        default: false
       dist:
         description: "pytest-xdist distribution mode (loadscope|load|worksteal|loadfile|no)"
         required: false
@@ -47,19 +42,6 @@ on:
         required: false
         type: string
         default: "run"
-    secrets:
-      REDIS_HOST:
-        required: false
-      REDIS_PORT:
-        required: false
-      REDIS_PASSWORD:
-        required: false
-      DATABASE_URL:
-        required: false
-      POSTGRES_USER:
-        required: false
-      POSTGRES_PASSWORD:
-        required: false
 
 permissions:
   contents: read
@@ -141,12 +123,7 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
           DIST: ${{ inputs.dist }}
-          DATABASE_URL: ${{ inputs.enable-postgres && 'postgresql://litellm:litellm@localhost:5432/litellm_test' || secrets.DATABASE_URL || '' }}
-          REDIS_HOST: ${{ secrets.REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.REDIS_PORT }}
-          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_URL: ${{ inputs.enable-postgres && 'postgresql://litellm:litellm@localhost:5432/litellm_test' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \
