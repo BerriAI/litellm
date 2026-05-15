@@ -375,21 +375,25 @@ async def test_weights_respected_when_all_healthy():
     )
 
     counts: Counter = Counter()
-    for _ in range(400):
+    for _ in range(1000):
         resp = await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],
         )
         counts[resp._hidden_params["model_id"]] += 1
 
-    # Expect ~80/20 split. Loose bound to keep test stable.
+    # Expect ~80/20 split. Loose bounds to keep the test stable under CI load.
     assert counts["A"] > counts["B"] * 2  # A should heavily dominate
-    assert counts["B"] > 20  # but B should still get some traffic
+    assert counts["B"] > 50  # but B should still get a meaningful share
 
 
 @pytest.mark.asyncio
 async def test_failover_skipped_for_non_simple_shuffle():
-    """Other routing strategies are not yet covered by weighted failover."""
+    """Weighted failover is only wired up for `simple-shuffle`. With another
+    strategy, a failure on the picked deployment must NOT silently retry the
+    other deployment in the same group. Both deployments fail here to keep the
+    test deterministic regardless of which one the strategy picks first.
+    """
     router = Router(
         model_list=[
             {
@@ -405,8 +409,8 @@ async def test_failover_skipped_for_non_simple_shuffle():
                 "model_name": "test-model",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_key": "good",
-                    "mock_response": "ok from B",
+                    "api_key": "bad",
+                    "mock_response": Exception("B down"),
                 },
                 "model_info": {"id": "B"},
             },

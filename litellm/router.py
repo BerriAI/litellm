@@ -357,7 +357,7 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
-            enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Defaults to False.
+            enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -5721,7 +5721,11 @@ class Router:
         )
         try:
             return await run_async_fallback(*args, **input_kwargs)
-        except Exception:
+        except openai.APIError:
+            # Expected model-level failure on the retried deployment (all litellm
+            # provider errors derive from openai.APIError). Defer to the regular
+            # fallback path. Programming errors (AttributeError, KeyError,
+            # TypeError, etc.) intentionally propagate so they remain visible.
             return None
 
     async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
