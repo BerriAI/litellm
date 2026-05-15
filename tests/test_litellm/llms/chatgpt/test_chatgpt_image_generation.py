@@ -1,3 +1,4 @@
+from io import BytesIO
 from typing import Any, cast
 
 import httpx
@@ -909,3 +910,131 @@ def test_chatgpt_image_generation_get_error_class(monkeypatch, tmp_path):
     assert isinstance(error, OpenAIError)
     assert error.status_code == 400
     assert error.message == "bad request"
+
+
+def test_chatgpt_image_generation_map_openai_params_keeps_existing_value(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+
+    optional_params = {"size": "1024x1024"}
+    result = config.map_openai_params(
+        non_default_params={"size": "1536x1024"},
+        optional_params=optional_params,
+        model="gpt-image-2",
+        drop_params=False,
+    )
+
+    assert result == {"size": "1024x1024"}
+
+
+def test_chatgpt_image_edit_delegates_environment_and_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+
+    class FakeImageGenerationConfig:
+        def validate_environment(self, **kwargs):
+            assert kwargs["messages"] == []
+            assert kwargs["optional_params"] == {}
+            assert kwargs["litellm_params"] == {"session_id": "session-123"}
+            assert kwargs["api_key"] == "api-key"
+            assert kwargs["api_base"] == "https://ignored.test"
+            return {"Authorization": "Bearer token"}
+
+        def get_complete_url(self, **kwargs):
+            assert kwargs["api_key"] == "api-key"
+            assert kwargs["optional_params"] == {}
+            return "https://chatgpt.com/backend-api/codex/responses"
+
+    config.image_generation_config = cast(Any, FakeImageGenerationConfig())
+
+    assert config.get_supported_openai_params("gpt-image-2") == ["size"]
+    assert config.map_openai_params(
+        image_edit_optional_params={"size": "1024x1024", "quality": "high"},
+        model="gpt-image-2",
+        drop_params=False,
+    ) == {"size": "1024x1024"}
+    assert config.validate_environment(
+        headers={},
+        model="gpt-image-2",
+        api_key="api-key",
+        litellm_params={"session_id": "session-123"},
+        api_base="https://ignored.test",
+    ) == {"Authorization": "Bearer token"}
+    assert (
+        config.get_complete_url(
+            model="gpt-image-2",
+            api_base="https://ignored.test",
+            litellm_params={"api_key": "api-key"},
+        )
+        == "https://chatgpt.com/backend-api/codex/responses"
+    )
+
+
+def test_chatgpt_image_edit_transform_response_and_error_class(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "output": [
+                {
+                    "type": "image_generation",
+                    "image": "edited-image-data",
+                }
+            ]
+        },
+    )
+
+    response = config.transform_image_edit_response(
+        model="gpt-image-2",
+        raw_response=raw_response,
+        logging_obj=mock_logging(),
+    )
+    error = config.get_error_class(
+        error_message="bad edit",
+        status_code=400,
+        headers={"x-request-id": "req-456"},
+    )
+
+    assert response.data is not None
+    assert response.data[0].b64_json == "edited-image-data"
+    assert isinstance(error, OpenAIError)
+    assert error.status_code == 400
+    assert error.message == "bad edit"
+
+
+def test_chatgpt_image_edit_prepare_input_images_handles_supported_file_types(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(b"path-bytes")
+
+    bytes_io = BytesIO(b"bytes-io-data")
+    bytes_io.seek(5)
+    with image_path.open("rb") as buffered_reader:
+        buffered_reader.seek(2)
+        input_images = config._prepare_input_images(
+            [
+                None,
+                bytes_io,
+                buffered_reader,
+                ("image.png", b"tuple-bytes", "image/png"),
+                image_path,
+            ]
+        )
+        assert buffered_reader.tell() == 2
+
+    assert bytes_io.tell() == 5
+    assert [image["type"] for image in input_images] == ["input_image"] * 4
+    assert input_images[0]["image_url"].startswith("data:image/png;base64,")
+    assert input_images[1]["image_url"].startswith("data:image/png;base64,")
+    assert input_images[2]["image_url"].startswith("data:image/png;base64,")
+    assert input_images[3]["image_url"].startswith("data:image/png;base64,")
+
+    with pytest.raises(ValueError, match="Unsupported image type"):
+        config._read_image_bytes(cast(Any, object()))
