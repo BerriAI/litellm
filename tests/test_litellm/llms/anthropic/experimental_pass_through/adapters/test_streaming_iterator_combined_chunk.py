@@ -11,6 +11,7 @@ content survives.
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
@@ -115,3 +116,35 @@ def test_splitter_splits_combined_chunk_into_content_then_finish():
 
     assert finish_chunk.choices[0].finish_reason == "stop"
     assert finish_chunk.choices[0].delta.content is None
+
+
+def test_is_combined_false_when_choices_empty():
+    """A metadata-only chunk with no choices is never treated as combined."""
+    assert _CombinedChunkSplitter._is_combined(SimpleNamespace(choices=[])) is False
+
+
+def test_is_combined_false_when_delta_missing():
+    """A finish chunk whose choice has no delta is not combined."""
+    chunk = SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", delta=None)])
+    assert _CombinedChunkSplitter._is_combined(chunk) is False
+
+
+def test_split_clears_reasoning_and_thinking_on_finish_chunk():
+    """When the combined delta carries reasoning/thinking, only the content
+    chunk keeps them — the finish chunk is cleared."""
+    delta = SimpleNamespace(
+        content="hi",
+        tool_calls=None,
+        reasoning_content="some reasoning",
+        thinking_blocks=[{"type": "thinking"}],
+    )
+    chunk = SimpleNamespace(
+        choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
+    )
+
+    content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
+
+    assert content_chunk.choices[0].delta.reasoning_content == "some reasoning"
+    assert content_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
+    assert finish_chunk.choices[0].delta.reasoning_content is None
+    assert finish_chunk.choices[0].delta.thinking_blocks is None
