@@ -847,6 +847,8 @@ async def test_tpm_api_key_rate_limits_v3():
         assert "retry-after" in e.headers
 
     assert error is not None, "An Exception must be thrown"
+    assert "Rate limit exceeded for model_per_key: REDACTED" in error.detail
+    assert _api_key_hash not in error.detail
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
 
     model_per_key_descriptor = None
@@ -942,6 +944,8 @@ async def test_rpm_api_key_rate_limits_v3():
         assert "retry-after" in e.headers
 
     assert error is not None, "An Exception must be thrown"
+    assert "Rate limit exceeded for model_per_key: REDACTED" in error.detail
+    assert _api_key_hash not in error.detail
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
 
     model_per_key_descriptor = None
@@ -1608,7 +1612,8 @@ async def test_multiple_rate_limits_per_descriptor():
 
     # Verify the exception details are correct and use the descriptor_key approach
     assert exc_info.value.status_code == 429
-    assert "Rate limit exceeded for api_key:" in exc_info.value.detail
+    assert "Rate limit exceeded for api_key: REDACTED" in exc_info.value.detail
+    assert _api_key_hash not in exc_info.value.detail
     assert "max_parallel_requests" in exc_info.value.detail
     assert "Current limit: 1" in exc_info.value.detail
     assert "Remaining: 0" in exc_info.value.detail  # max(0, -1) = 0
