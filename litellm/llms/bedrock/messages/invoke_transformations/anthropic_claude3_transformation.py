@@ -12,9 +12,14 @@ from typing import (
 
 import httpx
 
+import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
+from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+    AnthropicConfig,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -132,7 +137,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         - `scope` (e.g., "global") - always removed
         - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
 
-        Processes both `system` and `messages` content blocks.
+        Processes `tools`, `system`, and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -158,6 +163,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize_cache_control(item["cache_control"])
+
+        # Process tools
+        if "tools" in anthropic_messages_request:
+            for tool in anthropic_messages_request["tools"]:
+                if isinstance(tool, dict) and "cache_control" in tool:
+                    _sanitize_cache_control(tool["cache_control"])
 
         # Process system (list of content blocks)
         if "system" in anthropic_messages_request:
@@ -397,6 +408,47 @@ class AmazonAnthropicClaudeMessagesConfig(
             if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    @staticmethod
+    def _filter_context_management_for_bedrock_invoke(
+        anthropic_messages_request: Dict,
+        beta_set: set,
+    ) -> None:
+        """
+        Bedrock InvokeModel accepts ``context_management`` only when it carries
+        ``compact_20260112`` edits paired with the ``compact-2026-01-12``
+        anthropic-beta header. Other edit types (notably ``clear_thinking_20251015``,
+        which Claude Code sends on every request) are LiteLLM-internal and would
+        cause Bedrock to 400 with ``"context_management: Extra inputs are not
+        permitted"``.
+
+        Filter the edits list to the supported subset, add the beta header when
+        compact edits remain, and drop ``context_management`` entirely when no
+        supported edits are left so the safety-net allowlist can pass it through.
+
+        Ref: https://github.com/BerriAI/litellm/issues/27532
+        """
+        cm = anthropic_messages_request.get("context_management")
+        if not isinstance(cm, dict):
+            return
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            anthropic_messages_request.pop("context_management", None)
+            return
+
+        compact_edits = [
+            e
+            for e in edits
+            if isinstance(e, dict) and e.get("type") == "compact_20260112"
+        ]
+        if compact_edits:
+            beta_set.add("compact-2026-01-12")
+            anthropic_messages_request["context_management"] = {
+                **cm,
+                "edits": compact_edits,
+            }
+        else:
+            anthropic_messages_request.pop("context_management", None)
+
     def _convert_output_format_to_inline_schema(
         self,
         output_format: Dict,
@@ -540,6 +592,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
 
+        self._filter_context_management_for_bedrock_invoke(
+            anthropic_messages_request=anthropic_messages_request,
+            beta_set=beta_set,
+        )
+
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
             tool_search_used=tool_search_used,
@@ -574,9 +631,21 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
+        if (
+            litellm.drop_params is True
+            and "output_config" in anthropic_messages_request
+            and not AnthropicConfig._model_supports_effort_param(model)
+        ):
+            verbose_logger.warning(
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+                model,
+            )
+            anthropic_messages_request.pop("output_config", None)
+
         # 7. Final safety net: filter top-level fields to the Bedrock Invoke allowlist.
-        # Catches Anthropic-only extensions (context_management, output_config, speed,
-        # mcp_servers, ...) and any future additions Claude Code may start sending.
+        # Catches Anthropic-only extensions (output_config, speed, mcp_servers, ...)
+        # and any future additions Claude Code may start sending. ``context_management``
+        # has already been pre-filtered to its Bedrock-supported subset above.
         allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
         stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:

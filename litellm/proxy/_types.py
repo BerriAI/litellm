@@ -17,6 +17,9 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_no_callback_env_reference,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -187,6 +190,8 @@ class LitellmTableNames(str, enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
+    CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
+    CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -234,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
@@ -348,8 +354,10 @@ class LiteLLMRoutes(enum.Enum):
         # realtime
         "/realtime",
         "/v1/realtime",
+        "/openai/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        "/openai/v1/realtime?{model}",
         # responses API
         "/responses",
         "/v1/responses",
@@ -533,6 +541,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -562,6 +571,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/available",
             "/team/permissions_list",
             "/team/permissions_update",
+            "/team/permissions_bulk_update",
             "/team/daily/activity",
             # model
             "/model/new",
@@ -611,13 +621,12 @@ class LiteLLMRoutes(enum.Enum):
             "/",
             "/health/liveliness",
             "/health/liveness",
-            "/health/readiness",
             "/test",
             "/config/yaml",
-            "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
             "/public/skill_hub",
@@ -651,23 +660,48 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    # Stateless validators on caller-supplied log data; source logs are
+    # already accessible via spend_tracking_routes, so no scope expansion.
+    compliance_check_routes = [
+        "/compliance/eu-ai-act",
+        "/compliance/gdpr",
+    ]
+
+    # Routes in `global_spend_tracking_routes` return proxy-wide spend across
+    # every team, customer, and api_key. They are intentionally NOT included
+    # here — non-admin roles must not see other tenants' spend. Admin roles go
+    # through their own branches in `route_checks.py`, and a key minted with
+    # the `get_spend_routes` permission retains explicit opt-in access.
     internal_user_routes = (
         [
             "/global/activity",
             "/global/activity/model",
             "/global/activity/cache_hits",
+            # Tag usage endpoints scope internal users to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
+            "/project/list",
+            "/project/info",
         ]
         + spend_tracking_routes
-        + global_spend_tracking_routes
         + key_management_routes
+        + compliance_check_routes
     )
 
     internal_user_view_only_routes = (
-        spend_tracking_routes + global_spend_tracking_routes
+        spend_tracking_routes
+        + compliance_check_routes
+        + [
+            # Tag usage endpoints scope internal viewers to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
+        ]
     )
 
     self_managed_routes = [
@@ -677,6 +711,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -686,6 +721,11 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        # Project read routes - endpoint scopes results to caller's teams (non-admin)
+        "/project/list",
+        "/project/info",
+        # Endpoint enforces proxy-admin vs team-admin model access itself.
+        "/health/test_connection",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
@@ -713,21 +753,73 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_delete",
     ]
 
-    # Routes accessible by Admin Viewer (read-only admin access)
-    admin_viewer_routes = [
-        "/user/list",
-        "/user/available_users",
-        "/user/available_roles",
-        "/user/daily/activity",
-        "/team/daily/activity",
-        "/tag/daily/activity",
-        "/tag/list",
-        "/audit",
-        "/audit/{id}",
-        "/global/activity",
-        "/global/activity/model",
-        "/global/activity/cache_hits",
-    ] + info_routes
+    # Routes accessible by Admin Viewer (read-only admin access).
+    #
+    # Admin Viewer follows a read-parity-with-Proxy-Admin rule: anything Proxy
+    # Admin can read/list/get, Admin Viewer can too (no writes, no cost-incurring
+    # actions).
+    #
+    # NOTE: This list is no longer the primary mechanism for granting access —
+    # `_check_proxy_admin_viewer_access()` in route_checks.py default-allows
+    # any safe HTTP method (GET/HEAD/OPTIONS) on non-inference routes. This
+    # list now matters only for non-GET routes that are semantically reads
+    # (e.g. POST /spend/calculate). Adding a new GET endpoint does not require
+    # updating this list — the default-allow behavior covers it automatically.
+    admin_viewer_routes = (
+        [
+            "/user/list",
+            "/user/available_users",
+            "/user/available_roles",
+            "/user/daily/activity",
+            "/team/daily/activity",
+            "/tag/daily/activity",
+            "/tag/list",
+            "/audit",
+            "/audit/{id}",
+            "/global/activity",
+            "/global/activity/model",
+            "/global/activity/cache_hits",
+            # Customer / end-user listing (handlers already gate on
+            # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
+            "/customer/list",
+            "/customer/info",
+            # UI Logs page detail drawer (single + session). The list endpoint
+            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            "/spend/logs/ui/{logId}",
+            "/spend/logs/session/ui",
+            # Settings / observability read endpoints exposed in admin-only
+            # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
+            # Invitations).
+            "/callbacks/list",
+            "/callbacks/configs",
+            "/get/config/callbacks",
+            "/alerting/settings",
+            "/config/list",
+            "/config/field/info",
+            "/budget/list",
+            "/budget/settings",
+            # Invitation viewing (admin viewer cannot create/delete; can read).
+            "/invitation/info",
+            # Guardrails / Policies pages (read-only views).
+            "/guardrails/list",
+            "/v2/guardrails/list",
+            "/guardrails/submissions",
+            "/guardrails/submissions/{guardrail_id}",
+            "/guardrails/usage/overview",
+            "/policies/attachments/list",
+            # MCP semantic filter settings (read).
+            "/get/mcp_semantic_filter_settings",
+            # Model cost map maintenance views (read-only status / source).
+            "/schedule/model_cost_map_reload/status",
+            "/model/cost_map/source",
+        ]
+        # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
+        # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin
+        # Viewer can already read /global/spend/* via global_spend_tracking_routes;
+        # the per-tenant /spend/* views were the missing peer.
+        + spend_tracking_routes
+        + info_routes
+    )
 
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
@@ -901,6 +993,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
 
 
 class BudgetLimitEntry(LiteLLMPydanticObjectBase):
@@ -1181,6 +1274,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1263,6 +1357,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1334,6 +1429,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1865,8 +1961,10 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(
                     f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                 )
-            if not isinstance(value, str):
-                callback_vars[key] = str(value)
+            callback_vars[key] = str(value)
+            validate_no_callback_env_reference(
+                key, callback_vars[key], source="key/team callback metadata"
+            )
         return values
 
 
@@ -1931,6 +2029,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = []
     mcp_toolsets: Optional[List[str]] = None
     blocked_tools: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -2151,8 +2250,8 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
     auth: bool = Field(
-        default=False,
-        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+        default=True,
+        description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
     )
     guardrails: Optional[PassThroughGuardrailsConfig] = Field(
         default=None,
@@ -2305,6 +2404,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "health checks run without a concurrency cap"
         ),
     )
+    health_check_skip_disabled_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.disable_background_health_check "
+            "are skipped for on-demand GET /health as well as the background health loop."
+        ),
+    )
     alerting: Optional[List] = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
@@ -2370,6 +2476,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
+    )
+    trusted_proxy_ranges: Optional[List[str]] = Field(
+        None,
+        description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.",
     )
     store_model_in_db: Optional[bool] = Field(
         None,
@@ -2564,6 +2674,7 @@ class UserAPIKeyAuth(
     user_spend: Optional[float] = None
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
+    budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = (
         None  # Expanded created_by user when expand=user is used
@@ -2659,6 +2770,19 @@ class UserAPIKeyAuth(
             user_id="system",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
+
+
+def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Return True if the caller's role grants unscoped read access to all
+    tenant resources (managed files, batches, vector stores, spend rows, etc).
+
+    Lives on _types.py so leaf modules (e.g. litellm.llms.base_llm.managed_resources)
+    can use it without pulling in litellm.proxy.utils via management_endpoints.
+    """
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):
@@ -3261,6 +3385,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    azure_sentinel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="azure_sentinel",
+        ui_callback_name="Azure Sentinel",
+        litellm_callback_params=[
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID",
+            "AZURE_SENTINEL_ENDPOINT",
+            "AZURE_SENTINEL_TENANT_ID",
+            "AZURE_SENTINEL_CLIENT_ID",
+            "AZURE_SENTINEL_CLIENT_SECRET",
+            "AZURE_SENTINEL_STREAM_NAME",
+        ],
+    )
+
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
         ui_callback_name="OpenMeter",
@@ -3348,6 +3485,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
+    eval_information: Optional[Any]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
@@ -4122,6 +4260,12 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "allowed_passthrough_routes",
 ]
 
+# Metadata keys that are immutable once set: preserved when an update omits them,
+# and rejected (400) when an update tries to change them.
+LiteLLM_Reserved_Metadata_Fields = [
+    "service_account_id",
+]
+
 
 class ProviderBudgetResponseObject(LiteLLMPydanticObjectBase):
     """
@@ -4227,10 +4371,16 @@ class JWTRoutingOverride(BaseModel):
 
     A rule matches when all provided selectors match token claims.
     If matched, request is routed to the configured auth path.
+
+    Wildcard selectors use shell-style patterns (* and ?) and are matched with
+    case-sensitive semantics; use the same casing your IdP emits in JWT claims.
+    Space-delimited tokenization applies only to the ``scope`` claim (OAuth/OIDC
+    scope strings), not to ``iss``, ``aud``, or ``client_id``.
     """
 
     iss: Union[str, List[str]]
     client_id: Optional[Union[str, List[str]]] = None
+    scope: Optional[Union[str, List[str]]] = None
     aud: Optional[Union[str, List[str]]] = None
     path: Literal["oauth2"] = "oauth2"
 
@@ -4346,6 +4496,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
+        # ``config_file_path`` is a non-field kwarg threaded by the
+        # startup-load path so an operator-configured
+        # ``custom_validate: s3://bucket/module.fn`` resolves through
+        # the documented config-file flow. Pop before the invalid-keys
+        # check; the runtime gate in ``get_instance_fn`` refuses
+        # ``s3://`` / ``gcs://`` when this is None.
+        config_file_path = kwargs.pop("config_file_path", None)
+
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
@@ -4359,7 +4517,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         custom_validate = kwargs.get("custom_validate")
 
         if custom_validate is not None:
-            fn = get_instance_fn(custom_validate)
+            fn = get_instance_fn(custom_validate, config_file_path=config_file_path)
             validate_custom_validate_return_type(fn)
             kwargs["custom_validate"] = fn
 
@@ -4522,6 +4680,7 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
@@ -4530,8 +4689,10 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response"]
+    file_purpose: Literal["batch", "fine-tune", "response", "container"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+    created_by: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
@@ -4542,6 +4703,7 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None

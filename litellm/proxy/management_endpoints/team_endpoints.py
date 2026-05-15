@@ -10,6 +10,7 @@ All /team management endpoints
 """
 
 import asyncio
+import math
 import json
 import traceback
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -110,6 +112,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
+    TeamMemberInfoResponse,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -158,6 +161,18 @@ async def _verify_team_access(
 
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
+
+    # Metadata keys that are owned and set by the server. Callers must not be
+    # able to inject or overwrite these via request payloads.
+    SYSTEM_MANAGED_METADATA_KEYS = ("team_member_budget_id",)
+
+    @staticmethod
+    def strip_system_managed_metadata_keys(metadata: Optional[dict]) -> None:
+        """Remove server-owned metadata keys from a caller-supplied dict."""
+        if not isinstance(metadata, dict):
+            return
+        for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS:
+            metadata.pop(key, None)
 
     @staticmethod
     def should_create_budget(
@@ -892,30 +907,39 @@ async def new_team(  # noqa: PLR0915
             prisma_client,
             user_api_key_cache,
         )
+        from litellm.proxy.management_helpers.audit_logs import (
+            get_audit_log_changed_by,
+        )
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1040,6 +1064,8 @@ async def new_team(  # noqa: PLR0915
             _model_id = model_dict.id
 
         ## Create Team Member Budget Table
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1158,9 +1184,11 @@ async def new_team(  # noqa: PLR0915
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
                         object_id=data.team_id,
@@ -1198,7 +1226,10 @@ async def _create_team_update_audit_log(
         user_api_key_dict: User API key authentication details
         litellm_proxy_admin_name: Name of the proxy admin
     """
-    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+        get_audit_log_changed_by,
+    )
 
     _before_value = existing_team_row.json(exclude_none=True)
     _before_value = json.dumps(_before_value, default=str)
@@ -1209,9 +1240,11 @@ async def _create_team_update_audit_log(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by
-                or user_api_key_dict.user_id
-                or litellm_proxy_admin_name,
+                changed_by=get_audit_log_changed_by(
+                    litellm_changed_by=litellm_changed_by,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                ),
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.TEAM_TABLE_NAME,
                 object_id=team_id,
@@ -1569,25 +1602,31 @@ async def update_team(  # noqa: PLR0915
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1729,6 +1768,13 @@ async def update_team(  # noqa: PLR0915
                 )
 
         updated_kv = data.json(exclude_unset=True)
+
+        # Drop server-owned metadata keys from caller input so they can only
+        # be written by the same code path that creates the underlying rows.
+        if isinstance(updated_kv.get("metadata"), dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(
+                updated_kv["metadata"]
+            )
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -1980,21 +2026,34 @@ def team_member_add_duplication_check(
 async def _validate_team_member_add_permissions(
     user_api_key_dict: UserAPIKeyAuth,
     complete_team_data: LiteLLM_TeamTable,
+    data: TeamMemberAddRequest,
 ) -> None:
-    """Validate if user has permission to add members to the team."""
+    """Validate if user has permission to add members to the team.
+
+    Standard users can self-join an *available team*, but the bypass
+    must not be allowed to escalate them to ``role=admin`` or to add
+    other users into the team.  When access is granted via the
+    available-team bypass we therefore enforce that every member in
+    the request matches the caller's own ``user_id`` and is being
+    added with ``role="user"``.
+    """
     if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
+        getattr(user_api_key_dict, "user_role", None)
+        == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return
+    if _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+    if await _is_user_org_admin_for_team(
+        user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+    ):
+        return
+
+    if not _is_available_team(
+        team_id=complete_team_data.team_id,
+        user_api_key_dict=user_api_key_dict,
     ):
         raise HTTPException(
             status_code=403,
@@ -2005,6 +2064,34 @@ async def _validate_team_member_add_permissions(
                 )
             },
         )
+
+    # Available-team self-join: caller may add only themselves, only as a
+    # standard user.  Enforce that here so the bypass cannot be used as a
+    # privilege-escalation or cross-user-injection primitive.
+    members = data.member if isinstance(data.member, list) else [data.member]
+    caller_user_id = getattr(user_api_key_dict, "user_id", None)
+    for member in members:
+        if getattr(member, "role", "user") != "user":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join cannot assign 'admin' role. "
+                        "Only proxy/team/org admins can add admins to a team."
+                    )
+                },
+            )
+        member_user_id = getattr(member, "user_id", None)
+        if not caller_user_id or not member_user_id or member_user_id != caller_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "Available-team self-join can only add the caller "
+                        "(user_id must match the authenticated user's user_id)."
+                    )
+                },
+            )
 
 
 async def _process_team_members(
@@ -2026,8 +2113,11 @@ async def _process_team_members(
 
     # Resolve allowed_models: explicit request value, or fall back to team's default_team_member_models
     member_allowed_models = data.allowed_models
-    if member_allowed_models is None and complete_team_data.default_team_member_models:
-        member_allowed_models = complete_team_data.default_team_member_models
+    team_default_member_models = getattr(
+        complete_team_data, "default_team_member_models", None
+    )
+    if member_allowed_models is None and team_default_member_models:
+        member_allowed_models = team_default_member_models
 
     if isinstance(data.member, Member):
         try:
@@ -2358,6 +2448,7 @@ async def team_member_add(
     await _validate_team_member_add_permissions(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
+        data=data,
     )
 
     # Validate and populate user_email/user_id for members before processing
@@ -2969,6 +3060,9 @@ async def delete_team(
         litellm_proxy_admin_name,
         prisma_client,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3028,9 +3122,11 @@ async def delete_team(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
                         object_id=team_id,
@@ -3399,6 +3495,126 @@ async def team_info(
         )
 
 
+@router.get(
+    "/team/{team_id}/members/me",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMemberInfoResponse,
+)
+@management_endpoint_wrapper
+async def team_member_me(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the caller's own team-membership row for the given team.
+
+    Used by internal users to view their own spend, budget, budget reset
+    date, rate limits, and role within a team — without exposing other
+    members' data. The caller is resolved from their API key; the path
+    `/members/me` always refers to that caller.
+
+    Returns 404 if the caller is not a member of the team.
+
+    ```
+    curl --location 'http://localhost:4000/team/your_team_id/members/me' \
+    --header 'Authorization: Bearer your_api_key_here'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            },
+        )
+
+    caller_user_id = user_api_key_dict.user_id
+    if caller_user_id is None:
+        # Team keys / service-account keys without a user_id can't resolve "me".
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "API key has no associated user_id; cannot resolve 'me' for team membership."
+            },
+        )
+
+    team_table = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    caller_user_email = user_api_key_dict.user_email
+    member_role: Optional[str] = None
+    for m in team_table.members_with_roles:
+        # Match by user_id when present, else fall back to email — members
+        # added by email may have user_id=None on the stored entry.
+        if (m.user_id is not None and m.user_id == caller_user_id) or (
+            m.user_email is not None
+            and caller_user_email is not None
+            and m.user_email == caller_user_email
+        ):
+            member_role = m.role
+            break
+
+    if member_role is None:
+        # Caller is not a member of this team. Even proxy admins get 404 here —
+        # they can use /team/info to view all members; "me" only resolves for
+        # actual members of the team.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": f"User user_id={caller_user_id} is not a member of team_id={team_id}."
+            },
+        )
+
+    membership = await get_team_membership(
+        user_id=caller_user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    user_row = await get_user_object(
+        user_id=caller_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    user_email = getattr(user_row, "user_email", None) if user_row is not None else None
+
+    if membership is None:
+        # Member is in members_with_roles but has no membership row yet
+        # (no per-member budget/limits configured). Return defaults.
+        return TeamMemberInfoResponse(
+            user_id=caller_user_id,
+            team_id=team_id,
+            team_alias=team_table.team_alias,
+            role=member_role,
+            user_email=user_email,
+            spend=0.0,
+            total_spend=0.0,
+            budget_id=None,
+            litellm_budget_table=None,
+        )
+
+    return TeamMemberInfoResponse(
+        user_id=caller_user_id,
+        team_id=team_id,
+        team_alias=team_table.team_alias,
+        role=member_role,
+        user_email=user_email,
+        spend=membership.spend,
+        total_spend=membership.total_spend,
+        budget_id=membership.budget_id,
+        litellm_budget_table=membership.litellm_budget_table,
+    )
+
+
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -3602,6 +3818,7 @@ async def _build_team_list_where_conditions(
     organization_id: Optional[str],
     user_id: Optional[str],
     use_deleted_table: bool,
+    search: Optional[str] = None,
     org_admin_org_ids: Optional[List[str]] = None,
     user_api_key_cache: Optional[Any] = None,
     proxy_logging_obj: Optional[Any] = None,
@@ -3622,6 +3839,12 @@ async def _build_team_list_where_conditions(
             "contains": team_alias,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if search:
+        where_conditions["OR"] = [
+            {"team_id": search},
+            {"team_alias": {"contains": search, "mode": "insensitive"}},
+        ]
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
@@ -3816,6 +4039,10 @@ async def list_team_v2(
         default=None,
         description="Only return teams which this 'team_alias' belongs to. Supports partial matching.",
     ),
+    search: Optional[str] = fastapi.Query(
+        default=None,
+        description="Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive).",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -3901,6 +4128,7 @@ async def list_team_v2(
         organization_id=organization_id,
         user_id=user_id,
         use_deleted_table=use_deleted_table,
+        search=search,
         org_admin_org_ids=org_admin_org_ids,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -4480,9 +4708,11 @@ async def team_member_permissions(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    # Admin Viewer follows the read-parity rule: see team permissions like
+    # a Proxy Admin would. Team / org admins keep their existing scope.
     if (
         hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _user_has_admin_view(user_api_key_dict)
         and not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
@@ -4551,6 +4781,8 @@ async def update_team_member_permissions(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    # Available-team self-join must NOT grant write access to team-wide
+    # permission policies; only proxy/team/org admins can update them.
     if (
         hasattr(user_api_key_dict, "user_role")
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -4560,16 +4792,12 @@ async def update_team_member_permissions(
         and not await _is_user_org_admin_for_team(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
-            user_api_key_dict=user_api_key_dict,
-        )
     ):
         raise HTTPException(
             status_code=403,
             detail={
                 "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_add",
+                    "/team/permissions_update",
                     complete_team_data.team_id,
                 )
             },
@@ -4825,24 +5053,30 @@ async def get_team_daily_activity(
     }
 
     # Check if user is team admin or has /team/daily/activity permission
-    # If not, filter by user's API keys
+    # If not, filter by user's API keys.
+    #
+    # Earlier this loop used `any-team admin -> set has_full_team_view=True
+    # for the entire request`, so an admin of one team that requested
+    # data for several teams would see API-key-level breakdowns for all
+    # of them. Require full view on EVERY requested team — if the caller
+    # only has admin/permission for a strict subset, fall back to
+    # filtering the entire response by their own API keys (they can re-
+    # request the admin-only teams separately to get the wider view).
     user_api_keys: Optional[List[str]] = None
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        # Check if user is team admin or has usage view permission for any team
-        has_full_team_view = False
+        has_full_team_view = True
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
-            if _is_user_team_admin(
+            is_admin = _is_user_team_admin(
                 user_api_key_dict=user_api_key_dict, team_obj=team_obj
-            ):
-                has_full_team_view = True
-                break
-            if _team_member_has_permission(
+            )
+            has_perm = _team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 permission="/team/daily/activity",
-            ):
-                has_full_team_view = True
+            )
+            if not (is_admin or has_perm):
+                has_full_team_view = False
                 break
 
         # If user does not have full team view, filter by their API keys

@@ -68,7 +68,7 @@ async def test_azure_embedding_health_check():
 async def test_openai_img_gen_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "dall-e-3",
+            "model": "gpt-image-1",
             "api_key": os.getenv("OPENAI_API_KEY"),
         },
         mode="image_generation",
@@ -314,11 +314,11 @@ def test_update_litellm_params_for_health_check():
     # Issue #15807: Fixes health checks sending "region/model" as model ID to AWS
     model_info = {}
     litellm_params = {
-        "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
@@ -493,6 +493,45 @@ async def test_perform_health_check_filters_by_model_id():
     assert (captured_list[0][0].get("model_info") or {}).get("id") == "deployment-id-2"
     assert len(healthy_endpoints) == 1
     assert healthy_endpoints[0]["api_key"] == "fake-key-2"
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_skip_disabled_background_models():
+    from litellm.proxy.health_check import perform_health_check
+
+    model_list = [
+        {
+            "model_name": "a",
+            "model_info": {"id": "id-a"},
+            "litellm_params": {"model": "m-a", "api_key": "k1"},
+        },
+        {
+            "model_name": "b",
+            "model_info": {
+                "id": "id-b",
+                "disable_background_health_check": True,
+            },
+            "litellm_params": {"model": "m-b", "api_key": "k2"},
+        },
+    ]
+    captured = []
+
+    async def mock_inner(m_list, details=True, **kwargs):
+        captured.append(list(m_list))
+        return [], [], {}
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_inner,
+    ):
+        await perform_health_check(
+            model_list=model_list,
+            health_check_skip_disabled_background_models=True,
+        )
+
+    assert len(captured) == 1
+    assert len(captured[0]) == 1
+    assert captured[0][0]["model_name"] == "a"
 
 
 @pytest.mark.asyncio

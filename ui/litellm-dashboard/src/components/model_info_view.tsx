@@ -253,10 +253,16 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+
+      if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
+        updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+      }
+      if (form.isFieldTouched("output_cost") && values.output_cost !== undefined && values.output_cost !== null) {
+        updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+      }
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
@@ -373,6 +379,12 @@ export default function ModelInfoView({
           model: localModelData.litellm_model_name,
         },
         {
+          // `id` is required to disambiguate when multiple deployments
+          // share the same model_name (e.g. wildcard `openai/*` with two
+          // different `api_base` values for failover). Without it the
+          // backend silently falls back to deployments[0] and probes
+          // the wrong endpoint.
+          id: localModelData.model_info?.id,
           mode: localModelData.model_info?.mode,
         },
         localModelData.model_info?.mode,
