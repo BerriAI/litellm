@@ -2688,7 +2688,7 @@ class MCPServerManager:
         # Extract subject token for OAuth2 Token Exchange (OBO) flow
         subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        if mcp_server.has_token_exchange_config:
             subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:

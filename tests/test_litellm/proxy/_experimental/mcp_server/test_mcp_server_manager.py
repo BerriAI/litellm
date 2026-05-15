@@ -1455,6 +1455,35 @@ class TestMCPServerManager:
         assert server2.requires_per_user_auth is False
 
     @pytest.mark.asyncio
+    async def test_requires_per_user_auth_property_token_exchange(self):
+        """OAuth2 Token Exchange (OBO) servers always require a caller-supplied subject token."""
+        server = MCPServer(
+            server_id="obo-server",
+            name="obo-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            url="http://obo-server.com",
+            client_id="cid",
+            client_secret="csecret",
+            token_exchange_endpoint="https://idp.example.com/token",
+        )
+        assert server.requires_per_user_auth is True
+
+        # Even with a stray authentication_token set, health checks must still be skipped.
+        server_with_static = MCPServer(
+            server_id="obo-server-static",
+            name="obo-server-static",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            url="http://obo-server.com",
+            client_id="cid",
+            client_secret="csecret",
+            token_exchange_endpoint="https://idp.example.com/token",
+            authentication_token="static-fallback",
+        )
+        assert server_with_static.requires_per_user_auth is True
+
+    @pytest.mark.asyncio
     async def test_register_openapi_tools_includes_static_headers(self, tmp_path):
         """Ensure OpenAPI-to-MCP tool calls include server.static_headers (Issue #19341)."""
         manager = MCPServerManager()
