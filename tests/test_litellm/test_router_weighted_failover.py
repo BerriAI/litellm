@@ -49,15 +49,16 @@ class TestGetExcludedFilteredDeployments:
         ids = sorted(d["model_info"]["id"] for d in result)
         assert ids == ["a", "c"]
 
-    def test_all_excluded_returns_original(self):
-        # Safety: empty filtered list would otherwise mask the real
-        # no-deployments error. The helper returns the original list so the
-        # caller raises its usual error.
+    def test_all_excluded_returns_empty(self):
+        # When every healthy deployment has been excluded, the helper must
+        # return an empty list so the caller raises its usual no-deployments
+        # error. Returning the original list here would re-include the
+        # just-failed deployment and let weighted failover re-pick it.
         deps = [_make_dep("a"), _make_dep("b")]
         result = _get_excluded_filtered_deployments(
             deps, excluded_deployment_ids=["a", "b"]
         )
-        assert len(result) == 2
+        assert result == []
 
     def test_excluded_set_with_unknown_ids(self):
         deps = [_make_dep("a"), _make_dep("b")]

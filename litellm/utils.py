@@ -4994,22 +4994,20 @@ def _get_excluded_filtered_deployments(
     across the remaining deployments in the same model group after one of them
     has failed.
 
-    If the resulting list would be empty, the original list is returned unchanged
-    so the caller raises its usual no-deployments error rather than getting an
-    incorrect "all excluded" result.
+    If the filter would leave no deployments, an empty list is returned so the
+    caller raises its usual no-deployments error and the weighted-failover
+    helper falls through to the cross-group fallback path. Returning the
+    original unfiltered list here would re-include the just-failed deployment.
     """
     if not excluded_deployment_ids:
         return healthy_deployments
 
     excluded_set = set(excluded_deployment_ids)
-    filtered = [
+    return [
         d
         for d in healthy_deployments
         if (d.get("model_info") or {}).get("id") not in excluded_set
     ]
-    if not filtered:
-        return healthy_deployments
-    return filtered
 
 
 def _get_model_region(

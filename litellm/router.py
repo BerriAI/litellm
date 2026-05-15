@@ -5716,19 +5716,25 @@ class Router:
             "model": original_model_group,
             "_excluded_deployment_ids": list(excluded),
         }
-        input_kwargs.update(
-            {
-                "fallback_model_group": [entry],
-                "original_model_group": original_model_group,
-            }
-        )
+        # Build a local copy so the weighted-failover keys do not leak back to
+        # the caller's shared kwargs dict (any downstream fallback path reads
+        # the same dict and must not inherit our `_excluded_deployment_ids`
+        # entry).
+        failover_kwargs = {
+            **input_kwargs,
+            "fallback_model_group": [entry],
+            "original_model_group": original_model_group,
+        }
         try:
-            return await run_async_fallback(*args, **input_kwargs)
-        except openai.APIError:
-            # Expected model-level failure on the retried deployment (all litellm
-            # provider errors derive from openai.APIError). Defer to the regular
-            # fallback path. Programming errors (AttributeError, KeyError,
-            # TypeError, etc.) intentionally propagate so they remain visible.
+            return await run_async_fallback(*args, **failover_kwargs)
+        except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
+            # Expected model-level failure on the retried deployment. All
+            # litellm provider errors derive from openai.APIError; if every
+            # remaining deployment in the group is in cooldown the router
+            # raises RouterRateLimitError (a ValueError, not an APIError).
+            # In either case defer to the regular fallback path. Programming
+            # errors (AttributeError, KeyError, TypeError, etc.) intentionally
+            # propagate so they remain visible.
             return None
 
     async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
