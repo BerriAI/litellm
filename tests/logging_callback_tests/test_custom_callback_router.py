@@ -485,7 +485,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/text-embedding-3-small",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_AI_API_BASE"),
@@ -506,7 +506,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/text-embedding-3-small",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_AI_API_BASE"),

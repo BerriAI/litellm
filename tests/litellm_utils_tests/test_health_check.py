@@ -50,7 +50,7 @@ async def test_text_completion_health_check():
 async def test_azure_embedding_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "azure/text-embedding-3-small",
+            "model": "azure/text-embedding-ada-002",
             "api_key": os.getenv("AZURE_AI_API_KEY"),
             "api_base": os.getenv("AZURE_AI_API_BASE"),
             "api_version": os.getenv("AZURE_AI_API_VERSION"),
