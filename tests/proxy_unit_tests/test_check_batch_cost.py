@@ -396,6 +396,7 @@ class TestCheckBatchCost:
         mock_job.id = "job-raw-file-1"
         mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
+        mock_job.team_id = None
 
         check_batch_cost_instance._has_batch_processed_column = True
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
@@ -403,12 +404,14 @@ class TestCheckBatchCost:
         )
 
         raw_output_file_id = "file-batch-output-abc123"
-        fake_managed_id = "bGl0ZWxsbV9wcm94eTo6bWFuYWdlZA=="
+        raw_error_file_id = "file-batch-error-xyz456"
+        fake_managed_output_id = "bGl0ZWxsbV9wcm94eTo6b3V0cHV0"
+        fake_managed_error_id = "bGl0ZWxsbV9wcm94eTo6ZXJyb3I="
 
         mock_response = MagicMock()
         mock_response.status = "completed"
         mock_response.output_file_id = raw_output_file_id
-        mock_response.error_file_id = None
+        mock_response.error_file_id = raw_error_file_id
         mock_response.model_dump_json.return_value = (
             '{"id":"batch-1","status":"completed"}'
         )
@@ -426,7 +429,10 @@ class TestCheckBatchCost:
         mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
 
         mock_hook = MagicMock()
-        mock_hook.get_unified_output_file_id.return_value = fake_managed_id
+        mock_hook.get_unified_output_file_id.side_effect = [
+            fake_managed_output_id,
+            fake_managed_error_id,
+        ]
         mock_hook.store_unified_file_id = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = (
             mock_hook
@@ -439,9 +445,9 @@ class TestCheckBatchCost:
         with (
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
-                # call 1: job unified_object_id decode, call 2: existing raw check,
-                # call 3: fix's guard for output_file_id
-                side_effect=[decoded_id, None, None],
+                # call 1: job unified_object_id decode, call 2: existing raw check for output_file_id,
+                # call 3: fix guard for output_file_id, call 4: fix guard for error_file_id
+                side_effect=[decoded_id, None, None, None],
             ),
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
@@ -483,13 +489,26 @@ class TestCheckBatchCost:
 
             await check_batch_cost_instance.check_batch_cost()
 
-        mock_hook.get_unified_output_file_id.assert_called_once_with(
+        assert mock_hook.get_unified_output_file_id.call_count == 2
+        mock_hook.get_unified_output_file_id.assert_any_call(
             output_file_id=raw_output_file_id,
             model_id="model-123",
             model_name="gpt-5-mini",
         )
-        mock_hook.store_unified_file_id.assert_awaited_once()
-        store_kwargs = mock_hook.store_unified_file_id.call_args[1]
-        assert store_kwargs["file_id"] == fake_managed_id
-        assert store_kwargs["model_mappings"] == {"model-123": raw_output_file_id}
-        assert mock_response.output_file_id == fake_managed_id
+        mock_hook.get_unified_output_file_id.assert_any_call(
+            output_file_id=raw_error_file_id,
+            model_id="model-123",
+            model_name="gpt-5-mini",
+        )
+        assert mock_hook.store_unified_file_id.await_count == 2
+        # {raw_file_id: managed_file_id} for each store call
+        stored = {
+            next(iter(c[1]["model_mappings"].values())): c[1]["file_id"]
+            for c in mock_hook.store_unified_file_id.call_args_list
+        }
+        assert stored == {
+            raw_output_file_id: fake_managed_output_id,
+            raw_error_file_id: fake_managed_error_id,
+        }
+        assert mock_response.output_file_id == fake_managed_output_id
+        assert mock_response.error_file_id == fake_managed_error_id
