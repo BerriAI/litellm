@@ -2186,12 +2186,18 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
-    from litellm.proxy.proxy_server import open_telemetry_logger
+    from litellm.proxy.proxy_server import general_settings, open_telemetry_logger
 
     auth_start_time = datetime.now()
     route: str = get_request_route(request=request)
     parent_otel_span: Optional[Span] = None
-    if open_telemetry_logger is not None:
+    route_is_auth_exempt_public = not _route_requires_auth_despite_public(
+        route=route, general_settings=general_settings
+    ) and (
+        route in LiteLLMRoutes.public_routes.value  # type: ignore[attr-defined]
+        or route_in_additonal_public_routes(current_route=route)
+    )
+    if open_telemetry_logger is not None and not route_is_auth_exempt_public:
         parent_otel_span = (
             open_telemetry_logger.create_litellm_proxy_request_started_span(
                 start_time=auth_start_time,

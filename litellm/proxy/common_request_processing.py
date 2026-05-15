@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -1195,21 +1196,25 @@ class ProxyBaseLLMRequestProcessing:
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
-        llm_call: Any = None
-        async with litellm_otel_tracer.trace(
-            "proxy.chat.route_request",
-            service=ServiceTypes.PROXY_PRE_CALL,
-            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            attributes={"route_type": route_type},
-        ):
-            llm_call = await route_request(
-                data=self.data,
-                route_type=route_type,
-                llm_router=llm_router,
-                user_model=user_model,
-                user_api_key_dict=user_api_key_dict,
-            )
-        tasks.append(llm_call)
+        async def _run_route_request_with_span() -> Any:
+            async with litellm_otel_tracer.trace(
+                "proxy.chat.route_request",
+                service=ServiceTypes.PROXY_PRE_CALL,
+                parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+                attributes={"route_type": route_type},
+            ):
+                llm_call = await route_request(
+                    data=self.data,
+                    route_type=route_type,
+                    llm_router=llm_router,
+                    user_model=user_model,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                if inspect.isawaitable(llm_call):
+                    return await llm_call
+                return llm_call
+
+        tasks.append(asyncio.create_task(_run_route_request_with_span()))
 
         # wait for call to end
         llm_responses = asyncio.gather(
