@@ -30,6 +30,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -6834,12 +6835,11 @@ class Router:
         unhealthy_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments:
-                continue
-            else:
-                healthy_deployments.append(deployment)
+        unhealthy_set = set(unhealthy_deployments)
+        healthy_deployments: list = [
+            d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         return healthy_deployments, _all_deployments
 
@@ -6867,10 +6867,12 @@ class Router:
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set = set(unhealthy_deployments)
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] not in unhealthy_deployments_set:
-                healthy_deployments.append(deployment)
+        healthy_deployments: list = [
+            d
+            for d in _all_deployments
+            if d["model_info"]["id"] not in unhealthy_deployments_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
@@ -8019,10 +8021,14 @@ class Router:
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
         """
-        Returns -> dict of credentials for a given model id
+        Returns -> dict of credentials for a given model id.
+
+        Returns None if the deployment is paused via `LiteLLM_ProxyModelTable.blocked`,
+        so file/batch/passthrough callers that resolve credentials directly cannot keep
+        using a paused deployment.
         """
         deployment = self.get_deployment(model_id=model_id)
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
         return CredentialLiteLLMParams(
             **deployment.litellm_params.model_dump(exclude_none=True)
@@ -8067,7 +8073,9 @@ class Router:
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
-            Returns None if model not found.
+            Returns None if model not found, or if the resolved deployment is
+            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
+            cannot bypass an admin pause by resolving credentials directly).
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
@@ -8093,7 +8101,7 @@ class Router:
                 elif isinstance(deployment_dict, Deployment):
                     deployment = deployment_dict
 
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
@@ -9120,6 +9128,29 @@ class Router:
 
         return model_names
 
+    def get_fully_blocked_model_names(self) -> Set[str]:
+        """
+        Returns the set of model_names where every backing deployment has `blocked=True`.
+
+        Used by `/v1/models` to hide paused models from client listings while still
+        surfacing them on admin endpoints (e.g. `/model/info`). A model with at least
+        one non-blocked deployment is still serviceable and remains visible.
+        """
+        deployments = self.get_model_list() or []
+        blocked_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            name = deployment.get("model_name") or ""
+            if not name:
+                continue
+            is_blocked = (deployment.get("model_info") or {}).get("blocked") is True
+            if name in blocked_by_name:
+                blocked_by_name[name] = blocked_by_name[name] and is_blocked
+            else:
+                blocked_by_name[name] = is_blocked
+        return {
+            name for name, fully_blocked in blocked_by_name.items() if fully_blocked
+        }
+
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
     ) -> Optional[str]:
@@ -10006,6 +10037,8 @@ class Router:
             )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             return healthy_deployments
 
         # Health-check-based filtering (before cooldown)
@@ -10038,6 +10071,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -10419,6 +10454,8 @@ class Router:
         )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             return healthy_deployments
 
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
@@ -10448,6 +10485,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -10557,6 +10596,8 @@ class Router:
 
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise RouterRateLimitErrorBasic(model=model)
             litellm_params = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
                 return healthy_deployments
@@ -10595,6 +10636,9 @@ class Router:
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
             cooldown_deployments=cooldown_deployments,
+        )
+        pass_through_deployments = self._filter_blocked_deployments(
+            pass_through_deployments
         )
 
         # 5. Apply pre-call checks (if enabled)
@@ -10684,6 +10728,36 @@ class Router:
             for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
         ]
+
+    def _filter_blocked_deployments(
+        self, healthy_deployments: List[Dict]
+    ) -> List[Dict]:
+        """
+        Filters out deployments that an admin has paused via `LiteLLM_ProxyModelTable.blocked`.
+
+        Applied alongside the cooldown filter on every routing entry point that calls
+        `_common_checks_available_deployment` directly — the primary sync/async path,
+        the sync pass-through path, and the retry / health-check helpers — so paused
+        deployments never serve a request. The async pass-through path inherits this
+        filter through its delegation to `async_get_healthy_deployments`.
+        """
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if (deployment.get("model_info") or {}).get("blocked") is not True
+        ]
+
+    @staticmethod
+    def _is_deployment_blocked(deployment: "Deployment") -> bool:
+        """
+        Returns True when a `Deployment` Pydantic instance carries the admin-paused
+        flag. Used by credential-lookup helpers so passthrough file / batch endpoints
+        cannot bypass the pause by resolving credentials directly.
+        """
+        model_info = getattr(deployment, "model_info", None)
+        if model_info is None:
+            return False
+        return getattr(model_info, "blocked", None) is True
 
     async def _async_filter_health_check_unhealthy_deployments(
         self,
