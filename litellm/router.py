@@ -5687,7 +5687,10 @@ class Router:
             return None
 
         metadata_variable_name = self._get_metadata_variable_name_from_kwargs(kwargs)
-        meta = kwargs.setdefault(metadata_variable_name, {}) or {}
+        meta = kwargs.get(metadata_variable_name)
+        if meta is None:
+            meta = {}
+            kwargs[metadata_variable_name] = meta
         if not isinstance(meta, dict):
             return None
         prev_excluded = set(meta.get("_failover_excluded_ids") or [])
