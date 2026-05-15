@@ -141,10 +141,9 @@ class TokenExchangeHandler:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             verbose_logger.debug(
-                "Token exchange IDP error for MCP server %s (status %d): %s",
+                "Token exchange IDP error for MCP server %s (status %d)",
                 server.server_id,
                 exc.response.status_code,
-                exc.response.text,
             )
             raise ValueError(
                 f"Token exchange for MCP server '{server.server_id}' "
