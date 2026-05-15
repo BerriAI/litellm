@@ -1893,11 +1893,11 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
             return_value="198.51.100.10",
         ):
-            authorization_response = _build_oauth_authorization_server_response(
+            authorization_response = await _build_oauth_authorization_server_response(
                 request=mock_request,
                 mcp_server_name=None,
             )
-            resource_response = _build_oauth_protected_resource_response(
+            resource_response = await _build_oauth_protected_resource_response(
                 request=mock_request,
                 mcp_server_name=None,
                 use_standard_pattern=False,
@@ -1922,6 +1922,10 @@ async def test_oauth_callback_redirects_with_state():
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
     # Mock the state decoding
     mock_state_data = {
         "base_url": "http://localhost:3000/ui/mcp/oauth/callback",
@@ -1938,6 +1942,7 @@ async def test_oauth_callback_redirects_with_state():
 
         # Call callback endpoint with code and state
         response = await callback(
+            request=mock_request,
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -1967,6 +1972,10 @@ async def test_oauth_callback_preserves_client_redirect_uri_query():
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
     ) as mock_decode:
@@ -1981,6 +1990,7 @@ async def test_oauth_callback_preserves_client_redirect_uri_query():
         }
 
         response = await callback(
+            request=mock_request,
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -2003,6 +2013,10 @@ async def test_oauth_callback_handles_invalid_state():
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
     # Mock state decoding to raise an exception
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
@@ -2011,6 +2025,7 @@ async def test_oauth_callback_handles_invalid_state():
 
         # Call callback endpoint with invalid state
         response = await callback(
+            request=mock_request,
             code="test_code",
             state="invalid_encrypted_state",
         )
@@ -2390,6 +2405,10 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
         callback,
     )
 
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
     ) as mock_decode:
@@ -2401,7 +2420,11 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
             "client_redirect_uri": "https://attacker.example.com/cb",
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="stolen_code", state="encrypted_stale_state")
+            await callback(
+                request=mock_request,
+                code="stolen_code",
+                state="encrypted_stale_state",
+            )
         assert exc_info.value.status_code == 400
 
 
@@ -2411,6 +2434,10 @@ async def test_callback_revalidates_loopback_on_decoded_client_redirect_uri():
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         callback,
     )
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
@@ -2423,7 +2450,11 @@ async def test_callback_revalidates_loopback_on_decoded_client_redirect_uri():
             "client_redirect_uri": "https://attacker.example.com/cb",
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="stolen_code", state="encrypted_stale_state")
+            await callback(
+                request=mock_request,
+                code="stolen_code",
+                state="encrypted_stale_state",
+            )
         assert exc_info.value.status_code == 400
 
 
@@ -2434,6 +2465,10 @@ async def test_callback_rejects_state_missing_redirect_uri():
         callback,
     )
 
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
     ) as mock_decode:
@@ -2443,7 +2478,11 @@ async def test_callback_rejects_state_missing_redirect_uri():
             "code_challenge_method": None,
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="code", state="encrypted_malformed_state")
+            await callback(
+                request=mock_request,
+                code="code",
+                state="encrypted_malformed_state",
+            )
         assert exc_info.value.status_code == 400
 
 

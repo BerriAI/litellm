@@ -152,8 +152,14 @@ if MCP_AVAILABLE:
         UserAPIKeyAuth,
         UserMCPManagementMode,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.auth.user_api_key_auth import (
+        _user_api_key_auth_builder,
+        user_api_key_auth,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body,
+        populate_request_with_path_params,
+    )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials

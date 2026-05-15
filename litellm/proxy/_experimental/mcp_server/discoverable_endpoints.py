@@ -661,7 +661,11 @@ async def token_endpoint(
 async def callback(request: Request, code: str, state: str):
     try:
         state_data = decode_state_hash(state)
-        base_url = state_data["base_url"]
+        redirect_uri = state_data.get("client_redirect_uri") or state_data.get(
+            "base_url"
+        )
+        if not redirect_uri or not isinstance(redirect_uri, str):
+            raise HTTPException(status_code=400, detail="Invalid redirect URI")
         original_state = state_data["original_state"]
 
         # Re-validate at the sink. /authorize rejects untrusted
@@ -670,10 +674,10 @@ async def callback(request: Request, code: str, state: str):
         # valid indefinitely. Validating here (same-origin OR loopback)
         # blocks the open-redirect + code-theft primitive even for pre-fix
         # states while allowing the UI's same-origin callback to work.
-        validate_trusted_redirect_uri(request, base_url)
+        validate_trusted_redirect_uri(request, redirect_uri)
 
         params = {"code": code, "state": original_state}
-        complete_returned_url = f"{base_url}?{urlencode(params)}"
+        complete_returned_url = _append_query_params(redirect_uri, params)
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
     except HTTPException:

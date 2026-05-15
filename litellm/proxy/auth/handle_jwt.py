@@ -953,7 +953,7 @@ class JWTHandler:
             raise Exception(f"Validation fails: {str(e)}")
 
     async def auth_jwt(self, token: str) -> dict:
-            decode_kwargs = self._build_decode_kwargs()
+        decode_kwargs = self._build_decode_kwargs()
 
         header = jwt.get_unverified_header(token)
 
