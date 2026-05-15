@@ -666,11 +666,14 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
-                    cache_read_cost: localModelData.litellm_params?.cache_read_input_token_cost
-                      ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
-                      : localModelData.model_info?.cache_read_input_token_cost
-                        ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
-                        : null,
+                    cache_read_cost:
+                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_read_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_read_input_token_cost !== null
+                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
+                          : null,
                     cache_write_cost:
                       localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
                       localModelData.litellm_params?.cache_creation_input_token_cost !== null
@@ -778,9 +781,11 @@ export default function ModelInfoView({
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                            {localModelData?.litellm_params?.cache_read_input_token_cost
+                            {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_read_input_token_cost !== null
                               ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.cache_read_input_token_cost
+                              : localModelData?.model_info?.cache_read_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_read_input_token_cost !== null
                                 ? (localModelData.model_info.cache_read_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
