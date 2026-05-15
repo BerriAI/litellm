@@ -158,6 +158,78 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_with_original_chunk_reasoning_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/28000.
+
+    When Gemini emits a streaming chunk that carries only thinking content
+    (delta.content is None, delta.reasoning_content is set), the upstream
+    handler builds an `original_chunk` ModelResponseStream that holds the
+    reasoning_content, but `model_response` passed into is_chunk_non_empty
+    is a fresh empty object. The thought chunk must still be considered
+    non-empty so it propagates to the caller.
+    """
+    original_chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    reasoning_content="I need to add 2 and 2...",
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+    empty_model_response = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"content": ""},
+            model_response=empty_model_response,
+            response_obj={"original_chunk": original_chunk},
+        )
+        is True
+    )
+
+
+def test_is_chunk_non_empty_ignores_original_chunk_without_reasoning(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion to test_is_chunk_non_empty_with_original_chunk_reasoning_content.
+
+    An empty completion_obj plus an original_chunk that carries no
+    reasoning_content (and no other non-empty delta fields) must still be
+    treated as empty so existing pass-through behaviour is preserved.
+    """
+    original_chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason=None,
+            )
+        ],
+    )
+    empty_model_response = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"content": ""},
+            model_response=empty_model_response,
+            response_obj={"original_chunk": original_chunk},
+        )
+        is False
+    )
+
+
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -2036,23 +2108,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
