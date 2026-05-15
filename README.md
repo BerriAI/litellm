@@ -424,29 +424,24 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit `0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).
+All LiteLLM Docker images published to GHCR are **keyless-signed** with [cosign](https://docs.sigstore.dev/cosign/overview/) (Sigstore — Fulcio + Rekor) and ship with [SLSA Build L3](https://slsa.dev) provenance. There is no static public key to trust: each signature and attestation is cryptographically bound to the exact GitHub Actions workflow, repository, and release tag that produced the image. Verification works fully offline against the public Sigstore TUF root.
 
-**Verify using the pinned commit hash (recommended):**
-
-A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the original signing key:
+**Verify the cosign signature:**
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/0112e53046018d726492c814b3644b7d376029d0/cosign.pub \
+  --certificate-identity-regexp='^https://github\.com/BerriAI/litellm/\.github/workflows/_publish-container\.yml@refs/tags/<release-tag>$' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 
-**Verify using a release tag (convenience):**
-
-Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:
+**Verify the SLSA build provenance:**
 
 ```bash
-cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
-  ghcr.io/berriai/litellm:<release-tag>
+gh attestation verify oci://ghcr.io/berriai/litellm:<release-tag> --owner BerriAI
 ```
 
-Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`). The same two commands work for the `litellm-database` and `litellm-non-root` images.
 
 ---
 

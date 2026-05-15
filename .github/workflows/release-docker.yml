@@ -1,0 +1,173 @@
+name: Build, Publish and Sign LiteLLM Docker images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.83.14-stable)"
+        required: true
+      commit_hash:
+        description: "Source commit hash the tag must resolve to"
+        required: true
+      release_type:
+        description: "stable | nightly | rc | poc"
+        type: string
+        default: "stable"
+      enable_docker_hub:
+        description: "Also push to docker.io/litellm/* (requires Docker Hub OIDC federation)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  preflight:
+    name: Preflight tag/commit verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    environment: docker-release
+    # Only run in the canonical repository — never in forks.
+    if: github.repository == 'BerriAI/litellm'
+    outputs:
+      tag: ${{ inputs.tag }}
+      commit_hash: ${{ inputs.commit_hash }}
+    steps:
+      - name: Enforce tag-ref dispatch
+        env:
+          EXPECTED_REF: refs/tags/${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "${EXPECTED_REF}" ]; then
+            echo "::error::Dispatch this workflow from the release tag, not a branch. github.ref=${GITHUB_REF}, expected ${EXPECTED_REF}. The keyless cosign certificate identity binds to the dispatch ref; a branch dispatch would push images and then fail signature verification."
+            exit 1
+          fi
+          echo "Dispatch ref OK: ${GITHUB_REF}"
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Verify tag resolves to commit_hash
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED: ${{ inputs.commit_hash }}
+        run: |
+          set -euo pipefail
+          RESOLVED=$(git rev-parse "${TAG}^{commit}")
+          if [ "${RESOLVED}" != "${EXPECTED}" ]; then
+            echo "::error::Tag ${TAG} resolves to ${RESOLVED}, expected ${EXPECTED}"
+            exit 1
+          fi
+          echo "Tag ${TAG} -> ${RESOLVED} OK"
+
+  build-litellm:
+    name: Build, push, sign — litellm
+    needs: preflight
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+    uses: ./.github/workflows/_publish-container.yml
+    with:
+      image-name: litellm
+      dockerfile: ./Dockerfile
+      context: .
+      tag: ${{ needs.preflight.outputs.tag }}
+      commit-hash: ${{ needs.preflight.outputs.commit_hash }}
+      enable-docker-hub: ${{ inputs.enable_docker_hub }}
+
+  build-litellm-database:
+    name: Build, push, sign — litellm-database
+    needs: preflight
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+    uses: ./.github/workflows/_publish-container.yml
+    with:
+      image-name: litellm-database
+      dockerfile: ./docker/Dockerfile.database
+      context: .
+      tag: ${{ needs.preflight.outputs.tag }}
+      commit-hash: ${{ needs.preflight.outputs.commit_hash }}
+      enable-docker-hub: ${{ inputs.enable_docker_hub }}
+
+  build-litellm-non-root:
+    name: Build, push, sign — litellm-non-root
+    needs: preflight
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+    uses: ./.github/workflows/_publish-container.yml
+    with:
+      image-name: litellm-non-root
+      dockerfile: ./docker/Dockerfile.non_root
+      context: .
+      tag: ${{ needs.preflight.outputs.tag }}
+      commit-hash: ${{ needs.preflight.outputs.commit_hash }}
+      enable-docker-hub: ${{ inputs.enable_docker_hub }}
+
+  verify-all:
+    name: Final verification (consumer-style)
+    needs:
+      - preflight
+      - build-litellm
+      - build-litellm-database
+      - build-litellm-non-root
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: litellm
+            digest: ${{ needs.build-litellm.outputs.digest }}
+          - name: litellm-database
+            digest: ${{ needs.build-litellm-database.outputs.digest }}
+          - name: litellm-non-root
+            digest: ${{ needs.build-litellm-non-root.outputs.digest }}
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: 'v3.0.6'  # Keep in sync with _publish-container.yml's default
+      - name: Log in to GHCR (read-only, for attestation referrer pull)
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify cosign signature
+        env:
+          DIGEST: ${{ matrix.digest }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG_ESC=$(printf '%s' "${TAG}" | sed 's/\./\\./g')
+          # Cert identity reflects the reusable workflow that signed (job_workflow_ref).
+          IDENTITY_RE="^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/_publish-container\.yml@refs/tags/${TAG_ESC}$"
+          cosign verify \
+            --certificate-identity-regexp="${IDENTITY_RE}" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}@${DIGEST}"
+      - name: Verify SLSA provenance via gh attestation
+        env:
+          DIGEST: ${{ matrix.digest }}
+          IMAGE: ${{ matrix.name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}@${DIGEST}" \
+            --owner "${GITHUB_REPOSITORY_OWNER}"
