@@ -1369,23 +1369,14 @@ if MCP_AVAILABLE:
                     )
 
                 try:
-                    if subject_token is not None:
-                        tools = await global_mcp_server_manager._get_tools_from_server(
-                            server=server,
-                            mcp_auth_header=server_auth_header,
-                            extra_headers=extra_headers,
-                            add_prefix=True,  # Always add server prefix
-                            raw_headers=raw_headers,
-                            subject_token=subject_token,
-                        )
-                    else:
-                        tools = await global_mcp_server_manager._get_tools_from_server(
-                            server=server,
-                            mcp_auth_header=server_auth_header,
-                            extra_headers=extra_headers,
-                            add_prefix=True,  # Always add server prefix
-                            raw_headers=raw_headers,
-                        )
+                    tools = await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=True,  # Always add server prefix
+                        raw_headers=raw_headers,
+                        subject_token=subject_token,
+                    )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
                     filtered_tools = await filter_tools_by_key_team_permissions(
