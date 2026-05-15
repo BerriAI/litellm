@@ -131,6 +131,10 @@ class MCPServer(BaseModel):
         if self.needs_user_oauth_token:
             return True
 
+        # OAuth2 Token Exchange (OBO) — always requires a caller-supplied subject token
+        if self.has_token_exchange_config:
+            return True
+
         # PAT passthrough: auth_type is none but extra_headers includes auth headers
         if self.auth_type == MCPAuth.none and self.extra_headers:
             auth_header_names = {"authorization", "x-api-key", "api-key", "apikey"}

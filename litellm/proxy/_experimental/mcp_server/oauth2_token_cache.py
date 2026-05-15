@@ -124,6 +124,11 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"OAuth2 token request for MCP server '{server.server_id}' "
                 f"failed with status {exc.response.status_code}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise ValueError(
+                f"OAuth2 token request for MCP server '{server.server_id}' "
+                f"failed: {exc}"
+            ) from exc
 
         body = response.json()
 
@@ -292,20 +297,9 @@ async def resolve_mcp_auth(
             return await token_exchange.mcp_token_exchange_handler.exchange_token(
                 subject_token, server
             )
-        # No subject_token — fall back to client_credentials using the same client
-        # credentials and token_url so M2M scenarios still work.
-        if server.client_id and server.client_secret and server.token_url:
-            return await mcp_oauth2_token_cache.async_get_token(
-                server,
-                require_client_credentials_flow=False,
-            )
-        # OBO configured but no subject_token and missing client credentials — warn
-        # rather than silently proceeding unauthenticated.
-        verbose_logger.warning(
-            "MCP server '%s' is configured for token exchange (OBO) but no subject_token "
-            "was provided and client credentials (client_id/client_secret/token_url) are "
-            "incomplete. The request will proceed without authentication.",
-            server.server_id,
+        raise ValueError(
+            f"MCP server '{server.server_id}' is configured for OAuth2 token "
+            "exchange, but no subject_token was provided"
         )
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)

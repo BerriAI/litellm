@@ -149,6 +149,17 @@ class TokenExchangeHandler:
                 f"Token exchange for MCP server '{server.server_id}' "
                 f"failed with status {exc.response.status_code}"
             ) from exc
+        except httpx.RequestError as exc:
+            verbose_logger.debug(
+                "Token exchange request error for MCP server %s at %s: %s",
+                server.server_id,
+                endpoint,
+                exc,
+            )
+            raise ValueError(
+                f"Token exchange for MCP server '{server.server_id}' "
+                f"failed while connecting to the token endpoint"
+            ) from exc
 
         body = response.json()
         if not isinstance(body, dict):

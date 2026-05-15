@@ -1406,6 +1406,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        subject_token: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1439,6 +1440,7 @@ class MCPServerManager:
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -2683,7 +2685,7 @@ class MCPServerManager:
         # Extract subject token for OAuth2 Token Exchange (OBO) flow
         subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        if mcp_server.has_token_exchange_config:
             subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
@@ -2970,8 +2972,8 @@ class MCPServerManager:
         Note: This now handles prefixed tool names
         """
         for server in self.get_registry().values():
-            if server.needs_user_oauth_token:
-                # Skip OAuth2 servers that rely on user-provided tokens
+            if server.needs_user_oauth_token or server.has_token_exchange_config:
+                # Skip servers that rely on request-time user tokens.
                 continue
             tools = await self._get_tools_from_server(server)
             for tool in tools:
@@ -3024,7 +3026,8 @@ class MCPServerManager:
             normalised_prefix = normalize_server_name(server_name_from_prefix)
             matched_server = prefix_to_server.get(normalised_prefix)
             if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
+                matched_server.has_token_exchange_config
+                or original_tool_name in self.tool_name_to_mcp_server_name_mapping
                 or tool_name in self.tool_name_to_mcp_server_name_mapping
             ):
                 return matched_server
