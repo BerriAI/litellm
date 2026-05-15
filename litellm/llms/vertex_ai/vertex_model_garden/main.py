@@ -121,11 +121,7 @@ class VertexAIModelGardenModels(VertexBase):
             stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
 
-            if api_base is not None:
-                # User provided a custom api_base (e.g. Model Garden mg-endpoint URL).
-                # Use it directly — OpenAILikeChatHandler appends /chat/completions.
-                pass
-            else:
+            if api_base is None:
                 api_base = create_vertex_url(
                     vertex_location=vertex_location or "us-central1",
                     vertex_project=vertex_project or project_id,
