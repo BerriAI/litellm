@@ -1729,18 +1729,24 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
 
     verbose_proxy_logger.info(f"Redirecting to {redirect_url}")
     result = None
+    # Track which SSO provider actually handled this callback so attribute
+    # mapping (env_prefix, generic_client_id) reflects the active branch.
+    # Multiple *_CLIENT_ID env vars may be set; the elif chain picks one.
+    active_provider: Optional[str] = None
     if google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
             request=request,
             google_client_id=google_client_id,
             redirect_url=redirect_url,
         )
+        active_provider = "google"
     elif microsoft_client_id is not None:
         result = await MicrosoftSSOHandler.get_microsoft_callback_response(
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
         )
+        active_provider = "microsoft"
 
     elif okta_client_id is not None:
         (
@@ -1755,6 +1761,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             sso_jwt_handler=sso_jwt_handler,
             provider=_OIDC_PROVIDER_OKTA,
         )
+        active_provider = _OIDC_PROVIDER_OKTA
 
     elif generic_client_id is not None:
         (
@@ -1768,6 +1775,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             redirect_url=redirect_url,
             sso_jwt_handler=sso_jwt_handler,
         )
+        active_provider = _OIDC_PROVIDER_GENERIC
 
     if result is None:
         raise HTTPException(
@@ -1787,20 +1795,29 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     # Starlette's cookie_parser already handles RFC 2109 unquoting.
     cp_return_to: Optional[str] = request.cookies.get("litellm_cp_return_to")
 
+    # Only pass generic_client_id / env_prefix for the OIDC providers; Google
+    # and Microsoft results do not flow through the generic attribute-mapping
+    # branch in `_get_user_email_and_id_from_result`.
+    if active_provider == _OIDC_PROVIDER_OKTA:
+        callback_client_id: Optional[str] = okta_client_id
+        callback_env_prefix = _get_oidc_env_prefix(_OIDC_PROVIDER_OKTA)
+    elif active_provider == _OIDC_PROVIDER_GENERIC:
+        callback_client_id = generic_client_id
+        callback_env_prefix = _get_oidc_env_prefix(_OIDC_PROVIDER_GENERIC)
+    else:
+        callback_client_id = None
+        callback_env_prefix = _get_oidc_env_prefix(_OIDC_PROVIDER_GENERIC)
+
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
         request=request,
         received_response=received_response,
-        generic_client_id=okta_client_id or generic_client_id,
+        generic_client_id=callback_client_id,
         ui_access_mode=ui_access_mode,
         access_token_payload=access_token_payload,
         jwt_handler=jwt_handler,
         return_to=cp_return_to,
-        env_prefix=_get_oidc_env_prefix(
-            _OIDC_PROVIDER_OKTA
-            if okta_client_id is not None
-            else _OIDC_PROVIDER_GENERIC
-        ),
+        env_prefix=callback_env_prefix,
     )
 
 
