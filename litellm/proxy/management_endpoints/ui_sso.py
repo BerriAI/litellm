@@ -4228,13 +4228,15 @@ async def debug_sso_callback(request: Request):
         )
 
     elif okta_client_id is not None:
-        result, _, _ = await get_generic_sso_response(
-            request=request,
-            jwt_handler=jwt_handler,
-            generic_client_id=okta_client_id,
-            redirect_url=redirect_url,
-            sso_jwt_handler=sso_jwt_handler,
-            provider=_OIDC_PROVIDER_OKTA,
+        result, received_response, access_token_payload = (
+            await get_generic_sso_response(
+                request=request,
+                jwt_handler=jwt_handler,
+                generic_client_id=okta_client_id,
+                redirect_url=redirect_url,
+                sso_jwt_handler=sso_jwt_handler,
+                provider=_OIDC_PROVIDER_OKTA,
+            )
         )
 
     elif generic_client_id is not None:

@@ -928,10 +928,17 @@ async def update_sso_settings(sso_config: SSOConfig):
             detail={"error": f"Error updating environment_variables: {str(e)}"},
         )
 
+    # Redact secret fields in the response so plaintext secrets (including any
+    # restored from the sentinel) never leak back to the caller.
+    redacted_sso_data = {**sso_data}
+    for _secret_field in _SSO_SECRET_FIELDS:
+        if redacted_sso_data.get(_secret_field):
+            redacted_sso_data[_secret_field] = _REDACTED_SECRET
+
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": redacted_sso_data,
     }
 
 
