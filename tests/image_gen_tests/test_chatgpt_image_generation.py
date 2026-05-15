@@ -6,6 +6,7 @@ import pytest
 from litellm.exceptions import AuthenticationError
 from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 from litellm.llms.chatgpt.image_generation.transformation import (
+    ChatGPTImageEditConfig,
     ChatGPTImageGenerationConfig,
 )
 from litellm.llms.openai.common_utils import OpenAIError
@@ -136,6 +137,75 @@ def test_chatgpt_image_generation_config_registered(monkeypatch, tmp_path):
     )
 
     assert isinstance(config, ChatGPTImageGenerationConfig)
+
+
+def test_chatgpt_image_edit_config_registered(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ProviderConfigManager.get_provider_image_edit_config(
+        model="gpt-image-2",
+        provider=LlmProviders.CHATGPT,
+    )
+
+    assert isinstance(config, ChatGPTImageEditConfig)
+
+
+def test_chatgpt_image_edit_transforms_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+
+    request, files = config.transform_image_edit_request(
+        model="gpt-image-2",
+        prompt="replace the background with a warm sunset",
+        image=png_bytes,
+        image_edit_optional_request_params={"size": "1024x1024"},
+        litellm_params=cast(Any, {"chatgpt_responses_model": "gpt-5.5"}),
+        headers={},
+    )
+
+    assert files == []
+    assert request["model"] == "gpt-5.5"
+    assert request["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "replace the background with a warm sunset",
+    }
+    assert request["input"][0]["content"][1]["type"] == "input_image"
+    assert request["input"][0]["content"][1]["image_url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert request["tools"] == [
+        {
+            "type": "image_generation",
+            "model": "gpt-image-2",
+            "size": "1024x1024",
+        }
+    ]
+    assert request["tool_choice"] == {"type": "image_generation"}
+
+
+def test_chatgpt_image_edit_uses_json_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+
+    assert config.use_multipart_form_data() is False
+
+
+def test_chatgpt_image_edit_requires_image(monkeypatch, tmp_path):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageEditConfig()
+
+    with pytest.raises(ValueError, match="requires at least one image"):
+        config.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit this image",
+            image=None,
+            image_edit_optional_request_params={},
+            litellm_params=cast(Any, {}),
+            headers={},
+        )
 
 
 def test_chatgpt_image_generation_only_supports_prompt_output_format_and_size(

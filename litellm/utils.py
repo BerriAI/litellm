@@ -9122,6 +9122,10 @@ class ProviderConfigManager:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
             return get_openai_image_edit_config(model=model)
+        elif LlmProviders.CHATGPT == provider:
+            from litellm.llms.chatgpt.image_generation import ChatGPTImageEditConfig
+
+            return ChatGPTImageEditConfig()
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,

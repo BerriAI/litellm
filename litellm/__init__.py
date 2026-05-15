@@ -1872,6 +1872,7 @@ if TYPE_CHECKING:
         ChatGPTResponsesAPIConfig as ChatGPTResponsesAPIConfig,
     )
     from .llms.chatgpt.image_generation.transformation import (
+        ChatGPTImageEditConfig as ChatGPTImageEditConfig,
         ChatGPTImageGenerationConfig as ChatGPTImageGenerationConfig,
     )
     from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig

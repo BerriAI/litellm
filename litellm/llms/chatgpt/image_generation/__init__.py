@@ -1,3 +1,3 @@
-from .transformation import ChatGPTImageGenerationConfig
+from .transformation import ChatGPTImageEditConfig, ChatGPTImageGenerationConfig
 
-__all__ = ["ChatGPTImageGenerationConfig"]
+__all__ = ["ChatGPTImageEditConfig", "ChatGPTImageGenerationConfig"]

@@ -1134,6 +1134,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.chatgpt.image_generation.transformation",
         "ChatGPTImageGenerationConfig",
     ),
+    "ChatGPTImageEditConfig": (
+        ".llms.chatgpt.image_generation.transformation",
+        "ChatGPTImageEditConfig",
+    ),
     "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
     "WandbConfig": (".llms.wandb.chat.transformation", "WandbConfig"),
     "GigaChatConfig": (".llms.gigachat.chat.transformation", "GigaChatConfig"),
