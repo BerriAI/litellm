@@ -2544,7 +2544,7 @@ class SSOAuthenticationHandler:
 
         Priority order:
         1. CLI state (if provided)
-        2. GENERIC_CLIENT_STATE environment variable
+        2. {GENERIC,OKTA}_CLIENT_STATE environment variable (per provider)
         3. Generated UUID (required by Okta and most OAuth providers)
 
 
@@ -2565,7 +2565,8 @@ class SSOAuthenticationHandler:
             # the litellm proxy cli sends the "state" parameter to the proxy server for auth. We should maintain the state parameter for the cli if it is provided
             redirect_params["state"] = state
         else:
-            generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
+            client_state_env = f"{_get_oidc_env_prefix(provider)}_CLIENT_STATE"
+            generic_client_state = os.getenv(client_state_env, None)
             if generic_client_state:
                 redirect_params["state"] = generic_client_state
             else:
