@@ -5672,7 +5672,7 @@ class Router:
         self,
         exception: Exception,
         original_model_group: str,
-        all_deployments: List[Dict],
+        all_deployments: List[DeploymentTypedDict],
         args: tuple,
         kwargs: dict,
         input_kwargs: dict,
