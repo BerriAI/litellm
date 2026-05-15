@@ -7943,3 +7943,91 @@ async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
                 user_api_key_dict=caller_auth,
             )
     assert exc_info.value.status_code == 404
+
+@pytest.mark.asyncio
+async def test_propagate_budget_update_to_member_rows_updates_cloned_rows():
+    """
+    Members who joined while team_member_budget was already configured receive
+    their own cloned budget rows (budget_id != team_member_budget_id).
+    propagate_budget_update_to_member_rows must update those cloned rows with
+    the new budget_duration (and budget_reset_at) so they don't stay stale (NULL in this case)
+    """
+
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    team_id = "team-abc"
+    shared_budget_id = "budget-shared"
+    cloned_budget_id_1 = "budget-member-1"
+    cloned_budget_id_2 = "budget-member-2"
+
+    membership_shared = MagicMock()
+    membership_shared.budget_id = shared_budget_id  # points to shared default — skip
+
+    membership_cloned_1 = MagicMock()
+    membership_cloned_1.budget_id = cloned_budget_id_1
+
+    membership_cloned_2 = MagicMock()
+    membership_cloned_2.budget_id = cloned_budget_id_2
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership_shared, membership_cloned_1, membership_cloned_2]
+    )
+    mock_prisma.db.litellm_budgettable.update_many = AsyncMock(return_value=2)
+
+    await TeamMemberBudgetHandler.propagate_budget_update_to_member_rows(
+        team_id=team_id,
+        team_member_budget_id=shared_budget_id,
+        prisma_client=mock_prisma,
+        team_member_budget=50.0,
+        team_member_budget_duration="7d",
+    )
+
+    mock_prisma.db.litellm_teammembership.find_many.assert_called_once_with(
+        where={"team_id": team_id}
+    )
+
+    update_call = mock_prisma.db.litellm_budgettable.update_many.call_args
+    where_ids = update_call.kwargs["where"]["budget_id"]["in"]
+    assert set(where_ids) == {cloned_budget_id_1, cloned_budget_id_2}
+    assert shared_budget_id not in where_ids
+
+    update_data = update_call.kwargs["data"]
+    assert update_data["max_budget"] == 50.0
+    assert update_data["budget_duration"] == "7d"
+    assert "budget_reset_at" in update_data
+
+
+@pytest.mark.asyncio
+async def test_propagate_budget_update_skips_shared_budget_members():
+    """
+    Members whose budget_id equals team_member_budget_id point to the shared
+    default row, which is already updated by upsert_team_member_budget_table.
+    propagate_budget_update_to_member_rows must not include them in the update.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    team_id = "team-xyz"
+    shared_budget_id = "budget-shared"
+
+    membership = MagicMock()
+    membership.budget_id = shared_budget_id  # all members point to the shared budget
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    mock_prisma.db.litellm_budgettable.update_many = AsyncMock()
+
+    await TeamMemberBudgetHandler.propagate_budget_update_to_member_rows(
+        team_id=team_id,
+        team_member_budget_id=shared_budget_id,
+        prisma_client=mock_prisma,
+        team_member_budget_duration="30d",
+    )
+
+    mock_prisma.db.litellm_budgettable.update_many.assert_not_called()
