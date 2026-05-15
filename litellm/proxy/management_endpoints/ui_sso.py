@@ -1791,14 +1791,14 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         result=result,
         request=request,
         received_response=received_response,
-        generic_client_id=generic_client_id or okta_client_id,
+        generic_client_id=okta_client_id or generic_client_id,
         ui_access_mode=ui_access_mode,
         access_token_payload=access_token_payload,
         jwt_handler=jwt_handler,
         return_to=cp_return_to,
         env_prefix=_get_oidc_env_prefix(
             _OIDC_PROVIDER_OKTA
-            if okta_client_id is not None and generic_client_id is None
+            if okta_client_id is not None
             else _OIDC_PROVIDER_GENERIC
         ),
     )
