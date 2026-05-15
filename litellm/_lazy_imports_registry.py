@@ -296,6 +296,7 @@ LLM_CONFIG_NAMES = (
     "ChatGPTConfig",
     "ChatGPTResponsesAPIConfig",
     "ChatGPTImageGenerationConfig",
+    "ChatGPTImageEditConfig",
     "ManusResponsesAPIConfig",
     "GithubCopilotEmbeddingConfig",
     "NebiusConfig",
