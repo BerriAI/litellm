@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
@@ -13,6 +14,38 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+
+def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
+    """Parse a single MCP server name from /mcp/{name} or /{name}/mcp path patterns.
+    Returns None for the aggregate /mcp route (no bypass for multi-server paths)."""
+    m = re.match(r"^/mcp/([^/,?#]+)", path)
+    if m:
+        return [m.group(1)]
+    m = re.match(r"^/([^/,?#]+)/mcp", path)
+    if m:
+        return [m.group(1)]
+    return None
+
+
+def _is_mcp_passthrough_cold_start(
+    scope: Scope, mcp_servers: Optional[List[str]]
+) -> bool:
+    """True when the request targets a pass-through server with no auth headers —
+    the cold-start OAuth discovery case per RFC 9728 / MCP Authorization spec.
+    Lets the route handler's 401 emitter produce the spec-compliant WWW-Authenticate
+    challenge instead of surfacing a generic admission error."""
+    if not mcp_servers:
+        return False
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    for name in mcp_servers:
+        server = global_mcp_server_manager.get_mcp_server_by_name(name)
+        if server is not None and getattr(server, "is_oauth_passthrough", False):
+            return True
+    return False
 
 
 class MCPRequestHandler:
@@ -36,7 +69,7 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(
+    async def process_mcp_request(  # noqa: PLR0915
         scope: Scope,
     ) -> Tuple[
         UserAPIKeyAuth,
@@ -165,9 +198,26 @@ class MCPRequestHandler:
                 else:
                     raise
         else:
-            validated_user_api_key_auth = await user_api_key_auth(
-                api_key=litellm_api_key, request=request
-            )
+            try:
+                validated_user_api_key_auth = await user_api_key_auth(
+                    api_key=litellm_api_key, request=request
+                )
+            except (HTTPException, ProxyException):
+                # Cold-start MCP OAuth discovery: RFC 9728 / MCP Authorization spec
+                # require unauthenticated requests to protected resources to receive
+                # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
+                # for pass-through servers instead of surfacing a generic admission error.
+                path = scope.get("path", "")
+                mcp_servers_from_path = _parse_mcp_server_names_from_path(path)
+                if _is_mcp_passthrough_cold_start(
+                    scope, mcp_servers_from_path or mcp_servers
+                ):
+                    verbose_logger.debug(
+                        "MCP pass-through cold start: deferring admission to route 401 emitter"
+                    )
+                    validated_user_api_key_auth = UserAPIKeyAuth()
+                else:
+                    raise
 
         return (
             validated_user_api_key_auth,

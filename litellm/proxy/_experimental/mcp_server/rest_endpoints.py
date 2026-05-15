@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set,
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
@@ -441,6 +442,18 @@ if MCP_AVAILABLE:
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
             )
+        except MCPUpstreamAuthError as e:
+            # Pass-through server returned 401 — surface it to the client so
+            # standards-compliant MCP clients trigger the upstream OAuth flow.
+            raise HTTPException(
+                status_code=e.status_code,
+                detail="Unauthorized",
+                headers=(
+                    {"www-authenticate": e.www_authenticate}
+                    if e.www_authenticate
+                    else None
+                ),
+            )
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -529,6 +542,18 @@ if MCP_AVAILABLE:
                 raw_headers_from_request,
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
+            )
+        except MCPUpstreamAuthError as e:
+            # Pass-through server returned 401 — surface it to the client so
+            # standards-compliant MCP clients trigger the upstream OAuth flow.
+            raise HTTPException(
+                status_code=e.status_code,
+                detail="Unauthorized",
+                headers=(
+                    {"www-authenticate": e.www_authenticate}
+                    if e.www_authenticate
+                    else None
+                ),
             )
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
@@ -696,6 +721,22 @@ if MCP_AVAILABLE:
                 ),
             }
 
+        except HTTPException as http_exc:
+            # Preserve 401s emitted by the single-server pass-through path so
+            # clients receive the upstream WWW-Authenticate challenge and can
+            # start the upstream OAuth flow. 403 etc. keep flowing through the
+            # legacy "error dict" response shape so the existing contract
+            # stays intact.
+            if http_exc.status_code == 401:
+                raise
+            verbose_logger.exception(
+                "HTTPException in list_tool_rest_api: %s", str(http_exc)
+            )
+            return {
+                "tools": [],
+                "error": "unexpected_error",
+                "message": (f"An unexpected error occurred: {http_exc.detail}"),
+            }
         except Exception as e:
             verbose_logger.exception(
                 "Unexpected error in list_tool_rest_api: %s", str(e)

@@ -926,6 +926,42 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def _client_has_passthrough_authorization(
+        server: MCPServer,
+        oauth2_headers: Optional[Dict[str, str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+    ) -> bool:
+        """True if the incoming request already carries an ``Authorization``
+        header the gateway will forward to this pass-through server.
+
+        The client may supply the bearer as either the top-level
+        ``Authorization`` header (surfaced via ``oauth2_headers``) or a
+        per-server ``x-mcp-auth-<alias>`` style header (surfaced via
+        ``mcp_server_auth_headers``). Either form skips the pre-emptive 401.
+        """
+        if oauth2_headers:
+            for k in oauth2_headers.keys():
+                if k.lower() == "authorization":
+                    return True
+        if mcp_server_auth_headers:
+            for key in (server.alias, server.server_name, server.name):
+                if not key:
+                    continue
+                server_headers = None
+                for k, v in mcp_server_auth_headers.items():
+                    if k.lower() == key.lower():
+                        server_headers = v
+                        break
+                if server_headers is None:
+                    continue
+                if isinstance(server_headers, str) and server_headers.strip():
+                    return True
+                if isinstance(server_headers, dict):
+                    for hk in server_headers.keys():
+                        if hk.lower() == "authorization":
+                            return True
+        return False
+
     async def _get_user_oauth_extra_headers_from_db(
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2754,6 +2790,84 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    async def _raise_preemptive_401_for_unauthenticated_servers(
+        scope: Scope,
+        mcp_servers: Optional[List[str]],
+        oauth2_headers: Optional[Dict[str, str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        client_ip: Optional[str],
+    ) -> None:
+        """Fail fast with HTTP 401 for MCP servers that need user auth but
+        didn't receive it on this request. Covers both gateway-managed OAuth2
+        (points clients at the gateway AS metadata) and pass-through OAuth
+        (points clients at the upstream resource-metadata via our well-known)."""
+        for server_name in mcp_servers or []:
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                server_name, client_ip=client_ip
+            )
+            if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                # For per-user OAuth servers, only skip the pre-emptive 401 when
+                # a stored token actually exists for this user+server pair.
+                # If no stored token exists, fail fast with 401 so clients can
+                # kick off PKCE/interactive OAuth flow immediately.
+                if server.needs_user_oauth_token:
+                    stored_oauth_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_oauth_headers:
+                        continue
+
+                request = StarletteRequest(scope)
+                base_url = get_request_base_url(request)
+                _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+                # Pick the well-known AS-metadata form that matches the inbound route
+                # so strict RFC 9728 §3.2 clients can resolve it correctly.
+                if _path.startswith(f"/mcp/{server_name}"):
+                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
+                else:
+                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                authorization_uri = f"Bearer authorization_uri={_as_url}"
+
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": authorization_uri},
+                )
+
+            # Pass-through OAuth: when the admin has opted a server into
+            # forwarding the client's bearer token (is_oauth_passthrough) and
+            # the client hasn't supplied one, fail fast with 401 and point
+            # them at the gateway's oauth-protected-resource well-known URL.
+            # That endpoint proxies the upstream's metadata so the client
+            # kicks off OAuth against the real upstream IdP, not the gateway.
+            if (
+                server
+                and server.is_oauth_passthrough
+                and not _client_has_passthrough_authorization(
+                    server, oauth2_headers, mcp_server_auth_headers
+                )
+            ):
+                request = StarletteRequest(scope)
+                base_url = get_request_base_url(request)
+                _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+                # Pick the well-known resource-metadata form that matches the inbound
+                # route pattern so the metadata's `resource` field round-trips to what
+                # the client actually hit (RFC 9728 §3.2).
+                if _path.startswith(f"/{server_name}/mcp"):
+                    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
+                else:
+                    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
+                www_authenticate = f'Bearer resource_metadata="{resource_metadata_url}"'
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": www_authenticate},
+                )
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2779,38 +2893,14 @@ if MCP_AVAILABLE:
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-            for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name, client_ip=_client_ip
-                )
-                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For per-user OAuth servers, only skip the pre-emptive 401 when
-                    # a stored token actually exists for this user+server pair.
-                    # If no stored token exists, fail fast with 401 so clients can
-                    # kick off PKCE/interactive OAuth flow immediately.
-                    if server.needs_user_oauth_token:
-                        stored_oauth_headers = (
-                            await _get_user_oauth_extra_headers_from_db(
-                                server=server,
-                                user_api_key_auth=user_api_key_auth,
-                            )
-                        )
-                        if stored_oauth_headers:
-                            continue
-
-                    request = StarletteRequest(scope)
-                    base_url = get_request_base_url(request)
-
-                    authorization_uri = (
-                        f"Bearer authorization_uri="
-                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                    )
-
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Unauthorized",
-                        headers={"www-authenticate": authorization_uri},
-                    )
+            await _raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_client_ip,
+            )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [

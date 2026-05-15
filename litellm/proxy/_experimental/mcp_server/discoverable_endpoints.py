@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -12,7 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
-    validate_loopback_redirect_uri,
+    validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -23,6 +24,12 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+# TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
+# Keeps us from hammering the upstream IdP on each discovery request.
+# Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
+_OAUTH_METADATA_CACHE: Dict[Tuple[str, str], Tuple[float, dict]] = {}
+_OAUTH_METADATA_CACHE_TTL_SECONDS = 300
 
 router = APIRouter(
     tags=["mcp"],
@@ -125,15 +132,6 @@ def decode_state_hash(encrypted_state: str) -> dict:
 
     state_data = json.loads(decrypted_json)
     return state_data
-
-
-def _get_validated_client_redirect_uri(state_data: Dict[str, Any]) -> str:
-    """Return a loopback client redirect URI from OAuth state."""
-    redirect_uri = state_data.get("client_redirect_uri") or state_data.get("base_url")
-    if not redirect_uri or not isinstance(redirect_uri, str):
-        raise HTTPException(status_code=400, detail="Invalid redirect URI")
-    validate_loopback_redirect_uri(redirect_uri)
-    return redirect_uri
 
 
 def _append_query_params(url: str, params: Dict[str, str]) -> str:
@@ -338,12 +336,12 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
-    # Loopback-only redirect_uri. The URI is encrypted into the OAuth
-    # state and decoded on /callback to redirect the user back; a non-
-    # loopback URI would be an open-redirect + code-theft primitive
-    # (VERIA-57 root cause B). MCP clients are native apps — loopback is
-    # the spec-compliant callback pattern.
-    validate_loopback_redirect_uri(redirect_uri)
+    # Loopback OR same-origin redirect_uri. The URI is encrypted into the
+    # OAuth state and decoded on /callback to redirect the user back;
+    # restricting to trusted origins blocks the open-redirect +
+    # code-theft primitive (VERIA-57 root cause B). Loopback supports
+    # native MCP clients; same-origin supports the proxy's own UI callback.
+    validate_trusted_redirect_uri(request, redirect_uri)
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
@@ -660,20 +658,22 @@ async def token_endpoint(
 
 
 @router.get("/callback")
-async def callback(code: str, state: str):
+async def callback(request: Request, code: str, state: str):
     try:
         state_data = decode_state_hash(state)
+        base_url = state_data["base_url"]
         original_state = state_data["original_state"]
 
-        # Re-validate loopback at the sink. /authorize rejects non-loopback
+        # Re-validate at the sink. /authorize rejects untrusted
         # redirect_uri before encoding into state, but encrypted states
         # minted before that check was added have no expiry and remain
-        # valid indefinitely. Validating here blocks the open-redirect +
-        # code-theft primitive even for pre-fix states.
-        redirect_uri = _get_validated_client_redirect_uri(state_data)
+        # valid indefinitely. Validating here (same-origin OR loopback)
+        # blocks the open-redirect + code-theft primitive even for pre-fix
+        # states while allowing the UI's same-origin callback to work.
+        validate_trusted_redirect_uri(request, base_url)
 
         params = {"code": code, "state": original_state}
-        complete_returned_url = _append_query_params(redirect_uri, params)
+        complete_returned_url = f"{base_url}?{urlencode(params)}"
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
     except HTTPException:
@@ -708,13 +708,103 @@ async def callback(code: str, state: str):
 """
 
 
-def _build_oauth_protected_resource_response(
+async def fetch_upstream_oauth_protected_resource(
+    mcp_server: MCPServer,
+) -> Optional[dict]:
+    """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
+    metadata for a pass-through server.
+
+    Tries host-only first, then falls back to the RFC 9728 §3.1 path-suffix
+    form (e.g. ``https://host/.well-known/oauth-protected-resource/mcp``) to
+    cover upstreams that scope metadata per resource path.
+
+    Responses are cached in-process for ~5 minutes keyed on
+    ``(server_id, resource_url)`` so we do not hammer the IdP.
+
+    Returns the parsed JSON dict on success, or ``None`` if neither form
+    responds with a 2xx JSON payload. Raises on network/connection errors so
+    the caller can emit HTTP 502 rather than fabricate a gateway response.
+    """
+    if not mcp_server.url:
+        return None
+
+    upstream = urlparse(mcp_server.url)
+    if not upstream.scheme or not upstream.netloc:
+        return None
+
+    cache_key = (mcp_server.server_id, mcp_server.url)
+    cached = _OAUTH_METADATA_CACHE.get(cache_key)
+    if cached is not None and cached[0] > time.time():
+        return cached[1]
+
+    host_base = f"{upstream.scheme}://{upstream.netloc}"
+    candidates = [f"{host_base}/.well-known/oauth-protected-resource"]
+    # RFC 9728 §3.1 path fallback
+    if upstream.path and upstream.path not in ("", "/"):
+        candidates.append(
+            f"{host_base}/.well-known/oauth-protected-resource"
+            f"{upstream.path.rstrip('/')}"
+        )
+
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            response = await async_client.get(
+                candidate,
+                headers={"Accept": "application/json"},
+            )
+        except Exception as exc:  # network / connect errors
+            last_error = exc
+            continue
+        if response.status_code == 200:
+            try:
+                payload = response.json()
+            except Exception as exc:
+                last_error = exc
+                continue
+            if isinstance(payload, dict):
+                _OAUTH_METADATA_CACHE[cache_key] = (
+                    time.time() + _OAUTH_METADATA_CACHE_TTL_SECONDS,
+                    payload,
+                )
+                return payload
+
+    if last_error is not None and all(
+        is_network_error(last_error) for _ in candidates
+    ):
+        raise last_error
+
+    return None
+
+
+def is_network_error(exc: Exception) -> bool:
+    """True for transport-layer failures (connection refused, DNS, TLS, timeout)
+    as opposed to HTTP protocol errors (4xx/5xx with a valid response)."""
+    name = type(exc).__name__
+    return name in {
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+    }
+
+
+async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: Optional[str],
     use_standard_pattern: bool,
 ) -> dict:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
+
+    For pass-through MCP servers (``MCPServer.is_oauth_passthrough``), the
+    gateway proxies the upstream's own ``oauth-protected-resource`` metadata
+    so that standards-compliant MCP clients discover the **upstream** IdP
+    instead of the gateway. The ``resource`` field is rewritten to the
+    gateway's own URL so clients present the bearer token back to the gateway.
 
     Args:
         request: FastAPI Request object
@@ -755,6 +845,30 @@ def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    # Pass-through branch: proxy the upstream's own metadata so discovery
+    # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
+    if mcp_server is not None and mcp_server.is_oauth_passthrough:
+        try:
+            upstream_metadata = await fetch_upstream_oauth_protected_resource(
+                mcp_server
+            )
+        except Exception as exc:
+            verbose_logger.warning(
+                "Failed to fetch upstream oauth-protected-resource metadata "
+                f"for pass-through MCP server {mcp_server.name!r}: {exc}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Failed to fetch upstream oauth-protected-resource "
+                    f"metadata for MCP server {mcp_server.name!r}"
+                ),
+            )
+
+        if upstream_metadata is not None:
+            response = {**upstream_metadata, "resource": resource_url}
+            return response
+
     return {
         "authorization_servers": [
             (
@@ -785,7 +899,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
     This endpoint is compliant with MCP specification and works with standard
     MCP clients like mcp-inspector and VSCode Copilot.
     """
-    return _build_oauth_protected_resource_response(
+    return await _build_oauth_protected_resource_response(
         request=request,
         mcp_server_name=mcp_server_name,
         use_standard_pattern=True,
@@ -810,37 +924,18 @@ async def oauth_protected_resource_mcp(
     This endpoint is kept for backward compatibility. New integrations should
     use the standard MCP pattern (/mcp/{server_name}) instead.
     """
-    return _build_oauth_protected_resource_response(
+    return await _build_oauth_protected_resource_response(
         request=request,
         mcp_server_name=mcp_server_name,
         use_standard_pattern=False,
     )
 
 
-"""
-    https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
-    RFC 8414: Path-aware OAuth discovery
-    If the issuer identifier value contains a path component, any
-    terminating "/" MUST be removed before inserting "/.well-known/" and
-    the well-known URI suffix between the host component and the path(include root path)
-    component.
-"""
-
-
-def _build_oauth_authorization_server_response(
+async def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: Optional[str],
 ) -> dict:
-    """
-    Build OAuth authorization server metadata response.
-
-    Args:
-        request: FastAPI Request object
-        mcp_server_name: Name of the MCP server
-
-    Returns:
-        OAuth authorization server metadata dict
-    """
+    """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -904,7 +999,7 @@ async def oauth_authorization_server_mcp_standard(
     Standard pattern: /mcp/{server_name}
     Discovery path: /.well-known/oauth-authorization-server/mcp/{server_name}
     """
-    return _build_oauth_authorization_server_response(
+    return await _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )
@@ -923,7 +1018,7 @@ async def oauth_authorization_server_mcp(
 
     Supports both legacy pattern (/{server_name}) and root endpoint.
     """
-    return _build_oauth_authorization_server_response(
+    return await _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )
@@ -994,7 +1089,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
     """
-    return _build_oauth_authorization_server_response(
+    return await _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )

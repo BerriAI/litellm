@@ -47,6 +47,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -115,6 +116,67 @@ _AZURE_ENTRA_HOSTS = {
     "login.microsoftonline.us",  # US Government
     "login.chinacloudapi.cn",  # China
 }
+
+
+def _extract_upstream_auth_failure(
+    exc: BaseException,
+) -> Optional[Tuple[int, Optional[str]]]:
+    """Walk the exception tree looking for an HTTP 401/403 response from the
+    upstream MCP server.
+
+    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
+    may chain through ``__cause__`` / ``__context__``. We inspect all of those
+    layers for an ``httpx.Response``-bearing exception (typically
+    ``httpx.HTTPStatusError``) and extract the status code and any upstream
+    ``WWW-Authenticate`` header.
+
+    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
+    """
+    seen: Set[int] = set()
+    stack: List[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        response = getattr(current, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            if isinstance(status_code, int) and status_code in (401, 403):
+                www_authenticate: Optional[str] = None
+                headers = getattr(response, "headers", None)
+                if headers is not None:
+                    try:
+                        www_authenticate = headers.get("www-authenticate")
+                    except Exception:
+                        www_authenticate = None
+                return status_code, www_authenticate
+
+        if isinstance(current, HTTPStatusError):
+            status_code = getattr(current.response, "status_code", None)
+            if isinstance(status_code, int) and status_code in (401, 403):
+                www_authenticate = None
+                try:
+                    www_authenticate = current.response.headers.get("www-authenticate")
+                except Exception:
+                    pass
+                return status_code, www_authenticate
+
+        # anyio / PEP 654 ExceptionGroup
+        sub_exceptions = getattr(current, "exceptions", None)
+        if sub_exceptions:
+            stack.extend(sub_exceptions)
+
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if (
+            current.__context__ is not None
+            and current.__context__ is not current.__cause__
+        ):
+            stack.append(current.__context__)
+
+    return None
 
 
 def _warn_on_server_name_fields(
@@ -1330,7 +1392,9 @@ class MCPServerManager:
                     ]
                 return tools
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
+                tools = await self._fetch_tools_with_timeout(
+                    client, server.name, server=server
+                )
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
@@ -1339,6 +1403,11 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
+        except MCPUpstreamAuthError:
+            # Pass-through 401 must surface to single-server routes so the
+            # client triggers the upstream OAuth flow. The multi-server
+            # aggregator catches this explicitly to keep absorbing.
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
@@ -1940,7 +2009,10 @@ class MCPServerManager:
         return None
 
     async def _fetch_tools_with_timeout(
-        self, client: MCPClient, server_name: str
+        self,
+        client: MCPClient,
+        server_name: str,
+        server: Optional[MCPServer] = None,
     ) -> List[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -1948,16 +2020,28 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
+        For pass-through MCP servers (``MCPServer.is_oauth_passthrough``) an
+        upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
+        instead of being swallowed to an empty tool list. That lets the
+        single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
+        challenge so standards-compliant MCP clients trigger the upstream
+        OAuth flow. Non-pass-through servers keep today's swallow-and-log
+        behaviour so the multi-server ``/mcp`` aggregator doesn't get
+        tainted by a single bad server.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
+            server: Optional MCPServer; when pass-through, auth errors are
+                re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
+        is_passthrough = bool(server is not None and server.is_oauth_passthrough)
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools()
+                tools = await client.list_tools(raise_on_error=is_passthrough)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -1974,6 +2058,19 @@ class MCPServerManager:
             )
             return []
         except Exception as e:
+            if is_passthrough:
+                auth_info = _extract_upstream_auth_failure(e)
+                if auth_info is not None:
+                    status_code, www_authenticate = auth_info
+                    verbose_logger.info(
+                        f"Upstream auth failure from pass-through MCP server "
+                        f"{server_name}: HTTP {status_code}"
+                    )
+                    raise MCPUpstreamAuthError(
+                        status_code=status_code,
+                        www_authenticate=www_authenticate,
+                        server_name=server_name,
+                    ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 

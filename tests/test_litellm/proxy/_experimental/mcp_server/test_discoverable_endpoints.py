@@ -5,6 +5,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+TRUSTED_PROXY_IP = "10.0.0.5"
+TRUSTED_PROXY_RANGES = ["10.0.0.0/8"]
+
+
+def set_request_from_trusted_proxy(mock_request):
+    mock_request.client = MagicMock()
+    mock_request.client.host = TRUSTED_PROXY_IP
+
+
+@pytest.fixture
+def trusted_proxy_origin_headers():
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ):
+        yield
+
 
 # Fixture to mock IP address check for all MCP tests
 # This prevents tests from failing due to IP-based access control
@@ -561,6 +578,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    set_request_from_trusted_proxy(mock_request)
 
     # Mock the encryption functions
     with patch(
@@ -629,6 +647,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm-proxy.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    set_request_from_trusted_proxy(mock_request)
 
     # Mock httpx client response
     mock_response = MagicMock()
@@ -707,6 +726,7 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    set_request_from_trusted_proxy(mock_request)
 
     # Call the endpoint
     response = await oauth_protected_resource_mcp(
@@ -762,6 +782,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    set_request_from_trusted_proxy(mock_request)
 
     # Call the endpoint
     response = await oauth_authorization_server_mcp(
@@ -800,6 +821,7 @@ async def test_register_client_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://proxy.litellm.example/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    set_request_from_trusted_proxy(mock_request)
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
@@ -862,6 +884,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": "proxy.example.com",
     }
+    set_request_from_trusted_proxy(mock_request)
 
     # Mock the encryption functions
     with patch(
@@ -934,6 +957,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": "proxy.example.com",
     }
+    set_request_from_trusted_proxy(mock_request)
 
     # Mock httpx client response
     mock_response = MagicMock()
@@ -1091,7 +1115,11 @@ async def test_token_endpoint_respects_x_forwarded_host():
     ],
 )
 def test_get_request_base_url_comprehensive(
-    base_url, x_forwarded_proto, x_forwarded_host, x_forwarded_port, expected_url
+    base_url,
+    x_forwarded_proto,
+    x_forwarded_host,
+    x_forwarded_port,
+    expected_url,
 ):
     """Comprehensive test for get_request_base_url with various header combinations.
 
@@ -1110,6 +1138,7 @@ def test_get_request_base_url_comprehensive(
 
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = base_url
+    set_request_from_trusted_proxy(mock_request)
 
     headers = {}
     if x_forwarded_proto:
@@ -1264,6 +1293,71 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
 
 
+def test_validate_trusted_redirect_uri_rejects_spoofed_forwarded_host():
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP OAuth utilities not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "attacker.example.com",
+    }
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.10"
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+        },
+        create=True,
+    ), pytest.raises(HTTPException):
+        validate_trusted_redirect_uri(
+            mock_request,
+            "https://attacker.example.com/callback",
+        )
+
+
+def test_validate_trusted_redirect_uri_allows_forwarded_origin_from_trusted_proxy():
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP OAuth utilities not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "proxy.example.com",
+    }
+    set_request_from_trusted_proxy(mock_request)
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+        },
+        create=True,
+    ):
+        validate_trusted_redirect_uri(
+            mock_request,
+            "https://proxy.example.com/callback",
+        )
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
@@ -1313,7 +1407,7 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = _build_oauth_protected_resource_response(
+        response = await _build_oauth_protected_resource_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
             use_standard_pattern=False,
@@ -1367,7 +1461,7 @@ async def test_oauth_authorization_server_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = _build_oauth_authorization_server_response(
+        response = await _build_oauth_authorization_server_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
         )
@@ -1756,7 +1850,7 @@ async def test_discovery_root_includes_server_name_prefix():
 
     try:
         # Call with mcp_server_name=None (root discovery)
-        response = _build_oauth_authorization_server_response(
+        response = await _build_oauth_authorization_server_response(
             request=mock_request,
             mcp_server_name=None,
         )
