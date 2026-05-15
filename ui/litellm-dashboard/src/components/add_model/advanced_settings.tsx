@@ -226,10 +226,10 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       label="Cache Write Cost (per 1M tokens)"
                       name="cache_creation_input_token_cost"
                       rules={[{ validator: validateNumber }]}
-                      tooltip="If left blank, defaults to 0."
+                      tooltip="If left blank, defaults to Input Cost (the backend falls back to input_cost_per_token when no cache-write rate is set)."
                       className="mb-4"
                     >
-                      <TextInput placeholder="Defaults to 0 if blank" />
+                      <TextInput placeholder="Defaults to Input Cost if blank" />
                     </Form.Item>
                   </>
                 ) : (

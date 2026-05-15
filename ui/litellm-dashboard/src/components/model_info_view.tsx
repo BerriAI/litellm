@@ -793,9 +793,9 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_write_cost"
                             className="mb-0"
-                            tooltip="If left blank on save, defaults to 0."
+                            tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
                           >
-                            <NumericalInput placeholder="Defaults to 0 if blank" />
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded">

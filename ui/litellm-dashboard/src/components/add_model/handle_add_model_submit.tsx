@@ -67,6 +67,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
       // Cache Write Cost: explicit value if provided, else leave unset so the
       // backend keeps the model-level default (per-second pricing, model_prices
       // entries, etc.). Sending 0 here would overwrite that default.
+      // The backend falls back to input_cost_per_token when this key is absent.
       if (
         formValues.cache_creation_input_token_cost !== undefined &&
         formValues.cache_creation_input_token_cost !== null &&
