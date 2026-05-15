@@ -49,3 +49,43 @@ def test_azure_finalize_image_edit_strips_model_after_openai_transform():
     assert data_out.get("prompt") == prompt
     assert data_out.get("n") == 1
     assert len(files) >= 1
+
+
+def test_azure_image_edit_validate_environment_uses_api_key_header():
+    config = AzureImageEditConfig()
+    headers = {}
+
+    result = config.validate_environment(
+        headers=headers,
+        model="gpt-image-1",
+        api_key="azure-api-key",
+        litellm_params={},
+    )
+
+    assert result["api-key"] == "azure-api-key"
+    assert "Authorization" not in result
+
+
+def test_azure_image_edit_validate_environment_uses_azure_ad_token_provider(
+    monkeypatch,
+):
+    config = AzureImageEditConfig()
+    headers = {}
+    monkeypatch.setattr(
+        "litellm.llms.azure.common_utils.get_azure_ad_token",
+        lambda litellm_params: "azure-access-token",
+    )
+
+    result = config.validate_environment(
+        headers=headers,
+        model="gpt-image-1",
+        api_key=None,
+        litellm_params={
+            "tenant_id": "test-tenant-id",
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+        },
+    )
+
+    assert result["Authorization"] == "Bearer azure-access-token"
+    assert "api-key" not in result
