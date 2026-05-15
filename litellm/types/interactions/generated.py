@@ -1203,6 +1203,7 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     created: Optional[str] = None
     updated: Optional[str] = None
     role: Optional[str] = None
+    steps: Optional[List[Dict[str, Any]]] = None
     outputs: Optional[List[Dict[str, Any]]] = None
     usage: Optional[Dict[str, Any]] = None
 
@@ -1228,6 +1229,7 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     created: Optional[str] = None
     updated: Optional[str] = None
     role: Optional[str] = None
+    steps: Optional[List[Dict[str, Any]]] = None
     outputs: Optional[List[Dict[str, Any]]] = None
     usage: Optional[Dict[str, Any]] = None
     delta: Optional[Dict[str, Any]] = None
