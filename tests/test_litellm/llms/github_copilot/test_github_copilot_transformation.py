@@ -433,6 +433,108 @@ def test_get_supported_openai_params_case_insensitive():
     assert "reasoning_effort" not in supported_params_35
 
 
+def test_map_openai_params_converts_thinking_to_reasoning_effort():
+    """
+    Test that Anthropic-native ``thinking`` is converted to ``reasoning_effort`` for
+    GitHub Copilot Claude models.
+
+    GitHub Copilot uses an OpenAI-compatible API and does not understand the
+    Anthropic ``thinking`` parameter. When Claude Code sends ``thinking`` via the
+    proxy's ``/v1/messages`` endpoint, litellm must translate it to
+    ``reasoning_effort`` before forwarding to Copilot.
+    """
+    config = GithubCopilotConfig()
+    model = "claude-sonnet-4-20250514"
+
+    # budget_tokens < 2000 -> "minimal"
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert optional_params["reasoning_effort"] == "minimal"
+
+    # 2000 <= budget_tokens < 5000 -> "low"
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2000}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert optional_params["reasoning_effort"] == "low"
+
+    # 5000 <= budget_tokens < 10000 -> "medium"
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 5000}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert optional_params["reasoning_effort"] == "medium"
+
+    # budget_tokens >= 10000 -> "high"
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert optional_params["reasoning_effort"] == "high"
+
+
+def test_map_openai_params_thinking_does_not_overwrite_existing_reasoning_effort():
+    """Caller-supplied ``reasoning_effort`` must not be overwritten by the
+    ``thinking`` translation."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 15000},
+            "reasoning_effort": "low",
+        },
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert optional_params["reasoning_effort"] == "low"
+
+
+def test_map_openai_params_disabled_thinking_is_dropped():
+    """``thinking`` with ``type=disabled`` should be dropped without producing
+    ``reasoning_effort``."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "disabled"}},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+
+def test_map_openai_params_no_thinking_leaves_params_unchanged():
+    """A request without ``thinking`` should not gain a ``reasoning_effort`` value."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+    assert optional_params.get("temperature") == 0.5
+
+
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()
