@@ -11,7 +11,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: openai/gpt-5-mini
+      model: openai/gpt-4.1-mini
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-3.5-turbo-large
     litellm_params:
@@ -22,7 +22,7 @@ model_list:
       stream_timeout: 60
   - model_name: gpt-4
     litellm_params:
-      model: openai/gpt-5.5
+      model: openai/gpt-4.1
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
       rpm: 480
       timeout: 300
