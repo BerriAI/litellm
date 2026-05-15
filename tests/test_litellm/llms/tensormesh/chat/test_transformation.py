@@ -8,16 +8,14 @@ import sys
 from typing import Any
 from unittest.mock import patch
 
-from .helpers import (
+from . import (
     _FakeOpenAIRawResponse,
     _make_fake_openai_chat_client,
     _make_fake_openai_streaming_chat_client,
     _openai_stream_chunk,
 )
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 
 def test_tensormesh_provider_configured(monkeypatch):
@@ -28,9 +26,7 @@ def test_tensormesh_provider_configured(monkeypatch):
     monkeypatch.delenv("TENSORMESH_SERVERLESS_BASE_URL", raising=False)
 
     config = TensormeshChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="MiniMaxAI/MiniMax-M2.7"
-    )
+    supported_params = config.get_supported_openai_params(model="MiniMaxAI/MiniMax-M2.7")
 
     assert TENSORMESH_API_BASE == "https://serverless.tensormesh.ai/v1"
     assert config.custom_llm_provider == "tensormesh"
@@ -85,9 +81,7 @@ def test_tensormesh_provider_config_manager_returns_dedicated_config():
 
     assert config is not None
     assert config.custom_llm_provider == "tensormesh"
-    supported_params = config.get_supported_openai_params(
-        model="MiniMaxAI/MiniMax-M2.7"
-    )
+    supported_params = config.get_supported_openai_params(model="MiniMaxAI/MiniMax-M2.7")
     assert "tools" in supported_params
     assert "tool_choice" in supported_params
     assert "response_format" in supported_params
@@ -103,9 +97,7 @@ def test_tensormesh_is_registered_as_openai_compatible_provider():
 
 
 def test_tensormesh_public_endpoint_support():
-    repo_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../../../..")
-    )
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
     support_files = (
         os.path.join(repo_root, "provider_endpoints_support.json"),
         os.path.join(repo_root, "litellm/provider_endpoints_support_backup.json"),
@@ -242,9 +234,7 @@ def test_tensormesh_streaming_preserves_reasoning_only_deltas(monkeypatch):
             reasoning_parts.append(reasoning_content)
 
     assert captured["body"]["stream"] is True
-    assert "streamed reasoning text alternate reasoning field" in "".join(
-        reasoning_parts
-    )
+    assert "streamed reasoning text alternate reasoning field" in "".join(reasoning_parts)
 
 
 def test_tensormesh_on_demand_chat_completion_uses_api_base_and_user_id_header():
@@ -269,9 +259,7 @@ def test_tensormesh_on_demand_chat_completion_uses_api_base_and_user_id_header()
     assert captured["api_key"] == "tm-on-demand-test-key"
     assert captured["base_url"] == "https://external.example.tensormesh.ai/v1"
     assert captured["body"]["model"] == "served-coding-model"
-    assert captured["body"]["extra_headers"] == {
-        "X-User-Id": "00000000-0000-0000-0000-000000000000"
-    }
+    assert captured["body"]["extra_headers"] == {"X-User-Id": "00000000-0000-0000-0000-000000000000"}
     assert captured["body"]["max_tokens"] == 12
 
 
@@ -282,9 +270,7 @@ def test_tensormesh_on_demand_anthropic_messages_uses_api_base_and_user_id_heade
 
     with patch(
         "litellm.llms.openai.openai.OpenAI",
-        _make_fake_openai_chat_client(
-            captured, "chatcmpl-tensormesh-on-demand-messages-test"
-        ),
+        _make_fake_openai_chat_client(captured, "chatcmpl-tensormesh-on-demand-messages-test"),
     ):
         response = litellm.anthropic.messages.create(
             model="tensormesh/served-coding-model",
@@ -301,9 +287,7 @@ def test_tensormesh_on_demand_anthropic_messages_uses_api_base_and_user_id_heade
     assert captured["api_key"] == "tm-on-demand-messages-test-key"
     assert captured["base_url"] == "https://external.example.tensormesh.ai/v1"
     assert captured["body"]["model"] == "served-coding-model"
-    assert captured["body"]["extra_headers"] == {
-        "X-User-Id": "00000000-0000-0000-0000-000000000000"
-    }
+    assert captured["body"]["extra_headers"] == {"X-User-Id": "00000000-0000-0000-0000-000000000000"}
     assert captured["body"]["max_tokens"] == 12
 
 
