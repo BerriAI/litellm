@@ -400,6 +400,57 @@ def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
 
 
 @pytest.mark.asyncio
+async def test_builder_direct_call_does_not_create_parent_otel_span():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    class _FakeOpenTelemetryLogger:
+        def __init__(self):
+            self.create_litellm_proxy_request_started_span = MagicMock(
+                return_value=MagicMock()
+            )
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-custom-auth-trusted",
+        user_id="custom-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_user_custom_auth = AsyncMock(return_value=trusted_token)
+    fake_otel_logger = _FakeOpenTelemetryLogger()
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=mock_user_custom_auth)
+    attrs["open_telemetry_logger"] = fake_otel_logger
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key="Bearer sk-custom-auth-trusted",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        fake_otel_logger.create_litellm_proxy_request_started_span.assert_not_called()
+        assert result.parent_otel_span is None
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
 async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
     """
     Regression test: after v1.82.6, _run_post_custom_auth_checks was unconditionally

@@ -679,7 +679,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         llm_router,
         master_key,
         model_max_budget_limiter,
-        open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -721,14 +720,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
             )
 
-        if open_telemetry_logger is not None and parent_otel_span is None:
-            parent_otel_span = (
-                open_telemetry_logger.create_litellm_proxy_request_started_span(
-                    start_time=start_time,
-                    headers=_safe_get_request_headers(request),
-                )
-            )
-
         ### USER-DEFINED AUTH FUNCTION ###
         response: Any = None
         if enterprise_custom_auth is not None:
@@ -746,7 +737,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
-                validated.parent_otel_span = validated.parent_otel_span or parent_otel_span
+                validated.parent_otel_span = (
+                    validated.parent_otel_span or parent_otel_span
+                )
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
