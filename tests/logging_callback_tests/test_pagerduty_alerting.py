@@ -27,7 +27,7 @@ async def test_pagerduty_alerting():
 
     try:
         await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
@@ -48,7 +48,7 @@ async def test_pagerduty_alerting_high_failure_rate():
 
     try:
         await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
@@ -61,7 +61,7 @@ async def test_pagerduty_alerting_high_failure_rate():
     for _ in range(3):
         try:
             await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": "hi"}],
                 mock_response="litellm.RateLimitError",
             )
@@ -88,12 +88,12 @@ async def test_pagerduty_hanging_request_alerting():
             user_id="test-user",
             end_user_id="test-end-user",
         ),
-        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]},
         call_type="completion",
     )
 
     await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "hi"}],
     )
 

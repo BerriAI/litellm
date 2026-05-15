@@ -63,7 +63,7 @@ async def test_lakera_pre_call_hook_for_pii_masking():
                     "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com. My phone number is 555-123-4567",
                 },
             ],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -170,7 +170,7 @@ async def test_lakera_blocks_non_pii_violations():
                     "content": "Some harmful content that triggers violations",
                 }
             ],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -236,7 +236,7 @@ async def test_lakera_only_pii_violations_are_masked():
 
         data = {
             "messages": [{"role": "user", "content": "My email test@example.com here"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -423,7 +423,7 @@ async def test_lakera_blocks_flagged_content_with_user_scenario():
                     "content": "Some harmful content that should be blocked",
                 }
             ],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -487,7 +487,7 @@ async def test_lakera_monitor_mode_allows_flagged_content():
 
         data = {
             "messages": [{"role": "user", "content": "Some harmful content"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -535,7 +535,7 @@ async def test_lakera_block_mode_raises_exception():
 
         data = {
             "messages": [{"role": "user", "content": "Harmful content"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -578,7 +578,7 @@ async def test_lakera_monitor_mode_during_call():
 
         data = {
             "messages": [{"role": "user", "content": "Test content"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -623,7 +623,7 @@ async def test_lakera_post_call_blocks_flagged_content():
 
         data = {
             "messages": [{"role": "user", "content": "Harmful content"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -663,7 +663,7 @@ async def test_lakera_post_call_allows_clean_content():
 
         data = {
             "messages": [{"role": "user", "content": "Hello"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
@@ -713,7 +713,7 @@ async def test_lakera_post_call_masks_pii_and_allows():
 
         data = {
             "messages": [{"role": "user", "content": "Hello"}],
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "metadata": {},
         }
 
