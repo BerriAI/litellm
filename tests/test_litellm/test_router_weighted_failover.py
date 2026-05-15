@@ -9,6 +9,7 @@ cross-group fallback runs.
 
 from collections import Counter
 from typing import Optional
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -573,3 +574,198 @@ async def test_user_config_two_region_failover():
     # failover because eastus2 was picked first).
     assert successes["northcentralus"] == 20
     assert successes["eastus2"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for healthy-deployment-only check in _maybe_run_weighted_failover
+# (Issue: weighted failover checked all deployments, not just healthy ones)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_weighted_failover_skips_when_remaining_all_in_cooldown(
+    monkeypatch,
+):
+    """When every non-excluded deployment is in cooldown, _maybe_run_weighted_failover
+    must return None immediately without invoking run_async_fallback.
+
+    Previously the check was against all_deployments (including cooldown ones), so
+    run_async_fallback would be called unnecessarily and would raise RouterRateLimitError.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "B"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "C"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+    )
+
+    # A just failed; B and C are both in cooldown.
+    exc = Exception("A down")
+    exc.failed_deployment_id = "A"
+
+    run_async_fallback_called = False
+
+    async def _should_not_be_called(*args, **kwargs):
+        nonlocal run_async_fallback_called
+        run_async_fallback_called = True
+        return "should not reach here"
+
+    monkeypatch.setattr("litellm.router.run_async_fallback", _should_not_be_called)
+
+    # Patch cooldown so B and C appear in cooldown.
+    with patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new=AsyncMock(return_value=["B", "C"]),
+    ):
+        result = await router._maybe_run_weighted_failover(
+            exception=exc,
+            original_model_group="test-model",
+            all_deployments=[_make_dep("A"), _make_dep("B"), _make_dep("C")],
+            args=(),
+            kwargs={"metadata": {}},
+            input_kwargs={},
+        )
+
+    assert (
+        result is None
+    ), "Should return None when all remaining deployments are in cooldown"
+    assert (
+        not run_async_fallback_called
+    ), "run_async_fallback must NOT be called when no healthy deployments remain"
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_weighted_failover_proceeds_when_one_healthy_remains(
+    monkeypatch,
+):
+    """When at least one non-excluded deployment is healthy (not in cooldown),
+    _maybe_run_weighted_failover should still invoke run_async_fallback normally.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "B"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k", "weight": 1},
+                "model_info": {"id": "C"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+    )
+
+    # A just failed; B is in cooldown; C is healthy.
+    exc = Exception("A down")
+    exc.failed_deployment_id = "A"
+
+    run_async_fallback_called = False
+
+    async def _stub_run_async_fallback(*args, **kwargs):
+        nonlocal run_async_fallback_called
+        run_async_fallback_called = True
+        return "ok from C"
+
+    monkeypatch.setattr("litellm.router.run_async_fallback", _stub_run_async_fallback)
+
+    with patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new=AsyncMock(return_value=["B"]),
+    ):
+        result = await router._maybe_run_weighted_failover(
+            exception=exc,
+            original_model_group="test-model",
+            all_deployments=[_make_dep("A"), _make_dep("B"), _make_dep("C")],
+            args=(),
+            kwargs={"metadata": {}},
+            input_kwargs={},
+        )
+
+    assert result == "ok from C"
+    assert (
+        run_async_fallback_called
+    ), "run_async_fallback must be called when a healthy deployment remains"
+
+
+@pytest.mark.asyncio
+async def test_failover_falls_through_to_external_fallback_when_remaining_in_cooldown():
+    """End-to-end: when the only non-failed deployments are in cooldown,
+    weighted failover must fall through to the configured cross-group fallback.
+
+    Without the fix the _maybe_run_weighted_failover would invoke run_async_fallback
+    unnecessarily (because it counted cooldown deployments as "remaining"), get back
+    RouterRateLimitError, return None, and reach the same fallback path — but only
+    incidentally. With the fix the early-exit path is taken directly.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("A down"),
+                    "weight": 1_000_000,  # always picked first
+                },
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("B down"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "B"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "ok from fallback",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        enable_weighted_failover=True,
+        fallbacks=[{"test-model": ["fallback-model"]}],
+    )
+
+    # Put B in cooldown so weighted failover can't use it after A fails.
+    with patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new=AsyncMock(return_value=["B"]),
+    ):
+        response = await router.acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert response._hidden_params["model_id"] == "fallback"

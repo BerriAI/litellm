@@ -5701,7 +5701,17 @@ class Router:
             for d in all_deployments
             if (d.get("model_info") or {}).get("id") is not None
         }
-        remaining = all_ids - excluded
+        # Only consider deployments that are currently healthy (not in cooldown).
+        # Using all_ids here would cause a wasteful run_async_fallback invocation
+        # that fails with RouterRateLimitError whenever the "remaining" entries
+        # are all in cooldown — the inner async_get_healthy_deployments call
+        # would find an empty list and raise immediately.
+        cooldown_ids = set(
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self, parent_otel_span=None
+            )
+        )
+        remaining = (all_ids - cooldown_ids) - excluded
         if not remaining:
             return None
 
