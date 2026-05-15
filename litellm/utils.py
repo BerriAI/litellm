@@ -351,7 +351,6 @@ if TYPE_CHECKING:
         get_num_retries_from_retry_policy,
         reset_retry_policy,
     )
-    from litellm.secret_managers.main import get_secret
 
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -383,6 +382,8 @@ if TYPE_CHECKING:
         ChatCompletionToolCallFunctionChunk,
     )
     from litellm.types.router import LiteLLM_Params
+
+from litellm.secret_managers.main import get_secret
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
