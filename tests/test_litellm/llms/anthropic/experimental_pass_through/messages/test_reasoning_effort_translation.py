@@ -99,28 +99,27 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
 
 
 @pytest.mark.parametrize(
-    "model,bad_effort",
+    "model",
     [
-        ("claude-opus-4-6", "xhigh"),
-        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh"),
-        ("claude-sonnet-4-6", "xhigh"),
+        "claude-opus-4-6",
+        "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+        "claude-sonnet-4-6",
     ],
 )
-def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
+def test_reasoning_effort_xhigh_normalizes_to_max_messages(model):
     config = AnthropicMessagesConfig()
-    optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
+    optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
 
-    with pytest.raises(AnthropicError) as exc_info:
-        config.transform_anthropic_messages_request(
-            model=model,
-            messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_optional_request_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "not supported by this model" in str(exc_info.value)
+    output_config = result.get("output_config")
+    assert isinstance(output_config, dict) and output_config.get("effort") == "max"
 
 
 @pytest.mark.parametrize(
@@ -144,6 +143,43 @@ def test_reasoning_effort_max_accepted_on_sonnet_46_messages(model):
 
     output_config = result.get("output_config")
     assert isinstance(output_config, dict) and output_config.get("effort") == "max"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_explicit_output_config_xhigh_normalizes_to_max_messages(model):
+    config = AnthropicMessagesConfig()
+    optional_params = {"max_tokens": 1024, "output_config": {"effort": "xhigh"}}
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "max"}
+
+
+def test_explicit_output_config_xhigh_preserved_when_supported_messages():
+    config = AnthropicMessagesConfig()
+    optional_params = {"max_tokens": 1024, "output_config": {"effort": "xhigh"}}
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
 
 
 def test_explicit_output_config_wins_over_reasoning_effort():
