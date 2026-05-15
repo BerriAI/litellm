@@ -367,17 +367,26 @@ def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
 
 
 def pytest_sessionstart(session):
-    """Clear stale per-worker shards from any prior session.
+    """Reset per-session state before tests run.
 
-    Without this, a previous run's shard directory leaks into the next
-    `pytest_sessionfinish` merge — yielding a `compat-results.json`
-    that includes results from runs that aren't part of the current
-    session, and a misleading rate-limit summary that re-flags
-    failures the user already saw and addressed.
+    Two responsibilities:
 
-    Only the controller (non-xdist-worker) clears; workers must not
-    race the controller while it's wiping the directory.
+    1. Clear the module-level `_COLLECTOR` singleton, which survives
+       across `pytest.main()` invocations within the same Python
+       process. Without this reset, results from a prior session
+       would leak into the next run's `compat-results.json` artifact.
+
+    2. Remove stale per-worker shards from any prior session. Without
+       this, a previous run's shard directory leaks into the next
+       `pytest_sessionfinish` merge — yielding a `compat-results.json`
+       that includes results from runs that aren't part of the current
+       session, and a misleading rate-limit summary that re-flags
+       failures the user already saw and addressed. Only the
+       controller (non-xdist-worker) clears; workers must not race
+       the controller while it's wiping the directory.
     """
+    _COLLECTOR.items.clear()
+
     if _is_xdist_worker(session):
         return
     artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
@@ -393,17 +402,6 @@ def pytest_sessionstart(session):
             # robust to malformed shards, and a stale row landing in
             # the artifact is recoverable; aborting the session isn't.
             continue
-
-
-def pytest_sessionstart(session):
-    """Clear collected results at the start of each session.
-
-    The `_COLLECTOR` is a module-level singleton, so it survives across
-    `pytest.main()` invocations within the same Python process. Without
-    this reset, results from a prior session would leak into the next
-    run's `compat-results.json` artifact.
-    """
-    _COLLECTOR.items.clear()
 
 
 def pytest_sessionfinish(session, exitstatus):
