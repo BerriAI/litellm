@@ -3893,14 +3893,17 @@ def test_encrypt_env_variables_for_db_is_idempotent(monkeypatch):
         == plaintext
     )
 
-    # And again — still exactly one layer, never stacked.
+    # And again, ×3 total ciphertext re-feeds — still exactly one layer,
+    # never stacked, no matter how many times the UI re-saves.
     enc3 = proxy_config._encrypt_env_variables_for_db(enc2)
-    assert (
-        decrypt_value_helper(
-            value=enc3["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+    enc4 = proxy_config._encrypt_env_variables_for_db(enc3)
+    for stacked in (enc3, enc4):
+        assert (
+            decrypt_value_helper(
+                value=stacked["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY"
+            )
+            == plaintext
         )
-        == plaintext
-    )
 
     # Write path must not leak the value into the process environment.
     assert os.environ.get("LANGFUSE_PUBLIC_KEY") is None
@@ -6281,6 +6284,70 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert prisma.db.litellm_config.rows["environment_variables"] == {
             "FOO": "enc:bar"
         }
+    finally:
+        restore()
+
+
+def test_update_config_env_var_round_trip_not_double_encrypted(
+    _update_config_setup, monkeypatch
+):
+    """Endpoint-level regression for the /config/update double-encryption bug.
+
+    The Admin UI reads config back via /get/config/callbacks (which returns
+    the stored, still-encrypted value) and re-POSTs it on the next save. The
+    handler must NOT stack a second encryption layer on the re-submitted
+    ciphertext, and must leave untouched keys byte-identical.
+
+    Uses an invertible fake encrypt/decrypt pair ("enc:" prefix) so the
+    decrypt-then-encrypt chokepoint round-trips faithfully. On the pre-fix
+    code this stored "enc:enc:..."; the assertions below would fail there.
+    """
+
+    def _fake_decrypt(
+        value, key=None, exception_type="error", return_original_value=False
+    ):
+        if isinstance(value, str) and value.startswith("enc:"):
+            return value[len("enc:") :]
+        return value if return_original_value else None
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper", _fake_decrypt
+    )
+
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"PREEXISTING_KEY": "enc:keepme"}}
+    )
+    try:
+        # First write: plaintext in -> single-encrypted at rest.
+        resp = client.post(
+            "/config/update",
+            json={"environment_variables": {"LANGFUSE_SECRET_KEY": "sk-secret"}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["environment_variables"]
+        assert stored["LANGFUSE_SECRET_KEY"] == "enc:sk-secret"
+
+        # UI round-trip: re-POST the stored ciphertext (no field change).
+        resp = client.post(
+            "/config/update",
+            json={
+                "environment_variables": {
+                    "LANGFUSE_SECRET_KEY": stored["LANGFUSE_SECRET_KEY"]
+                }
+            },
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["environment_variables"]
+
+        # The bug: this would be "enc:enc:sk-secret". The fix keeps it single.
+        assert stored["LANGFUSE_SECRET_KEY"] == "enc:sk-secret"
+        assert (
+            _fake_decrypt(stored["LANGFUSE_SECRET_KEY"], return_original_value=True)
+            == "sk-secret"
+        )
+
+        # Untouched key preserved byte-for-byte (only sent keys rewritten).
+        assert stored["PREEXISTING_KEY"] == "enc:keepme"
     finally:
         restore()
 
