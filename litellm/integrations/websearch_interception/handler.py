@@ -86,10 +86,14 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         Claude Code sends web search as a separate, standalone /v1/messages
         request with a simple prompt and only web_search tool(s). For providers
-        that don't natively support web search (e.g. github_copilot), there is
-        no need to route this through the backend LLM — we can detect the
-        pattern, execute the search via Tavily/Perplexity, and return a
-        synthetic Anthropic response immediately.
+        that don't natively support web search, we execute the search via the
+        configured provider (SearXNG/Tavily/Perplexity) and return a synthetic
+        response in native Anthropic format (server_tool_use +
+        web_search_tool_result) so Claude Code's WebSearchTool parser works.
+
+        Providers with native Anthropic Messages support (anthropic, bedrock,
+        vertex_ai, azure_ai) are skipped — their API handles web search
+        natively and returns the correct format already.
 
         Args:
             model: Model name from the request
@@ -112,12 +116,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         ):
             return None
 
-        # Only short-circuit for providers without native Anthropic Messages
-        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
-        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
-        # includes a follow-up LLM call to synthesize the answer from search
-        # results.  Short-circuiting those would skip that synthesis step and
-        # return raw search text — a regression for existing users.
+        # Skip providers with native Anthropic Messages support — their API
+        # handles web_search_20250305 natively, returning server_tool_use +
+        # web_search_tool_result in the correct format already.
         try:
             provider_enum = LlmProviders(provider_str)
             anthropic_config = (
@@ -128,7 +129,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             if anthropic_config is not None:
                 verbose_logger.debug(
                     f"WebSearchInterception: Skipping short-circuit for {provider_str} "
-                    "(provider has native Anthropic Messages support, using agentic loop)"
+                    "(provider has native web search support)"
                 )
                 return None
         except (ValueError, Exception):
@@ -161,21 +162,69 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             search_result_text = f"Search failed: {e}"
 
-        # Build synthetic Anthropic response
+        # Parse search results into structured hits for web_search_tool_result
+        search_hits = []
+        for block in search_result_text.split("\n\n"):
+            title, url, snippet = "", "", ""
+            for line in block.strip().splitlines():
+                if line.startswith("Title: "):
+                    title = line[7:]
+                elif line.startswith("URL: "):
+                    url = line[5:]
+                elif line.startswith("Snippet: "):
+                    snippet = line[9:]
+            if url:
+                hit: Dict[str, Any] = {
+                    "type": "web_search_result",
+                    "url": url,
+                    "title": title or url,
+                    "encrypted_content": snippet or "",
+                    "page_age": None,
+                }
+                search_hits.append(hit)
+
+        tool_use_id = f"srvtoolu_{str(uuid.uuid4()).replace('-', '')[:24]}"
+
+        # Build response in native Anthropic format so Claude Code's
+        # WebSearchTool parser sees server_tool_use + web_search_tool_result.
+        content: List[Dict[str, Any]] = [
+            {
+                "type": "server_tool_use",
+                "id": tool_use_id,
+                "name": "web_search",
+                "input": {"query": query},
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": tool_use_id,
+                "content": search_hits,
+            },
+            {
+                "type": "text",
+                "text": search_result_text,
+            },
+        ]
+
         response: Dict[str, Any] = {
-            "id": f"msg_{str(uuid.uuid4())}",
+            "id": f"msg_{str(uuid.uuid4()).replace('-', '')[:20]}",
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": [{"type": "text", "text": search_result_text}],
+            "content": content,
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "server_tool_use": {
+                    "web_search_requests": 1,
+                },
+            },
         }
 
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, "
-            f"returning synthetic response ({len(search_result_text)} chars)"
+            f"returning native format ({len(search_hits)} hits)"
         )
         return response
 
@@ -880,8 +929,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 llm_router = None
 
-            # Determine search provider from router's search_tools
+            # Determine search provider and api_base from router's search_tools
             search_provider: Optional[str] = None
+            api_base: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
                     # Find specific search tool by name
@@ -892,9 +942,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get(
-                            "search_provider"
-                        )
+                        litellm_params = search_tool.get("litellm_params", {})
+                        search_provider = litellm_params.get("search_provider")
+                        api_base = litellm_params.get("api_base")
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
                             f"with provider '{search_provider}'"
@@ -908,9 +958,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get(
-                        "search_provider"
-                    )
+                    litellm_params = first_tool.get("litellm_params", {})
+                    search_provider = litellm_params.get("search_provider")
+                    api_base = api_base or litellm_params.get("api_base")
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
                     )
@@ -926,7 +976,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            result = await litellm.asearch(query=query, search_provider=search_provider, api_base=api_base)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
