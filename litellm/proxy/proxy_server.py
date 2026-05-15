@@ -4727,6 +4727,7 @@ class ProxyConfig:
         if _id is not None:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
+            model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
         if premium_user is True:
             # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
@@ -8121,6 +8122,12 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
+        # Hide paused models from the public listing (admins manage them via /model/info)
+        if llm_router is not None:
+            blocked_names = llm_router.get_fully_blocked_model_names()
+            if blocked_names:
+                all_models = [m for m in all_models if m not in blocked_names]
+
         # Build response data with all proxy models
         model_data = []
         for model in all_models:
@@ -8153,6 +8160,12 @@ async def model_list(
         return_wildcard_routes=return_wildcard_routes or False,
         user_api_key_cache=user_api_key_cache,
     )
+
+    # Hide paused models from the public listing (admins manage them via /model/info)
+    if llm_router is not None:
+        blocked_names = llm_router.get_fully_blocked_model_names()
+        if blocked_names:
+            all_models = [m for m in all_models if m not in blocked_names]
 
     # Build response data
     model_data = []
