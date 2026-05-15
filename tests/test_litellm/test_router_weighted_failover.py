@@ -7,6 +7,7 @@ SAME model group (weighted across the remaining deployments) before any
 cross-group fallback runs.
 """
 
+
 from collections import Counter
 from typing import Optional
 from unittest.mock import AsyncMock, patch
