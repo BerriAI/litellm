@@ -4022,6 +4022,11 @@ def get_optional_params(  # noqa: PLR0915
     safety_identifier: Optional[str] = None,
     **kwargs,
 ):
+    # Function-scoped to avoid a circular import: secret_managers.main pulls in
+    # `litellm`, which can be mid-loading utils at module-import time. By the
+    # time this function runs all modules are fully initialized.
+    from litellm.secret_managers.main import get_secret
+
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
     provider_config: Optional[BaseConfig] = None
