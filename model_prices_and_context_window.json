@@ -325,8 +325,8 @@
         "source": "https://avian.io"
     },
     "avian/minimax/minimax-m2.5": {
-        "max_tokens": 16384,
-        "max_input_tokens": 1048576,
+        "max_tokens": 1000000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.1e-06,
