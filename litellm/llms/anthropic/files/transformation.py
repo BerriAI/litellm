@@ -271,6 +271,12 @@ class AnthropicFilesConfig(BaseFilesConfig):
             AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
             or ANTHROPIC_FILES_API_BASE
         )
+        if file_id and file_id.startswith('msgbatch_'):
+            return (
+                f"{api_base.rstrip('/')}/v1/messages/batches/{file_id}/results",
+                {},
+            )
+
         encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
 

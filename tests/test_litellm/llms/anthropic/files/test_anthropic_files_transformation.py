@@ -317,6 +317,15 @@ class TestAnthropicFilesConfig:
                 litellm_params={},
             )
 
+    def test_transform_file_content_request_msgbatch_routes_to_batch_endpoint(self):
+        url, params = self.config.transform_file_content_request(
+            file_content_request={"file_id": "msgbatch_abc123"},
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/messages/batches/msgbatch_abc123/results"
+        assert params == {}
+
     def test_transform_file_content_response(self):
         mock_response = Mock(spec=httpx.Response)
         result = self.config.transform_file_content_response(
