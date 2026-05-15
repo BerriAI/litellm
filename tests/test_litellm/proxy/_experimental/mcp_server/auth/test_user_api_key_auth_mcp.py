@@ -1462,13 +1462,11 @@ class TestMCPDelegateAuthToUpstream:
             assert exc_info.value.status_code == 401
             mock_auth.assert_called_once()
 
-    async def test_delegate_ignored_for_non_public_server(self):
+    async def test_delegate_bypass_for_internal_server(self):
         """
-        Internal-only delegate servers must not bypass LiteLLM auth for
-        anonymous public callers.
+        Delegate + oauth2 interactive servers bypass LiteLLM auth even when
+        ``available_on_public_internet`` is False (internal MCPs).
         """
-        from fastapi import HTTPException
-
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1489,6 +1487,8 @@ class TestMCPDelegateAuthToUpstream:
         )
 
         async def mock_auth_raises(*_args, **_kwargs):
+            from fastapi import HTTPException
+
             raise HTTPException(status_code=401, detail="No key provided")
 
         with (
@@ -1501,10 +1501,9 @@ class TestMCPDelegateAuthToUpstream:
             ) as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = internal_server
-            with pytest.raises(HTTPException) as exc_info:
-                await MCPRequestHandler.process_mcp_request(scope)
-            assert exc_info.value.status_code == 401
-            mock_auth.assert_called_once()
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+            mock_auth.assert_not_called()
+            assert auth.api_key is None
 
     async def test_get_allowed_servers_excludes_client_credentials_delegate(self):
         """
@@ -1551,10 +1550,10 @@ class TestMCPDelegateAuthToUpstream:
         assert "pkce-server" in result
         assert "m2m-server" not in result
 
-    async def test_get_allowed_servers_excludes_non_public_delegate(self):
+    async def test_get_allowed_servers_includes_internal_delegate(self):
         """
         Internal-only (available_on_public_internet=False) delegate servers
-        must not appear in the anonymous allow-list.
+        appear in the anonymous allow-list like public delegate servers.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
@@ -1593,7 +1592,7 @@ class TestMCPDelegateAuthToUpstream:
             result = await manager.get_allowed_mcp_servers(None)
 
         assert "public-server" in result
-        assert "internal-server" not in result
+        assert "internal-server" in result
 
     def test_extract_target_server_names_matches_routing_parser(self):
         """
