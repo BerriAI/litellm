@@ -8073,7 +8073,9 @@ class Router:
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
-            Returns None if model not found.
+            Returns None if model not found, or if the resolved deployment is
+            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
+            cannot bypass an admin pause by resolving credentials directly).
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
