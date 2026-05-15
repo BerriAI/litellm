@@ -995,9 +995,6 @@ class MCPServerManager:
                     # unauthenticated caller would get LiteLLM to proxy tool
                     # calls using its stored client_credentials.
                     and not server.has_client_credentials
-                    # Internal-only servers must not be reachable from public
-                    # internet callers who happen to carry an upstream token.
-                    and getattr(server, "available_on_public_internet", True)
                 ]
                 combined_servers.update(delegate_server_ids)
 
