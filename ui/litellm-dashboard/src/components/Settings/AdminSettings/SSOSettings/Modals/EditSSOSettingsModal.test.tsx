@@ -202,6 +202,7 @@ vi.mock("../utils", () => ({
     return null;
   }),
   processSSOSettingsPayload: vi.fn(),
+  extractRoleMappingFields: vi.fn(() => ({})),
 }));
 
 // Test helpers

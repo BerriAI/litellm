@@ -123,6 +123,7 @@ PENDING_DOCS_PR_VARS: set = {
     "OKTA_AUTHORIZATION_ENDPOINT",
     "OKTA_TOKEN_ENDPOINT",
     "OKTA_USERINFO_ENDPOINT",
+    "OKTA_CLIENT_USE_PKCE",
 }
 
 # Compare and find undocumented keys
