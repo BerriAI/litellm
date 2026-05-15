@@ -259,6 +259,37 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
 
 
 @pytest.mark.asyncio
+async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_network_fail():
+    passthrough_server = MCPServer(
+        server_id="passthrough-partial-network",
+        name="jet_knowledge_qa",
+        server_name="jet_knowledge_qa",
+        alias="jet_knowledge_qa",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        extra_headers=["Authorization"],
+    )
+
+    not_found_response = MagicMock()
+    not_found_response.status_code = 404
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(
+        side_effect=[not_found_response, httpx.ConnectError("path fallback failed")]
+    )
+
+    with patch.object(
+        discoverable_endpoints, "get_async_httpx_client", return_value=mock_client
+    ):
+        result = await discoverable_endpoints.fetch_upstream_oauth_protected_resource(
+            passthrough_server
+        )
+
+    assert result is None
+    assert mock_client.get.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_oauth_protected_resource_gateway_managed_unchanged():
     """Regression guard: OAuth2 servers still advertise the gateway as AS."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

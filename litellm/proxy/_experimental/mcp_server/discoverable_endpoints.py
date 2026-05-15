@@ -748,7 +748,7 @@ async def fetch_upstream_oauth_protected_resource(
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
 
-    last_error: Optional[Exception] = None
+    network_errors: list[Exception] = []
     for candidate in candidates:
         try:
             response = await async_client.get(
@@ -756,13 +756,13 @@ async def fetch_upstream_oauth_protected_resource(
                 headers={"Accept": "application/json"},
             )
         except Exception as exc:  # network / connect errors
-            last_error = exc
+            if is_network_error(exc):
+                network_errors.append(exc)
             continue
         if response.status_code == 200:
             try:
                 payload = response.json()
-            except Exception as exc:
-                last_error = exc
+            except Exception:
                 continue
             if isinstance(payload, dict):
                 _OAUTH_METADATA_CACHE[cache_key] = (
@@ -771,10 +771,8 @@ async def fetch_upstream_oauth_protected_resource(
                 )
                 return payload
 
-    if last_error is not None and all(
-        is_network_error(last_error) for _ in candidates
-    ):
-        raise last_error
+    if len(network_errors) == len(candidates):
+        raise network_errors[-1]
 
     return None
 
