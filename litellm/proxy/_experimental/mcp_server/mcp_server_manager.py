@@ -1438,21 +1438,13 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            if subject_token is not None:
-                client = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=mcp_auth_header,
-                    extra_headers=extra_headers,
-                    stdio_env=stdio_env,
-                    subject_token=subject_token,
-                )
-            else:
-                client = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=mcp_auth_header,
-                    extra_headers=extra_headers,
-                    stdio_env=stdio_env,
-                )
+            client = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+            )
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:

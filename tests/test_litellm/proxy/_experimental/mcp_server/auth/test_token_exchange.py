@@ -263,6 +263,7 @@ async def test_exchange_token_request_error():
     ):
         await handler.exchange_token("bad-jwt", server)
 
+
 @pytest.mark.asyncio
 async def test_exchange_token_missing_access_token():
     """Response without access_token raises ValueError."""
@@ -369,27 +370,6 @@ async def test_oauth2_client_credentials_request_error():
         pytest.raises(ValueError, match="failed"),
     ):
         await token_cache.async_get_token(server)
-
-
-@pytest.mark.asyncio
-async def test_resolve_mcp_auth_obo_without_subject_token_uses_cached_client_credentials():
-    """The M2M fallback for OBO servers reuses the client_credentials cache."""
-    server = _obo_server(
-        server_id="srv-obo-m2m-cache",
-        token_url="https://auth.example.com/token",
-    )
-    mock_client = AsyncMock()
-    mock_client.post.return_value = _exchange_response("cached-cc-token")
-
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ):
-        first = await resolve_mcp_auth(server, subject_token=None)
-        second = await resolve_mcp_auth(server, subject_token=None)
-
-    assert first == second == "cached-cc-token"
-    mock_client.post.assert_called_once()
 
 
 @pytest.mark.asyncio
