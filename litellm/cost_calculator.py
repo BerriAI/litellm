@@ -447,6 +447,9 @@ def cost_per_token(  # noqa: PLR0915
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
+
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
