@@ -27,6 +27,7 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
+    validate_and_fix_openai_messages,
 )
 
 # Adds the parent directory to the system path
@@ -3277,6 +3278,37 @@ class TestIsCachedMessage:
         assert is_cached_message(message) is False
 
 
+def test_normalize_array_of_strings_in_content():
+    """String items in list content become OpenAI multimodal text parts; dict parts unchanged."""
+    only_strings = validate_and_fix_openai_messages(
+        [
+            {
+                "role": "user",
+                "content": ["what is the capital of France?"],
+            }
+        ]
+    )
+    assert only_strings[0]["content"] == [
+        {"type": "text", "text": "what is the capital of France?"}
+    ]
+
+    mixed = validate_and_fix_openai_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    "some text",
+                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+                ],
+            }
+        ]
+    )
+    assert mixed[0]["content"] == [
+        {"type": "text", "text": "some text"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+    ]
+
+
 @pytest.mark.asyncio
 class TestProxyLoggingBudgetAlerts:
     """Test budget_alerts method in ProxyLogging class."""
@@ -4107,3 +4139,18 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_normalize_array_of_strings_in_content():
+    from litellm.utils import validate_and_fix_openai_messages
+
+    messages = [
+        {
+            "role": "user",
+            "content": ["what is the capital of France?"],
+        }
+    ]
+    result = validate_and_fix_openai_messages(messages=messages)
+    assert result[0]["content"] == [
+        {"type": "text", "text": "what is the capital of France?"},
+    ]
