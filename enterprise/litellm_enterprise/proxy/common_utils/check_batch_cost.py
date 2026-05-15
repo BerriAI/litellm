@@ -306,7 +306,8 @@ class CheckBatchCost:
                 if managed_files_hook is not None:
                     from litellm.proxy._types import UserAPIKeyAuth
                     _minimal_auth = UserAPIKeyAuth(
-                        user_id=job.created_by or "default-user-id"
+                        user_id=job.created_by or "default-user-id",
+                        team_id=getattr(job, "team_id", None),
                     )
                     for _file_attr in ["output_file_id", "error_file_id"]:
                         _raw_file_id = getattr(response, _file_attr, None)
@@ -317,7 +318,6 @@ class CheckBatchCost:
                                     model_id=model_id,
                                     model_name=str(model_name) if model_name else deployment_info.model_name or None,
                                 )
-                                setattr(response, _file_attr, _unified_file_id)
                                 await managed_files_hook.store_unified_file_id(
                                     file_id=_unified_file_id,
                                     file_object=None,
@@ -325,6 +325,7 @@ class CheckBatchCost:
                                     model_mappings={model_id: _raw_file_id},
                                     user_api_key_dict=_minimal_auth,
                                 )
+                                setattr(response, _file_attr, _unified_file_id)
                                 verbose_proxy_logger.info(
                                     f"CheckBatchCost: converted {_file_attr} "
                                     f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
