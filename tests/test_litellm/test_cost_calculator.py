@@ -13,12 +13,31 @@ from pydantic import BaseModel
 import litellm
 from litellm.cost_calculator import (
     completion_cost,
+    cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_cost_per_token_duplicate_openai_prefix_matches_model_cost():
+    """
+    Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
+    resolve to model_prices keys (e.g. gpt-5.5), not fail or multiply prefixes.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="openai/openai/gpt-5.5",
+        prompt_tokens=100,
+        completion_tokens=50,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_usd + completion_usd > 0
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():

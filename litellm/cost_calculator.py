@@ -412,9 +412,28 @@ def cost_per_token(  # noqa: PLR0915
     prompt_tokens_cost_usd_dollar: float = 0
     completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref = litellm.model_cost
+    if custom_llm_provider is None:
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    # Router/proxy deployments may repeat the provider segment (e.g. model_name
+    # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
+    if custom_llm_provider is not None:
+        _dup_prefix = f"{custom_llm_provider}/"
+        while model.startswith(_dup_prefix):
+            _remainder = model[len(_dup_prefix) :]
+            if _remainder.startswith(_dup_prefix):
+                model = _remainder
+            else:
+                break
+
     model_with_provider = model
     if custom_llm_provider is not None:
-        model_with_provider = custom_llm_provider + "/" + model
+        _prov_prefix = f"{custom_llm_provider}/"
+        model_with_provider = (
+            model
+            if model.startswith(_prov_prefix)
+            else f"{custom_llm_provider}/{model}"
+        )
         if region_name is not None:
             model_with_provider_and_region = (
                 f"{custom_llm_provider}/{region_name}/{model}"
@@ -423,8 +442,6 @@ def cost_per_token(  # noqa: PLR0915
                 model_with_provider_and_region in model_cost_ref
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
-    else:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
