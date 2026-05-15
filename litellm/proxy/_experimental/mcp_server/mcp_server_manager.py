@@ -145,6 +145,30 @@ def _warn_on_server_name_fields(
     _warn("server_name", server_name)
 
 
+def _warn_internal_delegate_pkce_if_applicable(
+    server: MCPServer, *, source: str
+) -> None:
+    """Surface internal + upstream PKCE delegate in logs for operators."""
+    if server.auth_type != MCPAuth.oauth2:
+        return
+    if getattr(server, "delegate_auth_to_upstream", False) is not True:
+        return
+    if getattr(server, "available_on_public_internet", True):
+        return
+    if server.has_client_credentials:
+        return
+    label = get_server_prefix(server)
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=%s): internal-only (available_on_public_internet=false) "
+        "with delegate_auth_to_upstream=true. Anonymous callers can reach the upstream OAuth2 "
+        "/authorize flow and complete PKCE without a LiteLLM API key session; ensure the "
+        "upstream IdP and network enforce your access policy.",
+        label,
+        server.server_id,
+        source,
+    )
+
+
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -425,6 +449,7 @@ class MCPServerManager:
                 ),
             )
             self._assign_unique_short_prefix(new_server)
+            _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -834,6 +859,7 @@ class MCPServerManager:
             )
             or "urn:ietf:params:oauth:token-type:access_token",
         )
+        _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
 
     async def _maybe_register_openapi_tools(
