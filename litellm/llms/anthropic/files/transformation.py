@@ -272,6 +272,19 @@ class AnthropicFilesConfig(BaseFilesConfig):
             or ANTHROPIC_FILES_API_BASE
         )
         encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+
+        # msgbatch_* IDs are Anthropic batch result IDs, not Files API IDs.
+        # Routing them to /v1/files/{id}/content returns 404 and silently
+        # drops all token/cost data, causing CheckBatchCost to always
+        # record 0 tokens and $0 cost for completed batches.
+        # Correct endpoint: /v1/messages/batches/{id}/results
+        # Ref: https://github.com/BerriAI/litellm/issues/27944
+        if file_id and file_id.startswith("msgbatch_"):
+            return (
+                f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_file_id}/results",
+                {},
+            )
+
         return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
 
     def transform_file_content_response(
