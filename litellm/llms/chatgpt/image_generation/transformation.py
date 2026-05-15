@@ -1,5 +1,4 @@
 import json
-import re
 import base64
 from io import BufferedReader, BytesIO
 from os import PathLike
@@ -42,11 +41,6 @@ from ..common_utils import (
 )
 
 GPT_IMAGE_MODEL_PREFIX = "gpt-image-"
-GPT_IMAGE_2_MODEL_PREFIX = "gpt-image-2"
-GPT_IMAGE_2_MIN_PIXELS = 655_360
-GPT_IMAGE_2_MAX_PIXELS = 8_294_400
-GPT_IMAGE_2_MAX_EDGE = 3840
-GPT_IMAGE_2_MAX_RATIO = 3.0
 
 ALLOWED_OUTPUT_FORMATS = {"png", "jpeg", "webp"}
 INTERNAL_OPTIONAL_PARAMS = {"chatgpt_responses_model"}
@@ -230,46 +224,6 @@ class ChatGPTImageGenerationConfig(BaseImageGenerationConfig):
         output_format = optional_params.get("output_format")
         if output_format is not None and output_format not in ALLOWED_OUTPUT_FORMATS:
             raise ValueError("output_format must be one of png, jpeg, or webp")
-
-        size = optional_params.get("size")
-        if size is not None and model.startswith(GPT_IMAGE_2_MODEL_PREFIX):
-            self._validate_gpt_image_2_size(size)
-
-    @staticmethod
-    def _parse_size(size: str) -> Optional[Tuple[int, int]]:
-        match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", size)
-        if not match:
-            return None
-        return int(match.group(1)), int(match.group(2))
-
-    def _validate_gpt_image_2_size(self, size: str) -> None:
-        if size == "auto":
-            return
-
-        parsed = self._parse_size(size)
-        if parsed is None:
-            raise ValueError("size must be auto or WIDTHxHEIGHT, for example 1024x1024")
-
-        width, height = parsed
-        max_edge = max(width, height)
-        min_edge = min(width, height)
-        total_pixels = width * height
-
-        if max_edge > GPT_IMAGE_2_MAX_EDGE:
-            raise ValueError("gpt-image-2 size maximum edge length must be <= 3840px")
-        if width % 16 != 0 or height % 16 != 0:
-            raise ValueError(
-                "gpt-image-2 size width and height must be multiples of 16px"
-            )
-        if max_edge / min_edge > GPT_IMAGE_2_MAX_RATIO:
-            raise ValueError("gpt-image-2 size ratio must not exceed 3:1")
-        if (
-            total_pixels < GPT_IMAGE_2_MIN_PIXELS
-            or total_pixels > GPT_IMAGE_2_MAX_PIXELS
-        ):
-            raise ValueError(
-                "gpt-image-2 total pixels must be between 655,360 and 8,294,400"
-            )
 
     def transform_image_generation_response(
         self,

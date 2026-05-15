@@ -107,10 +107,6 @@ def test_chatgpt_image_generation_forwards_supported_generate_params(
     "optional_params, error",
     [
         ({"output_format": "jpg"}, "output_format must be one of png, jpeg, or webp"),
-        ({"size": "1535x1024"}, "multiples of 16px"),
-        ({"size": "4096x1024"}, "maximum edge length"),
-        ({"size": "1024x256"}, "ratio must not exceed 3:1"),
-        ({"size": "512x512"}, "total pixels must be between"),
     ],
 )
 def test_chatgpt_image_generation_validates_params(
@@ -489,7 +485,7 @@ def test_chatgpt_image_generation_uses_optional_responses_model(monkeypatch, tmp
         ("dall-e-3", {}, "requires a GPT Image model"),
         ("gpt-image-1.5", {"size": "auto"}, None),
         ("gpt-image-2", {"size": "auto"}, None),
-        ("gpt-image-2", {"size": "bad-size"}, "size must be auto or WIDTHxHEIGHT"),
+        ("gpt-image-2", {"size": "bad-size"}, None),
     ],
 )
 def test_chatgpt_image_generation_validates_additional_param_paths(
@@ -516,6 +512,23 @@ def test_chatgpt_image_generation_validates_additional_param_paths(
             litellm_params={},
             headers={},
         )
+
+
+def test_chatgpt_image_generation_forwards_size_without_local_constraints(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    config = ChatGPTImageGenerationConfig()
+
+    request = config.transform_image_generation_request(
+        model="gpt-image-2",
+        prompt="draw a cat",
+        optional_params={"size": "bad-size"},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"][0]["size"] == "bad-size"
 
 
 def test_chatgpt_image_generation_extracts_b64_from_deep_nested_payload(
