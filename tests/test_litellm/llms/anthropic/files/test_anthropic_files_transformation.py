@@ -309,6 +309,19 @@ class TestAnthropicFilesConfig:
         assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/files/file-abc123/content"
         assert params == {}
 
+    def test_transform_file_content_request_msgbatch_routes_to_batch_endpoint(self):
+        """msgbatch_* IDs must route to the batch results endpoint, not the Files API.
+        Routing to /v1/files/{id}/content returns 404 and silently drops cost data.
+        Ref: https://github.com/BerriAI/litellm/issues/27944
+        """
+        url, params = self.config.transform_file_content_request(
+            file_content_request={"file_id": "msgbatch_abc123"},
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/messages/batches/msgbatch_abc123/results"
+        assert params == {}
+
     def test_transform_file_content_request_rejects_dot_segment(self):
         with pytest.raises(ValueError, match="file_id cannot be a dot path segment"):
             self.config.transform_file_content_request(
