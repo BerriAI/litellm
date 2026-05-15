@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -226,6 +227,36 @@ def test_is_chunk_non_empty_ignores_original_chunk_without_reasoning(
             model_response=empty_model_response,
             response_obj={"original_chunk": original_chunk},
         )
+        is False
+    )
+
+
+def test_original_chunk_has_reasoning_content_defensive_branches():
+    """
+    Cover the defensive guards inside _original_chunk_has_reasoning_content so
+    every early-return path is exercised. Each branch must return False without
+    raising on the surrounding malformed input.
+    """
+    from litellm.litellm_core_utils.streaming_handler import (
+        _original_chunk_has_reasoning_content,
+    )
+
+    # 1. Missing original_chunk entirely.
+    assert _original_chunk_has_reasoning_content({}) is False
+
+    # 2. original_chunk present but no choices.
+    chunk_no_choices = ModelResponseStream(choices=[])
+    assert (
+        _original_chunk_has_reasoning_content({"original_chunk": chunk_no_choices})
+        is False
+    )
+
+    # 3. original_chunk with a choice whose delta is None. ModelResponseStream
+    # always materialises a Delta, so emulate the missing-delta case with a
+    # SimpleNamespace standing in for the choice.
+    chunk_no_delta = SimpleNamespace(choices=[SimpleNamespace(delta=None)])
+    assert (
+        _original_chunk_has_reasoning_content({"original_chunk": chunk_no_delta})
         is False
     )
 
