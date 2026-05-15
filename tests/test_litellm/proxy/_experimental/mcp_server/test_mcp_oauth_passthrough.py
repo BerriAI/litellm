@@ -134,9 +134,9 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-1",
-        name="jet_knowledge_qa",
-        server_name="jet_knowledge_qa",
-        alias="jet_knowledge_qa",
+        name="knowledge_qa",
+        server_name="knowledge_qa",
+        alias="knowledge_qa",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -163,7 +163,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
     ):
         result = await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="jet_knowledge_qa",
+            mcp_server_name="knowledge_qa",
             use_standard_pattern=True,
         )
 
@@ -171,7 +171,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
         "https://okta.example.com/oauth2/default"
     ]
     # resource is normalized to the gateway URL so bearers are sent back to us
-    assert result["resource"].endswith("/mcp/jet_knowledge_qa")
+    assert result["resource"].endswith("/mcp/knowledge_qa")
     assert result["scopes_supported"] == ["openid", "profile"]
 
 
@@ -184,9 +184,9 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-2",
-        name="jet_knowledge_qa",
-        server_name="jet_knowledge_qa",
-        alias="jet_knowledge_qa",
+        name="knowledge_qa",
+        server_name="knowledge_qa",
+        alias="knowledge_qa",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -209,12 +209,12 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
     ):
         await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="jet_knowledge_qa",
+            mcp_server_name="knowledge_qa",
             use_standard_pattern=True,
         )
         await _build_oauth_protected_resource_response(
             request=_make_request(),
-            mcp_server_name="jet_knowledge_qa",
+            mcp_server_name="knowledge_qa",
             use_standard_pattern=True,
         )
 
@@ -230,9 +230,9 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="passthrough-3",
-        name="jet_knowledge_qa",
-        server_name="jet_knowledge_qa",
-        alias="jet_knowledge_qa",
+        name="knowledge_qa",
+        server_name="knowledge_qa",
+        alias="knowledge_qa",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -251,7 +251,7 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
         with pytest.raises(HTTPException) as exc_info:
             await _build_oauth_protected_resource_response(
                 request=_make_request(),
-                mcp_server_name="jet_knowledge_qa",
+                mcp_server_name="knowledge_qa",
                 use_standard_pattern=True,
             )
 
@@ -262,9 +262,9 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
 async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_network_fail():
     passthrough_server = MCPServer(
         server_id="passthrough-partial-network",
-        name="jet_knowledge_qa",
-        server_name="jet_knowledge_qa",
-        alias="jet_knowledge_qa",
+        name="knowledge_qa",
+        server_name="knowledge_qa",
+        alias="knowledge_qa",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -381,7 +381,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     manager = MCPServerManager()
     passthrough_server = MCPServer(
         server_id="p1",
-        name="jet_knowledge_qa",
+        name="knowledge_qa",
         url="https://upstream/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -409,7 +409,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     assert exc_info.value.www_authenticate == (
         'Bearer resource_metadata="https://upstream"'
     )
-    assert exc_info.value.server_name == "jet_knowledge_qa"
+    assert exc_info.value.server_name == "knowledge_qa"
     mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
@@ -418,7 +418,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     manager = MCPServerManager()
     passthrough_server = MCPServer(
         server_id="p1",
-        name="jet_knowledge_qa",
+        name="knowledge_qa",
         url="https://upstream/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -492,12 +492,12 @@ def _make_scope(path: str, headers: list = None) -> dict:
     "route,expected_metadata_path",
     [
         (
-            "/mcp/jet_knowledge_qa",
-            "/.well-known/oauth-protected-resource/mcp/jet_knowledge_qa",
+            "/mcp/knowledge_qa",
+            "/.well-known/oauth-protected-resource/mcp/knowledge_qa",
         ),
         (
-            "/jet_knowledge_qa/mcp",
-            "/.well-known/oauth-protected-resource/jet_knowledge_qa/mcp",
+            "/knowledge_qa/mcp",
+            "/.well-known/oauth-protected-resource/knowledge_qa/mcp",
         ),
     ],
 )
@@ -517,9 +517,9 @@ async def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
     global_mcp_server_manager.registry.clear()
     passthrough_server = MCPServer(
         server_id="pt-cold-start",
-        name="jet_knowledge_qa",
-        server_name="jet_knowledge_qa",
-        alias="jet_knowledge_qa",
+        name="knowledge_qa",
+        server_name="knowledge_qa",
+        alias="knowledge_qa",
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
@@ -534,7 +534,7 @@ async def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
     if route.startswith("/mcp/"):
         scope = _make_scope(route)
     else:
-        scope = _make_scope(f"/mcp/jet_knowledge_qa")
+        scope = _make_scope(f"/mcp/knowledge_qa")
         scope["_original_path"] = route
 
     # Verify cold-start detection fires for this path
@@ -545,7 +545,7 @@ async def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
     assert _is_mcp_passthrough_cold_start(scope, servers) is True
 
     # Verify resource_metadata_url form selection
-    server_name = "jet_knowledge_qa"
+    server_name = "knowledge_qa"
     base_url = "http://localhost:4000"
     path = scope.get("_original_path") or scope.get("path", "") or ""
     if path.startswith(f"/{server_name}/mcp"):
@@ -617,10 +617,10 @@ def test_is_mcp_passthrough_cold_start_false_for_empty_servers():
 @pytest.mark.parametrize(
     "path,expected",
     [
-        ("/mcp/jet_knowledge_qa", ["jet_knowledge_qa"]),
-        ("/mcp/jet_knowledge_qa/tools/list", ["jet_knowledge_qa"]),
-        ("/jet_knowledge_qa/mcp", ["jet_knowledge_qa"]),
-        ("/jet_knowledge_qa/mcp/tools/list", ["jet_knowledge_qa"]),
+        ("/mcp/knowledge_qa", ["knowledge_qa"]),
+        ("/mcp/knowledge_qa/tools/list", ["knowledge_qa"]),
+        ("/knowledge_qa/mcp", ["knowledge_qa"]),
+        ("/knowledge_qa/mcp/tools/list", ["knowledge_qa"]),
         ("/mcp", None),
         ("/mcp/", None),
         ("/other/path", None),

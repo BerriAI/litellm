@@ -1707,8 +1707,8 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
         audience="audience-two",
         kid=shared_kid,
         extra_claims={
-            "repository_owner": "jet-ai-productivity",
-            "repository": "jet-ai-productivity/litellm-fork",
+            "repository_owner": "example-org",
+            "repository": "example-org/litellm-fork",
         },
     )
 
@@ -1716,10 +1716,10 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
 
     assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer_two
     assert jwt_handler.get_user_id(token=claims, default_value=None) == (
-        "jet-ai-productivity"
+        "example-org"
     )
     assert jwt_handler.get_team_id(token=claims, default_value=None) == (
-        "jet-ai-productivity/litellm-fork"
+        "example-org/litellm-fork"
     )
 
 
@@ -1748,12 +1748,12 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
         issuer=issuer,
         audience="kubernetes.default.svc",
         kid="k8s-key",
-        extra_claims={"kubernetes.io": {"namespace": "jet-namespace"}},
+        extra_claims={"kubernetes.io": {"namespace": "example-namespace"}},
     )
 
     claims = await jwt_handler.auth_jwt(token=token)
 
-    assert jwt_handler.get_user_id(token=claims, default_value=None) == "jet-namespace"
+    assert jwt_handler.get_user_id(token=claims, default_value=None) == "example-namespace"
 
 
 @pytest.mark.asyncio

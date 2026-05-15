@@ -16,8 +16,11 @@ def set_request_from_trusted_proxy(mock_request):
 @pytest.fixture
 def trusted_proxy_origin_headers():
     with patch(
-        "litellm.proxy._experimental.mcp_server.oauth_utils.get_mcp_trusted_proxy_ranges",
-        return_value=TRUSTED_PROXY_RANGES,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
     ):
         yield
 
@@ -1193,8 +1196,12 @@ def test_get_request_base_url_ignores_forwarded_headers_from_untrusted_client():
     mock_request.client.host = "203.0.113.10"
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.oauth_utils.get_mcp_trusted_proxy_ranges",
-        return_value=TRUSTED_PROXY_RANGES,
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+        },
+        create=True,
     ):
         assert get_request_base_url(mock_request) == "https://gateway.example.com/mcp"
 
@@ -1218,8 +1225,12 @@ def test_validate_trusted_redirect_uri_rejects_spoofed_forwarded_host():
     mock_request.client.host = "203.0.113.10"
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.oauth_utils.get_mcp_trusted_proxy_ranges",
-        return_value=TRUSTED_PROXY_RANGES,
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
+        },
+        create=True,
     ), pytest.raises(HTTPException):
         validate_trusted_redirect_uri(
             mock_request,
