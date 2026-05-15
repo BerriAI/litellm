@@ -699,10 +699,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             _span_name = "Failed Proxy Server Request"
 
+            parent_ctx = trace.set_span_in_context(parent_otel_span)
+
             # Exception Logging Child Span
             exception_logging_span = self.tracer.start_span(
                 name=_span_name,
-                context=trace.set_span_in_context(parent_otel_span),
+                context=parent_ctx,
             )
             self.safe_set_attribute(
                 span=exception_logging_span,
@@ -712,7 +714,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             exception_logging_span.set_status(Status(StatusCode.ERROR))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
-            # End Parent OTEL Sspan
+            # Emit guardrail spans from request_data metadata.
+            # When a guardrail blocks a request (GuardrailRaisedException),
+            # the normal _handle_failure path is skipped because the LLM call
+            # never happens.  The guardrail decorator already wrote
+            # standard_logging_guardrail_information to the metadata dict,
+            # so we can create the span here.
+            self._create_guardrail_span_from_request_data(
+                request_data=request_data,
+                context=parent_ctx,
+            )
+
+            # End Parent OTEL Span
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     async def async_post_call_success_hook(
@@ -917,6 +930,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {}) or {}
         proxy_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES).
+        if proxy_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            proxy_span = _litellm_metadata.get("litellm_parent_otel_span", None)
+
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -1497,6 +1517,92 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 end_time_datetime = datetime.fromtimestamp(end_time_float)
 
             guardrail_span = otel_tracer.start_span(
+                name="guardrail",
+                start_time=self._to_ns(start_time_datetime),
+                context=context,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.GUARDRAIL.value,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_name",
+                value=guardrail_information.get("guardrail_name"),
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_mode",
+                value=guardrail_information.get("guardrail_mode"),
+            )
+
+            masked_entity_count = guardrail_information.get("masked_entity_count")
+            if masked_entity_count is not None:
+                guardrail_span.set_attribute(
+                    "masked_entity_count", safe_dumps(masked_entity_count)
+                )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_response",
+                value=guardrail_information.get("guardrail_response"),
+            )
+
+            guardrail_span.end(end_time=self._to_ns(end_time_datetime))
+
+    def _create_guardrail_span_from_request_data(
+        self,
+        request_data: dict,
+        context: Optional[Context],
+    ):
+        """
+        Create guardrail spans directly from request_data metadata.
+
+        This is used in ``async_post_call_failure_hook`` when a guardrail
+        blocks a request (``GuardrailRaisedException``).  In that case the
+        LLM call never happens, so ``_handle_failure`` / ``_handle_success``
+        never fire and the normal ``_create_guardrail_span`` (which reads
+        from ``standard_logging_object``) is never reached.
+
+        The ``@log_guardrail_information`` decorator already wrote
+        ``standard_logging_guardrail_information`` into the request metadata
+        dict before re-raising, so we can read it here.
+        """
+        # Guardrail info may be in "metadata" or "litellm_metadata" depending
+        # on the endpoint (see LITELLM_METADATA_ROUTES).
+        guardrail_information_list = None
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = request_data.get(meta_key)
+            if isinstance(meta, dict):
+                info = meta.get("standard_logging_guardrail_information")
+                if info:
+                    guardrail_information_list = info
+                    break
+
+        if not guardrail_information_list or not isinstance(
+            guardrail_information_list, list
+        ):
+            return
+
+        for guardrail_information in guardrail_information_list:
+            if not isinstance(guardrail_information, dict):
+                continue
+
+            start_time_float = guardrail_information.get("start_time")
+            end_time_float = guardrail_information.get("end_time")
+
+            start_time_datetime = datetime.now()
+            if start_time_float is not None:
+                start_time_datetime = datetime.fromtimestamp(start_time_float)
+            end_time_datetime = datetime.now()
+            if end_time_float is not None:
+                end_time_datetime = datetime.fromtimestamp(end_time_float)
+
+            guardrail_span = self.tracer.start_span(
                 name="guardrail",
                 start_time=self._to_ns(start_time_datetime),
                 context=context,
@@ -2430,6 +2536,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         traceparent = headers.get("traceparent", None)
         _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES that store proxy-internal metadata
+        # separately from the provider's native "metadata" field).
+        if parent_otel_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            parent_otel_span = _litellm_metadata.get("litellm_parent_otel_span", None)
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
