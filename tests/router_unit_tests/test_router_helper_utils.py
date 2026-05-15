@@ -40,9 +40,9 @@ def model_list():
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -207,12 +207,12 @@ async def test_image_generation(model_list, sync_mode):
     router = Router(model_list=model_list)
     if sync_mode:
         response = router._image_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
     else:
         response = await router._aimage_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
 
@@ -382,7 +382,7 @@ async def test_router_make_call(model_list):
     ## AIMAGE_GENERATION
     response = await router.make_call(
         original_function=router._aimage_generation,
-        model="dall-e-3",
+        model="gpt-image-1",
         prompt="A cute baby sea otter",
         mock_response="https://example.com/image.png",
     )
@@ -877,6 +877,79 @@ async def test_set_response_headers(model_list):
     router = Router(model_list=model_list)
     resp = await router.set_response_headers(response=None, model_group=None)
     assert resp is None
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_subtracts_in_flight_delta(model_list):
+    """
+    LIT-2719: router-derived `x-ratelimit-remaining-*` headers must be
+    post-decrement (match OpenAI/Anthropic vendor semantics) so the proxy's
+    HTTP response headers and the prometheus gauges that read them stay
+    comparable across providers.
+
+    Router's TPM/RPM counter is incremented post-response by
+    `deployment_callback_on_success`, so `get_remaining_model_group_usage`
+    sees pre-decrement values. `set_response_headers` must replay the
+    in-flight increment before writing the headers.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-limit-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-limit-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 958
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # Limit headers pass through unmodified.
+    assert headers["x-ratelimit-limit-tokens"] == 1000
+    assert headers["x-ratelimit-limit-requests"] == 100
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_handles_missing_usage(model_list):
+    """
+    Streaming chunks and some response shapes may lack a `usage` attribute or
+    populated `total_tokens`. The in-flight subtraction must default to 0
+    tokens (still subtract 1 from requests) and never raise.
+    """
+    from pydantic import BaseModel
+
+    class _Resp(BaseModel):
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 99
 
 
 def test_get_all_deployments(model_list):

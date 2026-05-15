@@ -492,3 +492,57 @@ def test_update_messages_with_model_file_ids_tolerates_non_dict_content_items():
         update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {})
         == messages_token_ids_batch
     )
+
+
+class TestExtractFileDataBareStr:
+    """``extract_file_data`` used to accept bare ``str`` values and ``open()``
+    them server-side. When the helper runs inside a proxy request handler the
+    value is attacker-controlled, so the open() call was a textbook arbitrary
+    local file read. Lock the new contract: bare ``str`` is rejected with a
+    clear migration message; ``pathlib.Path`` is still accepted for SDK
+    ergonomics because it's a Python-level type that HTTP form values can't
+    fabricate."""
+
+    def test_rejects_bare_str(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
+        with pytest.raises(ValueError, match="does not accept bare str inputs"):
+            extract_file_data("/etc/passwd")
+
+    def test_accepts_pathlib_path(self):
+        import tempfile
+        from pathlib import Path
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
+        content = b"hello"
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(content)
+            tmp_path = Path(f.name)
+
+        try:
+            extracted = extract_file_data(tmp_path)
+            assert extracted.get("content") == content
+        finally:
+            os.unlink(str(tmp_path))
+
+    def test_accepts_bytes(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
+        extracted = extract_file_data(b"raw bytes content")
+        assert extracted.get("content") == b"raw bytes content"
+
+    def test_accepts_tuple(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
+        extracted = extract_file_data(("foo.txt", b"raw bytes content"))
+        assert extracted.get("filename") == "foo.txt"
+        assert extracted.get("content") == b"raw bytes content"

@@ -41,7 +41,7 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    include_args = [
+    include_args = {
         "url",
         "redis_connect_func",
         "gcp_service_account",
@@ -50,9 +50,9 @@ def _get_redis_kwargs():
         "azure_client_id",
         "azure_tenant_id",
         "azure_client_secret",
-    ]
+    }
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    available_args = {x for x in arg_spec.args if x not in exclude_args} | include_args
 
     return available_args
 
@@ -84,23 +84,23 @@ def _get_redis_cluster_kwargs(client=None):
     # Only allow primitive arguments
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args]
-    available_args.append("password")
-    available_args.append("username")
-    available_args.append("ssl")
-    available_args.append("ssl_cert_reqs")
-    available_args.append("ssl_check_hostname")
-    available_args.append("ssl_ca_certs")
-    available_args.append(
-        "redis_connect_func"
-    )  # Needed for sync clusters and IAM detection
-    available_args.append("gcp_service_account")
-    available_args.append("gcp_ssl_ca_certs")
-    available_args.append("azure_redis_ad_token")
-    available_args.append("azure_client_id")
-    available_args.append("azure_tenant_id")
-    available_args.append("azure_client_secret")
-    available_args.append("max_connections")
+    available_args = {x for x in arg_spec.args if x not in exclude_args}
+    available_args |= {
+        "password",
+        "username",
+        "ssl",
+        "ssl_cert_reqs",
+        "ssl_check_hostname",
+        "ssl_ca_certs",
+        "redis_connect_func",  # Needed for sync clusters and IAM detection
+        "gcp_service_account",
+        "gcp_ssl_ca_certs",
+        "azure_redis_ad_token",
+        "azure_client_id",
+        "azure_tenant_id",
+        "azure_client_secret",
+        "max_connections",
+    }
 
     return available_args
 
@@ -479,10 +479,24 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
 
 
+def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
+    connection_kwargs = {}
+    args = _get_redis_kwargs()
+    for arg in redis_kwargs:
+        if arg in args:
+            connection_kwargs[arg] = redis_kwargs[arg]
+
+    return connection_kwargs
+
+
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
+    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
+    sentinel_kwargs = dict(connection_kwargs)
+    sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -494,19 +508,22 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     # Set up the Sentinel client
     sentinel = redis.Sentinel(
         sentinel_nodes,
-        socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs,
     )
 
     # Return the master instance for the given service
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **connection_kwargs)
 
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
+    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
+    sentinel_kwargs = dict(connection_kwargs)
+    sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -518,13 +535,12 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     # Set up the Sentinel client
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
-        socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs,
     )
 
     # Return the master instance for the given service
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **connection_kwargs)
 
 
 def get_redis_client(**env_overrides):

@@ -32,6 +32,7 @@ from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
+    health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     run_with_timeout,
 )
@@ -858,6 +859,7 @@ async def _perform_health_check_and_save(
     user_id,
     model_id=None,
     max_concurrency=None,
+    **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
@@ -867,6 +869,7 @@ async def _perform_health_check_and_save(
         details=details,
         max_concurrency=max_concurrency,
         model_id=model_id,
+        **perform_health_check_extra,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -892,6 +895,37 @@ async def _perform_health_check_and_save(
         "healthy_count": len(healthy_endpoints),
         "unhealthy_count": len(unhealthy_endpoints),
     }
+
+
+def _health_endpoint_resolve_target_model_name(
+    model: Optional[str],
+    model_id: Optional[str],
+    llm_router,
+) -> Optional[str]:
+    """Map ``model_id`` (without ``model``) to ``model_name`` for live health checks."""
+    if not model_id or model:
+        return model
+    if llm_router is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        )
+    try:
+        deployment = llm_router.get_deployment(model_id=model_id)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error getting deployment for model_id {model_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        ) from e
+    if deployment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Model with ID {model_id} not found"},
+        )
+    return deployment.model_name
 
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
@@ -920,10 +954,15 @@ async def health_endpoint(
         background_health_checks: True
     ```
     else, the health checks will be run on models when /health is called.
+
+    To skip deployments that set ``model_info.disable_background_health_check: true``
+    on ``GET /health`` as well as in the background loop, set
+    ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
 
     from litellm.proxy.proxy_server import (
+        general_settings,
         health_check_concurrency,
         health_check_details,
         health_check_results,
@@ -934,35 +973,12 @@ async def health_endpoint(
         user_model,
     )
 
+    _hc_filter = health_check_filter_kwargs_from_general_settings(general_settings)
     start_time = time.time()
 
-    # Handle model_id parameter - convert to model name for health check
-    target_model = model
-    if model_id and not model:
-        # Use get_deployment from router to find the model name
-        if llm_router is not None:
-            try:
-                deployment = llm_router.get_deployment(model_id=model_id)
-                if deployment is not None:
-                    target_model = deployment.model_name
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail={"error": f"Model with ID {model_id} not found"},
-                    )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error getting deployment for model_id {model_id}: {e}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": f"Model with ID {model_id} not found"},
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"Model with ID {model_id} not found"},
-            )
+    target_model = _health_endpoint_resolve_target_model_name(
+        model, model_id, llm_router
+    )
 
     is_admin = _is_proxy_admin(user_api_key_dict)
     model_specific_request = bool(model or model_id)
@@ -1000,6 +1016,7 @@ async def health_endpoint(
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
+                    **_hc_filter,
                 )
                 return _post_process(cli_result)
             raise HTTPException(
@@ -1085,6 +1102,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                **_hc_filter,
             )
             return _post_process(router_result)
     except Exception as e:
@@ -1530,15 +1548,21 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
-async def _set_public_readiness_status(response: Response) -> None:
+async def _resolve_public_readiness_db(response: Response) -> str:
+    """
+    Return the db status string for the public probe and flip the response to
+    503 when a configured DB is unreachable. Mirrors the legacy values:
+    "Not connected" (no DB configured), "connected", "disconnected".
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        return
+        return "Not connected"
 
     db_health_status = await _db_health_readiness_check()
     if db_health_status["status"] != "connected":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return db_health_status["status"]
 
 
 @router.get(
@@ -1547,15 +1571,17 @@ async def _set_public_readiness_status(response: Response) -> None:
 )
 async def health_readiness(response: Response):
     """
-    Public readiness probe. Keep this low-detail for unauthenticated load
-    balancers by default. Admins can opt into the legacy detailed public
-    payload with general_settings.allow_public_health_readiness_details.
+    Public readiness probe. Returns a low-detail payload safe to expose to
+    unauthenticated load balancers — `status` plus `db` so orchestrators and
+    external probes can distinguish "healthy" from "DB unreachable" without a
+    credential. Admins can opt into the legacy detailed payload with
+    general_settings.allow_public_health_readiness_details.
     """
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
-    await _set_public_readiness_status(response=response)
-    return {"status": "healthy"}
+    db_status = await _resolve_public_readiness_db(response=response)
+    return {"status": "healthy", "db": db_status}
 
 
 @router.get(

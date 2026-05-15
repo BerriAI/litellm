@@ -38,9 +38,9 @@ model_list:
     model_info:
       mode: embedding
       base_model: text-embedding-ada-002
-  - model_name: dall-e-2 # some tests use dall-e-2 which is now deprecated, alias to dall-e-3
+  - model_name: dall-e-2 # dall-e-2 and dall-e-3 were deprecated 2026-05-12; alias to gpt-image-1
     litellm_params:
-      model: openai/dall-e-3
+      model: openai/gpt-image-1
   - model_name: openai-dall-e-3
     litellm_params:
       model: dall-e-3

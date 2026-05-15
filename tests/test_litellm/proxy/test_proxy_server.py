@@ -23,6 +23,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -4515,6 +4516,69 @@ async def test_async_data_generator_cleanup_on_early_exit():
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_uses_direct_stream_fast_path_without_callbacks():
+    """
+    When there are no streaming callbacks, async_data_generator should avoid
+    per-chunk hook machinery and iterate the provider stream directly.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+    ]
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            for chunk in mock_chunks:
+                yield chunk
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(
+            ProxyLogging, "_fire_deferred_stream_logging"
+        ) as mock_deferred_logging:
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert len([chunk for chunk in yielded_text if chunk.startswith("data: {")]) == 2
+    assert yielded_text[-1] == "data: [DONE]\n\n"
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook.assert_not_called()
+    mock_proxy_logging_obj.async_post_call_streaming_hook.assert_not_awaited()
+    mock_deferred_logging.assert_called_once_with(mock_request_data)
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_cleanup_on_normal_completion():
     """
     Test that async_data_generator calls response.aclose() even on normal completion.
@@ -6379,6 +6443,84 @@ class TestLazyFeatureMiddleware:
         assert loads == ["json"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_root_path,request_path,should_load,case",
+        [
+            # SERVER_ROOT_PATH set: incoming path includes prefix → strip and match.
+            ("/api/v1", "/api/v1/dummy/x", True, "root_path strip + match"),
+            # Trailing-slash env var must be normalized.
+            ("/api/v1/", "/api/v1/dummy/x", True, "trailing-slash env normalization"),
+            # Reverse proxy already stripped the prefix → original path still matches.
+            ("/api/v1", "/dummy/x", True, "pre-stripped path still loads"),
+            # No SERVER_ROOT_PATH set → unchanged behavior.
+            ("", "/dummy/x", True, "no root path"),
+            # SERVER_ROOT_PATH=/ must be a no-op (not strip every leading slash).
+            ("/", "/dummy/x", True, "root_path='/' is no-op"),
+            # Boundary check: /apiv2 must not match root /api.
+            ("/api", "/apiv2/foo", False, "boundary check prevents false match"),
+            # Genuine non-match under root_path.
+            ("/api/v1", "/api/v1/unrelated", False, "unrelated path under root"),
+        ],
+    )
+    async def test_root_path_handling(
+        self, monkeypatch, server_root_path, request_path, should_load, case
+    ):
+        """
+        The middleware must strip SERVER_ROOT_PATH before prefix-matching so
+        lazy features load under deployments that set a server root path,
+        while handling boundary, trailing-slash, and reverse-proxy edge cases
+        correctly.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name=f"dummy_{case}",
+            module_path="json",
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await mw(
+            {
+                "type": "http",
+                "path": request_path,
+                "method": "GET",
+                "headers": [],
+            },
+            receive,
+            send,
+        )
+        if should_load:
+            assert loads == ["json"], f"{case}: expected feature to load"
+        else:
+            assert loads == [], f"{case}: feature must not load"
+
+    @pytest.mark.asyncio
     async def test_concurrent_first_requests_only_register_once(self):
         """
         Two requests to the same prefix arriving in parallel must result in
@@ -6607,4 +6749,53 @@ def test_realtime_websocket_route_aliases_registered():
         assert API_ROUTE_TO_CALL_TYPES.get(expected) == [CallTypes.arealtime], (
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
+        )
+
+
+class TestTransformRequestBannedParams:
+    """
+    /utils/transform_request applies the same banned-param check as LLM endpoints.
+
+    Without this check, any authenticated user could supply aws_sts_endpoint,
+    api_base, etc. and have the server forward its credentials to an
+    attacker-controlled endpoint during SDK credential resolution.
+    """
+
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(
+            user_id="test-internal",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    @pytest.mark.parametrize(
+        "banned",
+        [
+            "aws_sts_endpoint",
+            "api_base",
+            "aws_web_identity_token",
+            "vertex_credentials",
+        ],
+    )
+    def test_banned_params_rejected_for_all_users(self, client, banned):
+        """Banned params must be blocked for any authenticated user."""
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {
+                    "model": "gpt-3.5-turbo",
+                    banned: "https://attacker.example",
+                },
+            },
+        )
+        assert response.status_code == 400, (
+            f"Expected 400 for banned param '{banned}', "
+            f"got {response.status_code}: {response.json()}"
         )

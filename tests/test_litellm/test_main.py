@@ -848,6 +848,45 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     }
 
 
+@pytest.mark.parametrize(
+    "model, model_info, expected_model_param",
+    [
+        ("gemini/gemini-3.1-pro", None, "gemini-3.1-pro"),
+        (
+            "gemini/gemini-3.1-pro",
+            {"base_model": "gemini-3.1-pro-preview"},
+            "gemini-3.1-pro-preview",
+        ),
+    ],
+)
+def test_completion_optional_params_base_model(
+    model: str,
+    model_info: dict | None,
+    expected_model_param: str,
+):
+    with patch("litellm.main.get_optional_params") as mock_get_optional_params:
+        mock_get_optional_params.return_value = MagicMock()
+
+        import litellm
+
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "api_key": "fake-key",
+            "mock_response": "Hey, how's it going?",
+        }
+        if model_info is not None:
+            kwargs["model_info"] = model_info
+
+        litellm.completion(**kwargs)
+
+        assert mock_get_optional_params.called is True
+        get_optional_params_model_param = mock_get_optional_params.call_args.kwargs[
+            "model"
+        ]
+        assert get_optional_params_model_param == expected_model_param
+
+
 @patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_4_responses_bridge_merges_reasoning_summary_kwarg_without_tools(
     mock_responses_completion,
