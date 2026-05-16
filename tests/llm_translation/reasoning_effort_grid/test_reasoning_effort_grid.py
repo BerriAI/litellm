@@ -1,6 +1,6 @@
 """
-End-to-end grid v4 regression suite for reasoning_effort mapping across
-Anthropic-backed routes.
+End-to-end regression suite for reasoning_effort mapping across the
+Anthropic-backed routes covered by the original QA sweep.
 
 Encodes the 21 (provider x model) x 11 effort matrix (231 cells) from the
 QA sweep on https://github.com/BerriAI/litellm/pull/27039#issuecomment-4363363610
@@ -13,9 +13,12 @@ against. Each cell asserts:
   - Status code returned by LiteLLM (200 vs BadRequestError -> 400) -- the
     regression signal for clean-error vs leaked-500 mappings.
 
-Hits real provider endpoints. Each route is skipped at runtime when its
-required env vars are absent, so PR builds without provider credentials no-op
-gracefully.
+Calls go to real provider endpoints, but the parent
+``tests/llm_translation/conftest.py`` auto-applies ``@pytest.mark.vcr`` to
+every collected item, so first run records cassettes (Redis-backed) and
+subsequent CI runs replay them with no live spend. Each route still skips at
+runtime when its required env vars are absent, so PR builds without provider
+credentials no-op gracefully.
 """
 
 import os
@@ -180,7 +183,7 @@ async def _call_messages(
 @pytest.mark.parametrize(
     ("route_name", "model", "effort", "cell"), _PARAMS, ids=_PARAM_IDS
 )
-async def test_reasoning_effort_grid_v4(
+async def test_reasoning_effort_grid(
     route_name: str,
     model: ModelEntry,
     effort: str,
@@ -209,7 +212,7 @@ async def test_reasoning_effort_grid_v4(
         raise
 
 
-def test_grid_v4_cell_count() -> None:
+def test_grid_cell_count() -> None:
     """Guard against accidental drops or duplicates in the grid spec."""
     assert len(_PARAMS) == 21 * 11, (
         f"expected 231 cells (21 provider x model combos x 11 efforts), "
@@ -217,7 +220,7 @@ def test_grid_v4_cell_count() -> None:
     )
 
 
-def test_grid_v4_route_coverage() -> None:
+def test_grid_route_coverage() -> None:
     """The grid must cover every route the original QA sweep covered."""
     route_names = {route.name for route in ROUTES}
     assert route_names == {

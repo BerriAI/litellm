@@ -1,12 +1,13 @@
 """
-Canonical post-fix expectations for the reasoning_effort grid v4 sweep.
+Canonical post-fix expectations for the reasoning_effort grid sweep.
 
-The QA sweep on https://github.com/BerriAI/litellm/pull/27039#issuecomment-4363363610
-covered 21 (provider x model) combos x 11 effort values (231 cells). The follow-up
-PR https://github.com/BerriAI/litellm/pull/27074 closed nine bugs surfaced by that
-sweep. This module encodes the post-fix expectations as a small rule set keyed by
-(model_mode, effort) and per-model capability overrides, then expands them across
-the model x effort matrix per route.
+The original QA sweep on
+https://github.com/BerriAI/litellm/pull/27039#issuecomment-4363363610
+covered 21 (provider x model) combos x 11 effort values (231 cells). The
+follow-up PR https://github.com/BerriAI/litellm/pull/27074 closed nine bugs
+surfaced by that sweep. This module encodes the post-fix expectations as a
+small rule set keyed by (model_mode, effort) and per-model capability
+overrides, then expands them across the model x effort matrix per route.
 """
 
 from dataclasses import dataclass, field

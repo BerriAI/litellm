@@ -1,6 +1,12 @@
-"""Shared fixtures for the reasoning_effort grid v4 e2e suite."""
+"""Shared fixtures for the reasoning_effort grid e2e suite.
 
-import os
+VCR wiring (Redis-backed cassette persister, auto-application of
+``@pytest.mark.vcr`` to every collected item, cassette-cache health summary)
+is inherited from ``tests/llm_translation/conftest.py``. This file only
+contributes the ``wire_capture`` fixture, which records the wire body
+LiteLLM sends upstream so each cell can inspect it.
+"""
+
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -12,10 +18,10 @@ from litellm.integrations.custom_logger import CustomLogger
 class _WireBodyCapture(CustomLogger):
     """Pre-call hook that records the outgoing wire body LiteLLM sends upstream.
 
-    `complete_input_dict` is the fully transformed provider request as set by
-    every provider transformation in `litellm/llms/**`. Capturing it here means
-    a regression anywhere in the transformation chain (strip, rename, drop)
-    surfaces as an assertion failure on the cell that depends on it.
+    ``complete_input_dict`` is the fully transformed provider request as set
+    by every provider transformation in ``litellm/llms/**``. Capturing it here
+    means a regression anywhere in the transformation chain (strip, rename,
+    drop) surfaces as an assertion failure on the cell that depends on it.
     """
 
     def __init__(self) -> None:
@@ -37,9 +43,6 @@ class _WireBodyCapture(CustomLogger):
     def latest(self) -> Optional[Dict[str, Any]]:
         return self.records[-1] if self.records else None
 
-    def reset(self) -> None:
-        self.records.clear()
-
 
 @pytest.fixture()
 def wire_capture():
@@ -50,12 +53,3 @@ def wire_capture():
         yield capture
     finally:
         litellm.callbacks = previous
-
-
-@pytest.fixture(scope="session")
-def vertex_credentials_path() -> Optional[str]:
-    """Resolve a usable Vertex credentials file path or None."""
-    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if path and os.path.exists(path):
-        return path
-    return None
