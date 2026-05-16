@@ -20,6 +20,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Callable,
     Dict,
     List,
     Literal,
@@ -10935,6 +10936,78 @@ async def _get_caller_byok_team_scope(
 _SORTED_SEARCH_DB_FETCH_CAP = 500
 
 
+async def _fetch_db_models_for_search(
+    prisma_client: Any,
+    proxy_config: Any,
+    search_lower: str,
+    db_model_ids_in_router: Set[str],
+    router_models_count: int,
+    page: int,
+    size: int,
+    sort_by: Optional[str],
+    is_byok_outside_caller_teams: Callable[[Dict[str, Any]], bool],
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Run the bounded DB query that backs `/v2/model/info?search=`. Returns
+    `(decrypted_models, total_count)` where `total_count` is the cheap
+    `count(...)` of rows matching `search` (not yet team-scoped) so the
+    UI's pagination stays accurate without materializing every row.
+
+    Earlier iterations also OR'd a JSON-path match on
+    `model_info.team_public_model_name` to surface BYOK rows that live
+    only in the DB. That branch fell back to `string_contains: ""`
+    because Prisma's JSON `string_contains` is case-sensitive on
+    Postgres, which let any authenticated caller force a full BYOK-table
+    read via `/v2/model/info?search=x`. We rely on the router-side
+    filter for `team_public_model_name` instead and keep the DB cost
+    bounded by `search`.
+    """
+    db_where_condition: Dict[str, Any] = {
+        "model_name": {"contains": search_lower, "mode": "insensitive"}
+    }
+    if db_model_ids_in_router:
+        db_where_condition["model_id"] = {
+            "not": {"in": list(db_model_ids_in_router)}
+        }
+
+    # Unsorted searches only need enough DB rows to fill the current
+    # page after counting router-side matches. Sorted searches need
+    # ordering across the full match set, so fall back to a hard cap.
+    if sort_by:
+        take_limit = _SORTED_SEARCH_DB_FETCH_CAP
+    else:
+        take_limit = max(0, page * size - router_models_count)
+
+    db_models_total_count = await prisma_client.db.litellm_proxymodeltable.count(
+        where=db_where_condition
+    )
+
+    db_models_raw: list = []
+    if take_limit > 0:
+        db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
+            where=db_where_condition,
+            take=take_limit,
+        )
+
+    # Scope BYOK rows to the caller's allowed teams so non-admin callers
+    # can't enumerate other teams' BYOK metadata via `?search=...`.
+    matching_db_rows = [
+        m
+        for m in db_models_raw
+        if not is_byok_outside_caller_teams(
+            m.model_info if isinstance(m.model_info, dict) else {}
+        )
+    ]
+
+    decrypted: List[Dict[str, Any]] = []
+    for db_model in matching_db_rows:
+        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+        if decrypted_models:
+            decrypted.extend(decrypted_models)
+
+    return decrypted, db_models_total_count
+
+
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
@@ -11031,101 +11104,30 @@ async def _apply_search_filter_to_models(
     router_models_count = config_models_count + db_models_in_router_count
 
     # Query database for additional models with search term
-    db_models = []
-    db_models_total_count = 0
-
-    # Only query database if prisma_client is available
+    db_models: List[Dict[str, Any]] = []
     if prisma_client is not None:
         try:
-            # Match the persisted internal `model_name` only. Earlier
-            # iterations of this code also OR'd a JSON-path match on
-            # `model_info.team_public_model_name` so BYOK rows present only
-            # in the DB (not the router) were searchable by display name.
-            # That branch had to fall back to `string_contains: ""` because
-            # Prisma's JSON `string_contains` is case-sensitive on
-            # Postgres, which made the predicate match every row with any
-            # `team_public_model_name` set — an authenticated user could
-            # force a full BYOK-table read with `/v2/model/info?search=x`.
-            # BYOK rows that are actually loaded into the router are
-            # already searchable via the router-side path above (which
-            # checks `team_public_model_name`), so we drop the unbounded
-            # JSON branch here to keep the DB cost bounded by `search`.
-            db_where_condition: Dict[str, Any] = {
-                "model_name": {
-                    "contains": search_lower,
-                    "mode": "insensitive",
-                }
-            }
-            # Exclude models already in router if we have any
-            if db_model_ids_in_router:
-                db_where_condition["model_id"] = {
-                    "not": {"in": list(db_model_ids_in_router)}
-                }
-
-            # Bound the DB fetch so a broad `search` can't force a full
-            # model-table read on each request:
-            #
-            # * Unsorted searches only need enough DB rows to fill the
-            #   current page after counting router-side matches.
-            # * Sorted searches need ordering across the full match set,
-            #   so we fall back to a hard cap (`_SORTED_SEARCH_DB_FETCH_CAP`)
-            #   instead of fetching everything.
-            #
-            # `total_count` exposes the precise number of remaining DB rows
-            # via a cheap `count(...)` so the UI's pagination stays
-            # accurate even when we don't materialize them all.
-            if sort_by:
-                take_limit = _SORTED_SEARCH_DB_FETCH_CAP
-            else:
-                models_needed = max(0, page * size - router_models_count)
-                take_limit = models_needed
-
-            db_models_total_count = (
-                await prisma_client.db.litellm_proxymodeltable.count(
-                    where=db_where_condition
-                )
+            db_models, db_models_total_count = await _fetch_db_models_for_search(
+                prisma_client=prisma_client,
+                proxy_config=proxy_config,
+                search_lower=search_lower,
+                db_model_ids_in_router=db_model_ids_in_router,
+                router_models_count=router_models_count,
+                page=page,
+                size=size,
+                sort_by=sort_by,
+                is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
             )
-
-            db_models_raw: list = []
-            if take_limit > 0:
-                db_models_raw = (
-                    await prisma_client.db.litellm_proxymodeltable.find_many(
-                        where=db_where_condition,
-                        take=take_limit,
-                    )
-                )
-
-            # Scope BYOK rows to the caller's allowed teams so non-admin
-            # callers can't enumerate other teams' BYOK metadata via
-            # `/v2/model/info?search=...`.
-            matching_db_rows = [
-                m
-                for m in db_models_raw
-                if not _is_byok_outside_caller_teams(
-                    m.model_info if isinstance(m.model_info, dict) else {}
-                )
-            ]
-
-            # Calculate total count for search results
             search_total_count = router_models_count + db_models_total_count
-
-            for db_model in matching_db_rows:
-                decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
-                if decrypted_models:
-                    db_models.extend(decrypted_models)
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error querying database models with search: {str(e)}"
             )
-            # If error, use router models count as fallback
             search_total_count = router_models_count
     else:
-        # If no prisma_client, only use router models
         search_total_count = router_models_count
 
-    # Combine all models
-    filtered_models = filtered_router_models + db_models
-    return filtered_models, search_total_count
+    return filtered_router_models + db_models, search_total_count
 
 
 def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
