@@ -28,6 +28,12 @@ NUM_SAMPLES = 4
 SAMPLE_INTERVAL_SECONDS = 20
 LEAK_MIN_NET_GROWTH = 5
 LEAK_MIN_GROWING_INTERVALS = 2
+# A routing-strategy switch / alerting config is a *known, bounded, one-time*
+# registration (CCI diagnostic 2026-05-16: total 85->95 on the first interval
+# after switching to latency-based-routing, then flat at 95 for 2.5 min under
+# load). We absorb that step by settling before the baseline sample, so only
+# growth *after* the deliberate perturbation can count as a leak.
+SETTLE_SECONDS = 30
 
 # Strip instance-identity noise so N leaked instances of one class collapse to
 # one rising counter instead of N opaque, unrelated-looking strings.
@@ -106,47 +112,6 @@ async def _sample_callbacks(session, num_samples, interval):
         samples.append(_summarize(all_cb))
         alerts.append(num_alert)
     return samples, alerts
-
-
-# ===================== TEMP DIAGNOSTIC (remove before PR) =====================
-# Purpose: empirically settle "real leak vs. bounded parallel pollution" on CCI.
-# MCP only exposes FAILED-job logs, so this probe samples over a long window and
-# always pytest.fail()s with the full per-type series + raw reprs of grown
-# types — surfaced via the JUnit failure message. DELETE this whole block and
-# restore the real assertion in test_check_num_callbacks_on_lowest_latency
-# before opening the PR.
-DIAG_NUM_SAMPLES = 8
-DIAG_INTERVAL_SECONDS = 20
-
-
-async def _sample_callbacks_raw(session, num_samples, interval):
-    samples, raws, alerts = [], [], []
-    for i in range(num_samples):
-        if i > 0:
-            await asyncio.sleep(interval)
-        _, num_alert, all_cb = await get_active_callbacks(session=session)
-        samples.append(_summarize(all_cb))
-        raws.append([str(c) for c in all_cb])
-        alerts.append(num_alert)
-    return samples, raws, alerts
-
-
-def _diag_report(samples, raws, alerts):
-    lines = [
-        "TEMP-DIAGNOSTIC callback probe",
-        f"alerts per sample: {alerts}",
-        _format_report(samples, _detect_leaks(samples)),
-    ]
-    first, last = samples[0], samples[-1]
-    grew = sorted(t for t in last if last[t] > first.get(t, 0))
-    lines.append(f"types that grew first->last: {len(grew)}")
-    for t in grew:
-        examples = [r[:140] for r in raws[-1] if _normalize_callback(r) == t][:3]
-        lines.append(f"  {t} ({first.get(t, 0)}->{last[t]}): {examples}")
-    return "\n".join(lines)
-
-
-# =================== END TEMP DIAGNOSTIC (remove before PR) ===================
 
 
 async def config_update(session, routing_strategy=None):
@@ -235,13 +200,15 @@ async def test_check_num_callbacks():
     """
     PROD invariant: no callback TYPE should grow without bound over time.
 
-    Other workers share this proxy (`pytest -n 4`), so the raw count is noisy:
-    they legitimately add team/key-scoped callbacks that then plateau. We
-    therefore sample several times and only fail on *sustained, monotonic*
-    per-type growth — a genuine leak — printing exactly which type leaked.
+    This suite runs `pytest -n 4` against one shared proxy, so the raw count is
+    noisy — other workers legitimately add team/key-scoped callbacks that then
+    plateau. We settle first, then sample several times, and only fail on
+    *sustained, monotonic* per-type growth (a genuine leak), naming the type.
     """
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
+        # Absorb proxy warmup / in-flight parallel registration before baseline.
+        await asyncio.sleep(SETTLE_SECONDS)
 
         samples, _ = await _sample_callbacks(
             session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
@@ -257,13 +224,14 @@ async def test_check_num_callbacks():
 
 @pytest.mark.asyncio
 @pytest.mark.order2
-# TEMP DIAGNOSTIC: flaky(reruns=2) removed so the always-fail probe runs once,
-# not 3x. Restore `@pytest.mark.flaky(reruns=2, reruns_delay=5)` before PR.
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 async def test_check_num_callbacks_on_lowest_latency():
     """
     Same PROD invariant as test_check_num_callbacks, but after switching the
-    router to latency-based-routing (a config/update path that historically
-    re-registered router hooks). Also asserts the alerting count is stable.
+    router to latency-based-routing. That switch is a *known, bounded* one-time
+    registration (it adds the latency strategy handler + Slack alerting); we
+    settle past it before baselining so only post-switch growth counts as a
+    leak. Also asserts the alerting count is stable.
     """
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
@@ -272,24 +240,20 @@ async def test_check_num_callbacks_on_lowest_latency():
         await config_update(session=session, routing_strategy="latency-based-routing")
 
         try:
-            # === TEMP DIAGNOSTIC (remove before PR): always-fail rich probe ===
-            samples, raws, alerts = await _sample_callbacks_raw(
-                session, DIAG_NUM_SAMPLES, DIAG_INTERVAL_SECONDS
+            # Absorb the deliberate one-time config/update registration step.
+            await asyncio.sleep(SETTLE_SECONDS)
+
+            samples, alerts = await _sample_callbacks(
+                session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
             )
-            report = _diag_report(samples, raws, alerts)
+
+            leaks = _detect_leaks(samples)
+            report = _format_report(samples, leaks)
             print(report)
-            pytest.fail(report)
-            # === END TEMP DIAGNOSTIC. Restore real assertion before PR: ===
-            # samples, alerts = await _sample_callbacks(
-            #     session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
-            # )
-            # leaks = _detect_leaks(samples)
-            # report = _format_report(samples, leaks)
-            # print(report)
-            # assert not leaks, f"Callback leak detected.\n{report}"
-            # assert (
-            #     len(set(alerts)) == 1
-            # ), f"alerting count changed across samples: {alerts}"
+            assert not leaks, f"Callback leak detected.\n{report}"
+            assert (
+                len(set(alerts)) == 1
+            ), f"alerting count changed across samples: {alerts}"
         finally:
             await config_update(
                 session=session, routing_strategy=original_routing_strategy
