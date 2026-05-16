@@ -53,7 +53,9 @@ class DeleteModelGroupResponse(BaseModel):
 
 class AccessGroupInfo(BaseModel):
     access_group: str
-    model_names: List[str]  # Transitively-resolved model names (includes nested groups' models)
+    model_names: List[
+        str
+    ]  # Transitively-resolved model names (includes nested groups' models)
     deployment_count: int  # Direct-tag deployment count for this access group only
     parent_groups: List[str] = Field(
         default_factory=list,

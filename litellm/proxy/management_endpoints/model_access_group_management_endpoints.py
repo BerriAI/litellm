@@ -50,9 +50,7 @@ def validate_models_exist(
     router_model_names = set(llm_router.get_model_names())
     known_groups = known_access_groups or set()
     missing = [
-        m
-        for m in model_names
-        if m not in router_model_names and m not in known_groups
+        m for m in model_names if m not in router_model_names and m not in known_groups
     ]
     return (len(missing) == 0, missing)
 
@@ -123,8 +121,7 @@ async def upsert_group_memberships(
         )
 
     rows = [
-        {"parent_group": parent_group, "child_group": child}
-        for child in child_groups
+        {"parent_group": parent_group, "child_group": child} for child in child_groups
     ]
     result = await prisma_client.db.litellm_accessgroupmembership.create_many(
         data=rows,
@@ -153,6 +150,73 @@ async def delete_group_membership_edges(
         }
     )
     return result
+
+
+async def _clear_access_group_from_all_deployments(
+    access_group: str,
+    prisma_client: PrismaClient,
+) -> int:
+    """
+    Remove the access_group tag from every deployment that carries it.
+    Shared by update_access_group and delete_access_group.
+
+    Returns:
+        int: number of deployments touched.
+    """
+    deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
+    touched = 0
+    for deployment in deployments:
+        model_info = deployment.model_info or {}
+        updated_model_info, was_modified = remove_access_group_from_deployment(
+            model_info=model_info,
+            access_group=access_group,
+        )
+        if was_modified:
+            await prisma_client.db.litellm_proxymodeltable.update(
+                where={"model_id": deployment.model_id},
+                data={"model_info": json.dumps(updated_model_info)},
+            )
+            touched += 1
+    return touched
+
+
+async def _dual_write_group_membership(
+    access_group: str,
+    member_names: List[str],
+    known_access_groups: Set[str],
+    llm_router,
+    prisma_client: PrismaClient,
+) -> int:
+    """
+    Classify member_names into real models vs child groups and route each to
+    the appropriate write path. Shared by create_model_group and
+    update_access_group.
+
+    Returns:
+        int: total writes performed (deployment tags + membership edges).
+    """
+    router_model_names = (
+        set(llm_router.get_model_names()) if llm_router is not None else set()
+    )
+    real_models, child_groups, _ = _classify_member_names(
+        names=member_names,
+        router_model_names=router_model_names,
+        known_access_groups=known_access_groups,
+    )
+    writes = 0
+    if real_models:
+        writes += await update_deployments_with_access_group(
+            model_names=real_models,
+            access_group=access_group,
+            prisma_client=prisma_client,
+        )
+    if child_groups:
+        writes += await upsert_group_memberships(
+            parent_group=access_group,
+            child_groups=child_groups,
+            prisma_client=prisma_client,
+        )
+    return writes
 
 
 def add_access_group_to_deployment(
@@ -343,9 +407,7 @@ async def get_all_access_groups_from_db(
 
         for access_group in access_groups:
             direct_models.setdefault(access_group, set()).add(model_name)
-            deployment_count[access_group] = (
-                deployment_count.get(access_group, 0) + 1
-            )
+            deployment_count[access_group] = deployment_count.get(access_group, 0) + 1
 
     # Group-to-group edges
     group_memberships = await get_group_memberships_from_db(prisma_client)
@@ -504,7 +566,6 @@ async def create_model_group(
         # Write path. model_ids -> existing per-deployment tagging.
         # model_names -> classify into real models vs. nested child groups and
         # route each to the appropriate table.
-        models_updated = 0
         if use_model_ids:
             assert data.model_ids is not None
             models_updated = await update_specific_deployments_with_access_group(
@@ -514,27 +575,13 @@ async def create_model_group(
             )
         else:
             assert data.model_names is not None
-            router_model_names = (
-                set(llm_router.get_model_names()) if llm_router is not None else set()
-            )
-            real_models, child_groups, _ = _classify_member_names(
-                names=data.model_names,
-                router_model_names=router_model_names,
+            models_updated = await _dual_write_group_membership(
+                access_group=data.access_group,
+                member_names=data.model_names,
                 known_access_groups=set(existing_access_groups.keys()),
+                llm_router=llm_router,
+                prisma_client=prisma_client,
             )
-
-            if real_models:
-                models_updated += await update_deployments_with_access_group(
-                    model_names=real_models,
-                    access_group=data.access_group,
-                    prisma_client=prisma_client,
-                )
-            if child_groups:
-                models_updated += await upsert_group_memberships(
-                    parent_group=data.access_group,
-                    child_groups=child_groups,
-                    prisma_client=prisma_client,
-                )
 
         await clear_cache()
 
@@ -777,32 +824,19 @@ async def update_access_group(
             )
 
     try:
-        # Step 1a: Clear deployment tags from ALL DB deployments
-        all_deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
+        # Step 1a: clear deployment tags carrying this access group
+        await _clear_access_group_from_all_deployments(
+            access_group=access_group, prisma_client=prisma_client
+        )
 
-        for deployment in all_deployments:
-            model_info = deployment.model_info or {}
-
-            updated_model_info, was_modified = remove_access_group_from_deployment(
-                model_info=model_info,
-                access_group=access_group,
-            )
-
-            if was_modified:
-                await prisma_client.db.litellm_proxymodeltable.update(
-                    where={"model_id": deployment.model_id},
-                    data={"model_info": json.dumps(updated_model_info)},
-                )
-
-        # Step 1b: Clear existing parent->child edges where this group is parent.
+        # Step 1b: clear parent->child edges where this group is parent.
         # Edges where it appears as a child are preserved (other groups still
-        # reference this one and that's outside the scope of this update).
+        # reference this one and that's outside this update's scope).
         await prisma_client.db.litellm_accessgroupmembership.delete_many(
             where={"parent_group": access_group}
         )
 
-        # Step 2: Re-add membership using the appropriate write path
-        models_updated = 0
+        # Step 2: re-add membership using the appropriate write path
         if use_model_ids:
             assert data.model_ids is not None
             models_updated = await update_specific_deployments_with_access_group(
@@ -812,29 +846,14 @@ async def update_access_group(
             )
         else:
             assert data.model_names is not None
-            router_model_names = (
-                set(llm_router.get_model_names()) if llm_router is not None else set()
-            )
-            real_models, child_groups, _ = _classify_member_names(
-                names=data.model_names,
-                router_model_names=router_model_names,
+            models_updated = await _dual_write_group_membership(
+                access_group=access_group,
+                member_names=data.model_names,
                 known_access_groups=set(access_groups_map.keys()),
+                llm_router=llm_router,
+                prisma_client=prisma_client,
             )
 
-            if real_models:
-                models_updated += await update_deployments_with_access_group(
-                    model_names=real_models,
-                    access_group=access_group,
-                    prisma_client=prisma_client,
-                )
-            if child_groups:
-                models_updated += await upsert_group_memberships(
-                    parent_group=access_group,
-                    child_groups=child_groups,
-                    prisma_client=prisma_client,
-                )
-
-        # Clear cache and reload models to pick up the access group changes
         await clear_cache()
 
         verbose_proxy_logger.info(
@@ -919,24 +938,10 @@ async def delete_access_group(
         )
 
     try:
-        # Remove access group from all DB deployments (skip config models)
-        all_deployments = await prisma_client.db.litellm_proxymodeltable.find_many()
-        models_updated = 0
-
-        for deployment in all_deployments:
-            model_info = deployment.model_info or {}
-
-            updated_model_info, was_modified = remove_access_group_from_deployment(
-                model_info=model_info,
-                access_group=access_group,
-            )
-
-            if was_modified:
-                await prisma_client.db.litellm_proxymodeltable.update(
-                    where={"model_id": deployment.model_id},
-                    data={"model_info": json.dumps(updated_model_info)},
-                )
-                models_updated += 1
+        # Remove tag from all DB deployments (skip config models)
+        models_updated = await _clear_access_group_from_all_deployments(
+            access_group=access_group, prisma_client=prisma_client
+        )
 
         # Clean up parent/child edges where this group appears on either side
         # to avoid dangling references in the membership table.
