@@ -65,17 +65,10 @@ def _build_completion_kwargs(model: ModelEntry, effort: str) -> Dict[str, Any]:
     if effort != "__omit__":
         kwargs["reasoning_effort"] = effort
     if model.model.startswith("vertex_ai/"):
-        kwargs["vertex_project"] = os.environ.get(
-            "VERTEX_PROJECT", "vertex-check-481318"
-        )
+        kwargs["vertex_project"] = os.environ["VERTEX_PROJECT"]
     if model.model.startswith("azure_ai/"):
         kwargs["api_base"] = os.environ["AZURE_FOUNDRY_API_BASE"]
         kwargs["api_key"] = os.environ["AZURE_FOUNDRY_API_KEY"]
-    return kwargs
-
-
-def _build_messages_kwargs(model: ModelEntry, effort: str) -> Dict[str, Any]:
-    kwargs = _build_completion_kwargs(model, effort)
     return kwargs
 
 
@@ -185,7 +178,7 @@ async def _call_chat(model: ModelEntry, effort: str) -> Tuple[int, Optional[Exce
 async def _call_messages(
     model: ModelEntry, effort: str
 ) -> Tuple[int, Optional[Exception]]:
-    kwargs = _build_messages_kwargs(model, effort)
+    kwargs = _build_completion_kwargs(model, effort)
     try:
         await litellm.anthropic_messages(**kwargs)
         return 200, None
