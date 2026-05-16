@@ -279,6 +279,10 @@ def get_known_models_from_wildcard(
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
+    if wildcard_model in {"*", "*/"}:
+        # Bare wildcard aliases should expose upstream ids as-is on /v1/models.
+        return wildcard_models or []
+
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
         if wildcard_provider_prefix and not model.startswith(

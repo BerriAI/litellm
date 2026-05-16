@@ -279,6 +279,7 @@ def test_get_complete_model_list_bare_wildcard_star():
     assert "*" not in result
     assert "openai/*" not in result
     assert len(result) > 0
+    assert "gpt-4o" in result or "gpt-3.5-turbo" in result
 
 
 def test_get_complete_model_list_bare_wildcard_star_slash():
@@ -306,6 +307,7 @@ def test_get_complete_model_list_bare_wildcard_star_slash():
 
     assert "*/" not in result
     assert len(result) > 0
+    assert "gpt-4o" in result or "gpt-3.5-turbo" in result
 
 
 def test_get_complete_model_list_bare_wildcard_multiple_providers():
@@ -417,3 +419,20 @@ def test_get_known_models_from_bare_wildcard_star_slash_does_not_add_alias_prefi
     )
 
     assert wildcard_models == ["gpt-4o", "gpt-4o-mini"]
+
+
+@patch("litellm.proxy.auth.model_checks.get_provider_models")
+def test_get_known_models_from_bare_wildcard_preserves_upstream_prefixed_ids(
+    mock_get_provider_models,
+):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    mock_get_provider_models.return_value = ["ollama/deepseek-v3.2", "glm-5"]
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="*",
+        litellm_params=LiteLLM_Params(model="ollama/*"),
+    )
+
+    assert wildcard_models == ["ollama/deepseek-v3.2", "glm-5"]
