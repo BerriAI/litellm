@@ -1629,11 +1629,6 @@ def test_gemini_image_size_limit_exceeded():
         completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
 
     error_message = str(excinfo.value)
-    # Wikimedia rate-limits CI runners (HTTP 429) for the Blue Marble image,
-    # so the size-limit check never gets a chance to fire and we instead
-    # capture the 429-wrapped ImageFetchError. Skip rather than fail when
-    # the upstream host blocks us -- the intent here is to exercise the
-    # size cap, not to test against Wikimedia availability.
     if "Status code: 429" in error_message or "Too Many Requests" in error_message:
         pytest.skip(f"Wikimedia rate-limited the test fixture image: {error_message}")
     assert "Image size" in error_message

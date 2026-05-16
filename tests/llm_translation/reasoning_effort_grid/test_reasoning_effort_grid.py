@@ -1,26 +1,3 @@
-"""
-End-to-end regression suite for reasoning_effort mapping across the
-Anthropic-backed routes covered by the original QA sweep.
-
-Encodes the 21 (provider x model) x 11 effort matrix (231 cells) from the
-QA sweep on https://github.com/BerriAI/litellm/pull/27039#issuecomment-4363363610
-that the fix in https://github.com/BerriAI/litellm/pull/27074 was validated
-against. Each cell asserts:
-
-  - Wire body shape captured pre-call (thinking.type, output_config.effort,
-    thinking.budget_tokens, max_tokens) -- the regression signal for silent
-    drops/strips anywhere in the transformation chain.
-  - Status code returned by LiteLLM (200 vs BadRequestError -> 400) -- the
-    regression signal for clean-error vs leaked-500 mappings.
-
-Calls go to real provider endpoints, but the parent
-``tests/llm_translation/conftest.py`` auto-applies ``@pytest.mark.vcr`` to
-every collected item, so first run records cassettes (Redis-backed) and
-subsequent CI runs replay them with no live spend. Each route still skips at
-runtime when its required env vars are absent, so PR builds without provider
-credentials no-op gracefully.
-"""
-
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -73,7 +50,6 @@ def _build_completion_kwargs(model: ModelEntry, effort: str) -> Dict[str, Any]:
 
 
 def _converse_subbody(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the dict that holds thinking/output_config for a Converse wire body."""
     return body.get("additionalModelRequestFields", body)
 
 
@@ -92,7 +68,6 @@ def _assert_cell(
     assert status == cell.status, f"expected status={cell.status}, got status={status}"
 
     if cell.status != 200:
-        # Bad-request paths short-circuit before the wire body matters.
         return
 
     assert body is not None, "wire body was not captured for a 200-status cell"
@@ -150,14 +125,6 @@ _PARAM_IDS: List[str] = [_cell_id(case) for case in _PARAMS]
 
 
 def _classify_status(exc: Exception) -> int:
-    """Map an exception to the HTTP status the QA grid would have observed.
-
-    The Anthropic Messages route (litellm.anthropic_messages) wraps client-side
-    BadRequestError as ``AnthropicError`` with ``status_code=400`` rather than
-    re-raising the BadRequestError class directly, so isinstance() alone misses
-    those cells. Read the ``status_code`` attribute when present (set by every
-    BaseLLMException subclass) and fall through to 500 otherwise.
-    """
     if isinstance(exc, BadRequestError):
         return 400
     code = getattr(exc, "status_code", None)
@@ -208,9 +175,6 @@ async def test_reasoning_effort_grid(
 
     record = wire_capture.latest()
     body = record["body"] if record else None
-    # Bedrock Converse logs `complete_input_dict` as a JSON string (see
-    # litellm/llms/bedrock/chat/converse_handler.py); parse it so the dict
-    # accessors in `_assert_cell` work uniformly across routes.
     if route_name == "bedrock_converse" and isinstance(body, str):
         body = json.loads(body)
 
@@ -225,7 +189,6 @@ async def test_reasoning_effort_grid(
 
 
 def test_grid_cell_count() -> None:
-    """Guard against accidental drops or duplicates in the grid spec."""
     assert len(_PARAMS) == 21 * 11, (
         f"expected 231 cells (21 provider x model combos x 11 efforts), "
         f"got {len(_PARAMS)}"
@@ -233,7 +196,6 @@ def test_grid_cell_count() -> None:
 
 
 def test_grid_route_coverage() -> None:
-    """The grid must cover every route the original QA sweep covered."""
     route_names = {route.name for route in ROUTES}
     assert route_names == {
         "anthropic_direct",

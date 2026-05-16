@@ -1,15 +1,3 @@
-"""
-Canonical post-fix expectations for the reasoning_effort grid sweep.
-
-The original QA sweep on
-https://github.com/BerriAI/litellm/pull/27039#issuecomment-4363363610
-covered 21 (provider x model) combos x 11 effort values (231 cells). The
-follow-up PR https://github.com/BerriAI/litellm/pull/27074 closed nine bugs
-surfaced by that sweep. This module encodes the post-fix expectations as a
-small rule set keyed by (model_mode, effort) and per-model capability
-overrides, then expands them across the model x effort matrix per route.
-"""
-
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
@@ -19,8 +7,6 @@ OMIT = object()
 
 @dataclass(frozen=True)
 class CellExpectation:
-    """Expected post-fix behavior for a single grid cell."""
-
     status: int
     thinking_type: object
     output_config_effort: object = OMIT
@@ -77,7 +63,6 @@ _BAD_REQUEST_EFFORTS: FrozenSet[str] = frozenset({"disabled", "invalid", ""})
 
 
 def expected(model: ModelEntry, effort: str) -> CellExpectation:
-    """Compute the post-fix expected cell for a (model, effort) pair."""
     if effort in ("__omit__", "none"):
         if model.mode == "budget":
             return CellExpectation(status=200, thinking_type=OMIT, max_tokens=8192)
