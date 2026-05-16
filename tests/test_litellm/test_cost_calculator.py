@@ -235,7 +235,7 @@ def test_transcription_cost_uses_token_pricing():
         call_type="atranscription",
     )
 
-    expected_cost = (14 * 6e-06) + (45 * 1e-05)
+    expected_cost = (14 * 2.5e-06) + (45 * 1e-05)
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 

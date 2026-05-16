@@ -56,13 +56,14 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.71",
+    "litellm-proxy-extras==0.4.72",
     "litellm-enterprise==0.1.40",
     "RestrictedPython==8.1",
     "rich==13.9.4",
     "polars==1.38.1",
     "soundfile==0.12.1",
     "pyroscope-io==0.8.16; sys_platform != 'win32'",
+    "pydantic-settings>=2.14.1",
 ]
 extra_proxy = [
     "prisma==0.11.0",
@@ -273,6 +274,39 @@ filterwarnings = [
     "ignore::UserWarning:pydantic.main",
     # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
     "ignore::DeprecationWarning:pytest_asyncio.plugin",
+]
+
+[tool.mutmut]
+# Mutation-testing scope. Driven by the manually-triggered workflow at
+# .github/workflows/mutation-test.yml. mutmut is not part of the project's
+# default install; it is pulled in via `uv run --with mutmut==<version>` in CI.
+# `also_copy = ["litellm/"]` is required because mutmut runs in a `mutants/`
+# sandbox and the test conftest imports from across the litellm package.
+paths_to_mutate = [
+    "litellm/proxy/management_endpoints/",
+]
+tests_dir = [
+    "tests/test_litellm/proxy/management_endpoints/",
+]
+also_copy = [
+    "litellm/",
+]
+# Run the test suite once before mutation to gather line coverage, then skip
+# mutating lines no test exercises. Those mutants would survive regardless
+# (no test hits the line to kill them), so generating them wastes hours of CI.
+# The score now reads as "mutation score over covered code" — pair with a
+# line-coverage number when reporting.
+mutate_only_covered_lines = true
+# Disable rerun/parallel plugins for mutation runs:
+# - pytest-retry triggers an `INTERNALERROR: no option named 'filtered_exceptions'`
+#   when invoked via mutmut's in-process `pytest.main()` call.
+# - rerunning a "failed" test on a mutant would mask which mutants are killed
+#   vs. survive, so reruns are wrong for mutation testing regardless.
+# - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+pytest_add_cli_args = [
+    "-p", "no:retry",
+    "-p", "no:rerunfailures",
+    "-p", "no:xdist",
 ]
 
 [tool.coverage.run]

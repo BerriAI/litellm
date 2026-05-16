@@ -12,6 +12,9 @@ from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, c
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import (
+    strip_empty_text_blocks_from_anthropic_messages,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -188,8 +191,20 @@ async def anthropic_messages(
     **kwargs,
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
-    Async: Make llm api request in Anthropic /messages API spec
+    Async: Make llm api request in Anthropic /messages API spec.
+
+    Runs the empty-text-block sanitizer before any backend dispatch.
     """
+    # Anthropic's API rejects requests containing empty / whitespace-only
+    # text content blocks with "messages: text content blocks must be
+    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
+    # loop assistant responses that contain {"type": "text", "text": ""}
+    # alongside tool_use blocks back as conversation history, which then
+    # causes the next /v1/messages call to 400.  /v1/chat/completions
+    # already handles this in anthropic_messages_pt; sanitize the native
+    # Anthropic Messages path here for the same guarantee.  See #22930.
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False
     )
@@ -335,6 +350,11 @@ def anthropic_messages_handler(
         container: Container config with skills for code execution
     """
     from litellm.types.utils import LlmProviders
+
+    # Sanitize empty text blocks here too so the sync entry point
+    # (litellm.messages.create -> anthropic_messages_handler) gets the same
+    # protection as the async wrapper.  Idempotent when called twice.
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
