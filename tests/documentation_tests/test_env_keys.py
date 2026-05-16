@@ -35,6 +35,14 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
+# These environment variables are documented in provider-specific docs outside
+# docs/proxy/config_settings.md, so they should not fail the generic proxy env
+# settings validation.
+PROVIDER_SPECIFIC_DOCS_VARS = {
+    "DEEPSEEK_API_BASE",
+    "OPENROUTER_API_BASE",
+}
+
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
 SKIP_DIRS = {
     ".venv",
@@ -114,7 +122,7 @@ except Exception as e:
 
 print(f"documented_keys: {documented_keys}")
 # Compare and find undocumented keys
-undocumented_keys = env_keys - documented_keys
+undocumented_keys = env_keys - documented_keys - PROVIDER_SPECIFIC_DOCS_VARS
 
 # Print results
 print("Keys expected in 'environment settings' (found in code):")

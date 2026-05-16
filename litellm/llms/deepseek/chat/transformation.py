@@ -19,7 +19,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
-        api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com"
+        api_base = (
+            api_base
+            or get_secret_str("DEEPSEEK_API_BASE")
+            or "https://api.deepseek.com"
+        )
         api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
 
         response = litellm.module_level_client.get(
