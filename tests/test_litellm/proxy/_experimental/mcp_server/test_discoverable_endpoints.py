@@ -1352,7 +1352,7 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
     import logging
 
     with (
-        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
         patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
     ):
         with pytest.raises(HTTPException) as exc_info:
