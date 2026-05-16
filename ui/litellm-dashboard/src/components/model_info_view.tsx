@@ -39,7 +39,8 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { getProviderLogoAndName } from "./provider_info_helpers";
+import { getProviderLogoAndName, Providers } from "./provider_info_helpers";
+import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
@@ -78,6 +79,9 @@ export default function ModelInfoView({
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+  // Provider auth-field keys reported by ProviderSpecificFields, so the save
+  // handler knows which form values are this provider's credential fields.
+  const [authFieldKeys, setAuthFieldKeys] = useState<string[]>([]);
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -241,9 +245,22 @@ export default function ModelInfoView({
         return;
       }
 
+      // Provider auth fields the user actually entered. Blank/null/undefined
+      // are omitted (never sent as "") so an untouched secret is preserved by
+      // the backend's merge instead of being overwritten. Mirrors the submit
+      // filter used by EditCredentialModal.
+      const authFieldUpdates = authFieldKeys.reduce<Record<string, any>>((acc, key) => {
+        const v = values[key];
+        if (v !== "" && v !== undefined && v !== null) {
+          acc[key] = v;
+        }
+        return acc;
+      }, {});
+
       let updatedLitellmParams = {
         ...values.litellm_params,
         ...parsedExtraParams,
+        ...authFieldUpdates,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -1063,6 +1080,35 @@ export default function ModelInfoView({
                           </div>
                         )}
                       </div>
+
+                      {isEditing && (
+                        <div>
+                          <Text className="font-medium">Authentication</Text>
+                          {usingExistingCredential ? (
+                            <div className="mt-1 p-2 bg-gray-50 rounded text-sm text-gray-600">
+                              This model uses the shared credential{" "}
+                              <span className="font-mono">
+                                {localModelData.litellm_params?.litellm_credential_name}
+                              </span>
+                              . Update its keys from the LLM Credentials tab.
+                            </div>
+                          ) : (
+                            <div className="mt-2">
+                              <Text className="text-xs text-gray-500 mb-2">
+                                Leave a field blank to keep its current value. Enter a new value to rotate it.
+                              </Text>
+                              <ProviderSpecificFields
+                                selectedProvider={
+                                  (localModelData.litellm_params?.custom_llm_provider ||
+                                    modelData.provider) as Providers
+                                }
+                                excludeKeys={["api_base", "organization", "custom_llm_provider"]}
+                                onFieldsResolved={setAuthFieldKeys}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {isWildcardModel && (
                         <div>

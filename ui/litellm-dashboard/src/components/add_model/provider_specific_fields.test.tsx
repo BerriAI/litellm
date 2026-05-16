@@ -183,6 +183,46 @@ describe("ProviderSpecificFields", () => {
     });
   });
 
+  it("excludeKeys removes parent-owned fields and reports only the remaining keys", async () => {
+    const queryClient = createQueryClient();
+    const onFieldsResolved = vi.fn();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields
+            selectedProvider={Providers.OpenAI}
+            excludeKeys={["api_base", "organization"]}
+            onFieldsResolved={onFieldsResolved}
+          />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      // api_key still rendered, the parent-owned fields are gone
+      expect(screen.getByLabelText("OpenAI API Key")).toBeInTheDocument();
+    });
+    expect(screen.queryByPlaceholderText("https://api.openai.com/v1")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("[OPTIONAL] my-unique-org")).not.toBeInTheDocument();
+    expect(onFieldsResolved).toHaveBeenCalledWith(["api_key"]);
+  });
+
+  it("onFieldsResolved reports the full key set when nothing is excluded", async () => {
+    const queryClient = createQueryClient();
+    const onFieldsResolved = vi.fn();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} onFieldsResolved={onFieldsResolved} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(onFieldsResolved).toHaveBeenCalledWith(["api_base", "organization", "api_key"]);
+    });
+  });
+
   it("should render the provider specific fields for Azure", async () => {
     const queryClient = createQueryClient();
     render(

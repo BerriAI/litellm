@@ -10,6 +10,13 @@ const { Link } = Typography;
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
   uploadProps?: UploadProps;
+  // Field keys to NOT render — used when a parent form already owns these
+  // inputs (e.g. the model edit form has a dedicated "API Base" field) so we
+  // don't create a duplicate Form.Item bound to the same name.
+  excludeKeys?: string[];
+  // Called whenever the set of rendered field keys changes, so a parent can
+  // know exactly which form values belong to this provider's auth fields.
+  onFieldsResolved?: (keys: string[]) => void;
 }
 
 interface ProviderCredentialField {
@@ -92,7 +99,12 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  uploadProps,
+  excludeKeys,
+  onFieldsResolved,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -167,6 +179,20 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
+  const excludeKeySet = React.useMemo(() => new Set(excludeKeys ?? []), [excludeKeys?.join(",")]);
+
+  const visibleFields = React.useMemo(
+    () => (excludeKeySet.size > 0 ? allFields.filter((f) => !excludeKeySet.has(f.key)) : allFields),
+    [allFields, excludeKeySet],
+  );
+
+  // Report the rendered field keys upward (string-joined so the effect only
+  // fires when the actual set changes, not on every parent render).
+  const visibleKeyList = React.useMemo(() => visibleFields.map((f) => f.key).join(","), [visibleFields]);
+  React.useEffect(() => {
+    onFieldsResolved?.(visibleKeyList ? visibleKeyList.split(",") : []);
+  }, [visibleKeyList, onFieldsResolved]);
+
   const handleUpload = {
     name: "file",
     accept: ".json",
@@ -214,7 +240,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           </Col>
         </Row>
       )}
-      {allFields.map((field) => (
+      {visibleFields.map((field) => (
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
