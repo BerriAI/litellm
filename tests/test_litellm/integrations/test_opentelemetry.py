@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -4619,3 +4620,282 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             2,
             f"Two distinct guardrail invocations expected, got {len(guardrail_spans)}",
         )
+
+
+class TestOpenTelemetryHttpStatusCodeAttribute(unittest.TestCase):
+    """PR 1: the failure recorder also exposes the HTTP status under the
+    OTel-standard ``http.response.status_code`` (as an int), while keeping the
+    legacy ``error.code`` for back-compat and leaving span status untouched.
+    """
+
+    def _record(self, error_information):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        kwargs = {
+            "exception": ValueError("boom"),
+            "standard_logging_object": {"error_information": error_information},
+        }
+        otel._record_exception_on_span(span=span, kwargs=kwargs)
+        span.end()
+
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1
+        return finished[0]
+
+    def test_401_sets_int_status_code_and_error_type(self):
+        span = self._record({"error_code": "401", "error_class": "AuthenticationError"})
+        assert span.attributes["http.response.status_code"] == 401
+        assert isinstance(span.attributes["http.response.status_code"], int)
+        assert span.attributes["error.type"] == "AuthenticationError"
+
+    def test_429_terminal(self):
+        span = self._record({"error_code": "429"})
+        assert span.attributes["http.response.status_code"] == 429
+
+    def test_500_sets_status_code_and_records_exception_event(self):
+        span = self._record({"error_code": "500"})
+        assert span.attributes["http.response.status_code"] == 500
+        assert any(e.name == "exception" for e in span.events)
+
+    def test_legacy_error_code_still_present_no_regression(self):
+        span = self._record({"error_code": "401"})
+        assert span.attributes["error.code"] == "401"
+
+    def test_non_numeric_error_code_omits_status_code(self):
+        span = self._record({"error_code": "ContextWindowExceeded"})
+        assert "http.response.status_code" not in span.attributes
+        # legacy attribute still set so existing dashboards don't regress
+        assert span.attributes["error.code"] == "ContextWindowExceeded"
+
+    def test_empty_error_code_omits_status_code(self):
+        span = self._record({"error_code": ""})
+        assert "http.response.status_code" not in span.attributes
+
+    def test_recorder_does_not_touch_span_status(self):
+        span = self._record({"error_code": "401"})
+        assert span.status.status_code == trace.StatusCode.UNSET
+
+
+class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
+    """Error attributes must land on the SERVER span dashboards query.
+    ``_handle_failure`` records on the litellm_request child span, so
+    ``async_post_call_failure_hook`` — which holds the SERVER span via
+    ``user_api_key_dict.parent_otel_span`` — is where it gets stamped.
+    """
+
+    def _run_hook(self, exception):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        otel.tracer = tracer
+        server_span = tracer.start_span("Received Proxy Server Request")
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.parent_otel_span = server_span
+
+        asyncio.run(
+            otel.async_post_call_failure_hook(
+                request_data={},
+                original_exception=exception,
+                user_api_key_dict=user_api_key_dict,
+                traceback_str="trace",
+            )
+        )
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        assert "Received Proxy Server Request" in finished
+        return finished["Received Proxy Server Request"]
+
+    def test_server_span_gets_int_status_code_and_error_type(self):
+        class _Boom(Exception):
+            status_code = 500
+
+        span = self._run_hook(_Boom("upstream blew up"))
+        assert span.attributes["http.response.status_code"] == 500
+        assert isinstance(span.attributes["http.response.status_code"], int)
+        assert span.attributes["error.type"] == "_Boom"
+        assert span.attributes["error.code"] == "500"  # legacy, string
+        assert span.status.status_code == trace.StatusCode.ERROR
+
+    def test_non_numeric_code_omits_status_code_no_crash(self):
+        class _Boom(Exception):
+            code = "ContextWindowExceeded"
+
+        span = self._run_hook(_Boom("bad"))
+        assert "http.response.status_code" not in span.attributes
+        assert span.attributes["error.code"] == "ContextWindowExceeded"
+
+    def test_no_parent_span_is_noop(self):
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.parent_otel_span = None
+        # Must not raise when there is no SERVER span (e.g. pre-auth 401).
+        asyncio.run(
+            otel.async_post_call_failure_hook(
+                request_data={},
+                original_exception=ValueError("x"),
+                user_api_key_dict=user_api_key_dict,
+                traceback_str=None,
+            )
+        )
+
+
+class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
+    """http.route (template) + url.path (literal) must land on the SERVER
+    span. The logging handlers write the litellm_request child span, so
+    this is set from the auth path on the freshly-created SERVER span.
+    """
+
+    def _set(self, **kwargs):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        otel.set_proxy_request_route_attributes(span, **kwargs)
+        span.end()
+        return exporter.get_finished_spans()[0]
+
+    def test_sets_named_template_and_literal(self):
+        span = self._set(
+            url_path="/v1/threads/abc123/runs",
+            http_route="/v1/threads/{thread_id}/runs",
+        )
+        # Exact OTel-standard names — NOT metadata.* (naming regression guard).
+        assert span.attributes["url.path"] == "/v1/threads/abc123/runs"
+        assert span.attributes["http.route"] == "/v1/threads/{thread_id}/runs"
+        assert span.attributes["http.route"] != span.attributes["url.path"]
+        assert "metadata.http_route" not in span.attributes
+
+    def test_flat_route_template_equals_literal(self):
+        span = self._set(
+            url_path="/v1/chat/completions",
+            http_route="/v1/chat/completions",
+        )
+        assert span.attributes["http.route"] == "/v1/chat/completions"
+        assert span.attributes["url.path"] == "/v1/chat/completions"
+
+    def test_missing_http_route_omits_only_that_attribute(self):
+        span = self._set(url_path="/v1/chat/completions", http_route=None)
+        assert span.attributes["url.path"] == "/v1/chat/completions"
+        assert "http.route" not in span.attributes
+
+    def test_missing_both_sets_nothing(self):
+        span = self._set(url_path=None, http_route=None)
+        assert "url.path" not in span.attributes
+        assert "http.route" not in span.attributes
+
+    def test_none_span_is_noop(self):
+        otel = OpenTelemetry()
+        # Mirrors the Langfuse-override path (create span returns None).
+        otel.set_proxy_request_route_attributes(None, url_path="/x", http_route="/x")
+
+
+class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
+    """litellm.preprocessing.duration_ms (proxy-receive -> first provider
+    handoff) on the SERVER span. Read from container metadata so the
+    success (model_call_details) and failure (request_data) paths work
+    uniformly. Excludes retries via the set-once first_api_call_start_time.
+    """
+
+    def _span(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        return tracer.start_span("Received Proxy Server Request"), exporter
+
+    def _attr(self, span, exporter):
+        span.end()
+        return exporter.get_finished_spans()[0].attributes
+
+    def test_success_shape_model_call_details(self):
+        # success path: first_api_call_start_time top-level,
+        # received-at under litellm_params.metadata
+        received = datetime(2026, 1, 1, 0, 0, 0)
+        handoff = datetime(2026, 1, 1, 0, 0, 0, 250000)  # +250ms
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "first_api_call_start_time": handoff,
+                "litellm_params": {"metadata": {"litellm_received_at": received}},
+            },
+        )
+        attrs = self._attr(span, exp)
+        self.assertAlmostEqual(
+            attrs["litellm.preprocessing.duration_ms"], 250.0, places=1
+        )
+
+    def test_failure_shape_request_data(self):
+        # failure path: request_data with first_api_call_start_time lifted
+        # to the TOP LEVEL by the proxy (off the logging object, before it
+        # is popped) and received-at riding the metadata variable. The
+        # user metadata sub-dict is never used for the handoff anchor.
+        received = datetime(2026, 1, 1, 0, 0, 0)
+        handoff = datetime(2026, 1, 1, 0, 0, 0, 30000)  # +30ms
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "first_api_call_start_time": handoff,
+                "metadata": {"litellm_received_at": received},
+            },
+        )
+        attrs = self._attr(span, exp)
+        self.assertAlmostEqual(
+            attrs["litellm.preprocessing.duration_ms"], 30.0, places=1
+        )
+
+    def test_missing_received_at_omits(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span, {"first_api_call_start_time": datetime(2026, 1, 1)}
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_missing_handoff_omits(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span, {"metadata": {"litellm_received_at": datetime(2026, 1, 1)}}
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_negative_duration_omitted(self):
+        # clock skew: handoff before receive -> omit, not a negative value
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "first_api_call_start_time": datetime(2026, 1, 1, 0, 0, 0),
+                "metadata": {"litellm_received_at": datetime(2026, 1, 1, 0, 0, 5)},
+            },
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_none_span_is_noop(self):
+        OpenTelemetry().set_preprocessing_duration_attribute(
+            None, {"first_api_call_start_time": datetime(2026, 1, 1)}
+        )
+
+    def test_non_dict_container_is_noop(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(span, None)
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
