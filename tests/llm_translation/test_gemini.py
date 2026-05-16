@@ -1621,7 +1621,10 @@ def test_gemini_image_size_limit_exceeded(monkeypatch):
                     "Content-Type": "image/jpeg",
                     "Content-Length": str(size_bytes),
                 },
-                content=b"x" * size_bytes,
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
                 request=Request("GET", url),
             )
 
