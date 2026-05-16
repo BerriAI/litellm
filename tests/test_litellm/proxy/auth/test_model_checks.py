@@ -240,6 +240,29 @@ def test_get_known_models_from_bare_wildcard_without_litellm_params():
     mock_get_provider_models.assert_called_once_with(provider="*", litellm_params=None)
 
 
+def test_get_known_models_from_invalid_wildcard_returns_empty_list():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    assert get_known_models_from_wildcard("not-a-wildcard", litellm_params=None) == []
+
+
+def test_get_known_models_from_bare_wildcard_with_invalid_litellm_model_falls_back_to_all():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    litellm_params = LiteLLM_Params(model="")
+    with patch(
+        "litellm.proxy.auth.model_checks.get_provider_models",
+        return_value=["model-a"],
+    ) as mock_get_provider_models:
+        result = get_known_models_from_wildcard("*", litellm_params=litellm_params)
+
+    assert result == ["model-a"]
+    mock_get_provider_models.assert_called_once_with(
+        provider="*", litellm_params=litellm_params
+    )
+
+
 def test_get_complete_model_list_byok_wildcard_expansion():
     """
     Test that wildcard models (e.g., openai/*) are expanded when the router has

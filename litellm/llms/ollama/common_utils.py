@@ -65,7 +65,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
         from litellm.secret_managers.main import get_secret_str
 
         return (
-            os.environ.get("OLLAMA_API_KEY")
+            api_key
+            or os.environ.get("OLLAMA_API_KEY")
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("OLLAMA_API_KEY")

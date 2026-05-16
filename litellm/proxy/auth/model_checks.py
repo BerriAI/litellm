@@ -248,7 +248,9 @@ def get_known_models_from_wildcard(
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
     if litellm_params is not None:
         try:
-            provider = litellm_params.model.split("/", 1)[0]
+            provider = (
+                litellm_params.model.split("/", 1)[0] or wildcard_provider_prefix or "*"
+            )
         except ValueError:
             provider = wildcard_provider_prefix or "*"
     else:
