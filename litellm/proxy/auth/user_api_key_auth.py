@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    get_request_route_template,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -722,6 +723,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     start_time=start_time,
                     headers=_safe_get_request_headers(request),
                 )
+            )
+            # Stamp OTel-standard http.route / url.path on the SERVER span
+            # here — the only point both the span and the request are in
+            # hand. The logging handlers write the litellm_request child
+            # span, never this one. `route` is the literal path (computed
+            # above); the template comes from the matched FastAPI route.
+            open_telemetry_logger.set_proxy_request_route_attributes(
+                parent_otel_span,
+                url_path=route,
+                http_route=get_request_route_template(request),
             )
 
         ### USER-DEFINED AUTH FUNCTION ###

@@ -62,6 +62,12 @@ LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 # OTel-standard HTTP semantic-convention name; what APM dashboards query
 # (status is also kept under the non-standard error.code for back compat).
 HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
+# http.route is the low-cardinality route template
+# (e.g. /v1/threads/{thread_id}/runs); url.path is the literal request
+# path. Set explicitly on the SERVER span (not via the metadata.*
+# passthrough, which would name them metadata.*).
+HTTP_ROUTE_ATTRIBUTE = "http.route"
+URL_PATH_ATTRIBUTE = "url.path"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -2928,3 +2934,27 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,
         )
+
+    def set_proxy_request_route_attributes(
+        self,
+        span: Optional[Span],
+        *,
+        url_path: Optional[str] = None,
+        http_route: Optional[str] = None,
+    ) -> None:
+        """
+        Set OTel-standard ``http.route`` / ``url.path`` on the proxy SERVER
+        span. Called from the auth path right after the span is created —
+        the only point where the SERVER span and the request are both in
+        hand (the success/failure logging handlers write the litellm_request
+        child span, not this one). No-op when there is no span (e.g. the
+        Langfuse override returns None) or a source value is missing.
+        """
+        if span is None:
+            return
+        if url_path:
+            self.safe_set_attribute(span=span, key=URL_PATH_ATTRIBUTE, value=url_path)
+        if http_route:
+            self.safe_set_attribute(
+                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
+            )

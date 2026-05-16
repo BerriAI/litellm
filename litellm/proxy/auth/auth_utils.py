@@ -522,6 +522,26 @@ def get_request_route(request: Request) -> str:
         return str(request.url.path)
 
 
+def get_request_route_template(request: Request) -> Optional[str]:
+    """
+    Return the low-cardinality route template for the request, e.g.
+    ``/v1/threads/{thread_id}/runs`` (vs. the literal path from
+    ``get_request_route``). FastAPI populates ``scope["route"]`` with the
+    matched route before endpoint dependencies run; its ``path`` is the
+    template. Returns None if unavailable (e.g. unmatched path, Mount).
+    """
+    try:
+        scope = request.scope
+        if not isinstance(scope, dict):
+            return None
+        route = scope.get("route")
+        template = getattr(route, "path", None)
+        return template if isinstance(template, str) and template else None
+    except Exception as e:
+        verbose_proxy_logger.debug(f"error on get_request_route_template: {str(e)}")
+        return None
+
+
 @lru_cache(maxsize=256)
 def normalize_request_route(route: str) -> str:
     """

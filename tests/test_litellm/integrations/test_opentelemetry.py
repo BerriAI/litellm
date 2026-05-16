@@ -4756,3 +4756,58 @@ class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
                 traceback_str=None,
             )
         )
+
+
+class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
+    """PR 2: http.route (template) + url.path (literal) must land on the
+    SERVER span. The logging handlers write the litellm_request child span,
+    so this is set from the auth path on the freshly-created SERVER span.
+    """
+
+    def _set(self, **kwargs):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        otel.set_proxy_request_route_attributes(span, **kwargs)
+        span.end()
+        return exporter.get_finished_spans()[0]
+
+    def test_sets_named_template_and_literal(self):
+        span = self._set(
+            url_path="/v1/threads/abc123/runs",
+            http_route="/v1/threads/{thread_id}/runs",
+        )
+        # Exact OTel-standard names — NOT metadata.* (regression guard for
+        # the naming nuance the plan calls out).
+        assert span.attributes["url.path"] == "/v1/threads/abc123/runs"
+        assert span.attributes["http.route"] == "/v1/threads/{thread_id}/runs"
+        # template differs from literal — the whole point of PR 2
+        assert span.attributes["http.route"] != span.attributes["url.path"]
+        assert "metadata.http_route" not in span.attributes
+
+    def test_flat_route_template_equals_literal(self):
+        span = self._set(
+            url_path="/v1/chat/completions",
+            http_route="/v1/chat/completions",
+        )
+        assert span.attributes["http.route"] == "/v1/chat/completions"
+        assert span.attributes["url.path"] == "/v1/chat/completions"
+
+    def test_missing_http_route_omits_only_that_attribute(self):
+        span = self._set(url_path="/v1/chat/completions", http_route=None)
+        assert span.attributes["url.path"] == "/v1/chat/completions"
+        assert "http.route" not in span.attributes
+
+    def test_missing_both_sets_nothing(self):
+        span = self._set(url_path=None, http_route=None)
+        assert "url.path" not in span.attributes
+        assert "http.route" not in span.attributes
+
+    def test_none_span_is_noop(self):
+        otel = OpenTelemetry()
+        # Mirrors the Langfuse-override path (create span returns None).
+        otel.set_proxy_request_route_attributes(None, url_path="/x", http_route="/x")
