@@ -174,7 +174,10 @@ class GithubCopilotConfig(OpenAIConfig):
             else:
                 reasoning_effort = "minimal"
             optional_params["reasoning_effort"] = reasoning_effort
-        elif non_default_params.get("reasoning_effort") is not None:
+        elif (
+            "claude" in model.lower()
+            and non_default_params.get("reasoning_effort") is not None
+        ):
             optional_params["reasoning_effort"] = non_default_params.pop(
                 "reasoning_effort"
             )

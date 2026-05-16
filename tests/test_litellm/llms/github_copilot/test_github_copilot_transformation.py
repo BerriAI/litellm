@@ -563,6 +563,20 @@ def test_map_openai_params_thinking_not_popped_for_non_claude_model():
     assert "reasoning_effort" not in optional_params
 
 
+def test_map_openai_params_reasoning_effort_not_promoted_for_non_claude_model():
+    """For non-Claude models, ``reasoning_effort`` must not be force-promoted
+    to ``optional_params``; the parent's supported-params filtering must run."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-4",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in optional_params
+
+
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()
