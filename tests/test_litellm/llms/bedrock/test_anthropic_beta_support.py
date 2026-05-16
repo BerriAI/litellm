@@ -92,6 +92,91 @@ class TestAnthropicBetaHeaderSupport:
             ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
         )
 
+    def test_converse_transformation_betas_from_body(self):
+        """Test that Converse API translates a top-level ``betas`` body field
+        into ``additionalModelRequestFields.anthropic_beta``.
+
+        Regression test for #28081: Bedrock Converse rejects ``betas`` as a
+        top-level field, so LiteLLM must move it into
+        ``additionalModelRequestFields`` (the same place header-derived beta
+        values land).
+        """
+        config = AmazonConverseConfig()
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-opus-4-7-20251101-v1:0",
+            system_content_blocks=[],
+            optional_params={"betas": ["context-1m-2025-08-07"]},
+            messages=[{"role": "user", "content": "Test"}],
+            headers={},
+        )
+
+        additional_fields = result["additionalModelRequestFields"]
+        assert "anthropic_beta" in additional_fields
+        assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07"]
+        assert "betas" not in additional_fields
+
+    def test_converse_transformation_anthropic_beta_from_body(self):
+        """Test that Converse API also translates a body-level ``anthropic_beta``
+        field (alternate naming some clients use) into
+        ``additionalModelRequestFields.anthropic_beta`` rather than passing it
+        through unchanged."""
+        config = AmazonConverseConfig()
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-opus-4-7-20251101-v1:0",
+            system_content_blocks=[],
+            optional_params={"anthropic_beta": ["context-1m-2025-08-07"]},
+            messages=[{"role": "user", "content": "Test"}],
+            headers={},
+        )
+
+        additional_fields = result["additionalModelRequestFields"]
+        assert "anthropic_beta" in additional_fields
+        assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07"]
+
+    def test_converse_transformation_betas_body_and_header_merged(self):
+        """Test that ``betas`` from the request body and ``anthropic-beta`` from
+        request headers are merged together into a single
+        ``anthropic_beta`` list inside ``additionalModelRequestFields``."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "interleaved-thinking-2025-05-14"}
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-opus-4-7-20251101-v1:0",
+            system_content_blocks=[],
+            optional_params={"betas": ["context-1m-2025-08-07"]},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers,
+        )
+
+        additional_fields = result["additionalModelRequestFields"]
+        assert sorted(additional_fields["anthropic_beta"]) == sorted(
+            ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+        )
+        assert "betas" not in additional_fields
+
+    def test_converse_transformation_betas_body_non_anthropic_model(self):
+        """Test that the body-level ``betas`` field is stripped for non-Anthropic
+        models on Bedrock Converse so AWS does not return a 400 error.
+
+        Non-Anthropic models (e.g. Nova, Llama) do not support
+        ``anthropic_beta`` in ``additionalModelRequestFields``, so the field
+        must be removed entirely rather than translated."""
+        config = AmazonConverseConfig()
+
+        result = config._transform_request_helper(
+            model="amazon.nova-pro-v1:0",
+            system_content_blocks=[],
+            optional_params={"betas": ["context-1m-2025-08-07"]},
+            messages=[{"role": "user", "content": "Test"}],
+            headers={},
+        )
+
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" not in additional_fields
+        assert "betas" not in additional_fields
+
     def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeMessagesConfig()
