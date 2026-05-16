@@ -1226,86 +1226,13 @@ async def test_apply_search_filter_matches_team_public_model_name():
 
 
 @pytest.mark.asyncio
-async def test_apply_search_filter_matches_db_byok_case_insensitively():
-    """
-    Regression test: BYOK rows that only exist in the DB (not in the
-    in-memory router) must still match search case-insensitively against
-    their stored `team_public_model_name`. Prisma's JSON path
-    `string_contains` is case-sensitive in Postgres, so a search like
-    "claude" must still match a stored value of "Claude Sonnet".
-    """
-    from litellm.proxy.proxy_server import _apply_search_filter_to_models
-
-    # Stored team_public_model_name uses mixed case; lowercased search
-    # would never match it via Prisma's case-sensitive JSON filter.
-    byok_db_row = MagicMock()
-    byok_db_row.model_id = "byok-db-only"
-    byok_db_row.model_name = "model_name_team-xyz_internal"
-    byok_db_row.model_info = {
-        "id": "byok-db-only",
-        "team_id": "team-xyz",
-        "team_public_model_name": "Claude Sonnet 4.6",
-        "db_model": True,
-    }
-    # Decoy row with team_public_model_name set but not matching the
-    # search — verifies the Python filter prunes the over-broad DB query.
-    decoy_db_row = MagicMock()
-    decoy_db_row.model_id = "decoy-db-only"
-    decoy_db_row.model_name = "model_name_team-xyz_decoy"
-    decoy_db_row.model_info = {
-        "id": "decoy-db-only",
-        "team_id": "team-xyz",
-        "team_public_model_name": "Some Gemini Variant",
-        "db_model": True,
-    }
-
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
-        return_value=[byok_db_row, decoy_db_row]
-    )
-
-    proxy_config = MagicMock()
-
-    # decrypt_model_list_from_db echoes back a router-shaped dict; mock
-    # it so we can identify which DB row(s) survived the Python filter.
-    def _fake_decrypt(rows):
-        return [
-            {
-                "model_name": r.model_name,
-                "model_info": r.model_info,
-                "litellm_params": {"model": "claude-sonnet"},
-            }
-            for r in rows
-        ]
-
-    proxy_config.decrypt_model_list_from_db = _fake_decrypt
-
-    filtered, total_count = await _apply_search_filter_to_models(
-        all_models=[],
-        search="claude",
-        prisma_client=prisma_client,
-        proxy_config=proxy_config,
-    )
-
-    filtered_ids = {m["model_info"]["id"] for m in filtered}
-    assert (
-        "byok-db-only" in filtered_ids
-    ), "mixed-case team_public_model_name must match lowercased search"
-    assert (
-        "decoy-db-only" not in filtered_ids
-    ), "non-matching BYOK row fetched by over-broad query must be filtered out"
-    assert total_count == 1
-
-
-@pytest.mark.asyncio
 async def test_apply_search_filter_scopes_byok_to_caller_teams():
     """
     Regression test: `/v2/model/info?search=...` must not leak BYOK rows
-    from teams the caller is not a member of. The new DB branch fetches
-    every row with a `team_public_model_name` set (the JSON
-    `string_contains: ""` widening), so without team scoping a non-admin
-    user could search for a common substring like "claude" and see other
-    teams' BYOK models.
+    from teams the caller is not a member of. Even with a bounded
+    `model_name`-contains DB query, a non-admin caller could otherwise
+    see other teams' BYOK rows that happen to match by internal name.
+    The post-fetch team scope drops those.
     """
     from litellm.proxy.proxy_server import _apply_search_filter_to_models
 

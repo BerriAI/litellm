@@ -11020,30 +11020,24 @@ async def _apply_search_filter_to_models(
     # Only query database if prisma_client is available
     if prisma_client is not None:
         try:
-            # Prisma's JSON path `string_contains` is case-sensitive in
-            # Postgres (it doesn't accept the `mode: insensitive` flag the
-            # way column-level string filters do), so the BYOK branch
-            # below can't match mixed-case stored names like
-            # "Claude Sonnet" against a lowercased search term. Widen the
-            # JSON branch to "row has a team_public_model_name set"
-            # (`string_contains: ""` matches any string at the path) and
-            # filter case-insensitively in Python below so behavior
-            # matches the router-side path in `_model_matches_search`.
+            # Match the persisted internal `model_name` only. Earlier
+            # iterations of this code also OR'd a JSON-path match on
+            # `model_info.team_public_model_name` so BYOK rows present only
+            # in the DB (not the router) were searchable by display name.
+            # That branch had to fall back to `string_contains: ""` because
+            # Prisma's JSON `string_contains` is case-sensitive on
+            # Postgres, which made the predicate match every row with any
+            # `team_public_model_name` set — an authenticated user could
+            # force a full BYOK-table read with `/v2/model/info?search=x`.
+            # BYOK rows that are actually loaded into the router are
+            # already searchable via the router-side path above (which
+            # checks `team_public_model_name`), so we drop the unbounded
+            # JSON branch here to keep the DB cost bounded by `search`.
             db_where_condition: Dict[str, Any] = {
-                "OR": [
-                    {
-                        "model_name": {
-                            "contains": search_lower,
-                            "mode": "insensitive",
-                        }
-                    },
-                    {
-                        "model_info": {
-                            "path": ["team_public_model_name"],
-                            "string_contains": "",
-                        }
-                    },
-                ]
+                "model_name": {
+                    "contains": search_lower,
+                    "mode": "insensitive",
+                }
             }
             # Exclude models already in router if we have any
             if db_model_ids_in_router:
@@ -11051,38 +11045,25 @@ async def _apply_search_filter_to_models(
                     "not": {"in": list(db_model_ids_in_router)}
                 }
 
-            # Fetch all candidates and filter in Python. We can't trust a
-            # DB-level count because the BYOK branch is over-broad — it
-            # returns every row with a team_public_model_name regardless
-            # of whether it matches the search term.
             db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
                 where=db_where_condition,
             )
 
-            def _db_row_matches_search(db_model: Any) -> bool:
-                info = (
-                    db_model.model_info if isinstance(db_model.model_info, dict) else {}
+            # Scope BYOK rows to the caller's allowed teams so non-admin
+            # callers can't enumerate other teams' BYOK metadata via
+            # `/v2/model/info?search=...`.
+            matching_db_rows = [
+                m
+                for m in db_models_raw
+                if not _is_byok_outside_caller_teams(
+                    m.model_info if isinstance(m.model_info, dict) else {}
                 )
-                # Scope BYOK rows to the caller's teams before applying
-                # the display-name match, so the over-broad
-                # `string_contains: ""` JSON branch can't leak other
-                # teams' models into search results.
-                if _is_byok_outside_caller_teams(info):
-                    return False
-                if search_lower in (db_model.model_name or "").lower():
-                    return True
-                return (
-                    search_lower in (info.get("team_public_model_name") or "").lower()
-                )
-
-            matching_db_rows = [m for m in db_models_raw if _db_row_matches_search(m)]
+            ]
             db_models_total_count = len(matching_db_rows)
 
             # Calculate total count for search results
             search_total_count = router_models_count + db_models_total_count
 
-            # Decrypt matching rows. Done after the in-Python filter so we
-            # don't decrypt BYOK rows we're going to throw away.
             for db_model in matching_db_rows:
                 decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
                 if decrypted_models:
