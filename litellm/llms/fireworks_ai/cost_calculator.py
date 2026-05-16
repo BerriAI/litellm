@@ -77,7 +77,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         )
 
     ## CALCULATE INPUT COST
-    input_cost_per_token = model_info["input_cost_per_token"]
+    input_cost_per_token: float = model_info["input_cost_per_token"] or 0.0
     prompt_cost: float = usage["prompt_tokens"] * input_cost_per_token
 
     ## ADJUST FOR CACHE READ TOKENS
