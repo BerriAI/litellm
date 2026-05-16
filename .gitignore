@@ -102,3 +102,4 @@ STABILIZATION_TODO.md
 **/coverage
 test-config
 .vscode
+.local/

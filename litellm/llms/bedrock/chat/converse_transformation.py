@@ -1297,6 +1297,27 @@ class AmazonConverseConfig(BaseConfig):
             output_config,
         )
 
+    @staticmethod
+    def _pop_body_anthropic_betas(additional_request_params: dict) -> List[str]:
+        """Extract beta values that arrived in the request body.
+
+        The Anthropic Messages API accepts a top-level ``betas`` array; some
+        clients also send ``anthropic_beta``. Bedrock Converse rejects either
+        as a top-level field, so we strip both from
+        ``additionalModelRequestFields`` and return them for the caller to
+        merge with header-derived betas.
+        """
+        body_betas: List[str] = []
+        for body_beta_key in ("betas", "anthropic_beta"):
+            value = additional_request_params.pop(body_beta_key, None)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                body_betas.extend(str(beta) for beta in value)
+            elif isinstance(value, str):
+                body_betas.append(value)
+        return body_betas
+
     def _process_tools_and_beta(
         self,
         original_tools: list,
@@ -1307,11 +1328,15 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: List[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
+        # Collect anthropic_beta values from user headers and request body.
+        # Both sources end up in ``additionalModelRequestFields.anthropic_beta``
+        # — Bedrock Converse rejects a top-level ``betas`` array (issue #28081).
         anthropic_beta_list = []
         if headers:
-            user_betas = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
+            anthropic_beta_list.extend(get_anthropic_beta_from_headers(headers))
+        anthropic_beta_list.extend(
+            self._pop_body_anthropic_betas(additional_request_params)
+        )
 
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
@@ -1431,9 +1456,13 @@ class AmazonConverseConfig(BaseConfig):
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
 
         # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field.
+        # Deduplicate while preserving order — header, body, and auto-detected
+        # paths (e.g. computer-use) can independently contribute the same beta.
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            additional_request_params["anthropic_beta"] = list(
+                dict.fromkeys(anthropic_beta_list)
+            )
 
         return bedrock_tools, anthropic_beta_list
 
