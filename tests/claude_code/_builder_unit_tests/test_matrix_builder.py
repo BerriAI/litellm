@@ -206,7 +206,12 @@ def test_build_matrix_6x5_grid_matches_published_sample():
         "tool_use",
         "prompt_caching_5m",
         "vision",
-        "extended_thinking",
+        # Row 6 of the v0 PRD; originally shipped as `extended_thinking`.
+        # The id was renamed in-place to `thinking` to match Anthropic's
+        # current docs (which reserve "extended thinking" for the
+        # deprecated manual mode only). The row's *position* in v0 is
+        # the load-bearing invariant, not the id string.
+        "thinking",
     ]
     v0_features = [
         feature

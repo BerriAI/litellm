@@ -26,7 +26,13 @@ EXPECTED_FEATURE_IDS = [
     "tool_use",
     "prompt_caching_5m",
     "vision",
-    "extended_thinking",
+    # v0 originally shipped this row as `extended_thinking`. It was
+    # renamed in-place to `thinking` because Anthropic's docs reserve
+    # "extended thinking" for the deprecated manual API mode only; the
+    # single row exercises both manual and adaptive shapes since Claude
+    # Code picks per model. The PRD's "v0" identity is the *position*
+    # (row 6, 0-indexed 5), not the id string.
+    "thinking",
 ]
 
 # The PRD's column order. Every feature directory must have one
