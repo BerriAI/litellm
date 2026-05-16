@@ -10905,7 +10905,10 @@ async def _get_caller_byok_team_scope(
     """
     if user_api_key_dict is None or prisma_client is None:
         return None
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
         return None
     user_id = user_api_key_dict.user_id
     if user_id is None:
@@ -11365,28 +11368,81 @@ async def _gather_team_accessible_model_ids(
     return team_accessible_model_ids
 
 
+async def _authorize_team_id_query(
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    `teamId` arrives untrusted via the /v2/model/info query string and the
+    filter below includes BYOK rows solely on `model_info.team_id == team_id`.
+    Without this guard, any authenticated user who knows (or guesses) another
+    team's id could enumerate that team's BYOK model metadata. Allow only
+    proxy admins or members of the requested team.
+    """
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        return
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Not authorized to view this team's models"},
+        )
+    try:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to look up caller teams while authorizing teamId filter"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Not authorized to view this team's models"},
+        )
+
+    if user_row is None or team_id not in (user_row.teams or []):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Not authorized to view this team's models"},
+        )
+
+
 async def _filter_models_by_team_id(
     all_models: List[Dict[str, Any]],
     team_id: str,
     prisma_client: PrismaClient,
     llm_router: Router,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> List[Dict[str, Any]]:
     """
     Filter models by team ID. Returns models where:
-    - direct_access is True, OR
-    - team_id is in access_via_team_ids
-
-    Also searches config and database for models accessible to the team.
+    - team_id matches the model's BYOK team_id, OR
+    - team_id is in access_via_team_ids, OR
+    - model_id is reachable via team.models / access groups
 
     Args:
         all_models: List of models to filter
         team_id: Team ID to filter by
         prisma_client: Prisma client for database queries
         llm_router: Router instance for config queries
+        user_api_key_dict: Caller auth context. When provided, the caller must
+            be a proxy admin or a member of `team_id`; otherwise raises 403.
 
     Returns:
         Filtered list of models
     """
+    if user_api_key_dict is not None:
+        await _authorize_team_id_query(
+            team_id=team_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
     team_object = await _load_team_object_for_model_filter(team_id, prisma_client)
     if team_object is None:
         return []
@@ -11597,6 +11653,7 @@ async def model_info_v2(
             team_id=teamId.strip(),
             prisma_client=prisma_client,
             llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
         )
         # Update search_total_count after teamId filter is applied
         search_total_count = len(all_models)

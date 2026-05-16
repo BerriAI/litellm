@@ -1498,6 +1498,121 @@ async def test_filter_models_by_team_id_excludes_viewer_direct_access():
 
 
 @pytest.mark.asyncio
+async def test_filter_models_by_team_id_rejects_non_member():
+    """
+    Regression test: /v2/model/info?teamId=X includes BYOK rows solely on
+    `model_info.team_id == X`. Without an auth check, any authenticated user
+    could enumerate another team's BYOK metadata by guessing its id. Callers
+    that are neither proxy admins nor members of `team_id` must get 403.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude"},
+        "model_info": {"id": "byok-team-111", "team_id": "team-111"},
+    }
+
+    prisma = MagicMock()
+    # Caller is in team-222 only
+    user_row = MagicMock()
+    user_row.teams = ["team-222"]
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _filter_models_by_team_id(
+            all_models=[byok],
+            team_id="team-111",
+            prisma_client=prisma,
+            llm_router=MagicMock(),
+            user_api_key_dict=caller,
+        )
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_filter_models_by_team_id_allows_team_member():
+    """
+    A caller who IS a member of `team_id` must be allowed to filter, and
+    should see that team's BYOK rows.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude"},
+        "model_info": {"id": "byok-team-111", "team_id": "team-111"},
+    }
+
+    prisma = MagicMock()
+    user_row = MagicMock()
+    user_row.teams = ["team-111", "team-999"]
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    team_db = MagicMock()
+    team_db.model_dump.return_value = {
+        "team_id": "team-111",
+        "team_alias": "Team 111",
+        "models": [],
+        "access_group_ids": None,
+    }
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    router = MagicMock()
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.get_model_list = MagicMock(return_value=[byok])
+
+    caller = UserAPIKeyAuth(
+        user_id="bob",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+    )
+
+    result = await _filter_models_by_team_id(
+        all_models=[byok],
+        team_id="team-111",
+        prisma_client=prisma,
+        llm_router=router,
+        user_api_key_dict=caller,
+    )
+    assert [m["model_info"]["id"] for m in result] == ["byok-team-111"]
+
+
+@pytest.mark.asyncio
+async def test_caller_byok_team_scope_treats_view_only_admin_as_unscoped():
+    """
+    Regression test: `PROXY_ADMIN_VIEW_ONLY` is an admin role
+    ("can login, view all own keys, view all spend"). Search results for
+    this role must show BYOK rows across all teams, not be silently scoped
+    to the user-id's `teams` field — that path narrows results to whatever
+    teams the admin happens to be a member of, regressing pre-PR behavior.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _get_caller_byok_team_scope
+
+    caller = UserAPIKeyAuth(
+        user_id="view-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        api_key="sk-test",
+    )
+    scope = await _get_caller_byok_team_scope(
+        user_api_key_dict=caller,
+        prisma_client=MagicMock(),
+    )
+    assert scope is None, "PROXY_ADMIN_VIEW_ONLY must be unscoped, like PROXY_ADMIN"
+
+
+@pytest.mark.asyncio
 async def test_add_access_group_models_to_team_models():
     """
     Test that models reachable via team access groups are included in team_models.
