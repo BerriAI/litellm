@@ -3499,7 +3499,12 @@ def test_video_metadata_supported_for_all_gemini_models():
         }
     ]
 
-    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]:
+    for model in [
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-3-pro-preview",
+    ]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
 
         file_part = None
@@ -3509,19 +3514,25 @@ def test_video_metadata_supported_for_all_gemini_models():
                 break
 
         assert file_part is not None, f"{model}: file part should exist"
-        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
+        assert (
+            "video_metadata" in file_part
+        ), f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
     # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
     for model in ["gemini-3-pro-preview"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
+        assert (
+            "media_resolution" in file_part
+        ), f"{model}: media_resolution should be present"
 
     for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
+        assert (
+            "media_resolution" not in file_part
+        ), f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():
@@ -4154,8 +4165,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert result.prompt_tokens_details.text_tokens == 782, \
-        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert (
+        result.prompt_tokens_details.text_tokens == 782
+    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -4190,8 +4202,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
 
     # DOCUMENT cached tokens map to cached_text_tokens, so:
     # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, \
-        "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert (
+        result.prompt_tokens_details.text_tokens == 382
+    ), "text_tokens should be (8 + 774) - 400 cached = 382"
     assert result.prompt_tokens_details.cached_tokens == 400
 
 
@@ -4290,3 +4303,365 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_chunk_parser_raises_on_429_error_chunk():
+    """Test chunk_parser raises VertexAIError on 429 RESOURCE_EXHAUSTED error chunk"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 429,
+            "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+    assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)
+    assert "Resource exhausted" in str(exc_info.value.message)
+
+
+def test_chunk_parser_raises_on_500_error_chunk():
+    """Test chunk_parser raises VertexAIError on 500 INTERNAL error chunk"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 500,
+            "message": "Internal error encountered.",
+            "status": "INTERNAL",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "INTERNAL" in str(exc_info.value.message)
+
+
+def test_chunk_parser_raises_on_error_chunk_with_minimal_fields():
+    """Test chunk_parser handles error chunks with missing optional fields"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 429,
+            "message": "Resource exhausted.",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+
+
+def test_chunk_parser_normal_chunk_unaffected_by_error_check():
+    """Test that normal streaming chunks still work correctly after error check addition"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    normal_chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello"}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 6,
+        },
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    result = streaming_obj.chunk_parser(normal_chunk)
+    assert result is not None
+    assert len(result.choices) > 0
+    assert result.choices[0].delta.content == "Hello"
+
+
+def test_chunk_parser_raises_on_non_dict_error():
+    """Test chunk_parser raises VertexAIError when chunk['error'] is not a dict"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": "something went wrong"}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "unexpected error format" in str(exc_info.value.message)
+
+
+def test_chunk_parser_raises_on_string_error_code():
+    """Test chunk_parser correctly converts string error code to int"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # code field is a string "429" rather than an int
+    error_chunk = {
+        "error": {
+            "code": "429",
+            "message": "Resource exhausted.",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+    assert isinstance(exc_info.value.status_code, int)
+
+
+def test_chunk_parser_raises_with_null_error_code():
+    """Test chunk_parser handles 'code': null gracefully by defaulting to status_code=500."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": None,
+            "message": "An error occurred.",
+            "status": "UNKNOWN",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "UNKNOWN" in str(exc_info.value.message)
+
+
+def test_chunk_parser_raises_with_non_numeric_string_error_code():
+    """Test chunk_parser handles a non-numeric 'code' string gracefully by defaulting to status_code=500."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": "UNKNOWN",
+            "message": "An unrecognized error occurred.",
+            "status": "UNKNOWN",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "UNKNOWN" in str(exc_info.value.message)
+
+
+def test_mid_stream_429_error_raises_during_iteration():
+    """
+    Simulate a full streaming scenario: normal thinking chunks arrive first,
+    then a 429 RESOURCE_EXHAUSTED error chunk arrives mid-stream.
+    Verify that ModelResponseIterator raises VertexAIError during iteration.
+    """
+    import json
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Simulate Vertex AI SSE stream: normal chunks followed by a 429 error chunk
+    normal_chunk_1 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "Let me think about this...", "thought": True}
+                        ],
+                    },
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            },
+            "modelVersion": "gemini-3.1-flash-image-preview",
+        }
+    )
+
+    normal_chunk_2 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "I'll generate the image now.", "thought": True}
+                        ],
+                    },
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 12,
+                "totalTokenCount": 22,
+            },
+        }
+    )
+
+    error_chunk = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+    )
+
+    # Build a mock SSE stream (lines returned by iter_lines)
+    sse_lines = iter([normal_chunk_1, normal_chunk_2, error_chunk])
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=sse_lines,
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    # Iterate the stream: first chunks should succeed, then 429 error should be raised
+    results = []
+    with pytest.raises(VertexAIError) as exc_info:
+        for chunk in streaming_obj:
+            if chunk is not None:
+                results.append(chunk)
+
+    # Verify: received normal chunks before the error
+    assert (
+        len(results) >= 1
+    ), "Should have received at least 1 normal chunk before the error"
+
+    # Verify: 429 error is properly raised
+    assert exc_info.value.status_code == 429
+    assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)
