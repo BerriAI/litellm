@@ -1057,7 +1057,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/llama-v3p3-70b-instruct",
+            model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
             messages=messages,
         )
         print(response)

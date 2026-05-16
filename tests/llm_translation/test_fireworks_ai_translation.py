@@ -97,7 +97,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     if disable_add_transform_inline_image_block is True:
         with pytest.raises(Exception):
             completion = litellm.completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",
@@ -119,7 +119,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
             )
     else:
         completion = litellm.completion(
-            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+            model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
             messages=[
                 {
                     "role": "user",
@@ -215,7 +215,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",

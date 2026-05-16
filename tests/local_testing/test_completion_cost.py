@@ -1171,7 +1171,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p3-70b-instruct", "fireworks-ai-above-16b"),
+        ("fireworks_ai/llama-v3p1-70b-instruct", "fireworks-ai-above-16b"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1182,7 +1182,7 @@ def test_get_model_params_fireworks_ai(model, base_model):
 @pytest.mark.parametrize(
     "model",
     [
-        "fireworks_ai/llama-v3p3-70b-instruct",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
     ],
 )
 def test_completion_cost_fireworks_ai(model):
