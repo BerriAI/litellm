@@ -86,6 +86,33 @@ async def test_get_group_memberships_empty_table_returns_empty_dict():
     assert await get_group_memberships_from_db(prisma_client=prisma) == {}
 
 
+@pytest.mark.asyncio
+async def test_get_group_memberships_returns_empty_when_table_unavailable():
+    """
+    Defensive fallback: if the prisma client predates the migration (or any
+    other reason find_many raises AttributeError/TypeError), we return {} so
+    auth-path callers fall back to today's flat-group behavior.
+    """
+    # Plain MagicMock - prisma_client.db.litellm_accessgroupmembership.find_many()
+    # returns a non-awaitable MagicMock, raising TypeError on `await`.
+    plain = MagicMock()
+    assert await get_group_memberships_from_db(prisma_client=plain) == {}
+
+
+@pytest.mark.asyncio
+async def test_get_group_memberships_returns_empty_when_table_attribute_missing():
+    """
+    AttributeError on the table accessor (model stripped from a downstream
+    Prisma client build) also falls back to empty.
+    """
+
+    class NoMembershipTable:
+        class db:
+            pass
+
+    assert await get_group_memberships_from_db(prisma_client=NoMembershipTable()) == {}
+
+
 # ---------------------------------------------------------------------------
 # upsert_group_memberships
 # ---------------------------------------------------------------------------

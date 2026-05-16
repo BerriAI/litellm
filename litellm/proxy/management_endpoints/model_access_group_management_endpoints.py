@@ -86,8 +86,23 @@ async def get_group_memberships_from_db(
     """
     Build parent_group -> [child_groups] map from the membership table.
     Single query, in-memory bucketing - no N+1.
+
+    Resilient by design: if the table isn't available (Prisma client predates
+    this migration, the proxy started before `prisma migrate deploy` finished,
+    or the membership Prisma model was stripped from a downstream build) we
+    return an empty map. The auth path then falls back to today's flat-group
+    semantics instead of 500-ing the whole request.
     """
-    rows = await prisma_client.db.litellm_accessgroupmembership.find_many()
+    try:
+        rows = await prisma_client.db.litellm_accessgroupmembership.find_many()
+    except (AttributeError, TypeError) as e:
+        verbose_proxy_logger.debug(
+            "litellm_accessgroupmembership unavailable - "
+            "skipping nested group resolution: %s",
+            e,
+        )
+        return {}
+
     memberships: Dict[str, List[str]] = {}
     for row in rows:
         memberships.setdefault(row.parent_group, []).append(row.child_group)
