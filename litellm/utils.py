@@ -8947,6 +8947,12 @@ class ProviderConfigManager:
             )
 
             return get_black_forest_labs_image_generation_config(model)
+        elif LlmProviders.HUNYUAN == provider:
+            from litellm.llms.hunyuan.image_generation import (
+                get_hunyuan_image_generation_config,
+            )
+
+            return get_hunyuan_image_generation_config(model)
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_generation import (
                 get_vertex_ai_image_generation_config,
