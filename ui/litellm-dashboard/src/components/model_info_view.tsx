@@ -40,7 +40,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { getProviderLogoAndName, Providers } from "./provider_info_helpers";
-import ProviderSpecificFields from "./add_model/provider_specific_fields";
+import ProviderSpecificFields, { useProviderAuthFieldKeys } from "./add_model/provider_specific_fields";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
@@ -54,6 +54,11 @@ interface ModelInfoViewProps {
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
+
+// Auth fields the model edit form already renders as dedicated inputs — kept
+// out of the inline provider auth section so we don't bind two Form.Items to
+// the same name or submit a duplicate value.
+const AUTH_FIELD_EXCLUDE_KEYS = ["api_base", "organization", "custom_llm_provider"];
 
 export default function ModelInfoView({
   modelId,
@@ -79,9 +84,6 @@ export default function ModelInfoView({
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
-  // Provider auth-field keys reported by ProviderSpecificFields, so the save
-  // handler knows which form values are this provider's credential fields.
-  const [authFieldKeys, setAuthFieldKeys] = useState<string[]>([]);
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -117,6 +119,20 @@ export default function ModelInfoView({
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
+
+  // Track the live credential dropdown so the Authentication section reacts to
+  // edits in this session (not just the server snapshot). When a named
+  // credential is selected the inline provider fields are hidden and never
+  // submitted, so we can't save a credential name and raw inline auth together.
+  const liveCredentialName = Form.useWatch("litellm_credential_name", form);
+  const isUsingCredentialInForm = isEditing ? !!liveCredentialName : usingExistingCredential;
+
+  // Provider auth-field keys, resolved from the same metadata
+  // ProviderSpecificFields renders, minus the fields the edit form already
+  // owns. The save handler harvests exactly these from the form values.
+  const authProvider = (localModelData?.litellm_params?.custom_llm_provider ||
+    modelData?.provider) as Providers;
+  const authFieldKeys = useProviderAuthFieldKeys(authProvider, AUTH_FIELD_EXCLUDE_KEYS);
 
   // Initialize localModelData from modelData when available
   useEffect(() => {
@@ -248,14 +264,18 @@ export default function ModelInfoView({
       // Provider auth fields the user actually entered. Blank/null/undefined
       // are omitted (never sent as "") so an untouched secret is preserved by
       // the backend's merge instead of being overwritten. Mirrors the submit
-      // filter used by EditCredentialModal.
-      const authFieldUpdates = authFieldKeys.reduce<Record<string, any>>((acc, key) => {
-        const v = values[key];
-        if (v !== "" && v !== undefined && v !== null) {
-          acc[key] = v;
-        }
-        return acc;
-      }, {});
+      // filter used by EditCredentialModal. Skipped entirely when a named
+      // credential is selected — that path owns auth, and sending both would
+      // leave conflicting config on the backend.
+      const authFieldUpdates = values.litellm_credential_name
+        ? {}
+        : authFieldKeys.reduce<Record<string, any>>((acc, key) => {
+            const v = values[key];
+            if (v !== "" && v !== undefined && v !== null) {
+              acc[key] = v;
+            }
+            return acc;
+          }, {});
 
       let updatedLitellmParams = {
         ...values.litellm_params,
@@ -1084,13 +1104,11 @@ export default function ModelInfoView({
                       {isEditing && (
                         <div>
                           <Text className="font-medium">Authentication</Text>
-                          {usingExistingCredential ? (
+                          {isUsingCredentialInForm ? (
                             <div className="mt-1 p-2 bg-gray-50 rounded text-sm text-gray-600">
                               This model uses the shared credential{" "}
-                              <span className="font-mono">
-                                {localModelData.litellm_params?.litellm_credential_name}
-                              </span>
-                              . Update its keys from the LLM Credentials tab.
+                              <span className="font-mono">{liveCredentialName}</span>. Update its keys from the LLM
+                              Credentials tab.
                             </div>
                           ) : (
                             <div className="mt-2">
@@ -1098,12 +1116,8 @@ export default function ModelInfoView({
                                 Leave a field blank to keep its current value. Enter a new value to rotate it.
                               </Text>
                               <ProviderSpecificFields
-                                selectedProvider={
-                                  (localModelData.litellm_params?.custom_llm_provider ||
-                                    modelData.provider) as Providers
-                                }
-                                excludeKeys={["api_base", "organization", "custom_llm_provider"]}
-                                onFieldsResolved={setAuthFieldKeys}
+                                selectedProvider={authProvider}
+                                excludeKeys={AUTH_FIELD_EXCLUDE_KEYS}
                               />
                             </div>
                           )}

@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
+import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import ProviderSpecificFields from "./provider_specific_fields";
+import ProviderSpecificFields, { useProviderAuthFieldKeys } from "./provider_specific_fields";
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
@@ -183,17 +184,12 @@ describe("ProviderSpecificFields", () => {
     });
   });
 
-  it("excludeKeys removes parent-owned fields and reports only the remaining keys", async () => {
+  it("excludeKeys removes parent-owned fields from the rendered set", async () => {
     const queryClient = createQueryClient();
-    const onFieldsResolved = vi.fn();
     render(
       <QueryClientProvider client={queryClient}>
         <Form>
-          <ProviderSpecificFields
-            selectedProvider={Providers.OpenAI}
-            excludeKeys={["api_base", "organization"]}
-            onFieldsResolved={onFieldsResolved}
-          />
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} excludeKeys={["api_base", "organization"]} />
         </Form>
       </QueryClientProvider>,
     );
@@ -204,22 +200,31 @@ describe("ProviderSpecificFields", () => {
     });
     expect(screen.queryByPlaceholderText("https://api.openai.com/v1")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("[OPTIONAL] my-unique-org")).not.toBeInTheDocument();
-    expect(onFieldsResolved).toHaveBeenCalledWith(["api_key"]);
   });
 
-  it("onFieldsResolved reports the full key set when nothing is excluded", async () => {
+  it("useProviderAuthFieldKeys returns the full key set when nothing is excluded", async () => {
     const queryClient = createQueryClient();
-    const onFieldsResolved = vi.fn();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <Form>
-          <ProviderSpecificFields selectedProvider={Providers.OpenAI} onFieldsResolved={onFieldsResolved} />
-        </Form>
-      </QueryClientProvider>,
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
+    const { result } = renderHook(() => useProviderAuthFieldKeys(Providers.OpenAI), { wrapper });
 
     await waitFor(() => {
-      expect(onFieldsResolved).toHaveBeenCalledWith(["api_base", "organization", "api_key"]);
+      expect(result.current).toEqual(["api_base", "organization", "api_key"]);
+    });
+  });
+
+  it("useProviderAuthFieldKeys excludes parent-owned keys", async () => {
+    const queryClient = createQueryClient();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useProviderAuthFieldKeys(Providers.OpenAI, ["api_base", "organization"]), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current).toEqual(["api_key"]);
     });
   });
 

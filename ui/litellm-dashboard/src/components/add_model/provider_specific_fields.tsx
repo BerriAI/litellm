@@ -3,7 +3,7 @@ import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
 import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
 import React from "react";
-import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
+import { CredentialItem, ProviderCreateInfo, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 const { Link } = Typography;
 
@@ -14,9 +14,6 @@ interface ProviderSpecificFieldsProps {
   // inputs (e.g. the model edit form has a dedicated "API Base" field) so we
   // don't create a duplicate Form.Item bound to the same name.
   excludeKeys?: string[];
-  // Called whenever the set of rendered field keys changes, so a parent can
-  // know exactly which form values belong to this provider's auth fields.
-  onFieldsResolved?: (keys: string[]) => void;
 }
 
 interface ProviderCredentialField {
@@ -57,6 +54,38 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
     options: field.options ?? undefined,
     defaultValue: field.default_value ?? undefined,
   };
+};
+
+// Resolve the credential UI fields for a provider from fetched metadata.
+// Matches the component's resolution order (display-name enum or raw slug).
+const resolveProviderFields = (
+  providerMetadata: ProviderCreateInfo[] | undefined,
+  selectedProvider: Providers,
+): ProviderCredentialField[] => {
+  if (!providerMetadata) return [];
+  const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
+  const providerInfo = providerMetadata.find(
+    (p) =>
+      p.provider_display_name === selectedProviderEnum ||
+      p.provider === selectedProvider ||
+      p.litellm_provider === selectedProvider,
+  );
+  return providerInfo ? providerInfo.credential_fields.map(mapFieldMetadataToUiField) : [];
+};
+
+// The auth-field keys a parent form should harvest for this provider, minus
+// any keys the parent already owns (excludeKeys). Lets the parent collect the
+// right form values on submit without the child reporting them back upward.
+export const useProviderAuthFieldKeys = (selectedProvider: Providers, excludeKeys?: string[]): string[] => {
+  const { data: providerMetadata } = useProviderFields();
+  const excludeDep = (excludeKeys ?? []).join("\0");
+  return React.useMemo(() => {
+    const excludeSet = new Set(excludeKeys ?? []);
+    return resolveProviderFields(providerMetadata, selectedProvider)
+      .map((f) => f.key)
+      .filter((k) => !excludeSet.has(k));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerMetadata, selectedProvider, excludeDep]);
 };
 
 // In-memory cache of provider credential fields keyed by provider display name.
@@ -103,7 +132,6 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   uploadProps,
   excludeKeys,
-  onFieldsResolved,
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
@@ -179,19 +207,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
-  const excludeKeySet = React.useMemo(() => new Set(excludeKeys ?? []), [excludeKeys?.join(",")]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const excludeKeySet = React.useMemo(() => new Set(excludeKeys ?? []), [(excludeKeys ?? []).join("\0")]);
 
   const visibleFields = React.useMemo(
     () => (excludeKeySet.size > 0 ? allFields.filter((f) => !excludeKeySet.has(f.key)) : allFields),
     [allFields, excludeKeySet],
   );
-
-  // Report the rendered field keys upward (string-joined so the effect only
-  // fires when the actual set changes, not on every parent render).
-  const visibleKeyList = React.useMemo(() => visibleFields.map((f) => f.key).join(","), [visibleFields]);
-  React.useEffect(() => {
-    onFieldsResolved?.(visibleKeyList ? visibleKeyList.split(",") : []);
-  }, [visibleKeyList, onFieldsResolved]);
 
   const handleUpload = {
     name: "file",
