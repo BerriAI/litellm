@@ -1170,6 +1170,146 @@ def test_add_team_models_to_all_models():
 
 
 @pytest.mark.asyncio
+async def test_apply_search_filter_matches_team_public_model_name():
+    """
+    Regression test: team BYOK models persist an internal model_name
+    (e.g. `model_name_{team_id}_{uuid}`) and surface the user-facing name
+    via `model_info.team_public_model_name`. The /v2/model/info search
+    filter must match that public name so BYOK rows appear in results.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    byok_model = {
+        "model_name": "model_name_team-abc-123_4a6b8",
+        "litellm_params": {"model": "claude-sonnet-4-5"},
+        "model_info": {
+            "id": "byok-id-1",
+            "team_id": "team-abc-123",
+            "team_public_model_name": "team-claude-sonnet",
+            "db_model": True,
+        },
+    }
+    unrelated_model = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "normal-id-1", "db_model": False},
+    }
+
+    # Search matching only team_public_model_name should still include BYOK
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="claude",
+        page=1,
+        size=50,
+        prisma_client=None,
+        proxy_config=MagicMock(),
+        sort_by=None,
+    )
+    filtered_ids = {m["model_info"]["id"] for m in filtered}
+    assert "byok-id-1" in filtered_ids
+    assert "normal-id-1" not in filtered_ids
+
+    # Search by internal model_name still matches as before
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="model_name_team-abc-123",
+        page=1,
+        size=50,
+        prisma_client=None,
+        proxy_config=MagicMock(),
+        sort_by=None,
+    )
+    assert [m["model_info"]["id"] for m in filtered] == ["byok-id-1"]
+
+    # Non-matching search returns nothing
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="gemini",
+        page=1,
+        size=50,
+        prisma_client=None,
+        proxy_config=MagicMock(),
+        sort_by=None,
+    )
+    assert filtered == []
+
+
+@pytest.mark.asyncio
+async def test_filter_models_by_team_id_excludes_viewer_direct_access():
+    """
+    Regression test: when the UI picks a specific team in the Current Team
+    selector, the model list must show only that team's BYOK rows + the
+    models assigned to the team. The admin viewer's `direct_access` flag
+    (set on every non-team model upstream) must NOT widen the team's
+    visible set, or selecting team-111 still shows every public model.
+    """
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    public_model = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {
+            "id": "public-id",
+            # admin viewer has direct_access on this public model
+            "direct_access": True,
+            # team-111 is NOT in access_via_team_ids -> shouldn't show for team-111
+            "access_via_team_ids": ["team-222"],
+        },
+    }
+    team111_byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-team-111",
+            "team_id": "team-111",
+            "team_public_model_name": "team-claude",
+            "access_via_team_ids": ["team-111"],
+        },
+    }
+    team222_byok = {
+        "model_name": "model_name_team-222_uuid",
+        "litellm_params": {"model": "claude-haiku"},
+        "model_info": {
+            "id": "byok-team-222",
+            "team_id": "team-222",
+            "team_public_model_name": "team-haiku",
+            "access_via_team_ids": ["team-222"],
+        },
+    }
+
+    prisma = MagicMock()
+    team_db = MagicMock()
+    team_db.model_dump.return_value = {
+        "team_id": "team-111",
+        "team_alias": "Team 111",
+        # specific models list that doesn't include the BYOK's internal name
+        "models": ["some-other-model"],
+        "access_group_ids": None,
+    }
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    router = MagicMock()
+    router.get_model_access_groups = MagicMock(return_value={})
+    # team-111 only resolves "some-other-model", which has no deployments
+    router.get_model_list = MagicMock(return_value=[])
+
+    filtered = await _filter_models_by_team_id(
+        all_models=[public_model, team111_byok, team222_byok],
+        team_id="team-111",
+        prisma_client=prisma,
+        llm_router=router,
+    )
+    visible_ids = sorted(m["model_info"]["id"] for m in filtered)
+
+    assert "byok-team-111" in visible_ids, "team-111's own BYOK must always be visible"
+    assert "byok-team-222" not in visible_ids, "must not leak other teams' BYOK"
+    assert (
+        "public-id" not in visible_ids
+    ), "viewer's direct_access must not widen the team's visible set"
+
+
+@pytest.mark.asyncio
 async def test_add_access_group_models_to_team_models():
     """
     Test that models reachable via team access groups are included in team_models.
@@ -6922,3 +7062,80 @@ class TestTransformRequestBannedParams:
             f"Expected 400 for banned param '{banned}', "
             f"got {response.status_code}: {response.json()}"
         )
+
+
+class TestSortModelsByDisplayName:
+    """Regression: team BYOK rows persist an internal `model_name` like
+    `model_name_{team_id}_{uuid}` and expose the user-facing name via
+    `model_info.team_public_model_name`. Sorting must use the displayed
+    name so BYOK rows interleave with non-BYOK rows alphabetically —
+    otherwise they clump at the end on their opaque IDs even though the
+    UI shows them under a normal-looking name.
+    """
+
+    def test_byok_models_sort_by_team_public_model_name(self):
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "claude-haiku-4-5", "model_info": {}},
+            {
+                # Opaque internal name; UI displays team_public_model_name.
+                "model_name": "model_name_team-1_abc123",
+                "model_info": {"team_public_model_name": "anthropic/claude"},
+            },
+            {"model_name": "gpt-4o", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="asc"
+        )
+        displayed_order = [
+            m["model_info"].get("team_public_model_name") or m["model_name"]
+            for m in sorted_models
+        ]
+        assert displayed_order == [
+            "anthropic/claude",
+            "claude-haiku-4-5",
+            "gpt-4o",
+        ]
+
+    def test_byok_models_sort_descending_by_display_name(self):
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "claude-haiku-4-5", "model_info": {}},
+            {
+                "model_name": "model_name_team-1_zzz",
+                "model_info": {"team_public_model_name": "zeta/model"},
+            },
+            {"model_name": "gpt-4o", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="desc"
+        )
+        displayed_order = [
+            m["model_info"].get("team_public_model_name") or m["model_name"]
+            for m in sorted_models
+        ]
+        assert displayed_order == [
+            "zeta/model",
+            "gpt-4o",
+            "claude-haiku-4-5",
+        ]
+
+    def test_empty_team_public_model_name_falls_back_to_model_name(self):
+        # Empty string for team_public_model_name (not None) must still
+        # fall back to model_name — otherwise BYOK rows with a blank
+        # display name would sort to the top.
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "alpha", "model_info": {"team_public_model_name": ""}},
+            {"model_name": "beta", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="asc"
+        )
+        assert [m["model_name"] for m in sorted_models] == ["alpha", "beta"]

@@ -10918,10 +10918,20 @@ async def _apply_search_filter_to_models(
 
     search_lower = search.lower().strip()
 
+    def _model_matches_search(m: Dict[str, Any]) -> bool:
+        # Team BYOK models persist an internal `model_name`
+        # (e.g. `model_name_{team_id}_{uuid}`) and expose the user-facing
+        # name via `model_info.team_public_model_name`. Match both so the
+        # name shown in the UI is searchable.
+        if search_lower in (m.get("model_name") or "").lower():
+            return True
+        team_public_model_name = (m.get("model_info") or {}).get(
+            "team_public_model_name"
+        ) or ""
+        return search_lower in team_public_model_name.lower()
+
     # Filter models in router by search term
-    filtered_router_models = [
-        m for m in all_models if search_lower in m.get("model_name", "").lower()
-    ]
+    filtered_router_models = [m for m in all_models if _model_matches_search(m)]
 
     # Separate filtered models into config vs db models, and track db model IDs
     filtered_config_models = []
@@ -10949,12 +10959,23 @@ async def _apply_search_filter_to_models(
     # Only query database if prisma_client is available
     if prisma_client is not None:
         try:
-            # Build where condition for database query
+            # Match either the persisted model_name or, for team BYOK rows,
+            # the user-facing team_public_model_name stored inside model_info.
             db_where_condition: Dict[str, Any] = {
-                "model_name": {
-                    "contains": search_lower,
-                    "mode": "insensitive",
-                }
+                "OR": [
+                    {
+                        "model_name": {
+                            "contains": search_lower,
+                            "mode": "insensitive",
+                        }
+                    },
+                    {
+                        "model_info": {
+                            "path": ["team_public_model_name"],
+                            "string_contains": search_lower,
+                        }
+                    },
+                ]
             }
             # Exclude models already in router if we have any
             if db_model_ids_in_router:
@@ -11102,6 +11123,15 @@ def _sort_models(
         model_info = model.get("model_info", {})
 
         if sort_by == "model_name":
+            # Team BYOK models persist an internal `model_name` (e.g.
+            # `model_name_{team_id}_{uuid}`) and expose the user-facing
+            # name via `model_info.team_public_model_name` — same as the
+            # UI's getDisplayModelName. Sort by the displayed name so
+            # BYOK rows interleave alphabetically with non-BYOK rows
+            # instead of clumping at the end on their opaque IDs.
+            team_public_model_name = model_info.get("team_public_model_name")
+            if team_public_model_name:
+                return str(team_public_model_name).lower()
             return model.get("model_name", "").lower()
 
         elif sort_by == "created_at":
@@ -11316,26 +11346,30 @@ async def _filter_models_by_team_id(
         team_object, team_id, prisma_client, llm_router
     )
 
-    # Filter models based on direct_access or access_via_team_ids
-    # Models are already enriched with these fields before this function is called
+    # When filtering by a specific team we want exactly the models that team
+    # can use: its BYOK rows and the deployments resolved from team.models /
+    # access groups. `direct_access` describes the viewer's own permissions
+    # (the admin path sets it on every non-team model) and must NOT widen the
+    # team's visible set, otherwise selecting a team in the UI still shows
+    # every public model the admin can call.
     filtered_models = []
     for _model in all_models:
         model_info = _model.get("model_info", {})
         model_id = model_info.get("id", None)
 
-        # Include if direct_access is True
-        if model_info.get("direct_access", False):
+        # BYOK rows owned by this team are always accessible to it, even if
+        # they haven't been re-added to team.models for some reason.
+        if model_info.get("team_id") == team_id:
             filtered_models.append(_model)
             continue
 
-        # Include if team_id is in access_via_team_ids
         access_via_team_ids = model_info.get("access_via_team_ids", [])
         if isinstance(access_via_team_ids, list) and team_id in access_via_team_ids:
             filtered_models.append(_model)
             continue
 
-        # Also include if model_id is in team_accessible_model_ids (from config/db search)
-        # This catches models that might not have been enriched with access_via_team_ids yet
+        # Catches models resolved from team.models / access groups that
+        # weren't enriched with access_via_team_ids upstream.
         if model_id and model_id in team_accessible_model_ids:
             filtered_models.append(_model)
 
