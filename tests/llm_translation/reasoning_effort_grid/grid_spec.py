@@ -60,6 +60,8 @@ _BUDGET_TOKENS: Dict[str, int] = {
     "low": 1024,
     "medium": 2048,
     "high": 4096,
+    "xhigh": 8192,
+    "max": 16384,
 }
 
 _ADAPTIVE_EFFORT_LABEL: Dict[str, str] = {
@@ -113,7 +115,7 @@ _BEDROCK_REQ = frozenset({"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
 _CAPS_OPUS_4_7: FrozenSet[str] = frozenset(
     {"supports_xhigh_reasoning_effort", "supports_max_reasoning_effort"}
 )
-_CAPS_OPUS_4_6: FrozenSet[str] = frozenset({"supports_max_reasoning_effort"})
+_CAPS_4_6: FrozenSet[str] = frozenset({"supports_max_reasoning_effort"})
 _CAPS_NONE: FrozenSet[str] = frozenset()
 
 
@@ -130,7 +132,7 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         model="anthropic/claude-sonnet-4-6",
         mode="adaptive",
         required_env=_ANTHROPIC_REQ,
-        caps=_CAPS_NONE,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="claude-haiku-4-5",
@@ -155,14 +157,14 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         model="azure_ai/claude-opus-4-6",
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
-        caps=_CAPS_OPUS_4_6,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="azure-claude-sonnet-4-6",
         model="azure_ai/claude-sonnet-4-6",
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
-        caps=_CAPS_NONE,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="azure-claude-haiku-4-5",
@@ -189,7 +191,7 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("vertex_location", "us-east5"),),
         required_env=_VERTEX_REQ,
-        caps=_CAPS_OPUS_4_6,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="vertex-claude-sonnet-4-6",
@@ -197,7 +199,7 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("vertex_location", "us-east5"),),
         required_env=_VERTEX_REQ,
-        caps=_CAPS_NONE,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="vertex-claude-haiku-4-5",
@@ -225,7 +227,7 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_OPUS_4_6,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="bedrock-claude-sonnet-4-6",
@@ -233,7 +235,7 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_NONE,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="bedrock-claude-sonnet-4-5",
@@ -253,7 +255,7 @@ BEDROCK_INVOKE_CHAT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_OPUS_4_6,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="bedrock-invoke-claude-sonnet-4-6",
@@ -261,7 +263,7 @@ BEDROCK_INVOKE_CHAT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_NONE,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="bedrock-invoke-claude-opus-4-5",

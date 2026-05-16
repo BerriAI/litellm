@@ -21,6 +21,7 @@ runtime when its required env vars are absent, so PR builds without provider
 credentials no-op gracefully.
 """
 
+import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -201,6 +202,11 @@ async def test_reasoning_effort_grid(
 
     record = wire_capture.latest()
     body = record["body"] if record else None
+    # Bedrock Converse logs `complete_input_dict` as a JSON string (see
+    # litellm/llms/bedrock/chat/converse_handler.py); parse it so the dict
+    # accessors in `_assert_cell` work uniformly across routes.
+    if route_name == "bedrock_converse" and isinstance(body, str):
+        body = json.loads(body)
 
     try:
         _assert_cell(route_name, body, status, cell)
