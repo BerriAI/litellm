@@ -156,15 +156,30 @@ def _cell_id(case: Tuple[str, ModelEntry, str, CellExpectation]) -> str:
 _PARAM_IDS: List[str] = [_cell_id(case) for case in _PARAMS]
 
 
+def _classify_status(exc: Exception) -> int:
+    """Map an exception to the HTTP status the QA grid would have observed.
+
+    The Anthropic Messages route (litellm.anthropic_messages) wraps client-side
+    BadRequestError as ``AnthropicError`` with ``status_code=400`` rather than
+    re-raising the BadRequestError class directly, so isinstance() alone misses
+    those cells. Read the ``status_code`` attribute when present (set by every
+    BaseLLMException subclass) and fall through to 500 otherwise.
+    """
+    if isinstance(exc, BadRequestError):
+        return 400
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    return 500
+
+
 async def _call_chat(model: ModelEntry, effort: str) -> Tuple[int, Optional[Exception]]:
     kwargs = _build_completion_kwargs(model, effort)
     try:
         await litellm.acompletion(**kwargs)
         return 200, None
-    except BadRequestError as exc:
-        return 400, exc
     except Exception as exc:
-        return 500, exc
+        return _classify_status(exc), exc
 
 
 async def _call_messages(
@@ -174,10 +189,8 @@ async def _call_messages(
     try:
         await litellm.anthropic_messages(**kwargs)
         return 200, None
-    except BadRequestError as exc:
-        return 400, exc
     except Exception as exc:
-        return 500, exc
+        return _classify_status(exc), exc
 
 
 @pytest.mark.asyncio
