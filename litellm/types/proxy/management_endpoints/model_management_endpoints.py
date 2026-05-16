@@ -53,8 +53,16 @@ class DeleteModelGroupResponse(BaseModel):
 
 class AccessGroupInfo(BaseModel):
     access_group: str
-    model_names: List[str]  # List of model names in this access group
-    deployment_count: int  # Total number of deployments with this access group
+    model_names: List[str]  # Transitively-resolved model names (includes nested groups' models)
+    deployment_count: int  # Direct-tag deployment count for this access group only
+    parent_groups: List[str] = Field(
+        default_factory=list,
+        description="Access groups that include THIS group as a member (nested groups).",
+    )
+    child_groups: List[str] = Field(
+        default_factory=list,
+        description="Access groups that THIS group includes as members (nested groups).",
+    )
 
 
 class ListAccessGroupsResponse(BaseModel):
