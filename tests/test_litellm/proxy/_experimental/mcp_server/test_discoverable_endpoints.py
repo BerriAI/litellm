@@ -1278,6 +1278,102 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
 
 
+def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
+    """When ``PROXY_BASE_URL`` is set, ``get_request_base_url`` must return
+    it verbatim regardless of inbound ``X-Forwarded-*`` or the trust gate.
+
+    This is the escape hatch for deployments behind ingresses that mangle
+    X-Forwarded-* — operators can declare the canonical public origin once
+    and the same-origin check in ``validate_trusted_redirect_uri`` will
+    compare against it.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "10.0.0.7"
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "litellm-internal:4000",  # ingress lies
+        "X-Forwarded-Port": "9999",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+
+    # Trailing slash on the env value must be stripped; trust gate
+    # outcome doesn't matter because PROXY_BASE_URL takes precedence.
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/")
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
+
+
+def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
+    caplog, monkeypatch
+):
+    """A bare ``{"detail":"invalid_request"}`` is undiagnosable for the
+    operator. Verify the rejection path emits a WARN log carrying the
+    redirect_uri, computed proxy base, and the X-Forwarded-* headers so
+    a single log line tells the customer which knob is wrong.
+    """
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.5"  # not in any trusted range
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "litellm.example.com",
+        "X-Forwarded-Port": "443",
+        "Host": "litellm-internal:4000",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(
+                mock_request,
+                "https://litellm.example.com/ui/mcp/oauth/callback",
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "invalid_request"
+
+    matching = [r for r in caplog.records if "rejecting redirect_uri" in r.getMessage()]
+    assert len(matching) == 1, (
+        "expected exactly one diagnostic warning, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    msg = matching[0].getMessage()
+    assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
+    assert "litellm-internal:4000" in msg  # computed proxy base
+    assert "X-Forwarded-Host" in msg
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------

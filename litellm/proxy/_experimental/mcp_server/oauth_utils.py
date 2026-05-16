@@ -34,12 +34,18 @@ def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
+    Resolution order:
+      1. ``PROXY_BASE_URL`` env var — operator-declared canonical public
+         origin. Honoured unconditionally so deployments behind ingresses
+         that mangle ``X-Forwarded-*`` can skip the trust-gate gymnastics
+         entirely.
+      2. X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port — only
+         when the request comes from a configured trusted proxy
+         (``use_x_forwarded_for`` enabled AND caller in
+         ``mcp_trusted_proxy_ranges``). Otherwise an untrusted caller
+         could poison OAuth-discovery / redirect_uri values by injecting
+         headers.
+      3. The request's literal ``base_url``.
 
     Args:
         request: FastAPI Request object
@@ -47,6 +53,10 @@ def get_request_base_url(request: Request) -> str:
     Returns:
         The reconstructed base URL (e.g., "https://proxy.example.com")
     """
+    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
 
@@ -284,4 +294,26 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             if _matches_trusted_origin_entry(redirect_netloc, entry):
                 return
 
+    # Diagnose: a bare 400 ``invalid_request`` is opaque to operators
+    # debugging an ingress / X-Forwarded-* mismatch. Surface the three
+    # inputs that drive the same-origin compare so a single log line is
+    # enough to tell the customer which knob is wrong.
+    verbose_logger.warning(
+        "MCP OAuth: rejecting redirect_uri %r as invalid_request. "
+        "Computed proxy base=%r (PROXY_BASE_URL=%r). "
+        "Inbound headers: X-Forwarded-Proto=%r X-Forwarded-Host=%r "
+        "X-Forwarded-Port=%r Host=%r. "
+        "Trusted-redirect-origins env=%r. "
+        "If this should be accepted, either align ingress X-Forwarded-* "
+        "with the browser URL, set PROXY_BASE_URL to your public origin, "
+        "or add the redirect_uri host to MCP_TRUSTED_REDIRECT_ORIGINS.",
+        redirect_uri,
+        proxy_base,
+        os.environ.get("PROXY_BASE_URL"),
+        request.headers.get("X-Forwarded-Proto"),
+        request.headers.get("X-Forwarded-Host"),
+        request.headers.get("X-Forwarded-Port"),
+        request.headers.get("Host"),
+        os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV),
+    )
     raise HTTPException(status_code=400, detail="invalid_request")
