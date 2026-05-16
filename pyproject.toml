@@ -63,6 +63,7 @@ proxy = [
     "polars==1.38.1",
     "soundfile==0.12.1",
     "pyroscope-io==0.8.16; sys_platform != 'win32'",
+    "pydantic-settings>=2.14.1",
 ]
 extra_proxy = [
     "prisma==0.11.0",
