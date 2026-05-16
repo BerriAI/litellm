@@ -164,7 +164,7 @@ class GithubCopilotConfig(OpenAIConfig):
             and thinking.get("type") == "enabled"
             and existing_reasoning_effort is None
         ):
-            budget_tokens = thinking.get("budget_tokens", 0)
+            budget_tokens = thinking.get("budget_tokens") or 0
             if budget_tokens >= 10000:
                 reasoning_effort = "high"
             elif budget_tokens >= 5000:
