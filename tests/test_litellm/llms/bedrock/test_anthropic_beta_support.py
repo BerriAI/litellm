@@ -177,6 +177,45 @@ class TestAnthropicBetaHeaderSupport:
         assert "anthropic_beta" not in additional_fields
         assert "betas" not in additional_fields
 
+    def test_converse_transformation_betas_body_string_value(self):
+        """Test that a bare string ``betas`` body value (not a list) is also
+        moved into ``additionalModelRequestFields.anthropic_beta``.
+
+        Clients that send a single beta typically pass a list, but the
+        transformer must tolerate a bare string too rather than silently
+        dropping it."""
+        config = AmazonConverseConfig()
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-opus-4-7-20251101-v1:0",
+            system_content_blocks=[],
+            optional_params={"betas": "context-1m-2025-08-07"},
+            messages=[{"role": "user", "content": "Test"}],
+            headers={},
+        )
+
+        additional_fields = result["additionalModelRequestFields"]
+        assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07"]
+        assert "betas" not in additional_fields
+
+    def test_converse_transformation_betas_deduplicated(self):
+        """Test that the same beta string appearing in both the header and the
+        body is deduplicated in the final ``anthropic_beta`` list (order
+        preserved via ``dict.fromkeys``)."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+
+        result = config._transform_request_helper(
+            model="anthropic.claude-opus-4-7-20251101-v1:0",
+            system_content_blocks=[],
+            optional_params={"betas": ["context-1m-2025-08-07"]},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers,
+        )
+
+        additional_fields = result["additionalModelRequestFields"]
+        assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07"]
+
     def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeMessagesConfig()
