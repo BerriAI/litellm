@@ -292,3 +292,272 @@ def test_diamond_inheritance_resolves_once():
 
     # set() removes the legitimate duplicate, all 2 unique models should be present
     assert sorted(set(result)) == sorted(["dall-e-3", "o1"])
+
+
+# ---------------------------------------------------------------------------
+# Brutal edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_all_models_empty_returns_empty():
+    """Empty all_models input produces empty output."""
+    result = _get_models_from_access_groups(
+        model_access_groups={"g": ["gpt-4"]},
+        all_models=[],
+        group_memberships={"g": []},
+    )
+    assert result == []
+
+
+def test_no_groups_no_memberships_passes_through():
+    """When neither map matches anything, all_models is returned untouched."""
+    result = _get_models_from_access_groups(
+        model_access_groups={},
+        all_models=["gpt-4", "claude-3"],
+        group_memberships={},
+    )
+    assert result == ["gpt-4", "claude-3"]
+
+
+def test_resolve_group_with_no_direct_models_and_no_children():
+    """A dangling group key with empty children expands to empty list."""
+    result = resolve_nested_groups(
+        group_name="empty-group",
+        model_access_groups={"empty-group": []},
+        group_memberships={"empty-group": []},
+        visited=set(),
+    )
+    assert result == []
+
+
+def test_resolve_unknown_group_returns_empty():
+    """Resolving a name that's in neither map (orphan) returns empty, no crash."""
+    result = resolve_nested_groups(
+        group_name="orphan",
+        model_access_groups={},
+        group_memberships={},
+        visited=set(),
+    )
+    assert result == []
+
+
+def test_membership_pointing_to_missing_child_is_safe():
+    """A parent referencing a child that has no direct models and no further children expands to empty."""
+    result = resolve_nested_groups(
+        group_name="parent",
+        model_access_groups={},
+        group_memberships={"parent": ["ghost-child"]},
+        visited=set(),
+    )
+    assert result == []
+
+
+def test_three_hop_cycle_logs_once_per_back_edge(caplog):
+    """A -> B -> C -> A is detected when the back-edge to A is attempted."""
+    model_access_groups = {"A": ["m-a"], "B": ["m-b"], "C": ["m-c"]}
+    group_memberships = {"A": ["B"], "B": ["C"], "C": ["A"]}
+
+    with caplog.at_level("WARNING"):
+        result = resolve_nested_groups(
+            group_name="A",
+            model_access_groups=model_access_groups,
+            group_memberships=group_memberships,
+            visited=set(),
+        )
+
+    assert sorted(set(result)) == sorted(["m-a", "m-b", "m-c"])
+    assert sum("cycle detected" in m.lower() for m in caplog.messages) >= 1
+
+
+def test_self_reference_in_deep_chain_only_warns_for_self_edge(caplog):
+    """A -> B -> C -> C: the leaf self-loop fires the warning; A/B traversal completes."""
+    model_access_groups = {"C": ["m-c"]}
+    group_memberships = {"A": ["B"], "B": ["C"], "C": ["C"]}
+
+    with caplog.at_level("WARNING"):
+        result = resolve_nested_groups(
+            group_name="A",
+            model_access_groups=model_access_groups,
+            group_memberships=group_memberships,
+            visited=set(),
+        )
+
+    assert result == ["m-c"]
+    cycle_msgs = [m for m in caplog.messages if "cycle detected" in m.lower()]
+    assert len(cycle_msgs) == 1
+    assert "'C'" in cycle_msgs[0]
+
+
+def test_deep_linear_chain_50_levels():
+    """A 50-level linear chain resolves without stack overflow and returns the leaf model."""
+    model_access_groups = {"g49": ["leaf-model"]}
+    group_memberships = {f"g{i}": [f"g{i+1}"] for i in range(49)}
+
+    result = resolve_nested_groups(
+        group_name="g0",
+        model_access_groups=model_access_groups,
+        group_memberships=group_memberships,
+        visited=set(),
+    )
+    assert result == ["leaf-model"]
+
+
+def test_wide_fanout_one_parent_100_children():
+    """A single parent with 100 children, each holding one unique model, resolves all 100."""
+    children = [f"child-{i}" for i in range(100)]
+    model_access_groups = {c: [f"model-{i}"] for i, c in enumerate(children)}
+    group_memberships = {"root": children}
+
+    result = resolve_nested_groups(
+        group_name="root",
+        model_access_groups=model_access_groups,
+        group_memberships=group_memberships,
+        visited=set(),
+    )
+    assert sorted(result) == sorted([f"model-{i}" for i in range(100)])
+
+
+def test_duplicate_top_level_groups_dedup_after_caller_pass():
+    """Same group passed twice in all_models. _get_models_from_access_groups expands both;
+    the caller's dedup step (dict.fromkeys at get_key_models) handles the duplicates."""
+    model_access_groups = {"g": ["gpt-4", "claude-3"]}
+    result = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["g", "g"],
+    )
+    # Function returns duplicates - that's contract; dedup is caller's job
+    assert result.count("gpt-4") == 2
+    assert result.count("claude-3") == 2
+
+
+def test_disconnected_components_only_seed_subtree_resolves():
+    """Resolution starting at A reaches A's subtree only, not unrelated components."""
+    model_access_groups = {"A": ["m-a"], "X": ["m-x"]}
+    group_memberships = {"X": ["Y"], "Y": []}
+
+    result = resolve_nested_groups(
+        group_name="A",
+        model_access_groups=model_access_groups,
+        group_memberships=group_memberships,
+        visited=set(),
+    )
+    assert result == ["m-a"]
+    assert "m-x" not in result
+
+
+def test_unicode_and_special_chars_in_group_names():
+    """Group names with unicode, hyphens, dots, slashes pass through verbatim."""
+    model_access_groups = {"groupe-prod/équipe.1": ["gpt-4"]}
+    group_memberships = {"meta⚡": ["groupe-prod/équipe.1"]}
+
+    result = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["meta⚡"],
+        group_memberships=group_memberships,
+    )
+    assert result == ["gpt-4"]
+
+
+def test_visited_set_isolation_between_top_level_calls():
+    """Two top-level groups in all_models must each fully expand - fresh visited per call."""
+    model_access_groups = {"shared": ["common-model"], "A": ["m-a"], "B": ["m-b"]}
+    group_memberships = {"A": ["shared"], "B": ["shared"]}
+
+    result = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["A", "B"],
+        group_memberships=group_memberships,
+    )
+    # Both A and B must contribute their direct models AND the shared subtree
+    expanded = set(result)
+    assert {"m-a", "m-b", "common-model"} <= expanded
+
+
+def test_empty_group_memberships_dict_behaves_like_none():
+    """Passing {} explicitly is identical to passing None (default)."""
+    model_access_groups = {"g": ["gpt-4"]}
+    via_none = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["g"],
+        group_memberships=None,
+    )
+    via_empty = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["g"],
+        group_memberships={},
+    )
+    assert via_none == via_empty == ["gpt-4"]
+
+
+def test_membership_with_empty_child_list_does_not_explode():
+    """A parent_group mapped to an empty list is a valid no-op edge set."""
+    model_access_groups = {"orphan": ["gpt-4"]}
+    group_memberships = {"orphan": []}
+
+    result = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=["orphan"],
+        group_memberships=group_memberships,
+    )
+    assert result == ["gpt-4"]
+
+
+def test_classify_empty_input_returns_three_empty_lists():
+    """Edge case: empty names input must not error."""
+    real, child, unknown = _classify_member_names(
+        names=[],
+        router_model_names={"gpt-4"},
+        known_access_groups={"g"},
+    )
+    assert real == [] and child == [] and unknown == []
+
+
+def test_classify_preserves_input_order():
+    """Output preserves caller-provided order within each bucket - matters for error messages."""
+    real, child, unknown = _classify_member_names(
+        names=["c-unknown", "a-model", "b-group", "d-model"],
+        router_model_names={"a-model", "d-model"},
+        known_access_groups={"b-group"},
+    )
+    assert real == ["a-model", "d-model"]
+    assert child == ["b-group"]
+    assert unknown == ["c-unknown"]
+
+
+def test_validate_models_exist_reports_missing_in_input_order():
+    """Missing names are reported in the order they appeared, for human-readable errors."""
+
+    class FakeRouter:
+        def get_model_names(self):
+            return ["a"]
+
+    all_valid, missing = validate_models_exist(
+        model_names=["z-missing", "a", "y-missing"],
+        llm_router=FakeRouter(),
+        known_access_groups=set(),
+    )
+    assert all_valid is False
+    assert missing == ["z-missing", "y-missing"]
+
+
+def test_validate_models_exist_with_null_router_returns_false():
+    """No router - everything reports as missing (matches today's defensive behavior)."""
+    all_valid, missing = validate_models_exist(
+        model_names=["any"],
+        llm_router=None,
+        known_access_groups={"any"},
+    )
+    # Without a router we can't say what's a model, so we fall back to fail-closed
+    assert all_valid is False
+    assert missing == ["any"]
+
+
+def test_resolve_with_empty_models_and_empty_memberships_returns_empty():
+    """Defensive: both maps empty + unknown seed = empty result, no crash."""
+    result = resolve_nested_groups(
+        group_name="nothing",
+        model_access_groups={},
+        group_memberships={},
+        visited=set(),
+    )
+    assert result == []
