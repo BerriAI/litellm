@@ -50,7 +50,11 @@ def _resolve_proxy_base_url_env() -> Optional[str]:
         return None
     parsed = urlparse(configured)
     if parsed.scheme in ("http", "https") and parsed.netloc:
-        return configured.rstrip("/")
+        # Normalize by dropping query/params/fragment so callers doing
+        # f"{base_url}/callback" don't end up with the path glued onto a
+        # query string or fragment. Mirrors the X-Forwarded-* path below.
+        normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        return normalized.rstrip("/")
     if _warned_invalid_proxy_base_url != configured:
         verbose_logger.warning(
             "PROXY_BASE_URL=%r is not a valid http(s) URL (missing scheme "
