@@ -62,6 +62,18 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map hunyuan provider value to Hunyuan display name and logo", () => {
+      const result = getProviderLogoAndName("hunyuan");
+      expect(result.displayName).toBe(Providers.HUNYUAN);
+      expect(result.logo).toBe(providerLogoMap[Providers.HUNYUAN]);
+    });
+
+    it("should map HUNYUAN provider value case-insensitively", () => {
+      const result = getProviderLogoAndName("HUNYUAN");
+      expect(result.displayName).toBe(Providers.HUNYUAN);
+      expect(result.logo).toBe(providerLogoMap[Providers.HUNYUAN]);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -152,6 +164,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.RunwayML)).toBe("runwayml/gen4_turbo");
     });
 
+    it("should return hunyuan/gpt-image-2 placeholder for HUNYUAN provider", () => {
+      expect(getPlaceholder(Providers.HUNYUAN)).toBe("hunyuan/gpt-image-2");
+    });
+
     it("should return watsonx placeholder for Watsonx provider", () => {
       expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
     });
@@ -162,6 +178,17 @@ describe("provider_info_helpers", () => {
 
     it("should return default gpt-3.5-turbo placeholder for OpenAI provider", () => {
       expect(getPlaceholder(Providers.OpenAI)).toBe("gpt-3.5-turbo");
+    });
+  });
+
+  describe("provider_map and providerLogoMap for HUNYUAN", () => {
+    it("should map HUNYUAN enum key to hunyuan backend string", () => {
+      expect(provider_map[Providers.HUNYUAN]).toBe("hunyuan");
+    });
+
+    it("should have a logo defined for HUNYUAN provider", () => {
+      expect(providerLogoMap[Providers.HUNYUAN]).toBeTruthy();
+      expect(providerLogoMap[Providers.HUNYUAN]).toContain("openai_small.svg");
     });
   });
 
@@ -281,6 +308,16 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.Bedrock, modelMap);
       expect(result).toEqual([]);
+    });
+
+    it("should return hunyuan models for HUNYUAN provider", () => {
+      const modelMap = {
+        "hunyuan/gpt-image-2": { litellm_provider: "hunyuan" },
+        "gpt-3.5-turbo": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels(Providers.HUNYUAN, modelMap);
+      expect(result).toContain("hunyuan/gpt-image-2");
+      expect(result).not.toContain("gpt-3.5-turbo");
     });
 
     it("should handle multiple providers correctly", () => {

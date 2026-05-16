@@ -47,6 +47,7 @@ export enum Providers {
   HEROKU = "Heroku",
   Hosted_Vllm = "vllm",
   HUGGINGFACE = "Huggingface",
+  HUNYUAN = "Hunyuan",
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
@@ -153,6 +154,8 @@ export const provider_map: Record<string, string> = {
   HEROKU: "heroku",
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
+  HUNYUAN: "hunyuan",
+  [Providers.HUNYUAN]: "hunyuan",
   HYPERBOLIC: "hyperbolic",
   Infinity: "infinity",
   JinaAI: "jina_ai",
@@ -253,6 +256,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Groq]: `${asset_logos_folder}groq.svg`,
   [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
   [Providers.HUGGINGFACE]: `${asset_logos_folder}huggingface.svg`,
+  [Providers.HUNYUAN]: `${asset_logos_folder}openai_small.svg`,
   [Providers.HYPERBOLIC]: `${asset_logos_folder}hyperbolic.svg`,
   [Providers.Infinity]: `${asset_logos_folder}infinity.png`,
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
@@ -360,6 +364,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "deepinfra/<any-model-on-deepinfra>";
   } else if (selectedProvider == Providers.FalAI) {
     return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
+  } else if (selectedProvider == Providers.HUNYUAN) {
+    return "hunyuan/gpt-image-2";
   } else if (selectedProvider == Providers.RunwayML) {
     return "runwayml/gen4_turbo";
   } else if (selectedProvider === Providers.WATSONX) {
