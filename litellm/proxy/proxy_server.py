@@ -10966,9 +10966,7 @@ async def _fetch_db_models_for_search(
         "model_name": {"contains": search_lower, "mode": "insensitive"}
     }
     if db_model_ids_in_router:
-        db_where_condition["model_id"] = {
-            "not": {"in": list(db_model_ids_in_router)}
-        }
+        db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
