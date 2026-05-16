@@ -1,12 +1,3 @@
-"""Shared fixtures for the reasoning_effort grid e2e suite.
-
-VCR wiring (Redis-backed cassette persister, auto-application of
-``@pytest.mark.vcr`` to every collected item, cassette-cache health summary)
-is inherited from ``tests/llm_translation/conftest.py``. This file only
-contributes the ``wire_capture`` fixture, which records the wire body
-LiteLLM sends upstream so each cell can inspect it.
-"""
-
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -16,14 +7,6 @@ from litellm.integrations.custom_logger import CustomLogger
 
 
 class _WireBodyCapture(CustomLogger):
-    """Pre-call hook that records the outgoing wire body LiteLLM sends upstream.
-
-    ``complete_input_dict`` is the fully transformed provider request as set
-    by every provider transformation in ``litellm/llms/**``. Capturing it here
-    means a regression anywhere in the transformation chain (strip, rename,
-    drop) surfaces as an assertion failure on the cell that depends on it.
-    """
-
     def __init__(self) -> None:
         super().__init__()
         self.records: List[Dict[str, Any]] = []
