@@ -126,17 +126,25 @@ class WebSearchInterceptionLogger(CustomLogger):
         # includes a follow-up LLM call to synthesize the answer from search
         # results.  Short-circuiting those would skip that synthesis step and
         # return raw search text — a regression for existing users.
+        #
+        # github_copilot is the exception: it has a BaseAnthropicMessagesConfig
+        # (added for thinking passthrough), but Copilot does not handle
+        # web_search tools natively, so we still need the short-circuit for
+        # web-search-only requests against Copilot.
         try:
             provider_enum = LlmProviders(provider_str)
-            anthropic_config = ProviderConfigManager.get_provider_anthropic_messages_config(
-                model=model, provider=provider_enum
-            )
-            if anthropic_config is not None:
-                verbose_logger.debug(
-                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
-                    "(provider has native Anthropic Messages support, using agentic loop)"
+            if provider_enum != LlmProviders.GITHUB_COPILOT:
+                anthropic_config = (
+                    ProviderConfigManager.get_provider_anthropic_messages_config(
+                        model=model, provider=provider_enum
+                    )
                 )
-                return None
+                if anthropic_config is not None:
+                    verbose_logger.debug(
+                        f"WebSearchInterception: Skipping short-circuit for {provider_str} "
+                        "(provider has native Anthropic Messages support, using agentic loop)"
+                    )
+                    return None
         except (ValueError, Exception):
             pass  # unknown provider enum → safe to short-circuit
 

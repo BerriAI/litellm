@@ -35,12 +35,15 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         """
         Validate environment for GitHub Copilot and add Copilot-specific headers.
+
+        The caller-supplied ``api_base`` is intentionally ignored. Routing this
+        request anywhere other than the authenticated Copilot endpoint would
+        leak the Copilot bearer token to a caller-controlled URL.
         """
-        # Get Copilot auth credentials
+        # Always use the Copilot endpoint resolved from the authenticated
+        # session, never the caller-supplied api_base.
         dynamic_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
-            or DEFAULT_GITHUB_COPILOT_API_BASE
+            self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
         )
         try:
             dynamic_api_key = self.authenticator.get_api_key()
@@ -61,6 +64,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
 
+        # Auto-inject anthropic-beta headers for advanced features
+        # (context_management, tool_search, output_format, speed)
+        headers = self._update_headers_with_anthropic_beta(
+            headers, optional_params, custom_llm_provider="github_copilot"
+        )
+
         return headers, dynamic_api_base
 
     def get_complete_url(
@@ -74,8 +83,13 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> str:
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.
+
+        The caller-supplied ``api_base`` is intentionally ignored to avoid
+        leaking the Copilot bearer token to a caller-controlled URL.
         """
-        api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+        resolved = (
+            self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
+        if not resolved.endswith("/v1/messages"):
+            resolved = f"{resolved}/v1/messages"
+        return resolved
