@@ -172,7 +172,7 @@ async def _call_messages(
 ) -> Tuple[int, Optional[Exception]]:
     kwargs = _build_messages_kwargs(model, effort)
     try:
-        await litellm.messages.acreate(**kwargs)
+        await litellm.anthropic_messages(**kwargs)
         return 200, None
     except BadRequestError as exc:
         return 400, exc
