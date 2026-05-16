@@ -535,6 +535,34 @@ def test_map_openai_params_no_thinking_leaves_params_unchanged():
     assert optional_params.get("temperature") == 0.5
 
 
+def test_map_openai_params_thinking_does_not_overwrite_reasoning_effort_in_optional_params():
+    """``reasoning_effort`` already in ``optional_params`` must not be overwritten
+    by the ``thinking`` conversion."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        optional_params={"reasoning_effort": "low"},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "low"
+
+
+def test_map_openai_params_thinking_not_popped_for_non_claude_model():
+    """For non-Claude models, ``thinking`` must not be silently discarded —
+    it should pass through to the parent's unsupported-param handling."""
+    config = GithubCopilotConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in optional_params
+
+
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()

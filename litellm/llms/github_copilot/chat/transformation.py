@@ -151,8 +151,13 @@ class GithubCopilotConfig(OpenAIConfig):
         global ``openAIGPTConfig`` whose supported-params list does not include
         ``reasoning_effort`` for Claude models, so a deferred write would be dropped.
         """
-        thinking = non_default_params.pop("thinking", None)
-        existing_reasoning_effort = non_default_params.get("reasoning_effort")
+        if "claude" in model.lower():
+            thinking = non_default_params.pop("thinking", None)
+        else:
+            thinking = None
+        existing_reasoning_effort = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
         if (
             thinking is not None
             and isinstance(thinking, dict)
@@ -169,7 +174,7 @@ class GithubCopilotConfig(OpenAIConfig):
             else:
                 reasoning_effort = "minimal"
             optional_params["reasoning_effort"] = reasoning_effort
-        elif existing_reasoning_effort is not None:
+        elif non_default_params.get("reasoning_effort") is not None:
             optional_params["reasoning_effort"] = non_default_params.pop(
                 "reasoning_effort"
             )
