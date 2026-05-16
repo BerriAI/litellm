@@ -6,10 +6,11 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
-from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 
 
 def test_github_copilot_anthropic_messages_config_init():
@@ -20,10 +21,12 @@ def test_github_copilot_anthropic_messages_config_init():
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():
-    """Test URL construction for GitHub Copilot messages endpoint."""
+    """URL is always resolved from the authenticator, never the caller."""
     config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = None
 
-    # Test with default api_base
+    # No api_base supplied -> default Copilot endpoint
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -33,25 +36,28 @@ def test_github_copilot_anthropic_messages_get_complete_url():
     )
     assert url == "https://api.githubcopilot.com/v1/messages"
 
-    # Test with custom api_base
+    # Caller-supplied api_base must be ignored (token-exfiltration guard).
     url = config.get_complete_url(
-        api_base="https://custom.api.com",
+        api_base="https://attacker.example.com",
         api_key=None,
         model="github_copilot/claude-haiku-4.5",
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://custom.api.com/v1/messages"
+    assert url == "https://api.githubcopilot.com/v1/messages"
 
-    # Test with api_base already ending with /v1/messages
+    # Authenticator-provided base is honored (e.g. business/enterprise tenants).
+    config.authenticator.get_api_base.return_value = (
+        "https://api.business.githubcopilot.com"
+    )
     url = config.get_complete_url(
-        api_base="https://custom.api.com/v1/messages",
+        api_base="https://attacker.example.com",
         api_key=None,
         model="github_copilot/claude-haiku-4.5",
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://custom.api.com/v1/messages"
+    assert url == "https://api.business.githubcopilot.com/v1/messages"
 
 
 def test_github_copilot_anthropic_messages_validate_environment():
@@ -64,6 +70,7 @@ def test_github_copilot_anthropic_messages_validate_environment():
     config.authenticator.get_api_base.return_value = None
 
     headers = {}
+    # Pass a hostile api_base to confirm it is ignored.
     validated_headers, api_base = config.validate_anthropic_messages_environment(
         headers=headers,
         model="github_copilot/claude-haiku-4.5",
@@ -71,7 +78,7 @@ def test_github_copilot_anthropic_messages_validate_environment():
         optional_params={},
         litellm_params={},
         api_key=None,
-        api_base=None,
+        api_base="https://attacker.example.com",
     )
 
     # Check that Copilot headers were added
@@ -80,7 +87,31 @@ def test_github_copilot_anthropic_messages_validate_environment():
     assert "Authorization" in validated_headers
     assert "anthropic-version" in validated_headers
     assert validated_headers["anthropic-version"] == "2023-06-01"
+    # api_base must come from the authenticator, never the caller.
     assert api_base == "https://api.githubcopilot.com"
+
+
+def test_github_copilot_anthropic_messages_validate_environment_injects_beta_headers():
+    """Anthropic-beta headers must be auto-injected for advanced features
+    (context_management, output_format, etc.) — matches the parent
+    AnthropicMessagesConfig contract."""
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key"
+    config.authenticator.get_api_base.return_value = None
+
+    validated_headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_format": {"type": "json_object"}},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert "anthropic-beta" in validated_headers
+    assert "structured-outputs-2025-11-13" in validated_headers["anthropic-beta"]
 
 
 def test_github_copilot_anthropic_messages_validate_environment_auth_error():
@@ -93,7 +124,7 @@ def test_github_copilot_anthropic_messages_validate_environment_auth_error():
         status_code=401, message="No valid API key found"
     )
 
-    with pytest.raises(Exception):  # AuthenticationError
+    with pytest.raises(AuthenticationError):
         config.validate_anthropic_messages_environment(
             headers={},
             model="github_copilot/claude-haiku-4.5",
