@@ -573,10 +573,11 @@ def test_escalation_threshold_min_guard(mock_proxy_logging):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_circuit_breaker_opens_after_repeated_failures(
+async def test_reconnect_circuit_breaker_exit_action_does_not_terminate_on_reconnect_failures(
     engine_client,
 ):
     engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
     engine_client._db_reconnect_circuit_breaker_max_attempts = 100
     engine_client._db_reconnect_circuit_breaker_max_failures = 2
     engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 100
@@ -603,7 +604,7 @@ async def test_reconnect_circuit_breaker_opens_after_repeated_failures(
     assert first_result is False
     assert second_result is False
     assert engine_client._db_reconnect_circuit_breaker_opened is True
-    engine_client._terminate_for_reconnect_breaker.assert_called_once()
+    engine_client._terminate_for_reconnect_breaker.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -611,6 +612,7 @@ async def test_reconnect_circuit_breaker_opens_immediately_on_engine_death(
     engine_client,
 ):
     engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
     engine_client._db_reconnect_circuit_breaker_max_attempts = 100
     engine_client._db_reconnect_circuit_breaker_max_failures = 100
     engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 1
@@ -663,6 +665,7 @@ async def test_reconnect_circuit_breaker_opens_on_exact_attempt_threshold(
     engine_client,
 ):
     engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_action = "exit"
     engine_client._db_reconnect_circuit_breaker_max_attempts = 2
     engine_client._db_reconnect_circuit_breaker_max_failures = 100
     engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 100
@@ -685,10 +688,10 @@ async def test_reconnect_circuit_breaker_opens_on_exact_attempt_threshold(
     )
 
     assert first_result is True
-    assert second_result is False
+    assert second_result is True
     assert len(engine_client._db_reconnect_breaker_attempts) == 2
     assert engine_client._db_reconnect_circuit_breaker_opened is True
-    engine_client._terminate_for_reconnect_breaker.assert_called_once()
+    engine_client._terminate_for_reconnect_breaker.assert_not_called()
 
 
 def test_reconnect_circuit_breaker_success_clears_failure_state(engine_client):
@@ -754,3 +757,25 @@ def test_reconnect_circuit_breaker_env_vars_are_respected(mock_proxy_logging):
     assert client._db_reconnect_breaker_attempts.maxlen == 4
     assert client._db_reconnect_breaker_failures.maxlen == 2
     assert client._db_reconnect_breaker_engine_deaths.maxlen == 1
+
+
+def test_reconnect_circuit_breaker_action_defaults_to_log(mock_proxy_logging):
+    with patch.dict(os.environ, {}, clear=True):
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
+
+    assert client._db_reconnect_circuit_breaker_enabled is True
+    assert client._db_reconnect_circuit_breaker_action == "log"
+
+
+def test_reconnect_circuit_breaker_invalid_action_defaults_to_log(mock_proxy_logging):
+    with patch.dict(
+        os.environ,
+        {"PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION": "invalid"},
+    ):
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
+
+    assert client._db_reconnect_circuit_breaker_action == "log"

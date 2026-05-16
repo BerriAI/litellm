@@ -2722,15 +2722,16 @@ class PrismaClient:
             int(os.getenv("PRISMA_RECONNECT_CIRCUIT_BREAKER_MAX_ENGINE_DEATHS", "1")),
         )
         self._db_reconnect_circuit_breaker_action: str = os.getenv(
-            "PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION", "exit"
+            "PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION", "log"
         ).lower()
         if self._db_reconnect_circuit_breaker_action not in {"exit", "log"}:
             verbose_proxy_logger.warning(
-                "Invalid PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION=%s; defaulting to exit",
+                "Invalid PRISMA_RECONNECT_CIRCUIT_BREAKER_ACTION=%s; defaulting to log",
                 self._db_reconnect_circuit_breaker_action,
             )
-            self._db_reconnect_circuit_breaker_action = "exit"
+            self._db_reconnect_circuit_breaker_action = "log"
         self._db_reconnect_circuit_breaker_opened: bool = False
+        self._db_reconnect_circuit_breaker_termination_started: bool = False
         self._db_reconnect_breaker_attempts: Deque[float] = deque(
             maxlen=self._db_reconnect_circuit_breaker_max_attempts
         )
@@ -4382,8 +4383,12 @@ class PrismaClient:
         return None
 
     def _terminate_for_reconnect_breaker(self) -> None:
-        if self._db_reconnect_circuit_breaker_action == "log":
+        if (
+            self._db_reconnect_circuit_breaker_action == "log"
+            or self._db_reconnect_circuit_breaker_termination_started
+        ):
             return
+        self._db_reconnect_circuit_breaker_termination_started = True
 
         def _hard_exit_if_sigterm_did_not_stop_process() -> None:
             time.sleep(30)
@@ -4396,6 +4401,11 @@ class PrismaClient:
         ).start()
         os.kill(os.getpid(), signal.SIGTERM)
 
+    def _should_terminate_for_reconnect_breaker(self, open_reason: str) -> bool:
+        if self._db_reconnect_circuit_breaker_action != "exit":
+            return False
+        return open_reason == "engine_process_death_threshold_exceeded"
+
     def _open_reconnect_breaker(
         self,
         *,
@@ -4404,33 +4414,37 @@ class PrismaClient:
         counts: Dict[str, int],
         last_error: Optional[BaseException],
     ) -> None:
-        if self._db_reconnect_circuit_breaker_opened:
+        should_terminate = self._should_terminate_for_reconnect_breaker(open_reason)
+        if self._db_reconnect_circuit_breaker_opened and not should_terminate:
             return
-        self._db_reconnect_circuit_breaker_opened = True
-        verbose_proxy_logger.critical(
-            "Prisma DB reconnect circuit breaker opened. "
-            "open_reason=%s current_reason=%s attempts=%s failures=%s engine_deaths=%s "
-            "window_seconds=%s max_attempts=%s max_failures=%s max_engine_deaths=%s "
-            "last_event_type=%s last_event_reason=%s last_error_type=%s last_error=%s "
-            "action=%s worker_pid=%s engine_pid=%s",
-            open_reason,
-            current_reason,
-            counts["attempts"],
-            counts["failures"],
-            counts["engine_deaths"],
-            self._db_reconnect_circuit_breaker_window_seconds,
-            self._db_reconnect_circuit_breaker_max_attempts,
-            self._db_reconnect_circuit_breaker_max_failures,
-            self._db_reconnect_circuit_breaker_max_engine_deaths,
-            self._db_reconnect_breaker_last_event_type,
-            self._db_reconnect_breaker_last_reason,
-            type(last_error).__name__ if last_error is not None else None,
-            last_error,
-            self._db_reconnect_circuit_breaker_action,
-            os.getpid(),
-            self._db_reconnect_breaker_last_engine_pid,
-        )
-        self._terminate_for_reconnect_breaker()
+        if not self._db_reconnect_circuit_breaker_opened or should_terminate:
+            self._db_reconnect_circuit_breaker_opened = True
+            verbose_proxy_logger.critical(
+                "Prisma DB reconnect circuit breaker opened. "
+                "open_reason=%s current_reason=%s attempts=%s failures=%s engine_deaths=%s "
+                "window_seconds=%s max_attempts=%s max_failures=%s max_engine_deaths=%s "
+                "last_event_type=%s last_event_reason=%s last_error_type=%s last_error=%s "
+                "action=%s should_terminate=%s worker_pid=%s engine_pid=%s",
+                open_reason,
+                current_reason,
+                counts["attempts"],
+                counts["failures"],
+                counts["engine_deaths"],
+                self._db_reconnect_circuit_breaker_window_seconds,
+                self._db_reconnect_circuit_breaker_max_attempts,
+                self._db_reconnect_circuit_breaker_max_failures,
+                self._db_reconnect_circuit_breaker_max_engine_deaths,
+                self._db_reconnect_breaker_last_event_type,
+                self._db_reconnect_breaker_last_reason,
+                type(last_error).__name__ if last_error is not None else None,
+                last_error,
+                self._db_reconnect_circuit_breaker_action,
+                should_terminate,
+                os.getpid(),
+                self._db_reconnect_breaker_last_engine_pid,
+            )
+        if should_terminate:
+            self._terminate_for_reconnect_breaker()
 
     def _record_reconnect_breaker_event(
         self,
@@ -4469,7 +4483,7 @@ class PrismaClient:
             counts=counts,
             last_error=error,
         )
-        return self._db_reconnect_circuit_breaker_action == "exit"
+        return self._should_terminate_for_reconnect_breaker(open_reason)
 
     async def _run_reconnect_cycle(
         self, timeout_seconds: Optional[float] = None
