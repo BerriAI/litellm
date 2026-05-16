@@ -1035,6 +1035,33 @@ def test_can_rbac_role_call_model():
         )
 
 
+def test_can_rbac_role_call_model_wildcard():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+
+    perms = [
+        RoleBasedPermissions(
+            role=LitellmUserRoles.INTERNAL_USER,
+            models=["bedrock-claude-*"],
+        ),
+        RoleBasedPermissions(
+            role=LitellmUserRoles.PROXY_ADMIN,
+            models=["*"],
+        ),
+    ]
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={"role_permissions": perms},
+        model="bedrock-claude-draft-rep-sonnet",
+    )
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.PROXY_ADMIN,
+        general_settings={"role_permissions": perms},
+        model="any-model-name",
+    )
+
+
 def test_can_rbac_role_call_model_no_role_permissions():
     from litellm.proxy.auth.handle_jwt import JWTAuthManager
 

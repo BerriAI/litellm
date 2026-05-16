@@ -52,6 +52,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
     _allowed_routes_check,
+    _check_model_access_helper,
     allowed_routes_check,
     get_actual_routes,
     get_end_user_object,
@@ -909,7 +910,13 @@ class JWTAuthManager:
         if role_based_models is None or model is None:
             return True
 
-        if model not in role_based_models:
+        from litellm.proxy.proxy_server import llm_router
+
+        if not _check_model_access_helper(
+            model=model,
+            llm_router=llm_router,
+            models=role_based_models,
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
