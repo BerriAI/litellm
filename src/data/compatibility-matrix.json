@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-05-16T19:21:06Z",
+  "generated_at": "2026-05-16T20:18:00Z",
   "litellm_version": "v1.83.14-stable",
   "claude_code_version": "2.1.126",
   "providers": [
@@ -44,8 +44,7 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "fail",
-          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
+          "status": "pass"
         },
         "vertex_ai": {
           "status": "pass"
@@ -88,7 +87,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -121,8 +121,8 @@
       }
     },
     {
-      "id": "extended_thinking",
-      "name": "Extended thinking",
+      "id": "thinking",
+      "name": "Thinking",
       "providers": {
         "anthropic": {
           "status": "pass"
@@ -133,7 +133,7 @@
         },
         "bedrock_converse": {
           "status": "fail",
-          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
+          "error": "[claude-opus-4-7-bedrock-converse] no `thinking` content block observed in stream-json events"
         },
         "vertex_ai": {
           "status": "fail",
@@ -245,6 +245,95 @@
         "bedrock_converse": {
           "status": "fail",
           "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "structured_outputs",
+      "name": "Structured outputs",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "count_tokens",
+      "name": "count_tokens endpoint",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "pass"
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "fail",
+          "error": "[claude-haiku-4-5-vertex] count_tokens probe failed: status 500: {\"detail\":{\"error\":\"Internal server error: vertexai import failed please run `pip install -U \\\"google-cloud-aiplatform>=1.38\\\"`. Got error: No module named 'vertexai'\"}}"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "tool_search",
+      "name": "Tool search (MCP discovery)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-invoke] tool_search probe failed: status 400: {\"error\":{\"message\":\"{\\\"message\\\":\\\"tools.0: Input tag 'tool_search_tool_regex_20251119' found using 'type' does not match any of the expected tags: 'bash_20250124', 'custom', 'memory_20250818', 'text_editor_20250124', 'text_editor_20250429', 'text_editor_20250728', 'web_search_20250305'\\\"}. Received Model Group=claude-haiku-4-5-bedrock-invoke\\nAvailable Model Group Fallbacks=None\",\"type\":\"None\",\""
+        },
+        "bedrock_converse": {
+          "status": "pass"
+        },
+        "vertex_ai": {
+          "status": "pass"
+        },
+        "azure": {
+          "status": "pass"
+        }
+      }
+    },
+    {
+      "id": "long_context_1m",
+      "name": "Long context (1M)",
+      "providers": {
+        "anthropic": {
+          "status": "pass"
+        },
+        "bedrock_invoke": {
+          "status": "fail",
+          "error": "[claude-opus-4-7-bedrock-invoke] claude CLI failed: exit=1; text=API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach. If you are seeing this refusal repeatedly, try running /model claude-sonnet-4-20250514 to switch models."
+        },
+        "bedrock_converse": {
+          "status": "fail",
+          "error": "[claude-opus-4-7-bedrock-converse] claude returned empty assistant text"
         },
         "vertex_ai": {
           "status": "pass"
