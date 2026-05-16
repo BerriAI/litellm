@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -4624,4 +4625,134 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             len(guardrail_spans),
             2,
             f"Two distinct guardrail invocations expected, got {len(guardrail_spans)}",
+        )
+
+
+class TestOpenTelemetryHttpStatusCodeAttribute(unittest.TestCase):
+    """PR 1: the failure recorder also exposes the HTTP status under the
+    OTel-standard ``http.response.status_code`` (as an int), while keeping the
+    legacy ``error.code`` for back-compat and leaving span status untouched.
+    """
+
+    def _record(self, error_information):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        kwargs = {
+            "exception": ValueError("boom"),
+            "standard_logging_object": {"error_information": error_information},
+        }
+        otel._record_exception_on_span(span=span, kwargs=kwargs)
+        span.end()
+
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1
+        return finished[0]
+
+    def test_401_sets_int_status_code_and_error_type(self):
+        span = self._record({"error_code": "401", "error_class": "AuthenticationError"})
+        assert span.attributes["http.response.status_code"] == 401
+        assert isinstance(span.attributes["http.response.status_code"], int)
+        assert span.attributes["error.type"] == "AuthenticationError"
+
+    def test_429_terminal(self):
+        span = self._record({"error_code": "429"})
+        assert span.attributes["http.response.status_code"] == 429
+
+    def test_500_sets_status_code_and_records_exception_event(self):
+        span = self._record({"error_code": "500"})
+        assert span.attributes["http.response.status_code"] == 500
+        assert any(e.name == "exception" for e in span.events)
+
+    def test_legacy_error_code_still_present_no_regression(self):
+        span = self._record({"error_code": "401"})
+        assert span.attributes["error.code"] == "401"
+
+    def test_non_numeric_error_code_omits_status_code(self):
+        span = self._record({"error_code": "ContextWindowExceeded"})
+        assert "http.response.status_code" not in span.attributes
+        # legacy attribute still set so existing dashboards don't regress
+        assert span.attributes["error.code"] == "ContextWindowExceeded"
+
+    def test_empty_error_code_omits_status_code(self):
+        span = self._record({"error_code": ""})
+        assert "http.response.status_code" not in span.attributes
+
+    def test_recorder_does_not_touch_span_status(self):
+        # Leaving status at UNSET proves PR 1 is no-behavior-change on the
+        # status axis — flipping 4xx off ERROR is PR 1-FOLLOWUP's job.
+        span = self._record({"error_code": "401"})
+        assert span.status.status_code == trace.StatusCode.UNSET
+
+
+class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
+    """PR 1: the error attributes must land on the SERVER span the customer's
+    dashboards query. ``_handle_failure`` records on the litellm_request child
+    span (parent not in kwargs), so ``async_post_call_failure_hook`` — which
+    holds the real SERVER span via ``user_api_key_dict.parent_otel_span`` — is
+    where the SERVER span gets stamped.
+    """
+
+    def _run_hook(self, exception):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        otel.tracer = tracer
+        server_span = tracer.start_span("Received Proxy Server Request")
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.parent_otel_span = server_span
+
+        asyncio.run(
+            otel.async_post_call_failure_hook(
+                request_data={},
+                original_exception=exception,
+                user_api_key_dict=user_api_key_dict,
+                traceback_str="trace",
+            )
+        )
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        assert "Received Proxy Server Request" in finished
+        return finished["Received Proxy Server Request"]
+
+    def test_server_span_gets_int_status_code_and_error_type(self):
+        class _Boom(Exception):
+            status_code = 500
+
+        span = self._run_hook(_Boom("upstream blew up"))
+        assert span.attributes["http.response.status_code"] == 500
+        assert isinstance(span.attributes["http.response.status_code"], int)
+        assert span.attributes["error.type"] == "_Boom"
+        assert span.attributes["error.code"] == "500"  # legacy, string
+        assert span.status.status_code == trace.StatusCode.ERROR
+
+    def test_non_numeric_code_omits_status_code_no_crash(self):
+        class _Boom(Exception):
+            code = "ContextWindowExceeded"
+
+        span = self._run_hook(_Boom("bad"))
+        assert "http.response.status_code" not in span.attributes
+        assert span.attributes["error.code"] == "ContextWindowExceeded"
+
+    def test_no_parent_span_is_noop(self):
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.parent_otel_span = None
+        # Must not raise when there is no SERVER span (e.g. pre-auth 401).
+        asyncio.run(
+            otel.async_post_call_failure_hook(
+                request_data={},
+                original_exception=ValueError("x"),
+                user_api_key_dict=user_api_key_dict,
+                traceback_str=None,
+            )
         )

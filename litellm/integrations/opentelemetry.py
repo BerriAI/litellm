@@ -59,6 +59,9 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
 LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
+# OTel-standard HTTP semantic-convention name; what APM dashboards query
+# (status is also kept under the non-standard error.code for back compat).
+HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -667,6 +670,31 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         parent_otel_span = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
             parent_otel_span.set_status(Status(StatusCode.ERROR))
+
+            # Stamp structured error attrs (error.code,
+            # http.response.status_code, error.type, ...) on the SERVER span
+            # itself. Dashboards query this span, but the failure path
+            # otherwise only set its status — _handle_failure records on the
+            # litellm_request child span, not here. Reuses the same recorder
+            # and extraction as that path so the values match. Inline import:
+            # litellm_logging <-> integrations is circular (same reason as
+            # the Logging import elsewhere in this module).
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+
+            error_information = StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
+            self._record_exception_on_span(
+                span=parent_otel_span,
+                kwargs={
+                    "exception": original_exception,
+                    "standard_logging_object": {"error_information": error_information},
+                },
+            )
+
             _span_name = "Failed Proxy Server Request"
 
             # Exception Logging Child Span
@@ -1626,6 +1654,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     key=ErrorAttributes.ERROR_CODE,
                     value=error_information["error_code"],
                 )
+
+                # Also expose it under the OTel-standard name as an int.
+                # error_code is a str and may be non-numeric, so coerce/skip.
+                try:
+                    self.safe_set_attribute(
+                        span=span,
+                        key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                        value=int(error_information["error_code"]),
+                    )
+                except (ValueError, TypeError):
+                    pass
 
             if error_information.get("error_class"):
                 self.safe_set_attribute(
