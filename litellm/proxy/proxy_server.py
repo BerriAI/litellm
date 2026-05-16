@@ -10892,11 +10892,8 @@ def _enrich_model_info_with_litellm_data(
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
-    page: int,
-    size: int,
     prisma_client: Optional[Any],
     proxy_config: Any,
-    sort_by: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -10904,11 +10901,8 @@ async def _apply_search_filter_to_models(
     Args:
         all_models: List of models to filter
         search: Search term (case-insensitive)
-        page: Current page number
-        size: Page size
         prisma_client: Prisma client for database queries
         proxy_config: Proxy config for decrypting models
-        sort_by: Optional sort field - if provided, fetch all matching models instead of paginating at DB level
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -10954,13 +10948,19 @@ async def _apply_search_filter_to_models(
     # Query database for additional models with search term
     db_models = []
     db_models_total_count = 0
-    models_needed_for_page = size * page
 
     # Only query database if prisma_client is available
     if prisma_client is not None:
         try:
-            # Match either the persisted model_name or, for team BYOK rows,
-            # the user-facing team_public_model_name stored inside model_info.
+            # Prisma's JSON path `string_contains` is case-sensitive in
+            # Postgres (it doesn't accept the `mode: insensitive` flag the
+            # way column-level string filters do), so the BYOK branch
+            # below can't match mixed-case stored names like
+            # "Claude Sonnet" against a lowercased search term. Widen the
+            # JSON branch to "row has a team_public_model_name set"
+            # (`string_contains: ""` matches any string at the path) and
+            # filter case-insensitively in Python below so behavior
+            # matches the router-side path in `_model_matches_search`.
             db_where_condition: Dict[str, Any] = {
                 "OR": [
                     {
@@ -10972,7 +10972,7 @@ async def _apply_search_filter_to_models(
                     {
                         "model_info": {
                             "path": ["team_public_model_name"],
-                            "string_contains": search_lower,
+                            "string_contains": "",
                         }
                     },
                 ]
@@ -10983,58 +10983,36 @@ async def _apply_search_filter_to_models(
                     "not": {"in": list(db_model_ids_in_router)}
                 }
 
-            # Get total count of matching database models
-            db_models_total_count = (
-                await prisma_client.db.litellm_proxymodeltable.count(
-                    where=db_where_condition
-                )
+            # Fetch all candidates and filter in Python. We can't trust a
+            # DB-level count because the BYOK branch is over-broad — it
+            # returns every row with a team_public_model_name regardless
+            # of whether it matches the search term.
+            db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
+                where=db_where_condition,
             )
+
+            def _db_row_matches_search(db_model: Any) -> bool:
+                if search_lower in (db_model.model_name or "").lower():
+                    return True
+                info = (
+                    db_model.model_info if isinstance(db_model.model_info, dict) else {}
+                )
+                return (
+                    search_lower in (info.get("team_public_model_name") or "").lower()
+                )
+
+            matching_db_rows = [m for m in db_models_raw if _db_row_matches_search(m)]
+            db_models_total_count = len(matching_db_rows)
 
             # Calculate total count for search results
             search_total_count = router_models_count + db_models_total_count
 
-            # If sorting is requested, we need to fetch ALL matching models to sort correctly
-            # Otherwise, we can optimize by only fetching what's needed for the current page
-            if sort_by:
-                # Fetch all matching database models for sorting
-                if db_models_total_count > 0:
-                    db_models_raw = (
-                        await prisma_client.db.litellm_proxymodeltable.find_many(
-                            where=db_where_condition,
-                            take=db_models_total_count,  # Fetch all matching models
-                        )
-                    )
-
-                    # Convert database models to router format
-                    for db_model in db_models_raw:
-                        decrypted_models = proxy_config.decrypt_model_list_from_db(
-                            [db_model]
-                        )
-                        if decrypted_models:
-                            db_models.extend(decrypted_models)
-            else:
-                # Fetch database models if we need more for the current page
-                if router_models_count < models_needed_for_page:
-                    models_to_fetch = min(
-                        models_needed_for_page - router_models_count,
-                        db_models_total_count,
-                    )
-
-                    if models_to_fetch > 0:
-                        db_models_raw = (
-                            await prisma_client.db.litellm_proxymodeltable.find_many(
-                                where=db_where_condition,
-                                take=models_to_fetch,
-                            )
-                        )
-
-                        # Convert database models to router format
-                        for db_model in db_models_raw:
-                            decrypted_models = proxy_config.decrypt_model_list_from_db(
-                                [db_model]
-                            )
-                            if decrypted_models:
-                                db_models.extend(decrypted_models)
+            # Decrypt matching rows. Done after the in-Python filter so we
+            # don't decrypt BYOK rows we're going to throw away.
+            for db_model in matching_db_rows:
+                decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+                if decrypted_models:
+                    db_models.extend(decrypted_models)
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error querying database models with search: {str(e)}"
@@ -11511,11 +11489,8 @@ async def model_info_v2(
         all_models, search_total_count = await _apply_search_filter_to_models(
             all_models=all_models,
             search=search or "",
-            page=page,
-            size=size,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
-            sort_by=sortBy,
         )
 
     if user_models_only:
