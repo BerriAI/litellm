@@ -279,11 +279,6 @@ const config = {
             label: 'Docs',
           },
           {
-            href: 'https://docs.litellm-agent-platform.ai/',
-            label: 'LiteLLM Agent Platform',
-            position: 'left',
-          },
-          {
             type: 'docSidebar',
             sidebarId: 'learnSidebar',
             position: 'left',
@@ -302,6 +297,11 @@ const config = {
           },
           { to: '/release_notes', label: 'Changelog', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
+          {
+            href: 'https://docs.litellm-agent-platform.ai/',
+            label: 'LiteLLM Agent Platform',
+            position: 'left',
+          },
           {
             href: 'https://github.com/BerriAI/litellm',
             position: 'right',
