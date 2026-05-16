@@ -191,7 +191,18 @@ def pytest_runtest_makereport(item, call):
     """
     outcome = yield
     report = outcome.get_result()
-    if report.when != "call":
+    # We record on two phases:
+    #   - "call": the normal end-of-test path.
+    #   - "setup" but only on failure: fixture/import errors that prevent the
+    #     test body from running. Without recording these, a broken setup
+    #     silently becomes "not_tested" in the published matrix instead of
+    #     "fail". Teardown is ignored — by then "call" already recorded the
+    #     outcome, and a teardown-only failure (e.g. fixture finalizer) is
+    #     not a cell-level signal.
+    if report.when == "setup":
+        if not report.failed:
+            return
+    elif report.when != "call":
         return
 
     inferred = _infer_feature_and_provider(Path(str(item.path)))
@@ -204,24 +215,27 @@ def pytest_runtest_makereport(item, call):
         fixture.collected() if isinstance(fixture, CompatResult) else []
     )
 
-    if not collected:
-        if report.passed:
-            collected = [
-                {
-                    "status": "fail",
-                    "error": "test passed without reporting via compat_result; "
-                    "every compat test must report a status.",
-                }
-            ]
-        else:
-            collected = [
-                {
-                    "status": "fail",
-                    "error": (
-                        str(report.longrepr) if report.longrepr else "test failed"
-                    ),
-                }
-            ]
+    if report.failed:
+        # The test body (or setup) raised. If the test had already recorded
+        # some per-model passes via `.add(...)` before crashing, those
+        # partial entries would otherwise aggregate to "pass" and hide the
+        # crash from the published matrix. Append an explicit "fail" row so
+        # the cell aggregator (which gives precedence to any fail) surfaces
+        # the breakage.
+        collected = collected + [
+            {
+                "status": "fail",
+                "error": (str(report.longrepr) if report.longrepr else "test failed"),
+            }
+        ]
+    elif not collected:
+        collected = [
+            {
+                "status": "fail",
+                "error": "test passed without reporting via compat_result; "
+                "every compat test must report a status.",
+            }
+        ]
 
     for reported in collected:
         _COLLECTOR.items.append(
