@@ -1605,13 +1605,49 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
 
 
-def test_gemini_image_size_limit_exceeded():
+def test_gemini_image_size_limit_exceeded(monkeypatch):
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
 
     This validates that the 50MB default limit prevents downloading very large images
     that could cause memory issues and pod crashes.
+
+    The image fetch is mocked (mirroring the LargeImageClient pattern in
+    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    deterministically exercises the size-limit rejection path without any
+    external network dependency.
     """
+    from httpx import Request, Response
+
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    class LargeImageClient:
+        """Returns a response whose Content-Length exceeds the 50MB limit."""
+
+        def get(self, url, follow_redirects=True):
+            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(size_bytes),
+                },
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
+                request=Request("GET", url),
+            )
+
+    # Bypass SSRF validation (which would resolve DNS / hit the network) and
+    # route straight to our mocked client.
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
+
     messages = [
         {
             "role": "user",
@@ -1619,7 +1655,7 @@ def test_gemini_image_size_limit_exceeded():
                 {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg",
+                    "image_url": "https://example.com/large-image.jpg",
                 },
             ],
         }
@@ -1629,8 +1665,6 @@ def test_gemini_image_size_limit_exceeded():
         completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
 
     error_message = str(excinfo.value)
-    if "Status code: 429" in error_message or "Too Many Requests" in error_message:
-        pytest.skip(f"Wikimedia rate-limited the test fixture image: {error_message}")
     assert "Image size" in error_message
     assert "exceeds maximum allowed size" in error_message
 
