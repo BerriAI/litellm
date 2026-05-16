@@ -4,8 +4,8 @@ Unit tests for nested access group resolution (#28032).
 Covers:
 - resolve_nested_groups (DFS + cycle detection)
 - _get_models_from_access_groups with the new group_memberships kwarg
-- _classify_member_names precedence
-- validate_models_exist with known_access_groups
+
+Classify + validate coverage lives in test_nested_access_groups_validate.py.
 """
 
 import os
@@ -18,10 +18,6 @@ import pytest
 from litellm.proxy.auth.model_checks import (
     _get_models_from_access_groups,
     resolve_nested_groups,
-)
-from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-    _classify_member_names,
-    validate_models_exist,
 )
 
 
@@ -157,87 +153,6 @@ def test_include_model_access_groups_keeps_parent_name():
 
     assert "project-x" in result
     assert "dall-e-3" in result
-
-
-# ---------------------------------------------------------------------------
-# _classify_member_names
-# ---------------------------------------------------------------------------
-
-
-def test_classify_router_model_takes_precedence_over_group():
-    """A name registered as both a router model and a group is classified as a model."""
-    real, child, unknown = _classify_member_names(
-        names=["shared-name"],
-        router_model_names={"shared-name"},
-        known_access_groups={"shared-name"},
-    )
-    assert real == ["shared-name"]
-    assert child == []
-    assert unknown == []
-
-
-def test_classify_splits_mixed_input():
-    """Mixed input is split across the three buckets in order."""
-    real, child, unknown = _classify_member_names(
-        names=["gpt-4", "image-group", "mystery"],
-        router_model_names={"gpt-4"},
-        known_access_groups={"image-group"},
-    )
-    assert real == ["gpt-4"]
-    assert child == ["image-group"]
-    assert unknown == ["mystery"]
-
-
-# ---------------------------------------------------------------------------
-# validate_models_exist
-# ---------------------------------------------------------------------------
-
-
-def test_validate_models_exist_accepts_known_group_names():
-    """Group names are valid members when passed via known_access_groups."""
-
-    class FakeRouter:
-        def get_model_names(self):
-            return ["gpt-4"]
-
-    all_valid, missing = validate_models_exist(
-        model_names=["gpt-4", "image-group"],
-        llm_router=FakeRouter(),
-        known_access_groups={"image-group"},
-    )
-    assert all_valid is True
-    assert missing == []
-
-
-def test_validate_models_exist_reports_unknown_names():
-    """Names that match neither a router model nor a known group are reported."""
-
-    class FakeRouter:
-        def get_model_names(self):
-            return ["gpt-4"]
-
-    all_valid, missing = validate_models_exist(
-        model_names=["gpt-4", "image-group", "ghost"],
-        llm_router=FakeRouter(),
-        known_access_groups={"image-group"},
-    )
-    assert all_valid is False
-    assert missing == ["ghost"]
-
-
-def test_validate_models_exist_backwards_compatible_without_groups():
-    """Without known_access_groups, behavior is identical to today's pure-model check."""
-
-    class FakeRouter:
-        def get_model_names(self):
-            return ["gpt-4"]
-
-    all_valid, missing = validate_models_exist(
-        model_names=["gpt-4", "anything-else"],
-        llm_router=FakeRouter(),
-    )
-    assert all_valid is False
-    assert missing == ["anything-else"]
 
 
 # ---------------------------------------------------------------------------
@@ -501,69 +416,6 @@ def test_membership_with_empty_child_list_does_not_explode():
         group_memberships=group_memberships,
     )
     assert result == ["gpt-4"]
-
-
-def test_classify_empty_input_returns_three_empty_lists():
-    """Edge case: empty names input must not error."""
-    real, child, unknown = _classify_member_names(
-        names=[],
-        router_model_names={"gpt-4"},
-        known_access_groups={"g"},
-    )
-    assert real == [] and child == [] and unknown == []
-
-
-def test_classify_preserves_input_order():
-    """Output preserves caller-provided order within each bucket - matters for error messages."""
-    real, child, unknown = _classify_member_names(
-        names=["c-unknown", "a-model", "b-group", "d-model"],
-        router_model_names={"a-model", "d-model"},
-        known_access_groups={"b-group"},
-    )
-    assert real == ["a-model", "d-model"]
-    assert child == ["b-group"]
-    assert unknown == ["c-unknown"]
-
-
-def test_validate_models_exist_reports_missing_in_input_order():
-    """Missing names are reported in the order they appeared, for human-readable errors."""
-
-    class FakeRouter:
-        def get_model_names(self):
-            return ["a"]
-
-    all_valid, missing = validate_models_exist(
-        model_names=["z-missing", "a", "y-missing"],
-        llm_router=FakeRouter(),
-        known_access_groups=set(),
-    )
-    assert all_valid is False
-    assert missing == ["z-missing", "y-missing"]
-
-
-def test_validate_models_exist_with_null_router_still_accepts_known_groups():
-    """DB-only deployment: llm_router is None but known_access_groups is still authoritative
-    for nested-group composition - only names not in known_groups are reported missing.
-    """
-    all_valid, missing = validate_models_exist(
-        model_names=["image", "reasoning"],
-        llm_router=None,
-        known_access_groups={"image", "reasoning"},
-    )
-    assert all_valid is True
-    assert missing == []
-
-
-def test_validate_models_exist_with_null_router_rejects_unknown_real_models():
-    """Without a router we can't validate real model names, so anything not in
-    known_access_groups is fail-closed reported as missing."""
-    all_valid, missing = validate_models_exist(
-        model_names=["gpt-4", "image"],
-        llm_router=None,
-        known_access_groups={"image"},
-    )
-    assert all_valid is False
-    assert missing == ["gpt-4"]
 
 
 def test_resolve_with_empty_models_and_empty_memberships_returns_empty():
