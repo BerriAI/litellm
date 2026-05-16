@@ -1171,7 +1171,14 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if server.has_client_credentials and header.lower() == "authorization":
+                # Never forward the inbound Authorization header that was used for
+                # LiteLLM API key authentication:
+                # - skip if server has client_credentials (fetch upstream token via M2M flow)
+                # - skip if server is oauth_passthrough (upstream token must come from
+                #   a server-specific header, not the LiteLLM API key header)
+                if header.lower() == "authorization" and (
+                    server.has_client_credentials or server.is_oauth_passthrough
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:

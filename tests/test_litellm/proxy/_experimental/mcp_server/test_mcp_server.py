@@ -109,7 +109,11 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     assert body["arguments"] == tool_arguments
 
 
-def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
+def test_prepare_mcp_server_headers_passthrough_omits_authorization():
+    """Pass-through servers must not forward the inbound Authorization header
+    (LiteLLM API key) to the upstream server. The upstream must provide its own
+    bearer token via a server-specific header.
+    """
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -118,9 +122,10 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
         pytest.skip("MCP server not available")
 
     server = MCPServer(
-        server_id="server-case",
+        server_id="server-passthrough",
         name="server",
         transport=MCPTransport.http,
+        auth_type=MCPAuth.none,  # Explicitly none for pass-through
         extra_headers=["Authorization"],
     )
 
@@ -129,11 +134,47 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
         mcp_server_auth_headers=None,
         mcp_auth_header=None,
         oauth2_headers=None,
-        raw_headers={"authorization": "Bearer token"},
+        raw_headers={"authorization": "Bearer sk-litellm-key"},
     )
 
     assert server_auth_header is None
-    assert extra_headers == {"Authorization": "Bearer token"}
+    # Authorization should NOT be forwarded for pass-through servers
+    assert extra_headers is None
+
+
+def test_prepare_mcp_server_headers_passthrough_forwards_other_headers():
+    """Pass-through servers should forward other headers (not Authorization)
+    from the raw request."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-passthrough-headers",
+        name="server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,  # Pass-through mode
+        extra_headers=["Authorization", "x-request-id", "x-trace-id"],
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers={
+            "authorization": "Bearer sk-litellm-key",
+            "x-request-id": "req-123",
+            "x-trace-id": "trace-456",
+        },
+    )
+
+    assert server_auth_header is None
+    # Authorization should be omitted, but other headers forwarded
+    assert extra_headers == {"x-request-id": "req-123", "x-trace-id": "trace-456"}
 
 
 def test_prepare_mcp_server_headers_oauth2_m2m_omits_litellm_caller_authorization():
@@ -2946,7 +2987,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     """
     P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
     rows where oauth2_flow is NULL but M2M credentials are present.
-    
+
     Without this fix, has_client_credentials returns False and the caller's
     Authorization header is forwarded upstream instead of being blocked.
     """
@@ -3044,7 +3085,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     """
     P2 Regression: When all configured extra_headers are filtered out (e.g.
     Authorization for M2M), the resulting extra_headers should be None, not {}.
-    
+
     Downstream code that checks `if extra_headers is None` will behave
     differently if an empty dict is passed instead.
     """
@@ -3071,7 +3112,10 @@ async def test_call_tool_empty_extra_headers_returns_none():
         extra_headers=["Authorization"],  # Will be filtered out for M2M
     )
 
-    raw_headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    raw_headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
 
     captured_extra_headers = None
 
@@ -3108,8 +3152,8 @@ async def test_call_tool_empty_extra_headers_returns_none():
             pass  # We only care about the captured headers
 
     # With P2 fix: extra_headers should be None (not {}) when all headers filtered
-    assert captured_extra_headers is None, (
-        "P2 API consistency issue: expected None for empty extra_headers, got: "
-        + str(captured_extra_headers)
+    assert (
+        captured_extra_headers is None
+    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
+        captured_extra_headers
     )
-
