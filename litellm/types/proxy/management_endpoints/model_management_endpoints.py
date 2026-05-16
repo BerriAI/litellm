@@ -33,7 +33,7 @@ class NewModelGroupResponse(BaseModel):
     access_group: str
     model_names: Optional[List[str]] = None
     model_ids: Optional[List[str]] = None
-    models_updated: int  # Number of models updated
+    models_updated: int  # Number of writes performed (deployment tags + membership edges for nested groups)
 
 
 class UpdateModelGroupRequest(BaseModel):

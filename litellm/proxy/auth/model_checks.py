@@ -42,7 +42,7 @@ def get_provider_models(
     return None
 
 
-def _resolve_nested_groups(
+def resolve_nested_groups(
     group_name: str,
     model_access_groups: Dict[str, List[str]],
     group_memberships: Dict[str, List[str]],
@@ -66,7 +66,7 @@ def _resolve_nested_groups(
     resolved: List[str] = list(model_access_groups.get(group_name, []))
     for child in group_memberships.get(group_name, []):
         resolved.extend(
-            _resolve_nested_groups(
+            resolve_nested_groups(
                 group_name=child,
                 model_access_groups=model_access_groups,
                 group_memberships=group_memberships,
@@ -92,7 +92,7 @@ def _get_models_from_access_groups(
             ):  # remove access group, unless requested - e.g. when creating a key
                 idx_to_remove.append(idx)
             new_models.extend(
-                _resolve_nested_groups(
+                resolve_nested_groups(
                     group_name=model,
                     model_access_groups=model_access_groups,
                     group_memberships=memberships,

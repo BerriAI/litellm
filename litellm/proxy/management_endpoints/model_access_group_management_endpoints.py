@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.model_checks import _resolve_nested_groups
+from litellm.proxy.auth.model_checks import resolve_nested_groups
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Clear cache and reload models to pick up the access group changes
@@ -370,7 +370,7 @@ async def get_all_access_groups_from_db(
 
     result: Dict[str, AccessGroupInfo] = {}
     for group in all_groups:
-        expanded = _resolve_nested_groups(
+        expanded = resolve_nested_groups(
             group_name=group,
             model_access_groups=flat_group_models,
             group_memberships=group_memberships,
