@@ -1,6 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -52,36 +52,40 @@ def resolve_nested_groups(
     Expand a group name to the full list of model names it transitively includes,
     following parent -> child edges in `group_memberships`.
 
-    Cycle handling: `visited` tracks the *current recursion path* (on-path),
-    not every node ever seen. A revisit while still on the path is a real
-    cycle - we log a warning and skip the cyclic edge. DAG-shared subtrees
-    (e.g. A -> [B, C], B -> [D], C -> [D]) re-traverse D, and the caller
-    deduplicates the final list.
+    Iterative DFS with an explicit stack (no Python recursion - the proxy's
+    recursive_detector forbids new recursive functions due to past CPU spikes).
+    Frames are tagged ENTER/EXIT so on-path tracking still works: we add to
+    `visited` on ENTER, discard on EXIT. A revisit while still on the path is
+    a real cycle - we log and skip. DAG-shared subtrees (e.g. A -> [B, C],
+    B -> [D], C -> [D]) re-traverse D, and the caller deduplicates.
 
     Cyclic edges are logged and skipped rather than raised: this runs on the
     auth path and a malformed row must not 500 the proxy.
     """
-    if group_name in visited:
-        verbose_proxy_logger.warning(
-            "access group cycle detected at '%s' - skipping cyclic edge",
-            group_name,
-        )
-        return []
-    visited.add(group_name)
-    try:
-        resolved: List[str] = list(model_access_groups.get(group_name, []))
-        for child in group_memberships.get(group_name, []):
-            resolved.extend(
-                resolve_nested_groups(
-                    group_name=child,
-                    model_access_groups=model_access_groups,
-                    group_memberships=group_memberships,
-                    visited=visited,
-                )
+    ENTER, EXIT = 0, 1
+    resolved: List[str] = []
+    stack: List[Tuple[int, str]] = [(ENTER, group_name)]
+
+    while stack:
+        action, node = stack.pop()
+        if action == EXIT:
+            visited.discard(node)
+            continue
+        if node in visited:
+            verbose_proxy_logger.warning(
+                "access group cycle detected at '%s' - skipping cyclic edge",
+                node,
             )
-        return resolved
-    finally:
-        visited.discard(group_name)
+            continue
+        visited.add(node)
+        # Schedule EXIT now so visited is cleaned up after this subtree finishes
+        stack.append((EXIT, node))
+        resolved.extend(model_access_groups.get(node, []))
+        # Reverse so siblings are visited in original (left-to-right) order
+        for child in reversed(group_memberships.get(node, [])):
+            stack.append((ENTER, child))
+
+    return resolved
 
 
 def _get_models_from_access_groups(
