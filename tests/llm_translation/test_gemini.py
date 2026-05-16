@@ -1625,18 +1625,17 @@ def test_gemini_image_size_limit_exceeded():
         }
     ]
 
-    try:
-        with pytest.raises(litellm.ImageFetchError) as excinfo:
-            completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
-    except litellm.BadRequestError as e:
-        # Wikimedia rate-limits CI runners (HTTP 429) for the Blue Marble
-        # image, so the size-limit check never gets a chance to fire. Skip
-        # rather than fail when the upstream host blocks us.
-        if "429" in str(e) or "Too Many Requests" in str(e):
-            pytest.skip(f"Wikimedia rate-limited the test fixture image: {e}")
-        raise
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
 
     error_message = str(excinfo.value)
+    # Wikimedia rate-limits CI runners (HTTP 429) for the Blue Marble image,
+    # so the size-limit check never gets a chance to fire and we instead
+    # capture the 429-wrapped ImageFetchError. Skip rather than fail when
+    # the upstream host blocks us -- the intent here is to exercise the
+    # size cap, not to test against Wikimedia availability.
+    if "Status code: 429" in error_message or "Too Many Requests" in error_message:
+        pytest.skip(f"Wikimedia rate-limited the test fixture image: {error_message}")
     assert "Image size" in error_message
     assert "exceeds maximum allowed size" in error_message
 
