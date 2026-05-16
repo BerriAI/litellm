@@ -157,14 +157,13 @@ class TestResponseCompliance:
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly)
+        # Output fields (readOnly) per the live Google Interactions OpenAPI spec.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
             "role",
-            "outputs",
             "usage",
         ]
 

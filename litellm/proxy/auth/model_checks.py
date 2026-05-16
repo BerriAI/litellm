@@ -232,6 +232,8 @@ def get_complete_model_list(
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
+    # Treat bare wildcard aliases (`*` and the defensive `*/` variant) as
+    # having no explicit provider prefix in the ids returned by /v1/models.
     if wildcard_model in {"*", "*/"}:
         wildcard_provider_prefix = ""
         wildcard_suffix = "*"
