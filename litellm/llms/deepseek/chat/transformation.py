@@ -132,6 +132,17 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
+    def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
+        """
+        Returns True only when thinking mode is actually active for this request:
+          - model supports reasoning (capability check)
+          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+        """
+        return (
+            supports_reasoning(model=model, custom_llm_provider="deepseek")
+            and optional_params.get("thinking", {}).get("type") == "enabled"
+        )
+
     def transform_request(
         self,
         model: str,
@@ -149,13 +160,31 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         (user explicitly enabled it), preventing spurious injection on models
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
-        thinking_enabled = (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and optional_params.get("thinking", {}).get("type") == "enabled"
-        )
-        if thinking_enabled:
+        if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Async equivalent of transform_request — applies the same reasoning_content
+        fix for multi-turn thinking-mode conversations.
+        """
+        if self._thinking_mode_active(model=model, optional_params=optional_params):
+            messages = self._fill_reasoning_content(messages)
+        return await super().async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
