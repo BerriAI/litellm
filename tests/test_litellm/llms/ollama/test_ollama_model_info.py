@@ -105,6 +105,28 @@ class TestOllamaModelInfo:
             "Authorization": "Bearer test_api_key"
         }
 
+    def test_get_models_prefers_explicit_api_key_argument(self, monkeypatch):
+        """Explicit api_key arg should take precedence over environment lookup."""
+        captured_api_keys = []
+
+        original_get_api_key = OllamaModelInfo.get_api_key
+
+        def mock_get_api_key(api_key=None):
+            captured_api_keys.append(api_key)
+            return original_get_api_key(api_key)
+
+        def mock_get(url, headers):
+            return DummyResponse({}, status_code=200)
+
+        monkeypatch.setattr(OllamaModelInfo, "get_api_key", staticmethod(mock_get_api_key))
+        monkeypatch.setattr(httpx, "get", mock_get)
+        monkeypatch.setenv("OLLAMA_API_KEY", "env_key")
+
+        info = OllamaModelInfo()
+        info.get_models(api_key="explicit_key")
+
+        assert captured_api_keys == ["explicit_key"]
+
     def test_get_models_from_list_response(self, monkeypatch):
         """
         When the /api/tags endpoint returns a list of dicts,

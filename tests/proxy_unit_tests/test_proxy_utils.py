@@ -2045,6 +2045,37 @@ def test_get_known_models_from_wildcard_without_litellm_params():
     assert "gpt-4o" in model_ids or "gpt-3.5-turbo" in model_ids
 
 
+def test_get_known_models_from_bare_wildcard_openrouter_uses_provider_discovery(
+    monkeypatch,
+):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+    from litellm.proxy.auth import model_checks
+
+    class _OpenRouterModelInfo:
+        def get_models(self, api_key=None, api_base=None):
+            assert api_key == "test-key"
+            return ["openai/gpt-4o", "google/gemini-2.5-flash"]
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: _OpenRouterModelInfo().get_models(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+        )
+        if provider == "openrouter"
+        else [],
+    )
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="*",
+        litellm_params=LiteLLM_Params(model="openrouter/*", api_key="test-key"),
+    )
+
+    assert wildcard_models == ["openai/gpt-4o", "google/gemini-2.5-flash"]
+
+
 @pytest.mark.parametrize(
     "data, user_api_key_dict, expected_model",
     [

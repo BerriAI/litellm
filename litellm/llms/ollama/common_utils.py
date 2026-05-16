@@ -84,7 +84,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         """
 
         base = self.get_api_base(api_base)
-        api_key = self.get_api_key()
+        api_key = self.get_api_key(api_key)
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         names: set[str] = set()
