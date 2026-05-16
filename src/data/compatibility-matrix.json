@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-05-07T15:28:48Z",
+  "generated_at": "2026-05-16T18:32:19Z",
   "litellm_version": "v1.83.14-stable",
   "claude_code_version": "2.1.126",
   "providers": [
@@ -23,7 +23,7 @@
         },
         "bedrock_converse": {
           "status": "fail",
-          "error": "[claude-haiku-4-5-bedrock-converse] claude returned empty assistant text"
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -110,7 +110,8 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
           "status": "pass"
@@ -128,13 +129,16 @@
           "status": "pass"
         },
         "bedrock_invoke": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-opus-4-7-bedrock-invoke] no `thinking` content block observed in stream-json events"
         },
         "bedrock_converse": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
         },
         "vertex_ai": {
-          "status": "pass"
+          "status": "fail",
+          "error": "[claude-opus-4-7-vertex] no `thinking` content block observed in stream-json events"
         },
         "azure": {
           "status": "pass"
@@ -218,8 +222,7 @@
           "status": "pass"
         },
         "bedrock_converse": {
-          "status": "fail",
-          "error": "[claude-haiku-4-5-bedrock-converse] claude CLI failed: exit=1; text=API Error: Content block is not a text block"
+          "status": "pass"
         },
         "vertex_ai": {
           "status": "pass"
