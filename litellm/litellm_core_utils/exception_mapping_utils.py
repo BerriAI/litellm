@@ -2324,6 +2324,16 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     exception_mapping_worked = True
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
+                        if ExceptionCheckers.is_error_str_context_window_exceeded(
+                            error_str
+                        ):
+                            raise ContextWindowExceededError(
+                                message=f"ContextWindowExceededError: {exception_provider} - {error_str}",
+                                llm_provider=custom_llm_provider,
+                                model=model,
+                                response=getattr(original_exception, "response", None),
+                                litellm_debug_info=extra_information,
+                            )
                         raise BadRequestError(
                             message=f"{exception_provider} - {error_str}",
                             llm_provider=custom_llm_provider,

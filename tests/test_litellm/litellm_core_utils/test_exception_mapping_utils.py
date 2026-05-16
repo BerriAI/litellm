@@ -301,6 +301,54 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 
+# Test cases for OpenRouter ContextWindowExceededError mapping
+# Regression for https://github.com/BerriAI/litellm/issues/28063
+openrouter_context_window_test_cases = [
+    ("This model's maximum context length is 4096 tokens.", True),
+    ("input length and max_tokens exceed context limit", True),
+    ("Input is longer than the model's context length", True),
+    ("Invalid model parameter", False),  # Negative case
+]
+
+
+class _OpenRouterUpstreamError(Exception):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize(
+    "error_message, should_raise_context_window", openrouter_context_window_test_cases
+)
+def test_openrouter_context_window_error_mapping(
+    error_message, should_raise_context_window
+):
+    """
+    Tests that the exception_type function correctly maps OpenRouter's
+    400 context window exceeded errors to litellm.ContextWindowExceededError.
+    """
+    model = "openrouter/anthropic/claude-3.5-sonnet"
+    custom_llm_provider = "openrouter"
+    original_exception = _OpenRouterUpstreamError(error_message, status_code=400)
+
+    if should_raise_context_window:
+        with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+        assert isinstance(excinfo.value, litellm.ContextWindowExceededError)
+    else:
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+        assert not isinstance(excinfo.value, litellm.ContextWindowExceededError)
+
+
 class TestExtractAndRaiseLitellmException:
     """Tests for extract_and_raise_litellm_exception function"""
 
