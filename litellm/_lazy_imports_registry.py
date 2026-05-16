@@ -1132,11 +1132,11 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "ChatGPTResponsesAPIConfig",
     ),
     "ChatGPTImageGenerationConfig": (
-        ".llms.chatgpt.image_generation.transformation",
+        ".llms.chatgpt.image_generation.generation_transformation",
         "ChatGPTImageGenerationConfig",
     ),
     "ChatGPTImageEditConfig": (
-        ".llms.chatgpt.image_generation.transformation",
+        ".llms.chatgpt.image_edit.transformation",
         "ChatGPTImageEditConfig",
     ),
     "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
