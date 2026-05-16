@@ -393,6 +393,9 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.management_endpoints.ui_sso import (
+    _OIDC_PROVIDER_GENERIC,
+    _OIDC_PROVIDER_OKTA,
+    _is_oidc_pkce_enabled,
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
@@ -4008,14 +4011,11 @@ class ProxyConfig:
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
-            generic_use_pkce = (
-                os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
-            )
-            # Okta defaults PKCE to enabled when OKTA_CLIENT_ID is configured.
-            okta_use_pkce = (
-                os.getenv("OKTA_CLIENT_ID") is not None
-                and os.getenv("OKTA_CLIENT_USE_PKCE", "true").lower() == "true"
-            )
+            # Use the same helper as the runtime SSO flow so the warning fires whenever
+            # PKCE *could* activate at request time — Okta credentials may be injected
+            # later via the SSO settings API after startup.
+            generic_use_pkce = _is_oidc_pkce_enabled(_OIDC_PROVIDER_GENERIC)
+            okta_use_pkce = _is_oidc_pkce_enabled(_OIDC_PROVIDER_OKTA)
             use_pkce = generic_use_pkce or okta_use_pkce
             if use_pkce and redis_usage_cache is None:
                 global _pkce_no_redis_warning_emitted
@@ -4024,7 +4024,7 @@ class ProxyConfig:
                     pkce_env_var = (
                         "GENERIC_CLIENT_USE_PKCE=true"
                         if generic_use_pkce
-                        else "OKTA_CLIENT_USE_PKCE defaults to true when OKTA_CLIENT_ID is set"
+                        else "OKTA_CLIENT_USE_PKCE defaults to true"
                     )
                     verbose_proxy_logger.warning(
                         f"{pkce_env_var} but Redis is not configured for LiteLLM caching. "
