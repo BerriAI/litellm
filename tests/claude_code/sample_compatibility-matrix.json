@@ -117,8 +117,8 @@
       }
     },
     {
-      "id": "extended_thinking",
-      "name": "Extended thinking",
+      "id": "thinking",
+      "name": "Thinking",
       "providers": {
         "anthropic": {
           "status": "pass"

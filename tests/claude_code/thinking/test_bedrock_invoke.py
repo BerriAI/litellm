@@ -1,4 +1,4 @@
-"""extended_thinking x Bedrock (Invoke).
+"""thinking x Bedrock (Invoke).
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
 Claude requests to AWS Bedrock via the legacy `InvokeModel` API path,
@@ -8,9 +8,9 @@ upstream returned a `thinking` content block.
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
 
-    tests/claude_code/extended_thinking/test_bedrock_invoke.py
-                       ^^^^^^^^^^^^^^^^^      ^^^^^^^^^^^^^^
-                       feature_id             provider
+    tests/claude_code/thinking/test_bedrock_invoke.py
+                       ^^^^^^^^      ^^^^^^^^^^^^^^
+                       feature_id    provider
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _has_thinking_block(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-def test_extended_thinking_bedrock_invoke(compat_result):
+def test_thinking_bedrock_invoke(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and assert a `thinking` content block was emitted."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)

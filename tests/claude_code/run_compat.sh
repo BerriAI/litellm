@@ -78,7 +78,7 @@ PATH="$HOME/.local/bin:$PATH" \
 uv run pytest \
     tests/claude_code/basic_messaging_non_streaming \
     tests/claude_code/basic_messaging_streaming \
-    tests/claude_code/extended_thinking \
+    tests/claude_code/thinking \
     tests/claude_code/tool_use \
     tests/claude_code/vision \
     tests/claude_code/prompt_caching_5m \

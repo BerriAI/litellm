@@ -1,24 +1,16 @@
-"""extended_thinking x Azure (Microsoft Foundry).
+"""thinking x Vertex AI.
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
-Claude requests to Anthropic's models hosted in Microsoft Foundry on
-Azure, enable extended thinking via `--effort high`, and assert
-that the upstream returned a `thinking` content block.
-
-Foundry's Claude deployments advertise `supports_reasoning: true` in
-LiteLLM's pricing metadata; the `thinking={"type": "enabled", ...}`
-parameter passes through `azure_ai/claude-*` to Foundry's
-`/anthropic/v1/messages` endpoint unchanged. Note that
-`claude-opus-4-7-preview` documents thinking as not supported on
-Foundry; if that lands, this row may flip to a partial pass and we'll
-re-evaluate.
+Claude requests to Anthropic's models on Google Cloud Vertex AI, enable
+extended thinking via `--effort high`, and assert that the
+upstream returned a `thinking` content block.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
 
-    tests/claude_code/extended_thinking/test_azure.py
-                       ^^^^^^^^^^^^^^^^^      ^^^^^
-                       feature_id             provider
+    tests/claude_code/thinking/test_vertex_ai.py
+                       ^^^^^^^^      ^^^^^^^^^
+                       feature_id    provider
 """
 
 from __future__ import annotations
@@ -37,10 +29,10 @@ from tests.claude_code.cli_driver import (
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
 
-AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-6-azure",
-    "claude-opus-4-7-azure",
+VERTEX_AI_MODELS = [
+    "claude-haiku-4-5-vertex",
+    "claude-sonnet-4-6-vertex",
+    "claude-opus-4-7-vertex",
 ]
 
 THINKING_ARGS = ["--effort", "max"]
@@ -64,7 +56,7 @@ def _has_thinking_block(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-def test_extended_thinking_azure(compat_result):
+def test_thinking_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and assert a `thinking` content block was emitted."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -84,7 +76,7 @@ def test_extended_thinking_azure(compat_result):
         )
 
     outcomes = run_claude_models_parallel(
-        models=AZURE_MODELS,
+        models=VERTEX_AI_MODELS,
         prompt=THINKING_PROMPT,
         base_url=base_url,
         api_key=api_key,
@@ -92,7 +84,7 @@ def test_extended_thinking_azure(compat_result):
     )
 
     failures = []
-    for model in AZURE_MODELS:
+    for model in VERTEX_AI_MODELS:
         outcome = outcomes[model]
         if isinstance(outcome, ClaudeCLIError):
             error = f"[{model}] {outcome}"
