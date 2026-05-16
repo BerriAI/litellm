@@ -30,15 +30,47 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
 
+# One-shot flag for the malformed-``PROXY_BASE_URL`` warning so the
+# proxy logs the misconfig once at first use instead of on every request.
+_warned_invalid_proxy_base_url: Optional[str] = None
+
+
+def _resolve_proxy_base_url_env() -> Optional[str]:
+    """Return ``PROXY_BASE_URL`` if it parses as an http(s) URL with a
+    netloc; otherwise log a one-shot warning naming the bad value and
+    return ``None`` so the caller falls back to the request-derived
+    origin. A bare hostname like ``litellm.example.com`` would otherwise
+    sail through ``urlparse`` with empty scheme + netloc, silently
+    breaking every same-origin compare and leaving the operator staring
+    at the same opaque 400 the env var was meant to fix.
+    """
+    global _warned_invalid_proxy_base_url
+    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    if not configured:
+        return None
+    parsed = urlparse(configured)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        return configured.rstrip("/")
+    if _warned_invalid_proxy_base_url != configured:
+        verbose_logger.warning(
+            "PROXY_BASE_URL=%r is not a valid http(s) URL (missing scheme "
+            "or host) and will be ignored for MCP OAuth origin resolution. "
+            "Set it to a full URL like https://litellm.example.com.",
+            configured,
+        )
+        _warned_invalid_proxy_base_url = configured
+    return None
+
+
 def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
     Resolution order:
       1. ``PROXY_BASE_URL`` env var — operator-declared canonical public
-         origin. Honoured unconditionally so deployments behind ingresses
-         that mangle ``X-Forwarded-*`` can skip the trust-gate gymnastics
-         entirely.
+         origin. Honoured unconditionally when it parses as a full
+         http(s) URL; a malformed value (e.g. missing scheme) is logged
+         once and ignored so the proxy still serves traffic.
       2. X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port — only
          when the request comes from a configured trusted proxy
          (``use_x_forwarded_for`` enabled AND caller in
@@ -53,9 +85,9 @@ def get_request_base_url(request: Request) -> str:
     Returns:
         The reconstructed base URL (e.g., "https://proxy.example.com")
     """
-    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    configured = _resolve_proxy_base_url_env()
     if configured:
-        return configured.rstrip("/")
+        return configured
 
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)

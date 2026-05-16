@@ -1374,6 +1374,121 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
     assert "X-Forwarded-Host" in msg
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "litellm.example.com",  # no scheme — bare hostname
+        "litellm.example.com/",
+        "://litellm.example.com",  # scheme-relative-ish, still no scheme
+        "ftp://litellm.example.com",  # wrong scheme
+        "https://",  # scheme but no netloc
+        "not a url at all",
+    ],
+)
+def test_get_request_base_url_rejects_malformed_proxy_base_url(
+    bad_value, monkeypatch, caplog
+):
+    """A scheme-less or otherwise malformed ``PROXY_BASE_URL`` must NOT
+    silently win the resolution order — that would leave every same-origin
+    compare in ``validate_trusted_redirect_uri`` failing (empty scheme,
+    empty netloc) and the operator staring at the same opaque 400 the
+    env var was meant to fix. Verify the helper falls through to the
+    request's literal base_url and emits a one-shot diagnostic.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    # Reset one-shot flag so each parametrize iteration logs.
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", bad_value)
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        result = get_request_base_url(mock_request)
+
+    assert result == "http://litellm-internal:4000", (
+        f"malformed PROXY_BASE_URL={bad_value!r} should be ignored, " f"got {result!r}"
+    )
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert len(matching) == 1, (
+        "expected one diagnostic for malformed PROXY_BASE_URL, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    assert (
+        repr(bad_value) in matching[0].getMessage()
+        or bad_value in matching[0].getMessage()
+    )
+
+
+def test_get_request_base_url_malformed_proxy_base_url_warning_is_one_shot(
+    monkeypatch, caplog
+):
+    """Two requests in a row with the same bad ``PROXY_BASE_URL`` must
+    log the warning exactly once — the proxy can take thousands of
+    requests per minute and we don't want one misconfig to drown the
+    log stream.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", "litellm.example.com")
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        for _ in range(5):
+            get_request_base_url(mock_request)
+
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one warning across 5 calls, got {len(matching)}"
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
