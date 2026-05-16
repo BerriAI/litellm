@@ -1,3 +1,6 @@
+tmp
+local_config.yaml
+local_config_openapi.yaml
 data
 .python-version
 .venv
