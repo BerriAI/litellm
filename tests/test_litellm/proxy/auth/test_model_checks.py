@@ -249,3 +249,94 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_bare_wildcard_star():
+    """
+    When model_name is "*" (bare wildcard without provider prefix)
+    and litellm_params.model contains the provider wildcard (e.g. "openai/*"),
+    get_complete_model_list should expand using the provider from litellm_params
+    instead of failing on wildcard_model.split("/").
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "*" not in result
+    assert "openai/*" not in result
+    assert any(m.startswith("openai/") for m in result)
+
+
+def test_get_complete_model_list_bare_wildcard_multiple_providers():
+    """
+    When multiple deployments share model_name "*" with different providers,
+    each deployment should expand independently and results should be deduplicated.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "*", "litellm_params": {"model": "anthropic/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "*" not in result
+    assert "openai/*" not in result
+    assert "anthropic/*" not in result
+    assert any(m.startswith("openai/") for m in result)
+    assert any(m.startswith("anthropic/") for m in result)
+    assert len(result) == len(set(result)), "results should be deduplicated"
+
+
+def test_get_complete_model_list_deduplication():
+    """
+    When two deployments with wildcard model_name resolve to overlapping models
+    (e.g. two ollama/* entries), the result should not contain duplicates.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "ollama/*", "litellm_params": {"model": "ollama/*"}},
+            {"model_name": "ollama/*", "litellm_params": {"model": "ollama/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "ollama/*" not in result
+    assert any(m.startswith("ollama/") for m in result)
+    assert len(result) == len(set(result)), "results should be deduplicated"
