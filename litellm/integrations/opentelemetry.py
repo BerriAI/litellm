@@ -1677,14 +1677,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
                 # Also expose it under the OTel-standard name as an int.
                 # error_code is a str and may be non-numeric, so coerce/skip.
-                try:
-                    self.safe_set_attribute(
-                        span=span,
-                        key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
-                        value=int(error_information["error_code"]),
-                    )
-                except (ValueError, TypeError):
-                    pass
+                _error_code_val = error_information["error_code"]
+                if _error_code_val is not None:
+                    try:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                            value=int(_error_code_val),
+                        )
+                    except (ValueError, TypeError):
+                        pass
 
             if error_information.get("error_class"):
                 self.safe_set_attribute(
@@ -3004,11 +3006,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if received_at is None or first_handoff is None:
             return
         try:
-            duration_ms = (
-                self._to_timestamp(first_handoff) - self._to_timestamp(received_at)
-            ) * 1000.0
+            start_ts = self._to_timestamp(received_at)
+            end_ts = self._to_timestamp(first_handoff)
         except Exception:
             return
+        if start_ts is None or end_ts is None:
+            return
+        duration_ms = (end_ts - start_ts) * 1000.0
         # Clock skew / out-of-order anchors → omit rather than emit a
         # negative latency.
         if duration_ms < 0:
