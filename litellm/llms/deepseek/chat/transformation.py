@@ -121,12 +121,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         DeepSeek does not support content in list format.
-        Also ensures `reasoning_content` is forwarded on assistant messages for
-        multi-turn thinking-mode conversations (issue #28045).
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
-        if supports_reasoning(model=model, custom_llm_provider="deepseek"):
-            messages = self._fill_reasoning_content(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
@@ -135,6 +131,37 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(
                 messages=messages, model=model, is_async=False
             )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Ensures `reasoning_content` is forwarded on assistant messages for
+        multi-turn thinking-mode conversations (issue #28045).
+
+        Only runs when thinking mode is actually active - guarded by both
+        supports_reasoning() (model capability) and optional_params["thinking"]
+        (user explicitly enabled it), preventing spurious injection on models
+        like deepseek-v3.2 that support thinking as opt-in but not always-on.
+        """
+        thinking_enabled = (
+            supports_reasoning(model=model, custom_llm_provider="deepseek")
+            and optional_params.get("thinking", {}).get("type") == "enabled"
+        )
+        if thinking_enabled:
+            messages = self._fill_reasoning_content(messages)
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

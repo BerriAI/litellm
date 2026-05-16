@@ -231,10 +231,15 @@ def test_deepseek_fill_reasoning_content_multiturn():
     assert "reasoning_content" not in result[1]
 
 
-def test_deepseek_fill_reasoning_content_only_for_reasoning_models():
+def test_deepseek_fill_reasoning_content_guard_in_transform_request():
     """
-    _fill_reasoning_content must only run for reasoning models (e.g. deepseek-reasoner),
-    not for standard models (e.g. deepseek-chat). Addresses greptile P1 feedback on PR #28057.
+    _fill_reasoning_content must only run when BOTH conditions are true:
+      1. supports_reasoning() is True for the model
+      2. thinking mode is explicitly enabled in optional_params ({"type": "enabled"})
+
+    This prevents spurious injection on models like deepseek-v3.2 that support
+    thinking as opt-in but not always-on. Addresses oss-pr-review-agent feedback
+    on PR #28057.
     """
     from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
@@ -246,14 +251,38 @@ def test_deepseek_fill_reasoning_content_only_for_reasoning_models():
         {"role": "user", "content": "Follow up"},
     ]
 
-    # deepseek-chat (non-reasoning): assistant message must NOT get reasoning_content injected
-    result = config._transform_messages(messages=messages, model="deepseek-chat")
-    assert "reasoning_content" not in result[1], (
-        "reasoning_content should not be injected for non-reasoning models"
+    # Case 1: reasoning model + thinking enabled -> injection should happen
+    result = config.transform_request(
+        model="deepseek-reasoner",
+        messages=messages,
+        optional_params={"thinking": {"type": "enabled"}},
+        litellm_params={},
+        headers={},
+    )
+    assert result["messages"][1].get("reasoning_content") == " ", (
+        "reasoning_content should be injected when thinking is enabled"
     )
 
-    # deepseek-reasoner (reasoning): assistant message SHOULD get reasoning_content placeholder
-    result = config._transform_messages(messages=messages, model="deepseek-reasoner")
-    assert result[1].get("reasoning_content") == " ", (
-        "reasoning_content placeholder should be injected for reasoning models"
+    # Case 2: reasoning model + thinking NOT in optional_params -> no injection
+    result = config.transform_request(
+        model="deepseek-reasoner",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning_content" not in result["messages"][1], (
+        "reasoning_content should not be injected when thinking is not enabled"
+    )
+
+    # Case 3: non-reasoning model + thinking enabled -> no injection
+    result = config.transform_request(
+        model="deepseek-chat",
+        messages=messages,
+        optional_params={"thinking": {"type": "enabled"}},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning_content" not in result["messages"][1], (
+        "reasoning_content should not be injected for non-reasoning models"
     )
