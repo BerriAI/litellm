@@ -1388,4 +1388,5 @@ model LiteLLM_AccessGroupMembership {
 
   @@unique([parent_group, child_group])
   @@index([parent_group])
+  @@index([child_group])
 }

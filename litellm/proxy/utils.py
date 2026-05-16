@@ -5848,7 +5848,7 @@ async def get_available_models_for_user(
         get_team_models,
     )
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-        get_group_memberships_from_db,
+        get_cached_group_memberships,
     )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
@@ -5860,11 +5860,12 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Parent->child edges for nested access groups. Empty when no DB is
-    # configured (e.g. SDK-only mode), preserving today's flat behavior.
+    # Parent->child edges for nested access groups (TTL-cached per process).
+    # Empty when no DB is configured (e.g. SDK-only mode), preserving
+    # today's flat behavior.
     group_memberships: Dict[str, List[str]] = {}
     if prisma_client is not None:
-        group_memberships = await get_group_memberships_from_db(
+        group_memberships = await get_cached_group_memberships(
             prisma_client=prisma_client
         )
 

@@ -113,6 +113,20 @@ async def test_get_group_memberships_returns_empty_when_table_attribute_missing(
     assert await get_group_memberships_from_db(prisma_client=NoMembershipTable()) == {}
 
 
+@pytest.mark.asyncio
+async def test_get_group_memberships_returns_empty_on_transient_db_error():
+    """
+    Generic DB error (connection timeout, Prisma query failure, network blip)
+    must NOT propagate as a 500 on the auth path - we fall back to empty so
+    model-listing requests keep working until the DB recovers.
+    """
+    prisma = _make_prisma()
+    prisma.db.litellm_accessgroupmembership.find_many = AsyncMock(
+        side_effect=ConnectionError("postgres unreachable")
+    )
+    assert await get_group_memberships_from_db(prisma_client=prisma) == {}
+
+
 # ---------------------------------------------------------------------------
 # upsert_group_memberships
 # ---------------------------------------------------------------------------

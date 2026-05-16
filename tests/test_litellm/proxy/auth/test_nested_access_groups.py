@@ -541,16 +541,29 @@ def test_validate_models_exist_reports_missing_in_input_order():
     assert missing == ["z-missing", "y-missing"]
 
 
-def test_validate_models_exist_with_null_router_returns_false():
-    """No router - everything reports as missing (matches today's defensive behavior)."""
+def test_validate_models_exist_with_null_router_still_accepts_known_groups():
+    """DB-only deployment: llm_router is None but known_access_groups is still authoritative
+    for nested-group composition - only names not in known_groups are reported missing.
+    """
     all_valid, missing = validate_models_exist(
-        model_names=["any"],
+        model_names=["image", "reasoning"],
         llm_router=None,
-        known_access_groups={"any"},
+        known_access_groups={"image", "reasoning"},
     )
-    # Without a router we can't say what's a model, so we fall back to fail-closed
+    assert all_valid is True
+    assert missing == []
+
+
+def test_validate_models_exist_with_null_router_rejects_unknown_real_models():
+    """Without a router we can't validate real model names, so anything not in
+    known_access_groups is fail-closed reported as missing."""
+    all_valid, missing = validate_models_exist(
+        model_names=["gpt-4", "image"],
+        llm_router=None,
+        known_access_groups={"image"},
+    )
     assert all_valid is False
-    assert missing == ["any"]
+    assert missing == ["gpt-4"]
 
 
 def test_resolve_with_empty_models_and_empty_memberships_returns_empty():

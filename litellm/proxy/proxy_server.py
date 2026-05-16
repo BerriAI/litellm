@@ -367,7 +367,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
-    get_group_memberships_from_db,
+    get_cached_group_memberships,
     router as model_access_group_management_router,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -11978,11 +11978,11 @@ async def model_info_v1(  # noqa: PLR0915
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Parent->child edges for nested access groups. Empty when no DB is
-    # configured, preserving today's flat behavior.
+    # Parent->child edges for nested access groups (TTL-cached per process).
+    # Empty when no DB is configured, preserving today's flat behavior.
     group_memberships: Dict[str, List[str]] = {}
     if prisma_client is not None:
-        group_memberships = await get_group_memberships_from_db(
+        group_memberships = await get_cached_group_memberships(
             prisma_client=prisma_client
         )
 

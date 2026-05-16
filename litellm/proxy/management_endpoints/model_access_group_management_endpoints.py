@@ -6,6 +6,7 @@ Endpoints here:
 """
 
 import json
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,6 +33,29 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
 router = APIRouter()
 
 
+# ---------------------------------------------------------------------------
+# Per-process membership-map cache
+# ---------------------------------------------------------------------------
+# get_group_memberships_from_db is called on every /v1/models and /model/info
+# request via get_available_models_for_user. Without a cache that's one extra
+# Prisma roundtrip per request - bad under burst traffic. We cache the map
+# in process memory for a short TTL and invalidate explicitly on writes
+# (upsert/delete) so the consistency window inside the writing process is
+# zero. Across processes, eventual consistency is bounded by the TTL -
+# matches today's behavior for llm_router.get_model_access_groups() which is
+# also per-process.
+
+_MEMBERSHIPS_CACHE_TTL_SECONDS = 60.0
+_MEMBERSHIPS_CACHE: Optional[Tuple[float, Dict[str, List[str]]]] = None
+
+
+def invalidate_group_memberships_cache() -> None:
+    """Drop the in-process membership cache. Call after any write that
+    mutates the LiteLLM_AccessGroupMembership table."""
+    global _MEMBERSHIPS_CACHE
+    _MEMBERSHIPS_CACHE = None
+
+
 def validate_models_exist(
     model_names: List[str],
     llm_router,
@@ -44,11 +68,17 @@ def validate_models_exist(
     Returns:
         Tuple[bool, List[str]]: (all_valid, missing_names)
     """
+    known_groups = known_access_groups or set()
+
     if llm_router is None:
-        return False, model_names
+        # DB-only deployment: no in-memory router means we cannot validate
+        # real model names, but known_access_groups is still authoritative
+        # for nested-group composition. Anything not in known_groups is
+        # reported as missing (fail-closed).
+        missing = [m for m in model_names if m not in known_groups]
+        return (len(missing) == 0, missing)
 
     router_model_names = set(llm_router.get_model_names())
-    known_groups = known_access_groups or set()
     missing = [
         m for m in model_names if m not in router_model_names and m not in known_groups
     ]
@@ -87,17 +117,18 @@ async def get_group_memberships_from_db(
     Build parent_group -> [child_groups] map from the membership table.
     Single query, in-memory bucketing - no N+1.
 
-    Resilient by design: if the table isn't available (Prisma client predates
-    this migration, the proxy started before `prisma migrate deploy` finished,
-    or the membership Prisma model was stripped from a downstream build) we
-    return an empty map. The auth path then falls back to today's flat-group
-    semantics instead of 500-ing the whole request.
+    Resilient by design: any failure to read the membership table (missing
+    Prisma model, migration race, transient DB/network error, query timeout)
+    degrades to an empty map. The auth path then falls back to today's
+    flat-group semantics instead of 500-ing the whole request. We log at
+    debug so ops can correlate fallback periods with incidents without
+    drowning normal traffic in warnings.
     """
     try:
         rows = await prisma_client.db.litellm_accessgroupmembership.find_many()
-    except (AttributeError, TypeError) as e:
+    except Exception as e:  # noqa: BLE001 - intentional broad catch on auth path
         verbose_proxy_logger.debug(
-            "litellm_accessgroupmembership unavailable - "
+            "litellm_accessgroupmembership read failed - "
             "skipping nested group resolution: %s",
             e,
         )
@@ -107,6 +138,25 @@ async def get_group_memberships_from_db(
     for row in rows:
         memberships.setdefault(row.parent_group, []).append(row.child_group)
     return memberships
+
+
+async def get_cached_group_memberships(
+    prisma_client: PrismaClient,
+) -> Dict[str, List[str]]:
+    """
+    TTL-cached wrapper around get_group_memberships_from_db. Hot-path
+    callers (model-listing endpoints) should use this; tests and write
+    paths that need fresh data can call the underlying helper directly.
+    """
+    global _MEMBERSHIPS_CACHE
+    now = time.monotonic()
+    if _MEMBERSHIPS_CACHE is not None:
+        cached_at, value = _MEMBERSHIPS_CACHE
+        if now - cached_at < _MEMBERSHIPS_CACHE_TTL_SECONDS:
+            return value
+    fresh = await get_group_memberships_from_db(prisma_client=prisma_client)
+    _MEMBERSHIPS_CACHE = (now, fresh)
+    return fresh
 
 
 async def upsert_group_memberships(
@@ -142,6 +192,7 @@ async def upsert_group_memberships(
         data=rows,
         skip_duplicates=True,
     )
+    invalidate_group_memberships_cache()
     return result
 
 
@@ -164,6 +215,7 @@ async def delete_group_membership_edges(
             ]
         }
     )
+    invalidate_group_memberships_cache()
     return result
 
 
@@ -850,6 +902,7 @@ async def update_access_group(
         await prisma_client.db.litellm_accessgroupmembership.delete_many(
             where={"parent_group": access_group}
         )
+        invalidate_group_memberships_cache()
 
         # Step 2: re-add membership using the appropriate write path
         if use_model_ids:
