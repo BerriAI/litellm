@@ -1362,8 +1362,12 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         # For Gemini 3, should not force thinkingLevel by default
-        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
-        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
+        assert (
+            "thinkingLevel" not in result
+        ), "Should not force thinkingLevel for Gemini 3"
+        assert (
+            "thinkingBudget" not in result
+        ), "Should NOT have thinkingBudget for Gemini 3"
         assert result["includeThoughts"] is True
 
         # Test 2: Anthropic thinking disabled for Gemini 3
@@ -1395,7 +1399,10 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+        assert (
+            "thinkingLevel" not in result_zero
+            or result_zero.get("thinkingLevel") is None
+        )
 
         # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
@@ -1525,8 +1532,12 @@ def test_anthropic_thinking_param_via_map_openai_params():
     # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
-    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
+    assert (
+        "thinkingLevel" not in thinking_config
+    ), "Should not force thinkingLevel for Gemini 3 by default"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     # Test with Gemini 2 model
@@ -1614,8 +1625,16 @@ def test_gemini_image_size_limit_exceeded():
         }
     ]
 
-    with pytest.raises(litellm.ImageFetchError) as excinfo:
-        completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
+    try:
+        with pytest.raises(litellm.ImageFetchError) as excinfo:
+            completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
+    except litellm.BadRequestError as e:
+        # Wikimedia rate-limits CI runners (HTTP 429) for the Blue Marble
+        # image, so the size-limit check never gets a chance to fire. Skip
+        # rather than fail when the upstream host blocks us.
+        if "429" in str(e) or "Too Many Requests" in str(e):
+            pytest.skip(f"Wikimedia rate-limited the test fixture image: {e}")
+        raise
 
     error_message = str(excinfo.value)
     assert "Image size" in error_message

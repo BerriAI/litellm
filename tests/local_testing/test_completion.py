@@ -1061,6 +1061,8 @@ def test_completion_fireworks_ai():
             messages=messages,
         )
         print(response)
+    except litellm.NotFoundError as e:
+        pytest.skip(f"Fireworks model unavailable upstream (404): {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
