@@ -1984,6 +1984,17 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Lift the first-handoff instant onto request_data (top-level
+        # internal key, not metadata) so failure-path callbacks can still
+        # compute preprocessing latency after the logging object is popped.
+        _logging_obj = request_data.get("litellm_logging_obj")
+        if _logging_obj is not None:
+            _first_handoff = getattr(_logging_obj, "model_call_details", {}).get(
+                "first_api_call_start_time"
+            )
+            if _first_handoff is not None:
+                request_data["first_api_call_start_time"] = _first_handoff
+
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 

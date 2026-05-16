@@ -19,6 +19,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
+    get_request_route_template,
     is_request_body_safe,
 )
 
@@ -1573,3 +1574,44 @@ class TestPricingInjectionBlocked:
             )
             is True
         )
+
+
+class TestGetRequestRouteTemplate:
+    """get_request_route_template returns the low-cardinality FastAPI route
+    template (e.g. /v1/threads/{thread_id}/runs) for http.route, distinct
+    from the literal url.path. None when unavailable."""
+
+    def _request(self, scope):
+        req = MagicMock()
+        req.scope = scope
+        return req
+
+    def test_returns_route_template(self):
+        route = MagicMock()
+        route.path = "/v1/threads/{thread_id}/runs"
+        req = self._request({"route": route, "path": "/v1/threads/abc123/runs"})
+        # template, not the literal path — two thread IDs share this value
+        assert get_request_route_template(req) == "/v1/threads/{thread_id}/runs"
+
+    def test_scope_not_dict_returns_none(self):
+        assert get_request_route_template(self._request("not-a-dict")) is None
+
+    def test_no_route_in_scope_returns_none(self):
+        assert get_request_route_template(self._request({"path": "/x"})) is None
+
+    def test_route_without_str_path_returns_none(self):
+        route = MagicMock()
+        route.path = 12345  # not a str
+        assert get_request_route_template(self._request({"route": route})) is None
+
+    def test_route_with_empty_path_returns_none(self):
+        route = MagicMock()
+        route.path = ""
+        assert get_request_route_template(self._request({"route": route})) is None
+
+    def test_exception_returns_none(self):
+        req = MagicMock()
+        type(req).scope = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        assert get_request_route_template(req) is None

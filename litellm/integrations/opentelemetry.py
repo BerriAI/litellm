@@ -59,6 +59,11 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
 LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
+# OTel-standard names. status is also kept under error.code for back compat.
+HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
+HTTP_ROUTE_ATTRIBUTE = "http.route"
+URL_PATH_ATTRIBUTE = "url.path"
+PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -667,6 +672,31 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         parent_otel_span = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
             parent_otel_span.set_status(Status(StatusCode.ERROR))
+
+            # Stamp structured error attrs on the SERVER span itself; the
+            # failure path otherwise only sets its status (_handle_failure
+            # records on the litellm_request child span). Inline import:
+            # litellm_logging <-> integrations is circular.
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+
+            error_information = StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
+            self._record_exception_on_span(
+                span=parent_otel_span,
+                kwargs={
+                    "exception": original_exception,
+                    "standard_logging_object": {"error_information": error_information},
+                },
+            )
+
+            # Pre-request latency (request_data carries the propagated
+            # metadata on the failure path; omitted if it failed before handoff).
+            self.set_preprocessing_duration_attribute(parent_otel_span, request_data)
+
             _span_name = "Failed Proxy Server Request"
 
             # Exception Logging Child Span
@@ -702,6 +732,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             parent_span = user_api_key_dict.parent_otel_span
 
             ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
+
+            # Pre-request latency on the SERVER span (success path).
+            self.set_preprocessing_duration_attribute(parent_span, kwargs)
 
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -1626,6 +1659,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     key=ErrorAttributes.ERROR_CODE,
                     value=error_information["error_code"],
                 )
+
+                # Also expose under the OTel-standard name as an int
+                # (error_code is a str, may be non-numeric).
+                _error_code_val = error_information["error_code"]
+                if _error_code_val is not None:
+                    try:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                            value=int(_error_code_val),
+                        )
+                    except (ValueError, TypeError):
+                        pass
 
             if error_information.get("error_class"):
                 self.safe_set_attribute(
@@ -2888,4 +2934,68 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             start_time=self._to_ns(start_time),
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,
+        )
+
+    def set_proxy_request_route_attributes(
+        self,
+        span: Optional[Span],
+        *,
+        url_path: Optional[str] = None,
+        http_route: Optional[str] = None,
+    ) -> None:
+        """
+        Set OTel-standard ``http.route`` / ``url.path`` on the proxy SERVER
+        span. Called from the auth path, the only point where both the
+        SERVER span and the request are in hand. No-op if span/value missing.
+        """
+        if span is None:
+            return
+        if url_path:
+            self.safe_set_attribute(span=span, key=URL_PATH_ATTRIBUTE, value=url_path)
+        if http_route:
+            self.safe_set_attribute(
+                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
+            )
+
+    def set_preprocessing_duration_attribute(
+        self, span: Optional[Span], container: Any
+    ) -> None:
+        """
+        Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
+        provider handoff) on the proxy SERVER span. ``litellm_received_at``
+        rides request metadata; ``first_api_call_start_time`` is the
+        set-once first-handoff instant (retries/backoff excluded). Works
+        uniformly for the success (model_call_details) and failure
+        (request_data) containers. No-op if span/either anchor is missing.
+        """
+        if span is None or not isinstance(container, dict):
+            return
+        received_at = None
+        # first_api_call_start_time is top-level (never in user metadata).
+        first_handoff = container.get("first_api_call_start_time")
+        _lp = container.get("litellm_params")
+        for _md in (
+            (_lp or {}).get("metadata") if isinstance(_lp, dict) else None,
+            container.get("metadata"),
+            container.get("litellm_metadata"),
+        ):
+            if isinstance(_md, dict):
+                received_at = received_at or _md.get("litellm_received_at")
+        if received_at is None or first_handoff is None:
+            return
+        try:
+            start_ts = self._to_timestamp(received_at)
+            end_ts = self._to_timestamp(first_handoff)
+        except Exception:
+            return
+        if start_ts is None or end_ts is None:
+            return
+        duration_ms = (end_ts - start_ts) * 1000.0
+        # Clock skew → omit rather than emit a negative latency.
+        if duration_ms < 0:
+            return
+        self.safe_set_attribute(
+            span=span,
+            key=PREPROCESSING_DURATION_MS_ATTRIBUTE,
+            value=duration_ms,
         )
