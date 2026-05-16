@@ -1646,6 +1646,78 @@ def test_azure_v1_api_uses_openai_client(api_version):
         ), f"base_url should contain /openai/v1/, got {async_client.base_url}"
 
 
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_with_azure_ad_token_provider(api_version):
+    """
+    Test that Azure v1 API versions resolve azure_ad_token_provider to api_key.
+
+    The standard OpenAI client used for v1 API versions does not accept
+    azure_ad_token_provider. When no api_key is provided and an
+    azure_ad_token_provider is set, the provider should be called and the
+    resulting token used as api_key for the OpenAI client.
+
+    See: https://github.com/BerriAI/litellm/issues/27945
+    """
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    token_value = "mock-azure-ad-token-from-provider"
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: token_value,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        assert isinstance(client, OpenAI)
+        assert client.api_key == token_value
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_with_azure_ad_token(api_version):
+    """
+    Test that Azure v1 API versions use azure_ad_token as api_key when no
+    api_key or token_provider is set.
+
+    See: https://github.com/BerriAI/litellm/issues/27945
+    """
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    token_value = "static-azure-ad-token"
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": token_value,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        assert isinstance(client, OpenAI)
+        assert client.api_key == token_value
+
+
 def test_azure_traditional_api_uses_azure_openai_client():
     """
     Test that traditional Azure API versions still use AzureOpenAI client.

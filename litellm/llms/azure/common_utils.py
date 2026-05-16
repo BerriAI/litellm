@@ -474,8 +474,22 @@ class BaseAzureLLM(BaseOpenAILLM):
             if self._is_azure_v1_api_version(api_version):
                 # Extract only params that OpenAI client accepts
                 # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
+                v1_api_key = azure_client_params.get("api_key")
+
+                # When using Azure AD auth, resolve the token for the
+                # standard OpenAI client which does not accept
+                # azure_ad_token_provider directly.
+                if not v1_api_key:
+                    azure_ad_token_provider = azure_client_params.get(
+                        "azure_ad_token_provider"
+                    )
+                    if azure_ad_token_provider is not None:
+                        v1_api_key = azure_ad_token_provider()
+                    elif azure_client_params.get("azure_ad_token"):
+                        v1_api_key = azure_client_params["azure_ad_token"]
+
                 v1_params = {
-                    "api_key": azure_client_params.get("api_key"),
+                    "api_key": v1_api_key,
                     "base_url": f"{api_base}/openai/v1/",
                 }
                 if "timeout" in azure_client_params:
