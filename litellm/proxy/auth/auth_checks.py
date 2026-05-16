@@ -3650,7 +3650,7 @@ async def _team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
         )
 
-        if spend > team_object.max_budget:
+        if spend >= team_object.max_budget:
             if valid_token:
                 call_info = CallInfo(
                     token=valid_token.token,
