@@ -87,9 +87,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         The caller-supplied ``api_base`` is intentionally ignored to avoid
         leaking the Copilot bearer token to a caller-controlled URL.
         """
-        resolved = (
-            self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        resolved = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
         if not resolved.endswith("/v1/messages"):
             resolved = f"{resolved}/v1/messages"
         return resolved
