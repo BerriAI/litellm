@@ -59,19 +59,10 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
 LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
-# OTel-standard HTTP semantic-convention name; what APM dashboards query
-# (status is also kept under the non-standard error.code for back compat).
+# OTel-standard names. status is also kept under error.code for back compat.
 HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
-# http.route is the low-cardinality route template
-# (e.g. /v1/threads/{thread_id}/runs); url.path is the literal request
-# path. Set explicitly on the SERVER span (not via the metadata.*
-# passthrough, which would name them metadata.*).
 HTTP_ROUTE_ATTRIBUTE = "http.route"
 URL_PATH_ATTRIBUTE = "url.path"
-# Total time LiteLLM spends before the upstream provider request begins
-# (proxy-receive -> first provider handoff): auth + parsing + pre-call
-# hooks. A single number, not a span — the window crosses many
-# sub-operations with no single span representing it.
 PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
@@ -682,14 +673,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if parent_otel_span is not None:
             parent_otel_span.set_status(Status(StatusCode.ERROR))
 
-            # Stamp structured error attrs (error.code,
-            # http.response.status_code, error.type, ...) on the SERVER span
-            # itself. Dashboards query this span, but the failure path
-            # otherwise only set its status — _handle_failure records on the
-            # litellm_request child span, not here. Reuses the same recorder
-            # and extraction as that path so the values match. Inline import:
-            # litellm_logging <-> integrations is circular (same reason as
-            # the Logging import elsewhere in this module).
+            # Stamp structured error attrs on the SERVER span itself; the
+            # failure path otherwise only sets its status (_handle_failure
+            # records on the litellm_request child span). Inline import:
+            # litellm_logging <-> integrations is circular.
             from litellm.litellm_core_utils.litellm_logging import (
                 StandardLoggingPayloadSetup,
             )
@@ -706,9 +693,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 },
             )
 
-            # Pre-request latency. request_data still carries the propagated
-            # metadata here (the logging object was popped before failure
-            # callbacks ran). Omitted if the request failed before handoff.
+            # Pre-request latency (request_data carries the propagated
+            # metadata on the failure path; omitted if it failed before handoff).
             self.set_preprocessing_duration_attribute(parent_otel_span, request_data)
 
             _span_name = "Failed Proxy Server Request"
@@ -747,8 +733,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
 
-            # Pre-request latency on the SERVER span (model_call_details
-            # holds first_api_call_start_time + the propagated received-at).
+            # Pre-request latency on the SERVER span (success path).
             self.set_preprocessing_duration_attribute(parent_span, kwargs)
 
             # 3. Guardrail span
@@ -1675,8 +1660,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=error_information["error_code"],
                 )
 
-                # Also expose it under the OTel-standard name as an int.
-                # error_code is a str and may be non-numeric, so coerce/skip.
+                # Also expose under the OTel-standard name as an int
+                # (error_code is a str, may be non-numeric).
                 _error_code_val = error_information["error_code"]
                 if _error_code_val is not None:
                     try:
@@ -2960,11 +2945,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     ) -> None:
         """
         Set OTel-standard ``http.route`` / ``url.path`` on the proxy SERVER
-        span. Called from the auth path right after the span is created —
-        the only point where the SERVER span and the request are both in
-        hand (the success/failure logging handlers write the litellm_request
-        child span, not this one). No-op when there is no span (e.g. the
-        Langfuse override returns None) or a source value is missing.
+        span. Called from the auth path, the only point where both the
+        SERVER span and the request are in hand. No-op if span/value missing.
         """
         if span is None:
             return
@@ -2980,24 +2962,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     ) -> None:
         """
         Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
-        provider handoff) on the proxy SERVER span. Called from the
-        post-call hooks where the SERVER span is in hand — the logging
-        handlers write the litellm_request child span, not this one.
-
-        ``litellm_received_at`` rides request metadata (set in the auth
-        path); ``first_api_call_start_time`` is the set-once first-handoff
-        instant (so retries/backoff are excluded). Both are read from the
-        container's metadata so success (model_call_details) and failure
-        (request_data, logging object already popped) paths work uniformly.
-        No-op if the span or either anchor is missing.
+        provider handoff) on the proxy SERVER span. ``litellm_received_at``
+        rides request metadata; ``first_api_call_start_time`` is the
+        set-once first-handoff instant (retries/backoff excluded). Works
+        uniformly for the success (model_call_details) and failure
+        (request_data) containers. No-op if span/either anchor is missing.
         """
         if span is None or not isinstance(container, dict):
             return
         received_at = None
-        # first_api_call_start_time rides the container TOP LEVEL:
-        # model_call_details on success, request_data on failure (the
-        # proxy lifts it off the logging object before popping it). It is
-        # never placed in the user metadata sub-dict.
+        # first_api_call_start_time is top-level (never in user metadata).
         first_handoff = container.get("first_api_call_start_time")
         _lp = container.get("litellm_params")
         for _md in (
@@ -3017,8 +2991,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if start_ts is None or end_ts is None:
             return
         duration_ms = (end_ts - start_ts) * 1000.0
-        # Clock skew / out-of-order anchors → omit rather than emit a
-        # negative latency.
+        # Clock skew → omit rather than emit a negative latency.
         if duration_ms < 0:
             return
         self.safe_set_attribute(

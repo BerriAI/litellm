@@ -4683,18 +4683,15 @@ class TestOpenTelemetryHttpStatusCodeAttribute(unittest.TestCase):
         assert "http.response.status_code" not in span.attributes
 
     def test_recorder_does_not_touch_span_status(self):
-        # Leaving status at UNSET proves PR 1 is no-behavior-change on the
-        # status axis — flipping 4xx off ERROR is PR 1-FOLLOWUP's job.
         span = self._record({"error_code": "401"})
         assert span.status.status_code == trace.StatusCode.UNSET
 
 
 class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
-    """PR 1: the error attributes must land on the SERVER span the customer's
-    dashboards query. ``_handle_failure`` records on the litellm_request child
-    span (parent not in kwargs), so ``async_post_call_failure_hook`` — which
-    holds the real SERVER span via ``user_api_key_dict.parent_otel_span`` — is
-    where the SERVER span gets stamped.
+    """Error attributes must land on the SERVER span dashboards query.
+    ``_handle_failure`` records on the litellm_request child span, so
+    ``async_post_call_failure_hook`` — which holds the SERVER span via
+    ``user_api_key_dict.parent_otel_span`` — is where it gets stamped.
     """
 
     def _run_hook(self, exception):
@@ -4759,9 +4756,9 @@ class TestOpenTelemetryFailureHookStampsServerSpan(unittest.TestCase):
 
 
 class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
-    """PR 2: http.route (template) + url.path (literal) must land on the
-    SERVER span. The logging handlers write the litellm_request child span,
-    so this is set from the auth path on the freshly-created SERVER span.
+    """http.route (template) + url.path (literal) must land on the SERVER
+    span. The logging handlers write the litellm_request child span, so
+    this is set from the auth path on the freshly-created SERVER span.
     """
 
     def _set(self, **kwargs):
@@ -4781,11 +4778,9 @@ class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
             url_path="/v1/threads/abc123/runs",
             http_route="/v1/threads/{thread_id}/runs",
         )
-        # Exact OTel-standard names — NOT metadata.* (regression guard for
-        # the naming nuance the plan calls out).
+        # Exact OTel-standard names — NOT metadata.* (naming regression guard).
         assert span.attributes["url.path"] == "/v1/threads/abc123/runs"
         assert span.attributes["http.route"] == "/v1/threads/{thread_id}/runs"
-        # template differs from literal — the whole point of PR 2
         assert span.attributes["http.route"] != span.attributes["url.path"]
         assert "metadata.http_route" not in span.attributes
 
@@ -4814,11 +4809,10 @@ class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
 
 
 class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
-    """PR 3: litellm.preprocessing.duration_ms (proxy-receive -> first
-    provider handoff) on the SERVER span. Read from container metadata so
-    the success (model_call_details) and failure (request_data, logging
-    object popped) paths work uniformly. Excludes retries via the set-once
-    first_api_call_start_time anchor.
+    """litellm.preprocessing.duration_ms (proxy-receive -> first provider
+    handoff) on the SERVER span. Read from container metadata so the
+    success (model_call_details) and failure (request_data) paths work
+    uniformly. Excludes retries via the set-once first_api_call_start_time.
     """
 
     def _span(self):

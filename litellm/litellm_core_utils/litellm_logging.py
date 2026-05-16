@@ -1050,21 +1050,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
-            # Set-once: the FIRST provider-handoff instant. api_call_start_time
-            # above is overwritten on every retry/fallback attempt (this
-            # logging object is reused), so it can't measure one-time
-            # preprocessing. This field is written only if absent, so it
-            # pins the first attempt — proxy-receive -> here is pure
-            # preprocessing, excluding retry loops + backoff sleeps.
+            # Set-once first provider-handoff instant. api_call_start_time
+            # is overwritten on every retry, so it can't measure one-time
+            # preprocessing; pinning the first attempt excludes retry loops
+            # + backoff. Logging object only — must NOT go into
+            # litellm_params["metadata"] (caller request metadata, typed
+            # Dict[str, str], echoed downstream; a datetime breaks it).
             if self.model_call_details.get("first_api_call_start_time") is None:
-                # Set-once on the logging object only. The success path
-                # reads this directly off model_call_details; the proxy
-                # failure path lifts it into request_data before the
-                # logging object is popped (see proxy/utils.py). It must
-                # NOT be written into litellm_params["metadata"] — that is
-                # the caller's request metadata, echoed back into provider
-                # request bodies, spend logs, and batch objects (typed
-                # Dict[str, str]); a datetime there breaks them.
                 self.model_call_details["first_api_call_start_time"] = (
                     self.model_call_details["api_call_start_time"]
                 )

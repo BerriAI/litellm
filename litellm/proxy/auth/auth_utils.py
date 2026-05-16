@@ -524,11 +524,10 @@ def get_request_route(request: Request) -> str:
 
 def get_request_route_template(request: Request) -> Optional[str]:
     """
-    Return the low-cardinality route template for the request, e.g.
+    Return the low-cardinality route template, e.g.
     ``/v1/threads/{thread_id}/runs`` (vs. the literal path from
-    ``get_request_route``). FastAPI populates ``scope["route"]`` with the
-    matched route before endpoint dependencies run; its ``path`` is the
-    template. Returns None if unavailable (e.g. unmatched path, Mount).
+    ``get_request_route``). FastAPI sets ``scope["route"]`` before endpoint
+    dependencies run. Returns None if unavailable (unmatched path, Mount).
     """
     try:
         scope = request.scope

@@ -1651,10 +1651,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
-    # Carry the proxy-receive instant through the same request->metadata
-    # channel as `endpoint` so the OTel layer can compute pre-request
-    # latency. Survives into request_data on the failure path (where the
-    # logging object is popped before callbacks run).
+    # Carry the proxy-receive instant via metadata (like `endpoint`) so the
+    # OTel layer can compute pre-request latency, including on the failure
+    # path after the logging object is popped.
     data[_metadata_variable_name]["litellm_received_at"] = getattr(
         request.state, "litellm_received_at", None
     )

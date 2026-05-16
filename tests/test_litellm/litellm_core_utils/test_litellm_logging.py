@@ -2719,9 +2719,7 @@ class TestFirstApiCallStartTimeSetOnce:
         obj.pre_call(input="hi", api_key="sk-test")
         first = obj.model_call_details["first_api_call_start_time"]
         assert first == obj.model_call_details["api_call_start_time"]
-        # Set on the logging object only — the user metadata sub-dict is
-        # left completely untouched (no foreign datetime keys leak into
-        # provider bodies / batch objects).
+        # Set on the logging object only — user metadata untouched.
         assert user_meta == {}
         assert (
             "first_api_call_start_time" not in obj.model_call_details["litellm_params"]

@@ -683,10 +683,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
-    # True proxy-receive instant. Stash it so the pre-request latency
-    # (proxy-receive -> first provider handoff) can be computed later — the
-    # SERVER span is started with this but the OTel Span API exposes no
-    # start-time getter, so it must be propagated explicitly.
+    # Stash the proxy-receive instant for the pre-request latency calc —
+    # the OTel Span API exposes no start-time getter, so propagate it.
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -732,11 +730,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     headers=_safe_get_request_headers(request),
                 )
             )
-            # Stamp OTel-standard http.route / url.path on the SERVER span
-            # here — the only point both the span and the request are in
-            # hand. The logging handlers write the litellm_request child
-            # span, never this one. `route` is the literal path (computed
-            # above); the template comes from the matched FastAPI route.
+            # `route` is the literal path; template from the matched route.
             open_telemetry_logger.set_proxy_request_route_attributes(
                 parent_otel_span,
                 url_path=route,
