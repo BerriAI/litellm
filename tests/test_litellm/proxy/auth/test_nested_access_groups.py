@@ -244,6 +244,34 @@ def test_validate_models_exist_backwards_compatible_without_groups():
 # ---------------------------------------------------------------------------
 
 
+def test_dag_shared_group_subtree_no_false_cycle_warning(caplog):
+    """
+    DAG with a shared group subtree:
+        A -> [B, C]
+        B -> [D]
+        C -> [D]
+        D -> [model-1]
+
+    On-path cycle tracking lets D be re-traversed via both B and C without
+    a spurious 'cycle detected' warning. Caller dedups.
+    """
+    model_access_groups = {"D": ["model-1"]}
+    group_memberships = {"A": ["B", "C"], "B": ["D"], "C": ["D"]}
+
+    with caplog.at_level("WARNING"):
+        result = resolve_nested_groups(
+            group_name="A",
+            model_access_groups=model_access_groups,
+            group_memberships=group_memberships,
+            visited=set(),
+        )
+
+    assert sorted(set(result)) == ["model-1"]
+    assert not any(
+        "cycle detected" in m.lower() for m in caplog.messages
+    ), "DAG-shared subtree must not trigger cycle warnings"
+
+
 def test_diamond_inheritance_resolves_once():
     """
     Diamond shape:

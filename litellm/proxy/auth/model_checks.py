@@ -52,8 +52,14 @@ def resolve_nested_groups(
     Expand a group name to the full list of model names it transitively includes,
     following parent -> child edges in `group_memberships`.
 
-    Runs on the auth path, so cyclic edges are logged and skipped rather than raised:
-    a malformed row must not 500 the proxy.
+    Cycle handling: `visited` tracks the *current recursion path* (on-path),
+    not every node ever seen. A revisit while still on the path is a real
+    cycle - we log a warning and skip the cyclic edge. DAG-shared subtrees
+    (e.g. A -> [B, C], B -> [D], C -> [D]) re-traverse D, and the caller
+    deduplicates the final list.
+
+    Cyclic edges are logged and skipped rather than raised: this runs on the
+    auth path and a malformed row must not 500 the proxy.
     """
     if group_name in visited:
         verbose_proxy_logger.warning(
@@ -62,18 +68,20 @@ def resolve_nested_groups(
         )
         return []
     visited.add(group_name)
-
-    resolved: List[str] = list(model_access_groups.get(group_name, []))
-    for child in group_memberships.get(group_name, []):
-        resolved.extend(
-            resolve_nested_groups(
-                group_name=child,
-                model_access_groups=model_access_groups,
-                group_memberships=group_memberships,
-                visited=visited,
+    try:
+        resolved: List[str] = list(model_access_groups.get(group_name, []))
+        for child in group_memberships.get(group_name, []):
+            resolved.extend(
+                resolve_nested_groups(
+                    group_name=child,
+                    model_access_groups=model_access_groups,
+                    group_memberships=group_memberships,
+                    visited=visited,
+                )
             )
-        )
-    return resolved
+        return resolved
+    finally:
+        visited.discard(group_name)
 
 
 def _get_models_from_access_groups(
