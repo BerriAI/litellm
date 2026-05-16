@@ -279,6 +279,11 @@ const config = {
             label: 'Docs',
           },
           {
+            href: 'https://docs.litellm-agent-platform.ai/',
+            label: 'LiteLLM Agent Platform',
+            position: 'left',
+          },
+          {
             type: 'docSidebar',
             sidebarId: 'learnSidebar',
             position: 'left',
