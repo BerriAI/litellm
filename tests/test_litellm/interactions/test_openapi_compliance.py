@@ -157,16 +157,13 @@ class TestResponseCompliance:
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly). Google's current OpenAPI response payload
-        # exposes content through `steps`; LiteLLM keeps `outputs` only as a
-        # compatibility response field.
+        # Output fields (readOnly)
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
             "role",
-            "steps",
             "usage",
         ]
 
