@@ -28,6 +28,54 @@ def test_chatgpt_image_generation_usage_helpers_ignore_invalid_payloads():
     )
 
 
+def test_chatgpt_image_generation_usage_helper_prefers_nested_response_usage():
+    config = ChatGPTImageGenerationConfig()
+
+    usage = config._get_image_generation_usage(
+        {
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                }
+            },
+            "response": {
+                "tool_usage": {
+                    "image_gen": {
+                        "input_tokens": 10,
+                        "output_tokens": 20,
+                    }
+                }
+            },
+        }
+    )
+
+    assert usage is not None
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 20
+    assert usage["total_tokens"] == 30
+
+
+def test_chatgpt_image_generation_usage_helper_handles_cyclic_response_payload():
+    config = ChatGPTImageGenerationConfig()
+    payload = {
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 3,
+                "output_tokens": 4,
+            }
+        }
+    }
+    payload["response"] = payload
+
+    usage = config._get_image_generation_usage(payload)
+
+    assert usage is not None
+    assert usage["input_tokens"] == 3
+    assert usage["output_tokens"] == 4
+    assert usage["total_tokens"] == 7
+
+
 def test_chatgpt_image_generation_extracts_tool_usage_from_completed_response():
     config = ChatGPTImageGenerationConfig()
     raw_response = httpx.Response(

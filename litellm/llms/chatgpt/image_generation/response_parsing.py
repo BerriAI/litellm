@@ -86,12 +86,29 @@ def get_image_generation_usage(response_payload: Any) -> Optional[dict]:
     if not isinstance(response_payload, dict):
         return None
 
-    response = response_payload.get("response")
-    if isinstance(response, dict):
-        image_gen_usage = get_image_generation_usage(response)
+    payloads_to_check: List[dict] = []
+    current_payload = response_payload
+    visited_container_ids = set()
+    while isinstance(current_payload, dict):
+        container_id = id(current_payload)
+        if container_id in visited_container_ids:
+            break
+        visited_container_ids.add(container_id)
+        payloads_to_check.append(current_payload)
+
+        next_payload = current_payload.get("response")
+        if not isinstance(next_payload, dict):
+            break
+        current_payload = next_payload
+
+    for payload in reversed(payloads_to_check):
+        image_gen_usage = _get_image_generation_usage_from_payload(payload)
         if image_gen_usage is not None:
             return image_gen_usage
+    return None
 
+
+def _get_image_generation_usage_from_payload(response_payload: dict) -> Optional[dict]:
     tool_usage = response_payload.get("tool_usage")
     if not isinstance(tool_usage, dict):
         return None
