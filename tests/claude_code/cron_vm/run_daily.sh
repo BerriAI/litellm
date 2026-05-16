@@ -73,7 +73,7 @@ cleanup() {
   fi
   # Belt-and-braces: any python or uv talking to ${PROXY_PORT} that
   # survived the SIGTERM gets SIGKILL'd by name.
-  pgrep -f "litellm.*--port[ =]?${PROXY_PORT}\b" 2>/dev/null \
+  pgrep -f "litellm.*--port[ =]?${PROXY_PORT}([^0-9]|$)" 2>/dev/null \
     | xargs -r kill -KILL 2>/dev/null || true
   pgrep -f "${WORKTREE}/.uv-bin/uv.*run litellm" 2>/dev/null \
     | xargs -r kill -KILL 2>/dev/null || true
