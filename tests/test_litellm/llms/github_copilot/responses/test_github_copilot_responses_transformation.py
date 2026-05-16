@@ -19,7 +19,10 @@ from litellm.utils import ProviderConfigManager
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
+from litellm.exceptions import AuthenticationError
 
 
 class TestGithubCopilotResponsesAPITransformation:
@@ -217,7 +220,7 @@ class TestGithubCopilotResponsesAPITransformation:
         assert has_vision is False, "Should return False for string input"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_vision_header(self, mock_authenticator_class):
+    def test_transform_request_with_vision_header(self, mock_authenticator_class):
         """Test that copilot-vision-request header is added for vision input"""
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key"
@@ -225,17 +228,21 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
 
-        # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
-        mock_litellm_params.input = [
+        # Vision input with input_image type
+        input_with_vision = [
             {
                 "role": "user",
                 "content": [{"type": "input_image", "data": "base64..."}],
             }
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
+        headers = {}
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=input_with_vision,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers=headers,
         )
 
         assert (
@@ -243,7 +250,7 @@ class TestGithubCopilotResponsesAPITransformation:
         ), "Should add copilot-vision-request header for vision input"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_x_initiator(self, mock_authenticator_class):
+    def test_transform_request_with_x_initiator(self, mock_authenticator_class):
         """Test that X-Initiator header is set based on input"""
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key"
@@ -251,15 +258,19 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
 
-        # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
-        mock_litellm_params.input = [
+        # Multi-turn input with assistant role
+        input_with_assistant = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi"},
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
+        headers = {}
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=input_with_assistant,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers=headers,
         )
 
         assert (
@@ -306,7 +317,7 @@ class TestGithubCopilotResponsesAPITransformation:
             assert param in supported, f"{param} should be in supported params"
 
     def test_handle_reasoning_item_preserves_encrypted_content(self):
-        """Test that _handle_reasoning_item preserves encrypted_content for GitHub Copilot.
+        """Test _handle_reasoning_item preserves encrypted_content for GitHub Copilot.
 
         GitHub Copilot uses encrypted_content in reasoning items to maintain
         conversation state across turns. This field must be preserved for
@@ -373,3 +384,258 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Non-reasoning items should pass through unchanged
         assert result == message_item
+
+
+class TestGetInitiatorEdgeCases:
+    """
+    FIX-04: Verify _get_initiator handles all Responses API role-less item types.
+    Items without explicit 'role' keys are agent-initiated (function_call,
+    function_call_output, mcp_call, mcp_call_result, reasoning).
+    """
+
+    def setup_method(self):
+        self.handler = GithubCopilotResponsesAPIConfig()
+        self.handler.authenticator = MagicMock()
+        self.handler.authenticator.get_api_key.return_value = "gh-test-token"
+
+    def test_function_call_item_returns_agent(self):
+        """function_call items have no role — must return 'agent'."""
+        input_param = [
+            {"role": "user", "content": "Call the function"},
+            {"type": "function_call", "name": "get_weather", "arguments": "{}"},
+        ]
+        assert self.handler._get_initiator(input_param) == "agent"
+
+    def test_function_call_output_item_returns_agent(self):
+        """function_call_output items have no role — must return 'agent'."""
+        input_param = [
+            {"role": "user", "content": "Use the result"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": '{"temperature": 72}',
+            },
+        ]
+        assert self.handler._get_initiator(input_param) == "agent"
+
+    def test_reasoning_item_returns_agent(self):
+        """reasoning items have no role — must return 'agent'."""
+        input_param = [
+            {"role": "user", "content": "Think step by step"},
+            {
+                "type": "reasoning",
+                "id": "rs_abc",
+                "summary": [],
+                "encrypted_content": "encrypted-data-here",
+            },
+        ]
+        assert self.handler._get_initiator(input_param) == "agent"
+
+    def test_mcp_call_item_returns_agent(self):
+        """mcp_call items (GitHub Copilot extension) have no role — return 'agent'."""
+        input_param = [
+            {"role": "user", "content": "Use the MCP tool"},
+            {"type": "mcp_call", "name": "some_tool", "arguments": "{}"},
+        ]
+        assert self.handler._get_initiator(input_param) == "agent"
+
+    def test_user_only_messages_return_user(self):
+        """All user-role messages should return 'user' (no agent continuation)."""
+        input_param = [
+            {"role": "user", "content": "Hello"},
+        ]
+        assert self.handler._get_initiator(input_param) == "user"
+
+    def test_string_input_returns_user(self):
+        """String input is always user-initiated."""
+        assert self.handler._get_initiator("What is the weather?") == "user"
+
+
+class TestEncryptedContentEdgeCases:
+    """
+    FIX-01/FIX-02: Additional edge cases for encrypted_content preservation.
+
+    GitHub Copilot uses encrypted_content in reasoning items to maintain
+    billing session state across conversation turns. The _handle_reasoning_item()
+    method MUST preserve this field so callers can include it in follow-up
+    requests. If encrypted_content is lost, GitHub treats the next request
+    as a new premium billable turn.
+
+    Caller contract:
+        When building the next turn's input, callers should include the full
+        reasoning item from the response output (not just strip it to content).
+        LiteLLM's _handle_reasoning_item() preserves encrypted_content on the
+        INPUT side (when callers pass reasoning items forward). The output side
+        passes through the parent class which returns raw API output unchanged.
+
+    Existing coverage (do not duplicate):
+        - test_handle_reasoning_item_preserves_encrypted_content (non-None value)
+        - test_handle_reasoning_item_without_encrypted_content (key absent)
+        - test_handle_reasoning_item_non_reasoning_passthrough (non-reasoning items)
+    """
+
+    def setup_method(self):
+        self.config = GithubCopilotResponsesAPIConfig()
+
+    def test_handle_reasoning_item_encrypted_content_none_not_included(self):
+        """
+        When encrypted_content=None, it must NOT appear in the output.
+
+        The _handle_reasoning_item() filtering logic skips None values for
+        most fields, including encrypted_content when it is None. This is
+        correct behavior — sending null encrypted_content to GitHub Copilot
+        causes 'encrypted content could not be verified' errors.
+        """
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs-none-test",
+            "summary": [],
+            "encrypted_content": None,
+            "status": None,
+        }
+
+        result = self.config._handle_reasoning_item(reasoning_item)
+
+        assert "encrypted_content" not in result, (
+            "encrypted_content=None must NOT be included in output. "
+            "Sending null encrypted_content to GitHub Copilot API causes "
+            "'encrypted content could not be verified' errors."
+        )
+        assert "status" not in result, "status=None must be filtered out"
+        assert result.get("type") == "reasoning"
+        assert result.get("id") == "rs-none-test"
+
+    def test_handle_reasoning_item_encrypted_content_empty_string_preserved(self):
+        """
+        When encrypted_content is an empty string "", it must be preserved.
+
+        Empty string is a valid (non-None) value and differs from absent/None.
+        The filtering logic only skips None values, not falsy ones.
+        """
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs-empty-test",
+            "summary": [],
+            "encrypted_content": "",
+        }
+
+        result = self.config._handle_reasoning_item(reasoning_item)
+
+        # Empty string is a valid encrypted_content value — preserve it
+        # (GitHub may use empty string to signal "no billing context" vs absent = error)
+        assert "encrypted_content" in result, (
+            "encrypted_content='' (empty string) must be preserved — "
+            "it is a non-None value and may be meaningful to the API."
+        )
+        assert result["encrypted_content"] == ""
+
+    def test_handle_reasoning_item_large_encrypted_content_preserved(self):
+        """
+        Large encrypted_content values must be preserved without truncation.
+
+        Real GitHub Copilot encrypted_content values can be several KB.
+        Verify no length-based truncation occurs.
+        """
+        large_encrypted = "x" * 10000  # 10KB simulated encrypted blob
+
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs-large-test",
+            "summary": [],
+            "encrypted_content": large_encrypted,
+        }
+
+        result = self.config._handle_reasoning_item(reasoning_item)
+
+        assert result.get("encrypted_content") == large_encrypted, (
+            f"Large encrypted_content ({len(large_encrypted)} chars) must be "
+            "preserved without truncation"
+        )
+
+    def test_handle_reasoning_item_multiple_items_all_preserved(self):
+        """
+        When multiple reasoning items are processed, each must preserve its
+        own encrypted_content independently.
+
+        Verifies there's no shared state between calls that could cause
+        encrypted_content from one item to bleed into another.
+        """
+        item1 = {
+            "type": "reasoning",
+            "id": "rs-1",
+            "summary": [],
+            "encrypted_content": "encrypted-blob-for-item-1",
+        }
+        item2 = {
+            "type": "reasoning",
+            "id": "rs-2",
+            "summary": [],
+            "encrypted_content": "encrypted-blob-for-item-2",
+        }
+
+        result1 = self.config._handle_reasoning_item(item1)
+        result2 = self.config._handle_reasoning_item(item2)
+
+        assert result1.get("encrypted_content") == "encrypted-blob-for-item-1"
+        assert result2.get("encrypted_content") == "encrypted-blob-for-item-2"
+        assert (
+            result1["encrypted_content"] != result2["encrypted_content"]
+        ), "Each reasoning item must preserve its own encrypted_content independently"
+
+
+class TestResponsesAPIMiscMethods:
+    """Cover misc methods with low coverage in responses/transformation.py."""
+
+    def setup_method(self):
+        self.config = GithubCopilotResponsesAPIConfig()
+
+    def test_supports_native_websocket_is_false(self):
+        assert self.config.supports_native_websocket() is False
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_get_complete_url_default_base(self, mock_authenticator_class):
+        url = self.config.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://api.githubcopilot.com/responses"
+
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_get_complete_url_custom_base(self, mock_authenticator_class):
+        url = self.config.get_complete_url(
+            api_base="https://custom.example.com/v1/", litellm_params={}
+        )
+        assert url == "https://custom.example.com/v1/responses"
+
+    def test_validate_environment_no_api_key_raises(self):
+        self.config.authenticator.get_api_key = MagicMock(return_value=None)
+        with pytest.raises(AuthenticationError):
+            self.config.validate_environment(
+                headers={}, model="gpt-4", litellm_params=None
+            )
+
+    def test_validate_environment_get_api_key_error_raises(self):
+        self.config.authenticator.get_api_key = MagicMock(
+            side_effect=GetAPIKeyError(status_code=401, message="key expired")
+        )
+        with pytest.raises(AuthenticationError):
+            self.config.validate_environment(
+                headers={}, model="gpt-4", litellm_params=None
+            )
+
+    def test_validate_environment_with_conversation_key(self):
+        self.config.authenticator.get_api_key = MagicMock(return_value="test-key")
+        lp = GenericLiteLLMParams(metadata={"copilot_conversation_id": "test-conv"})
+        headers = self.config.validate_environment(
+            headers={}, model="gpt-4", litellm_params=lp
+        )
+        assert "x-conversation-id" in headers
+
+    def test_map_openai_params_returns_dict(self):
+        result = self.config.map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="gpt-4",
+            drop_params=False,
+        )
+        assert result == {"temperature": 0.5}
+
+    def test_get_supported_openai_params_returns_list(self):
+        result = self.config.get_supported_openai_params("gpt-4")
+        assert isinstance(result, list)
