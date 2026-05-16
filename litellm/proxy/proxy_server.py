@@ -10928,12 +10928,22 @@ async def _get_caller_byok_team_scope(
     return set(user_row.teams or [])
 
 
+# Hard cap on rows the DB-side BYOK search may pull when results need to be
+# sorted across the full match set. Without this, an authenticated caller
+# can hit `/v2/model/info?search=<broad>&sortBy=<field>` and force the
+# proxy to materialize and decrypt every matching BYOK row on each request.
+_SORTED_SEARCH_DB_FETCH_CAP = 500
+
+
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
     prisma_client: Optional[Any],
     proxy_config: Any,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    page: int = 1,
+    size: int = 50,
+    sort_by: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -10947,6 +10957,13 @@ async def _apply_search_filter_to_models(
             teams the caller belongs to. When omitted (None), no team
             scoping is applied — pass it from request handlers that expose
             this function to non-admin callers.
+        page: Current page number (1-indexed). Used with ``size`` to bound
+            the DB ``find_many(take=...)`` so a broad search term can't
+            force a full table read + decrypt on every request.
+        size: Page size. See ``page``.
+        sort_by: Sort field. When set, results must be sorted across the
+            full match set, so the DB fetch is capped at
+            ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -11045,9 +11062,38 @@ async def _apply_search_filter_to_models(
                     "not": {"in": list(db_model_ids_in_router)}
                 }
 
-            db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where=db_where_condition,
+            # Bound the DB fetch so a broad `search` can't force a full
+            # model-table read on each request:
+            #
+            # * Unsorted searches only need enough DB rows to fill the
+            #   current page after counting router-side matches.
+            # * Sorted searches need ordering across the full match set,
+            #   so we fall back to a hard cap (`_SORTED_SEARCH_DB_FETCH_CAP`)
+            #   instead of fetching everything.
+            #
+            # `total_count` exposes the precise number of remaining DB rows
+            # via a cheap `count(...)` so the UI's pagination stays
+            # accurate even when we don't materialize them all.
+            if sort_by:
+                take_limit = _SORTED_SEARCH_DB_FETCH_CAP
+            else:
+                models_needed = max(0, page * size - router_models_count)
+                take_limit = models_needed
+
+            db_models_total_count = (
+                await prisma_client.db.litellm_proxymodeltable.count(
+                    where=db_where_condition
+                )
             )
+
+            db_models_raw: list = []
+            if take_limit > 0:
+                db_models_raw = (
+                    await prisma_client.db.litellm_proxymodeltable.find_many(
+                        where=db_where_condition,
+                        take=take_limit,
+                    )
+                )
 
             # Scope BYOK rows to the caller's allowed teams so non-admin
             # callers can't enumerate other teams' BYOK metadata via
@@ -11059,7 +11105,6 @@ async def _apply_search_filter_to_models(
                     m.model_info if isinstance(m.model_info, dict) else {}
                 )
             ]
-            db_models_total_count = len(matching_db_rows)
 
             # Calculate total count for search results
             search_total_count = router_models_count + db_models_total_count
@@ -11600,6 +11645,9 @@ async def model_info_v2(
             prisma_client=prisma_client,
             proxy_config=proxy_config,
             user_api_key_dict=user_api_key_dict,
+            page=page,
+            size=size,
+            sort_by=sortBy,
         )
 
     if user_models_only:

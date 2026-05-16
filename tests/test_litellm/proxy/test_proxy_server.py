@@ -1285,6 +1285,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     }
 
     prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=2)
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
         return_value=[db_caller_row, db_other_row]
     )
@@ -1328,9 +1329,13 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
         "DB-only BYOK from another team must be dropped from search when "
         "caller doesn't belong to that team"
     )
-    # total_count is router_models_count (3: caller_team_byok, public_model
-    # would be counted; other_team_byok is dropped — 2) + 1 db row = 3.
-    assert total_count == 3
+    # total_count is router_models_count (2: caller_team_byok + public_model,
+    # other_team_byok dropped router-side) + DB count (2 from the mocked
+    # `count()`). The DB count is the *unscoped* match count; non-admin
+    # team scoping applies only to the returned page so the count can be
+    # over-reported, but it must never under-report (callers can paginate
+    # within the bound).
+    assert total_count == 4
 
     # Admins keep the un-scoped view across teams.
     admin = MagicMock(spec=UserAPIKeyAuth)
@@ -1347,6 +1352,59 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     admin_ids = {m["model_info"]["id"] for m in filtered_admin}
     assert "byok-other" in admin_ids
     assert "byok-db-other" in admin_ids
+
+
+@pytest.mark.asyncio
+async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
+    """
+    Regression test: a broad search term must not force a full BYOK-table
+    read + decrypt on each request.
+
+    * Unsorted searches: `find_many(take=N)` where N is just enough to
+      fill the current page after counting router-side matches.
+    * Sorted searches: `find_many(take=cap)` falls back to
+      `_SORTED_SEARCH_DB_FETCH_CAP` so ordering still works across a
+      large match set without scanning the whole table.
+    """
+    from litellm.proxy.proxy_server import (
+        _SORTED_SEARCH_DB_FETCH_CAP,
+        _apply_search_filter_to_models,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=10_000)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: []
+
+    # Unsorted: page=1, size=50, no router-side matches -> take must be 50.
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="model",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        page=1,
+        size=50,
+        sort_by=None,
+    )
+    take = prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["take"]
+    assert take == 50, "unsorted search must take just one page's worth of rows"
+
+    # Sorted: still bounded, but by the hard cap rather than the page.
+    prisma_client.db.litellm_proxymodeltable.find_many.reset_mock()
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="model",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        page=1,
+        size=50,
+        sort_by="model_name",
+    )
+    take = prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["take"]
+    assert take == _SORTED_SEARCH_DB_FETCH_CAP
+    assert take < 10_000, "sorted search must cap below the full match set"
 
 
 @pytest.mark.asyncio
