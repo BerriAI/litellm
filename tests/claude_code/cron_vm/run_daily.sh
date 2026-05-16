@@ -159,31 +159,36 @@ fi
 log "updating worktree to ${LITELLM_VERSION}"
 git -C "${WORKTREE}" fetch --tags --force
 git -C "${WORKTREE}" reset --hard
-# Keep the venv, the .uv-bin cache, and any tests/claude_code/ we may
-# have shimmed in (see below) around — uv sync will reconcile the
-# venv, we don't want to re-download the pinned uv binary every run,
-# and the test files may not exist on the resolved tag yet. Drop
-# everything else so each run starts clean.
-git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin -e tests/claude_code
+# Keep the venv and the .uv-bin cache around — uv sync will reconcile
+# the venv on every run, and we don't want to re-download the pinned
+# uv binary each time. Drop everything else (including any prior
+# tests/claude_code/ shim) so each run starts clean before the shim
+# below rewrites it from the dev checkout.
+git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin
 git -C "${WORKTREE}" checkout --force "${LITELLM_VERSION}"
 
-# Bridge for the pre-stable window: until the compat matrix work hits a
-# v*-stable tag, the resolver will pick a tag whose tree predates
-# tests/claude_code/ entirely. In that case we shim in the dev
-# checkout's copy of the test tree so the proxy config + tests are
-# discoverable. Once the matrix work is in the resolved tag, this
-# block is a no-op (the if-branch falls through). The shimmed files
-# are untracked, so the next run's `git clean -e tests/claude_code`
-# preserves them across runs.
-if [[ ! -f "${WORKTREE}/tests/claude_code/test_config.yaml" ]]; then
-  if [[ -d "${LITELLM_REPO}/tests/claude_code" ]]; then
-    log "tests/claude_code missing on ${LITELLM_VERSION}; shimming from ${LITELLM_REPO}"
-    mkdir -p "${WORKTREE}/tests"
-    cp -r "${LITELLM_REPO}/tests/claude_code" "${WORKTREE}/tests/"
-  else
-    die "tests/claude_code missing on ${LITELLM_VERSION} and no shim source at ${LITELLM_REPO}/tests/claude_code"
-  fi
+# Always overwrite tests/claude_code/ in the worktree with the copy
+# from the dev checkout, regardless of whether the resolved
+# ${LITELLM_VERSION} tag already ships a tests/claude_code/ tree of
+# its own. Rationale: the matrix populator's job is to exercise
+# today's tests against the latest stable proxy. The dev checkout
+# carries the most recent test fixes (e.g. the stream-json vision
+# rewrite, the --effort thinking knob, the WebSearch tool_use
+# assertion) that haven't yet rolled into a v*-stable, and we want
+# every cron run to pick those up the moment they land on
+# ${LITELLM_REPO}, not whenever the next stable release happens.
+#
+# Concretely this means a fresh `rm -rf` + `cp -r` every run so the
+# tree is byte-identical to ${LITELLM_REPO}/tests/claude_code (no
+# stale files left over from the tag's own checkout, no drift across
+# runs).
+if [[ ! -d "${LITELLM_REPO}/tests/claude_code" ]]; then
+  die "no shim source at ${LITELLM_REPO}/tests/claude_code"
 fi
+log "shimming tests/claude_code/ from ${LITELLM_REPO} (always-overwrite)"
+rm -rf "${WORKTREE}/tests/claude_code"
+mkdir -p "${WORKTREE}/tests"
+cp -r "${LITELLM_REPO}/tests/claude_code" "${WORKTREE}/tests/"
 
 # litellm pins an exact uv version in pyproject.toml's [tool.uv]
 # `required-version` field, so a system uv that's newer or older
