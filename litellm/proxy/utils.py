@@ -2732,7 +2732,7 @@ class PrismaClient:
             self._db_reconnect_circuit_breaker_action = "exit"
         self._db_reconnect_circuit_breaker_opened: bool = False
         self._db_reconnect_breaker_attempts: Deque[float] = deque(
-            maxlen=self._db_reconnect_circuit_breaker_max_attempts + 1
+            maxlen=self._db_reconnect_circuit_breaker_max_attempts
         )
         self._db_reconnect_breaker_failures: Deque[float] = deque(
             maxlen=self._db_reconnect_circuit_breaker_max_failures
@@ -4377,7 +4377,7 @@ class PrismaClient:
             return "engine_process_death_threshold_exceeded"
         if counts["failures"] >= self._db_reconnect_circuit_breaker_max_failures:
             return "reconnect_failure_threshold_exceeded"
-        if counts["attempts"] > self._db_reconnect_circuit_breaker_max_attempts:
+        if counts["attempts"] >= self._db_reconnect_circuit_breaker_max_attempts:
             return "reconnect_attempt_threshold_exceeded"
         return None
 
@@ -4455,6 +4455,8 @@ class PrismaClient:
         elif event_type == "failure":
             self._db_reconnect_breaker_failures.append(now)
         else:
+            self._db_reconnect_breaker_failures.clear()
+            self._db_reconnect_breaker_engine_deaths.clear()
             return False
 
         counts = self._get_reconnect_breaker_counts()

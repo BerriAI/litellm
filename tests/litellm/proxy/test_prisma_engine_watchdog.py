@@ -15,6 +15,7 @@ Covers:
 """
 
 import asyncio
+from collections import deque
 import os
 import threading
 import time
@@ -658,6 +659,54 @@ async def test_reconnect_circuit_breaker_stays_closed_on_transient_success(
 
 
 @pytest.mark.asyncio
+async def test_reconnect_circuit_breaker_opens_on_exact_attempt_threshold(
+    engine_client,
+):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_circuit_breaker_max_attempts = 2
+    engine_client._db_reconnect_circuit_breaker_max_failures = 100
+    engine_client._db_reconnect_circuit_breaker_max_engine_deaths = 100
+    engine_client._db_reconnect_breaker_attempts = deque(maxlen=2)
+    engine_client._db_reconnect_breaker_failures = deque(maxlen=100)
+    engine_client._db_reconnect_breaker_engine_deaths = deque(maxlen=100)
+    engine_client._db_reconnect_cooldown_seconds = 0
+    engine_client._run_reconnect_cycle = AsyncMock(return_value=None)
+    engine_client._terminate_for_reconnect_breaker = MagicMock()
+
+    first_result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="db_health_watchdog_connection_error",
+        timeout_seconds=5.0,
+    )
+    second_result = await engine_client._attempt_reconnect_inside_lock(
+        force=True,
+        reason="db_health_watchdog_connection_error",
+        timeout_seconds=5.0,
+    )
+
+    assert first_result is True
+    assert second_result is False
+    assert len(engine_client._db_reconnect_breaker_attempts) == 2
+    assert engine_client._db_reconnect_circuit_breaker_opened is True
+    engine_client._terminate_for_reconnect_breaker.assert_called_once()
+
+
+def test_reconnect_circuit_breaker_success_clears_failure_state(engine_client):
+    engine_client._db_reconnect_circuit_breaker_enabled = True
+    engine_client._db_reconnect_breaker_failures.append(100.0)
+    engine_client._db_reconnect_breaker_engine_deaths.append(100.0)
+
+    result = engine_client._record_reconnect_breaker_event(
+        event_type="success",
+        reason="db_health_watchdog_connection_error",
+    )
+
+    assert result is False
+    assert len(engine_client._db_reconnect_breaker_failures) == 0
+    assert len(engine_client._db_reconnect_breaker_engine_deaths) == 0
+
+
+@pytest.mark.asyncio
 async def test_reconnect_circuit_breaker_log_action_does_not_skip_reconnect(
     engine_client,
 ):
@@ -702,6 +751,6 @@ def test_reconnect_circuit_breaker_env_vars_are_respected(mock_proxy_logging):
     assert client._db_reconnect_circuit_breaker_max_failures == 2
     assert client._db_reconnect_circuit_breaker_max_engine_deaths == 1
     assert client._db_reconnect_circuit_breaker_action == "log"
-    assert client._db_reconnect_breaker_attempts.maxlen == 5
+    assert client._db_reconnect_breaker_attempts.maxlen == 4
     assert client._db_reconnect_breaker_failures.maxlen == 2
     assert client._db_reconnect_breaker_engine_deaths.maxlen == 1
