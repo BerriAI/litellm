@@ -581,6 +581,8 @@ def test_content_policy_violation_error_streaming():
 
 
 def test_completion_perplexity_exception_on_openai_client():
+    import openai
+
     print("perplexity test\n\n")
     litellm.set_verbose = False
     old_perplexity_key = os.environ["PERPLEXITYAI_API_KEY"]
@@ -588,7 +590,7 @@ def test_completion_perplexity_exception_on_openai_client():
     del os.environ["PERPLEXITYAI_API_KEY"]
     del os.environ["OPENAI_API_KEY"]
     try:
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(openai.OpenAIError) as exc_info:
             completion(
                 model="perplexity/mistral-7b-instruct",
                 messages=[{"role": "user", "content": "hello"}],
