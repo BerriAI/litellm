@@ -64,19 +64,6 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         return optional_params
 
-    @overload
-    def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
-
-    @overload
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-        model: str,
-        is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
-
     def _fill_reasoning_content(
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
@@ -115,6 +102,19 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             else:
                 result.append(msg)
         return result
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
