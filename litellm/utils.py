@@ -8893,6 +8893,13 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            if "claude" in model_lower:
+                from litellm.llms.github_copilot.messages.transformation import (
+                    GithubCopilotAnthropicMessagesConfig,
+                )
+
+                return GithubCopilotAnthropicMessagesConfig()
         return None
 
     @staticmethod

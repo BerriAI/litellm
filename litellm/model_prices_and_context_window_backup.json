@@ -18951,7 +18951,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -18964,7 +18965,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -19015,7 +19017,8 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
