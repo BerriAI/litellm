@@ -30,6 +30,7 @@ metadata that drifts.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -37,9 +38,10 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import pytest
+import yaml
 
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
@@ -161,20 +163,54 @@ def compat_result() -> CompatResult:
     return CompatResult()
 
 
+@functools.lru_cache(maxsize=1)
+def _manifest_feature_ids() -> FrozenSet[str]:
+    """Return the set of feature_ids declared in `manifest.yaml`.
+
+    Used as a positive filter so only directories that correspond to a
+    real matrix row contribute results — utility/support directories
+    (e.g. `cron_vm`, `_driver_unit_tests`) are dropped regardless of
+    naming convention, and the rate-limit summary stays clean.
+
+    Returns an empty set if the manifest is missing or malformed; the
+    caller treats that as "no path is a feature path", which is the
+    safe default — we'd rather drop a real result than pollute the
+    artifact with a garbage cell.
+    """
+    manifest_path = Path(__file__).resolve().parent / "manifest.yaml"
+    try:
+        raw = yaml.safe_load(manifest_path.read_text())
+    except (OSError, yaml.YAMLError):
+        return frozenset()
+    if not isinstance(raw, dict):
+        return frozenset()
+    features = raw.get("features")
+    if not isinstance(features, list):
+        return frozenset()
+    return frozenset(
+        entry["id"]
+        for entry in features
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    )
+
+
 def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
     """Infer (feature_id, provider) from a test file path.
 
     Path shape:  tests/claude_code/<feature_id>/test_<provider>.py
     Returns None if the file is not a per-feature test (e.g. unit tests
-    living under tests/claude_code/_driver_unit_tests/), so those don't
-    pollute the matrix artifact.
+    under `_driver_unit_tests/` or support code under `cron_vm/`), so
+    those don't pollute the matrix artifact. We positively filter the
+    parent directory against `manifest.yaml` rather than relying on
+    naming conventions, because non-feature siblings don't all share
+    an underscore prefix.
     """
     name = node_path.name
     if not name.startswith("test_") or not name.endswith(".py"):
         return None
     provider = name[len("test_") : -len(".py")]
     feature_id = node_path.parent.name
-    if feature_id.startswith("_") or feature_id == "claude_code":
+    if feature_id not in _manifest_feature_ids():
         return None
     return feature_id, provider
 
@@ -215,20 +251,24 @@ def pytest_runtest_makereport(item, call):
         fixture.collected() if isinstance(fixture, CompatResult) else []
     )
 
-    if report.failed:
-        # The test body (or setup) raised. If the test had already recorded
-        # some per-model passes via `.add(...)` before crashing, those
-        # partial entries would otherwise aggregate to "pass" and hide the
-        # crash from the published matrix. Append an explicit "fail" row so
-        # the cell aggregator (which gives precedence to any fail) surfaces
-        # the breakage.
+    if report.failed and not any(entry.get("status") == "fail" for entry in collected):
+        # The test body (or setup) raised and the test author hasn't
+        # already recorded a fail row via `.add(...)`. If the test had
+        # recorded only per-model passes before crashing, those partial
+        # entries would aggregate to "pass" and hide the crash from the
+        # published matrix; append an explicit "fail" row so the cell
+        # aggregator (which gives precedence to any fail) surfaces the
+        # breakage. We skip the append when a fail row is already
+        # present so that the common pattern — `.add({"status": "fail",
+        # ...})` per failing model, then `pytest.fail("; ".join(...))`
+        # to surface them — doesn't produce a phantom duplicate row.
         collected = collected + [
             {
                 "status": "fail",
                 "error": (str(report.longrepr) if report.longrepr else "test failed"),
             }
         ]
-    elif not collected:
+    elif not report.failed and not collected:
         collected = [
             {
                 "status": "fail",
