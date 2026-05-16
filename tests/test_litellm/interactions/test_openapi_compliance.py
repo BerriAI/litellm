@@ -157,15 +157,17 @@ class TestResponseCompliance:
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly). Google renamed `outputs` → `steps` in the
-        # upstream spec; keep this list aligned with the live schema.
+        # Output fields (readOnly). Google's live spec has churned through
+        # both `outputs` and `steps` for the per-turn output array and at the
+        # moment carries neither -- only the stable response-level fields
+        # below are guaranteed. Re-add the per-turn key once upstream
+        # stabilizes on a name.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
             "role",
-            "steps",
             "usage",
         ]
 
