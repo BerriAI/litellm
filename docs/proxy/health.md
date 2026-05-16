@@ -301,6 +301,17 @@ model_list:
       disable_background_health_check: true
 ```
 
+### Skip the same models on `GET /health`
+
+By default, `disable_background_health_check: true` only skips those deployments in the **background** health loop. On-demand `GET /health` still probes them unless you enable this global flag:
+
+```yaml
+general_settings:
+  health_check_skip_disabled_background_models: true
+```
+
+When `true`, deployments with `model_info.disable_background_health_check: true` are omitted from on-demand `GET /health` (including `?model=` / `?model_id=`) and from health-check runs that honor `general_settings` (including Redis-backed shared health checks).
+
 ### Hide details
 
 The health check response contains details like endpoint URLs, error messages,
