@@ -13,9 +13,13 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now litellm-compat-matrix.timer
 #
-# The %h specifier expands to the runtime user's home directory, which
-# avoids hard-coding /home/mateo into a unit that should be portable
-# across operator handoffs. The runtime user (`User=mateo`) must:
+# Paths are hard-coded to /home/mateo rather than using systemd's %h
+# specifier. Why: in *system* units (this one), %h is expanded at
+# parse time against the *manager's* home -- which is /root for PID 1
+# -- and *not* against the User= directive. That mismatch makes
+# ReadWritePaths point at /root/.cache (which doesn't exist), causing
+# the namespace setup to fail with status=226/NAMESPACE before the
+# script ever runs. The runtime user (`User=mateo`) must:
 #
 #   * have a checkout of `BerriAI/litellm` at `~/litellm/litellm` so the
 #     publisher module is importable;
@@ -28,7 +32,7 @@
 
 [Unit]
 Description=Claude Code compatibility-matrix populator (oneshot)
-Documentation=file://%h/litellm/litellm/tests/claude_code/cron_vm/README.md
+Documentation=file:///home/mateo/litellm/litellm/tests/claude_code/cron_vm/README.md
 Wants=network-online.target
 After=network-online.target
 
@@ -41,9 +45,21 @@ Group=mateo
 # is the standard `KEY=value` one line per env var.
 EnvironmentFile=-/etc/litellm-compat-matrix.env
 
-WorkingDirectory=%h/litellm/litellm
+# systemd starts with a minimal PATH (~/usr/local/bin:/usr/bin:/bin).
+# `uv` and `claude` are installed under the runtime user's `~/.local/bin`
+# so we have to prepend it explicitly; otherwise run_daily.sh fails at
+# the up-front command-presence check.
+Environment=PATH=/home/mateo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-ExecStart=%h/litellm/litellm/tests/claude_code/cron_vm/run_daily.sh
+# `HOME` is auto-set to /home/mateo when User=mateo is honored, but be
+# explicit so anything that reads $HOME (e.g. uv's cache lookup, the
+# claude CLI's per-session dir) sees the right value even if a future
+# refactor flips DynamicUser= or PrivateUsers= on.
+Environment=HOME=/home/mateo
+
+WorkingDirectory=/home/mateo/litellm/litellm
+
+ExecStart=/home/mateo/litellm/litellm/tests/claude_code/cron_vm/run_daily.sh
 
 # 90 minutes is generous: cold runs do `git clone` + `uv sync` of a new
 # tag's lockfile, which can take a couple of minutes on a 2-vCPU VM,
@@ -57,10 +73,27 @@ Restart=no
 # Security hardening: the populator only reads the litellm checkout and
 # the env-file; everything else it writes lives in either the worktree
 # (managed) or `/tmp` (cleaned up by tempfile).
+#
+# ReadWritePaths whitelist:
+#   * litellm-cron-worktree    - the long-lived stable-tag checkout +
+#                                its `.venv` (`uv sync` rewrites every
+#                                run) + `.uv-bin` (pinned `uv` binary
+#                                cache).
+#   * .cache                   - uv's wheel cache (~/.cache/uv) so we
+#                                don't redownload pinned deps each run.
+#   * .claude                  - `claude` CLI's per-session state under
+#                                `~/.claude/projects/<sha>/`; created
+#                                on every `claude --print` invocation.
+#   * .config/gh               - `gh` CLI host config; technically not
+#                                needed when we pass GH_TOKEN inline,
+#                                but cheap to whitelist and prevents
+#                                future regressions if a code path
+#                                ever falls back to the host config.
+#   * /tmp                     - mktemp -d workdir + proxy logs.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/litellm-cron-worktree %h/.cache /tmp
+ReadWritePaths=/home/mateo/litellm-cron-worktree /home/mateo/.cache /home/mateo/.claude /home/mateo/.config/gh /tmp
 PrivateTmp=true
 
 [Install]
