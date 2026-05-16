@@ -4200,6 +4200,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
+        elif logging_integration == "ecologits":
+            from litellm.integrations.ecologits import EcoLogitsLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, EcoLogitsLogger):
+                    return callback
+            ecologits_logger = EcoLogitsLogger()
+            _in_memory_loggers.append(ecologits_logger)
+            return ecologits_logger  # type: ignore
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
@@ -4536,6 +4545,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "ecologits":
+            from litellm.integrations.ecologits import EcoLogitsLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, EcoLogitsLogger):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
