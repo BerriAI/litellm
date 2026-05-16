@@ -249,3 +249,171 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_bare_wildcard_star():
+    """
+    When model_name is "*" (bare wildcard without provider prefix)
+    and litellm_params.model contains the provider wildcard (e.g. "openai/*"),
+    get_complete_model_list should expand using the provider from litellm_params
+    without adding a wildcard alias prefix.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "*" not in result
+    assert "openai/*" not in result
+    assert len(result) > 0
+
+
+def test_get_complete_model_list_bare_wildcard_star_slash():
+    """
+    When model_name is "*/" it should behave the same as bare "*" and avoid
+    adding a wildcard alias prefix to expanded models.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "*/", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "*/" not in result
+    assert len(result) > 0
+
+
+def test_get_complete_model_list_bare_wildcard_multiple_providers():
+    """
+    When multiple deployments share model_name "*" with different providers,
+    each deployment should expand independently and results should be deduplicated.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "*", "litellm_params": {"model": "anthropic/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "*" not in result
+    assert "openai/*" not in result
+    assert "anthropic/*" not in result
+    assert len(result) > 0
+    assert len(result) == len(set(result)), "results should be deduplicated"
+
+
+def test_get_complete_model_list_deduplication():
+    """
+    When two deployments with wildcard model_name resolve to overlapping models
+    (e.g. two ollama/* entries), the result should not contain duplicates.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "ollama/*", "litellm_params": {"model": "ollama/*"}},
+            {"model_name": "ollama/*", "litellm_params": {"model": "ollama/*"}},
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert "ollama/*" not in result
+    assert any(m.startswith("ollama/") for m in result)
+    assert len(result) == len(set(result)), "results should be deduplicated"
+
+
+def test_get_known_models_from_wildcard_avoids_prefix_string_false_positive():
+    """
+    Providers with model ids like `deepseek-chat` should still get the
+    `deepseek/` alias added for `deepseek/*` routes.
+    """
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="deepseek/*",
+        litellm_params=LiteLLM_Params(model="deepseek/*"),
+    )
+
+    assert "deepseek/deepseek-chat" in wildcard_models
+    assert "deepseek-chat" not in wildcard_models
+
+
+@patch("litellm.proxy.auth.model_checks.get_provider_models")
+def test_get_known_models_from_bare_wildcard_star_does_not_add_alias_prefix(
+    mock_get_provider_models,
+):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    mock_get_provider_models.return_value = ["gpt-4o", "gpt-4o-mini"]
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="*",
+        litellm_params=LiteLLM_Params(model="openai/*"),
+    )
+
+    assert wildcard_models == ["gpt-4o", "gpt-4o-mini"]
+
+
+@patch("litellm.proxy.auth.model_checks.get_provider_models")
+def test_get_known_models_from_bare_wildcard_star_slash_does_not_add_alias_prefix(
+    mock_get_provider_models,
+):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    mock_get_provider_models.return_value = ["gpt-4o", "gpt-4o-mini"]
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="*/",
+        litellm_params=LiteLLM_Params(model="openai/*"),
+    )
+
+    assert wildcard_models == ["gpt-4o", "gpt-4o-mini"]

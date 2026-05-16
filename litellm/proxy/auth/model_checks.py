@@ -226,16 +226,20 @@ def get_complete_model_list(
 
     complete_model_list = unique_models + all_wildcard_models
 
-    return complete_model_list
+    return list(dict.fromkeys(complete_model_list))
 
 
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
-    try:
-        wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
-    except ValueError:  # safely fail
-        return []
+    if wildcard_model in {"*", "*/"}:
+        wildcard_provider_prefix = ""
+        wildcard_suffix = "*"
+    else:
+        try:
+            wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
+        except ValueError:  # safely fail
+            return []
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -275,7 +279,9 @@ def get_known_models_from_wildcard(
 
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
+        if wildcard_provider_prefix and not model.startswith(
+            f"{wildcard_provider_prefix}/"
+        ):
             model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
@@ -300,13 +306,16 @@ def _get_wildcard_models(
                 model_list = llm_router.get_model_list(model_name=model)
                 if model_list:
                     for router_model in model_list:
+                        router_litellm_params = LiteLLM_Params(
+                            **router_model["litellm_params"]  # type: ignore
+                        )
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
-                            litellm_params=LiteLLM_Params(
-                                **router_model["litellm_params"]  # type: ignore
-                            ),
+                            litellm_params=router_litellm_params,
                         )
-                        all_wildcard_models.extend(wildcard_models)
+                        if wildcard_models:
+                            models_to_remove.add(model)
+                            all_wildcard_models.extend(wildcard_models)
                 else:
                     # Router has no deployment for this wildcard (e.g., BYOK team models)
                     # Fall back to expanding from known provider models
