@@ -14,6 +14,11 @@ interface ProviderSpecificFieldsProps {
   // inputs (e.g. the model edit form has a dedicated "API Base" field) so we
   // don't create a duplicate Form.Item bound to the same name.
   excludeKeys?: string[];
+  // Drop the "required" validation rule from every rendered field. Used in the
+  // model edit context, where auth fields render blank ("leave blank to keep")
+  // — a required rule would block onFinish and prevent saving any unrelated
+  // edit unless the user re-enters the secret.
+  disableRequired?: boolean;
 }
 
 interface ProviderCredentialField {
@@ -132,6 +137,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   uploadProps,
   excludeKeys,
+  disableRequired,
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
@@ -267,7 +273,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           <Form.Item
             label={field.label}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
+            rules={field.required && !disableRequired ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >

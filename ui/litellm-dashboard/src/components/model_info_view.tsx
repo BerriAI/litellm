@@ -1126,6 +1126,7 @@ export default function ModelInfoView({
                               <ProviderSpecificFields
                                 selectedProvider={authProvider}
                                 excludeKeys={AUTH_FIELD_EXCLUDE_KEYS}
+                                disableRequired
                               />
                             </div>
                           )}
