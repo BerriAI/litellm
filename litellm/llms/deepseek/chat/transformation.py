@@ -2,8 +2,9 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -75,13 +76,55 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         is_async: Literal[False] = False,
     ) -> List[AllMessageValues]: ...
 
+    def _fill_reasoning_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        DeepSeek thinking mode requires `reasoning_content` to be passed back on
+        every assistant message in multi-turn conversations. If it is missing,
+        the API returns:
+          "The reasoning_content in the thinking mode must be passed back to the API."
+
+        For each assistant message that is missing `reasoning_content`:
+          1. Promote it from `provider_specific_fields["reasoning_content"]` if present
+             (LiteLLM stores provider-specific response fields there).
+          2. Otherwise inject a single space — the minimum value the API accepts.
+        """
+        result: List[AllMessageValues] = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
+                patched = dict(cast(dict, msg))
+                provider_fields = patched.get("provider_specific_fields") or {}
+                stored = provider_fields.get("reasoning_content")
+                if stored:
+                    patched["reasoning_content"] = stored
+                    cleaned = dict(provider_fields)
+                    cleaned.pop("reasoning_content", None)
+                    patched["provider_specific_fields"] = cleaned
+                else:
+                    litellm.verbose_logger.debug(
+                        "DeepSeek thinking mode: assistant message is missing "
+                        "`reasoning_content`. Injecting a placeholder to satisfy "
+                        "API validation. For best results, preserve "
+                        "`reasoning_content` from the original assistant response "
+                        "when building multi-turn conversation history."
+                    )
+                    patched["reasoning_content"] = " "
+                result.append(cast(AllMessageValues, patched))
+            else:
+                result.append(msg)
+        return result
+
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         DeepSeek does not support content in list format.
+        Also ensures `reasoning_content` is forwarded on assistant messages for
+        multi-turn thinking-mode conversations (issue #28045).
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
+        messages = self._fill_reasoning_content(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
