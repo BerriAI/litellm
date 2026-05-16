@@ -229,3 +229,31 @@ def test_deepseek_fill_reasoning_content_multiturn():
     result = config._fill_reasoning_content(messages_user_only)
     assert "reasoning_content" not in result[0]
     assert "reasoning_content" not in result[1]
+
+
+def test_deepseek_fill_reasoning_content_only_for_reasoning_models():
+    """
+    _fill_reasoning_content must only run for reasoning models (e.g. deepseek-reasoner),
+    not for standard models (e.g. deepseek-chat). Addresses greptile P1 feedback on PR #28057.
+    """
+    from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+    config = DeepSeekChatConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Follow up"},
+    ]
+
+    # deepseek-chat (non-reasoning): assistant message must NOT get reasoning_content injected
+    result = config._transform_messages(messages=messages, model="deepseek-chat")
+    assert "reasoning_content" not in result[1], (
+        "reasoning_content should not be injected for non-reasoning models"
+    )
+
+    # deepseek-reasoner (reasoning): assistant message SHOULD get reasoning_content placeholder
+    result = config._transform_messages(messages=messages, model="deepseek-reasoner")
+    assert result[1].get("reasoning_content") == " ", (
+        "reasoning_content placeholder should be injected for reasoning models"
+    )

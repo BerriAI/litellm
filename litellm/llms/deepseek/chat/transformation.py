@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -124,7 +125,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         multi-turn thinking-mode conversations (issue #28045).
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
-        messages = self._fill_reasoning_content(messages)
+        if supports_reasoning(model=model, custom_llm_provider="deepseek"):
+            messages = self._fill_reasoning_content(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
