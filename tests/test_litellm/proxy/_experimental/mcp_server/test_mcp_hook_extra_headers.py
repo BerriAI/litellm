@@ -512,6 +512,58 @@ class TestCallToolFlowsHookHeaders:
                             proxy_logging_obj=proxy_logging,
                         )
 
+    @pytest.mark.asyncio
+    async def test_openapi_m2m_skips_caller_authorization_extra_header(self):
+        """OpenAPI M2M servers must not forward caller Authorization upstream."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_extra_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.tool_registry import MCPTool
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="openapi_server",
+            server_name="openapi_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://auth.example.com/token",
+            extra_headers=["Authorization", "X-Custom"],
+        )
+
+        captured_headers: Dict[str, Any] = {}
+
+        async def fake_handler(**kwargs):
+            captured_headers["value"] = _request_extra_headers.get()
+            return {"ok": True}
+
+        fake_tool = MCPTool(
+            name="openapi_server-test_tool",
+            description="test",
+            input_schema={},
+            handler=fake_handler,
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_tool_registry.get_tool",
+            return_value=fake_tool,
+        ):
+            await manager._call_openapi_tool_handler(
+                server=server,
+                tool_name="test_tool",
+                arguments={"key": "val"},
+                raw_headers={
+                    "authorization": "Bearer caller-token",
+                    "x-custom": "from-client",
+                },
+            )
+
+        headers = captured_headers["value"] or {}
+        assert "Authorization" not in headers
+        assert headers["X-Custom"] == "from-client"
+
 
 class TestHookHeaderMergePriority:
     """Tests that hook-provided headers have highest priority in _call_regular_mcp_tool."""

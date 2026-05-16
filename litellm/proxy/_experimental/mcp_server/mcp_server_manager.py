@@ -2374,6 +2374,8 @@ class MCPServerManager:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
+                if server.has_client_credentials and header.lower() == "authorization":
+                    continue
                 val = normalized.get(header.lower())
                 if val is not None:
                     extra_headers_dict[header] = val
