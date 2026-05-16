@@ -41,6 +41,7 @@ EXCLUDED_TERMINAL_VARS = {
 PROVIDER_SPECIFIC_DOCS_VARS = {
     "DEEPSEEK_API_BASE",
     "OPENROUTER_API_BASE",
+    "OPENROUTER_API_KEY",
 }
 
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source

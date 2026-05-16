@@ -34,7 +34,7 @@ class CacheControlSupportedModels(str, Enum):
 
 class OpenrouterConfig(OpenAIGPTConfig):
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: Optional[str] = None) -> str:
         from litellm.secret_managers.main import get_secret_str
 
         return (
