@@ -59,6 +59,8 @@ _BUDGET_TOKENS: Dict[str, int] = {
     "low": 1024,
     "medium": 2048,
     "high": 4096,
+    "xhigh": 8192,
+    "max": 16384,
 }
 
 _ADAPTIVE_EFFORT_LABEL: Dict[str, str] = {

@@ -1,6 +1,5 @@
 """Shared fixtures for the reasoning_effort grid v4 e2e suite."""
 
-import os
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -50,12 +49,3 @@ def wire_capture():
         yield capture
     finally:
         litellm.callbacks = previous
-
-
-@pytest.fixture(scope="session")
-def vertex_credentials_path() -> Optional[str]:
-    """Resolve a usable Vertex credentials file path or None."""
-    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if path and os.path.exists(path):
-        return path
-    return None
