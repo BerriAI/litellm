@@ -157,6 +157,6 @@ def test_get_dynamic_langfuse_logging_config_handles_none(monkeypatch):
 
     # Should not raise AttributeError
     config = LangFuseHandler.get_dynamic_langfuse_logging_config(None)
-    assert config.langfuse_public_key is None
-    assert config.langfuse_secret is None
-    assert config.langfuse_host is None
+    assert config["langfuse_public_key"] is None
+    assert config["langfuse_secret"] is None
+    assert config["langfuse_host"] is None
