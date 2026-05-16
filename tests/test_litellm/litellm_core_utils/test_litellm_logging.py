@@ -2690,9 +2690,13 @@ def test_success_handler_unified_helper_runs_for_typed_results():
 class TestFirstApiCallStartTimeSetOnce:
     """first_api_call_start_time pins the FIRST provider handoff so
     preprocessing latency excludes retries/backoff (api_call_start_time is
-    overwritten on every attempt). It is also mirrored onto
-    litellm_params.metadata so the failure path (logging object popped
-    from request_data) can still read it.
+    overwritten on every attempt). It is set ONLY on the logging object's
+    model_call_details. It must never be written into
+    litellm_params["metadata"] — that is the caller's request metadata,
+    echoed back into provider request bodies, spend logs, and batch
+    objects (typed Dict[str, str]); a datetime there breaks them. The
+    proxy failure path lifts it off the logging object into request_data
+    separately (see proxy/utils.py), not via this dict.
     """
 
     def _logging_obj(self):
@@ -2708,17 +2712,19 @@ class TestFirstApiCallStartTimeSetOnce:
         obj.model_call_details["litellm_params"] = {"metadata": {}}
         return obj
 
-    def test_set_once_survives_retry_and_mirrors_to_metadata(self):
+    def test_set_once_survives_retry_and_never_touches_user_metadata(self):
         obj = self._logging_obj()
+        user_meta = obj.model_call_details["litellm_params"]["metadata"]
 
         obj.pre_call(input="hi", api_key="sk-test")
         first = obj.model_call_details["first_api_call_start_time"]
         assert first == obj.model_call_details["api_call_start_time"]
+        # Set on the logging object only — the user metadata sub-dict is
+        # left completely untouched (no foreign datetime keys leak into
+        # provider bodies / batch objects).
+        assert user_meta == {}
         assert (
-            obj.model_call_details["litellm_params"]["metadata"][
-                "first_api_call_start_time"
-            ]
-            == first
+            "first_api_call_start_time" not in obj.model_call_details["litellm_params"]
         )
 
         time.sleep(0.002)  # ensure a distinct retry timestamp
@@ -2727,9 +2733,4 @@ class TestFirstApiCallStartTimeSetOnce:
         # retry advanced api_call_start_time but NOT first_api_call_start_time
         assert obj.model_call_details["api_call_start_time"] > first
         assert obj.model_call_details["first_api_call_start_time"] == first
-        assert (
-            obj.model_call_details["litellm_params"]["metadata"][
-                "first_api_call_start_time"
-            ]
-            == first
-        )
+        assert user_meta == {}

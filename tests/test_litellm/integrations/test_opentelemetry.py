@@ -4851,9 +4851,11 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
             attrs["litellm.preprocessing.duration_ms"], 250.0, places=1
         )
 
-    def test_failure_shape_request_data_metadata(self):
-        # failure path: both anchors under top-level metadata (logging
-        # object already popped from request_data)
+    def test_failure_shape_request_data(self):
+        # failure path: request_data with first_api_call_start_time lifted
+        # to the TOP LEVEL by the proxy (off the logging object, before it
+        # is popped) and received-at riding the metadata variable. The
+        # user metadata sub-dict is never used for the handoff anchor.
         received = datetime(2026, 1, 1, 0, 0, 0)
         handoff = datetime(2026, 1, 1, 0, 0, 0, 30000)  # +30ms
         otel = OpenTelemetry()
@@ -4861,10 +4863,8 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         otel.set_preprocessing_duration_attribute(
             span,
             {
-                "metadata": {
-                    "litellm_received_at": received,
-                    "first_api_call_start_time": handoff,
-                }
+                "first_api_call_start_time": handoff,
+                "metadata": {"litellm_received_at": received},
             },
         )
         attrs = self._attr(span, exp)

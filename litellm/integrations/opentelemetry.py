@@ -2994,15 +2994,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if span is None or not isinstance(container, dict):
             return
         received_at = None
+        # first_api_call_start_time rides the container TOP LEVEL:
+        # model_call_details on success, request_data on failure (the
+        # proxy lifts it off the logging object before popping it). It is
+        # never placed in the user metadata sub-dict.
         first_handoff = container.get("first_api_call_start_time")
+        _lp = container.get("litellm_params")
         for _md in (
-            (container.get("litellm_params") or {}).get("metadata"),
+            (_lp or {}).get("metadata") if isinstance(_lp, dict) else None,
             container.get("metadata"),
             container.get("litellm_metadata"),
         ):
             if isinstance(_md, dict):
                 received_at = received_at or _md.get("litellm_received_at")
-                first_handoff = first_handoff or _md.get("first_api_call_start_time")
         if received_at is None or first_handoff is None:
             return
         try:
