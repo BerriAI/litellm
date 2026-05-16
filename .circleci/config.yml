@@ -578,6 +578,48 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  reasoning_effort_grid_v4_e2e:
+    docker:
+      - *python312_image
+    working_directory: ~/project
+    resource_class: large
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - restore_cache:
+          keys:
+            - v1-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - save_cache:
+          paths:
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
+      # Grid v4 exercises reasoning_effort mapping against real Anthropic,
+      # Azure AI Foundry, Vertex AI, Bedrock Converse, and Bedrock Invoke
+      # endpoints. Per-route cells pytest-skip themselves when the matching
+      # provider env vars are absent, so PRs without credentials no-op.
+      - run:
+          name: Run reasoning_effort grid v4 e2e suite
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest \
+              tests/test_litellm/reasoning_effort_grid_v4/ \
+              -v \
+              --junitxml=test-results/junit.xml \
+              --durations=20 \
+              -n 4 \
+              --timeout=180 --timeout_method=thread \
+              --retries 2 --retry-delay 5 \
+              --max-worker-restart=5
+          no_output_timeout: 20m
+
+      - store_test_results:
+          path: test-results
   realtime_translation_testing:
     docker:
       - *python312_image
@@ -2618,6 +2660,8 @@ workflows:
             - build_docker_database_image
           filters: *main_branches
       - llm_translation_testing:
+          filters: *main_branches
+      - reasoning_effort_grid_v4_e2e:
           filters: *main_branches
       - realtime_translation_testing:
           filters: *main_branches
