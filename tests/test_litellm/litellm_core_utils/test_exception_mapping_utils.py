@@ -301,6 +301,64 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 
+# OpenRouter passes upstream provider errors through with status 400; the canonical
+# context-window phrases (raised originally by OpenAI / Anthropic / Vertex / etc.)
+# should map to ContextWindowExceededError so downstream recovery paths can fire.
+openrouter_context_window_test_cases = [
+    # Positive cases — OpenRouter passing through upstream context-window errors.
+    # Phrases mirror the canonical list in ExceptionCheckers.is_error_str_context_window_exceeded.
+    ("This model's maximum context length is 4096 tokens.", True),
+    ("input length and max_tokens exceed context limit", True),
+    ("Input is longer than the model's context length", True),
+    # Negative case — generic OpenRouter 400 unrelated to context window.
+    ("Invalid model parameter", False),
+]
+
+
+class _OpenRouterUpstreamError(Exception):
+    """Stand-in for the OpenRouter-shaped exception that carries an HTTP status."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize(
+    "error_message, should_raise_context_window",
+    openrouter_context_window_test_cases,
+)
+def test_openrouter_context_window_error_mapping(
+    error_message, should_raise_context_window
+):
+    """
+    Tests that exception_type correctly maps OpenRouter 400 responses whose
+    error string matches the canonical context-window phrases to
+    litellm.ContextWindowExceededError instead of plain BadRequestError.
+    Regression for https://github.com/BerriAI/litellm/issues/28063.
+    """
+    model = "openrouter/anthropic/claude-3.5-sonnet"
+    custom_llm_provider = "openrouter"
+
+    original_exception = _OpenRouterUpstreamError(error_message, status_code=400)
+
+    if should_raise_context_window:
+        with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+        assert isinstance(excinfo.value, litellm.ContextWindowExceededError)
+    else:
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+        assert not isinstance(excinfo.value, litellm.ContextWindowExceededError)
+
+
 class TestExtractAndRaiseLitellmException:
     """Tests for extract_and_raise_litellm_exception function"""
 
