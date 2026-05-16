@@ -715,6 +715,30 @@ def _count_content_list(
                 num_tokens += _count_image_tokens(
                     image_url, use_default_image_token_count
                 )
+            elif c["type"] == "image":
+                source = c.get("source", {})
+                if isinstance(source, dict):
+                    source_type = source.get("type")
+                    if source_type == "base64":
+                        media_type = source.get("media_type", "image/jpeg")
+                        data = source.get("data", "")
+                        data_uri = f"data:{media_type};base64,{data}"
+                        num_tokens += calculate_img_tokens(
+                            data=data_uri,
+                            mode="auto",
+                            use_default_image_token_count=use_default_image_token_count,
+                        )
+                    elif source_type == "url":
+                        url = source.get("url", "")
+                        num_tokens += calculate_img_tokens(
+                            data=url,
+                            mode="auto",
+                            use_default_image_token_count=use_default_image_token_count,
+                        )
+                    else:
+                        num_tokens += DEFAULT_IMAGE_TOKEN_COUNT
+                else:
+                    num_tokens += DEFAULT_IMAGE_TOKEN_COUNT
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
