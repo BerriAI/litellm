@@ -896,13 +896,15 @@ async def update_access_group(
             access_group=access_group, prisma_client=prisma_client
         )
 
-        # Step 1b: clear parent->child edges where this group is parent.
-        # Edges where it appears as a child are preserved (other groups still
-        # reference this one and that's outside this update's scope).
-        await prisma_client.db.litellm_accessgroupmembership.delete_many(
-            where={"parent_group": access_group}
-        )
-        invalidate_group_memberships_cache()
+        # Step 1b: clear parent->child edges ONLY when re-writing via
+        # model_names. The model_ids path targets specific deployments and
+        # does not own the membership edges — clearing them here without
+        # re-adding them would silently destroy nested-group structure.
+        if not use_model_ids:
+            await prisma_client.db.litellm_accessgroupmembership.delete_many(
+                where={"parent_group": access_group}
+            )
+            invalidate_group_memberships_cache()
 
         # Step 2: re-add membership using the appropriate write path
         if use_model_ids:

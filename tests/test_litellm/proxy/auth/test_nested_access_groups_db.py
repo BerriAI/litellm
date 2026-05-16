@@ -16,13 +16,19 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import pytest
 from fastapi import HTTPException
 
+import litellm.proxy.management_endpoints.model_access_group_management_endpoints as magm
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     _clear_access_group_from_all_deployments,
     _dual_write_group_membership,
     delete_group_membership_edges,
     get_all_access_groups_from_db,
     get_group_memberships_from_db,
+    update_access_group,
     upsert_group_memberships,
+)
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    AccessGroupInfo,
+    UpdateModelGroupRequest,
 )
 
 
@@ -369,3 +375,119 @@ async def test_get_all_access_groups_surfaces_pure_composition_groups():
     assert result["composite"].deployment_count == 0
     assert result["composite"].child_groups == ["image"]
     assert result["composite"].model_names == ["dall-e-3"]
+
+
+# ---------------------------------------------------------------------------
+# update_access_group — model_ids path must not destroy nested membership edges
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_access_group_with_model_ids_preserves_membership_edges(
+    monkeypatch,
+):
+    """Updating via model_ids must not clear parent->child edges. The model_ids
+    path targets specific deployments and does not own the membership table, so
+    wiping edges there silently destroys nested-group structure."""
+    prisma = _make_prisma()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", prisma, raising=False
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", None, raising=False
+    )
+
+    existing_group = AccessGroupInfo(
+        access_group="project-x",
+        model_names=["gpt-4"],
+        deployment_count=1,
+        parent_groups=[],
+        child_groups=["image", "reasoning"],
+    )
+
+    async def _fake_get_all(prisma_client):
+        return {"project-x": existing_group}
+
+    async def _fake_clear(access_group, prisma_client):
+        return 0
+
+    async def _fake_update_ids(model_ids, access_group, prisma_client):
+        return len(model_ids)
+
+    async def _fake_clear_cache():
+        return None
+
+    monkeypatch.setattr(magm, "get_all_access_groups_from_db", _fake_get_all)
+    monkeypatch.setattr(
+        magm, "_clear_access_group_from_all_deployments", _fake_clear
+    )
+    monkeypatch.setattr(
+        magm,
+        "update_specific_deployments_with_access_group",
+        _fake_update_ids,
+    )
+    monkeypatch.setattr(magm, "clear_cache", _fake_clear_cache)
+
+    response = await update_access_group(
+        access_group="project-x",
+        data=UpdateModelGroupRequest(model_ids=["deployment-1"]),
+        user_api_key_dict=SimpleNamespace(user_id="u1"),
+    )
+
+    prisma.db.litellm_accessgroupmembership.delete_many.assert_not_called()
+    assert response.models_updated == 1
+    assert response.model_ids == ["deployment-1"]
+
+
+@pytest.mark.asyncio
+async def test_update_access_group_with_model_names_still_clears_edges(
+    monkeypatch,
+):
+    """Sanity-check the other branch: the model_names path owns the membership
+    table, so it must still clear edges before re-writing."""
+    prisma = _make_prisma()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", prisma, raising=False
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", None, raising=False
+    )
+
+    existing_group = AccessGroupInfo(
+        access_group="project-x",
+        model_names=["gpt-4"],
+        deployment_count=1,
+        parent_groups=[],
+        child_groups=[],
+    )
+
+    async def _fake_get_all(prisma_client):
+        return {"project-x": existing_group, "image": existing_group}
+
+    async def _fake_clear(access_group, prisma_client):
+        return 0
+
+    async def _fake_dual_write(**kwargs):
+        return 1
+
+    async def _fake_clear_cache():
+        return None
+
+    monkeypatch.setattr(magm, "get_all_access_groups_from_db", _fake_get_all)
+    monkeypatch.setattr(
+        magm, "_clear_access_group_from_all_deployments", _fake_clear
+    )
+    monkeypatch.setattr(magm, "_dual_write_group_membership", _fake_dual_write)
+    monkeypatch.setattr(magm, "clear_cache", _fake_clear_cache)
+
+    await update_access_group(
+        access_group="project-x",
+        data=UpdateModelGroupRequest(model_names=["image"]),
+        user_api_key_dict=SimpleNamespace(user_id="u1"),
+    )
+
+    prisma.db.litellm_accessgroupmembership.delete_many.assert_called_once_with(
+        where={"parent_group": "project-x"}
+    )
