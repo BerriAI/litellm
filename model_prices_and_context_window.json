@@ -38606,5 +38606,10 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "hunyuan/gpt-image-2": {
+        "litellm_provider": "hunyuan",
+        "mode": "image_generation",
+        "source": "https://cloud.tencent.com/document/product/1668"
     }
 }
