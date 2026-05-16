@@ -736,6 +736,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Pre-request latency on the SERVER span (success path).
             self.set_preprocessing_duration_attribute(parent_span, kwargs)
 
+            # http.response.status_code on the SERVER span (success path).
+            # A successful proxy response is HTTP 200; the failure path sets
+            # this from the error code in _record_exception_on_span.
+            self.set_response_status_code_attribute(parent_span, 200)
+
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
@@ -2956,6 +2961,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.safe_set_attribute(
                 span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
             )
+
+    def set_response_status_code_attribute(
+        self, span: Optional[Span], status_code: Optional[int]
+    ) -> None:
+        """
+        Set OTel-standard ``http.response.status_code`` (int) on the proxy
+        SERVER span. The failure path sets this from the error code in
+        ``_record_exception_on_span``; this is the success-path counterpart
+        so the attribute is present on every SERVER span regardless of
+        outcome (required by the HTTP semconv, and needed for error-ratio /
+        status-breakdown dashboards). No-op if span/value missing.
+        """
+        if span is None or status_code is None:
+            return
+        self.safe_set_attribute(
+            span=span,
+            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+            value=int(status_code),
+        )
 
     def set_preprocessing_duration_attribute(
         self, span: Optional[Span], container: Any
