@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import traceback
 from datetime import datetime
@@ -28,6 +29,31 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+_MANAGED_WS_HISTORY_MAX_RESPONSES = _positive_int_env(
+    "LITELLM_RESPONSES_WS_HISTORY_MAX_RESPONSES", 16
+)
+_MANAGED_WS_HISTORY_MAX_MESSAGES = _positive_int_env(
+    "LITELLM_RESPONSES_WS_HISTORY_MAX_MESSAGES", 80
+)
+_MANAGED_WS_HISTORY_MAX_BYTES = _positive_int_env(
+    "LITELLM_RESPONSES_WS_HISTORY_MAX_BYTES", 524_288
+)
+_MANAGED_WS_HISTORY_TTL_SECONDS = _positive_int_env(
+    "LITELLM_RESPONSES_WS_HISTORY_TTL_SECONDS", 600
+)
 
 
 @lru_cache(maxsize=1)
@@ -1459,6 +1485,7 @@ class ManagedResponsesWebSocketHandler:
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
         self._session_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._session_history_touched: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1502,7 +1529,11 @@ class ManagedResponsesWebSocketHandler:
             previous_response_id
         )
         raw_id = decoded.get("response_id", previous_response_id)
-        return list(self._session_history.get(raw_id, []))
+        self._prune_session_history()
+        messages = self._session_history.get(raw_id, [])
+        if messages:
+            self._session_history_touched[raw_id] = time.time()
+        return list(messages)
 
     def _store_history(self, response_id: str, messages: List[Dict[str, Any]]) -> None:
         """
@@ -1511,7 +1542,62 @@ class ManagedResponsesWebSocketHandler:
         Replaces any prior value — callers are responsible for passing the full
         history (prior turns + current input + new output).
         """
-        self._session_history[response_id] = messages
+        self._prune_session_history()
+        normalized_messages = self._trim_history_messages(messages)
+        if not normalized_messages:
+            return
+        self._session_history[response_id] = normalized_messages
+        self._session_history_touched[response_id] = time.time()
+        self._prune_session_history()
+
+    def _delete_history(self, response_id: Optional[str]) -> None:
+        if not response_id:
+            return
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        raw_id = decoded.get("response_id", response_id)
+        self._session_history.pop(raw_id, None)
+        self._session_history_touched.pop(raw_id, None)
+
+    @staticmethod
+    def _history_size_bytes(messages: List[Dict[str, Any]]) -> int:
+        try:
+            return len(json.dumps(messages, default=str, separators=(",", ":")))
+        except Exception:
+            return sum(len(str(message)) for message in messages)
+
+    def _trim_history_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        normalized_messages = list(messages)
+        if len(normalized_messages) > _MANAGED_WS_HISTORY_MAX_MESSAGES:
+            normalized_messages = normalized_messages[-_MANAGED_WS_HISTORY_MAX_MESSAGES:]
+
+        while (
+            len(normalized_messages) > 1
+            and self._history_size_bytes(normalized_messages)
+            > _MANAGED_WS_HISTORY_MAX_BYTES
+        ):
+            normalized_messages.pop(0)
+        return normalized_messages
+
+    def _prune_session_history(self) -> None:
+        now = time.time()
+        expired_response_ids = [
+            response_id
+            for response_id, touched_at in self._session_history_touched.items()
+            if now - touched_at > _MANAGED_WS_HISTORY_TTL_SECONDS
+        ]
+        for response_id in expired_response_ids:
+            self._delete_history(response_id)
+
+        while len(self._session_history) > _MANAGED_WS_HISTORY_MAX_RESPONSES:
+            oldest_response_id = min(
+                self._session_history,
+                key=lambda response_id: self._session_history_touched.get(
+                    response_id, 0.0
+                ),
+            )
+            self._delete_history(oldest_response_id)
 
     @staticmethod
     def _extract_response_id(completed_event: Dict[str, Any]) -> Optional[str]:
@@ -1726,6 +1812,7 @@ class ManagedResponsesWebSocketHandler:
     def _save_turn_history(
         self,
         completed_event: Optional[Dict[str, Any]],
+        previous_response_id: Optional[str],
         prior_history: List[Dict[str, Any]],
         current_messages: List[Dict[str, Any]],
     ) -> None:
@@ -1738,6 +1825,15 @@ class ManagedResponsesWebSocketHandler:
         output_msgs = self._extract_output_messages(completed_event)
         all_messages = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
+        decoded_previous = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                previous_response_id
+            ).get("response_id")
+            if previous_response_id
+            else None
+        )
+        if decoded_previous and decoded_previous != new_response_id:
+            self._delete_history(decoded_previous)
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
             len(all_messages),
@@ -1806,7 +1902,9 @@ class ManagedResponsesWebSocketHandler:
             await self._send_error(str(exc))
             return
 
-        self._save_turn_history(completed_event, prior_history, current_messages)
+        self._save_turn_history(
+            completed_event, previous_response_id, prior_history, current_messages
+        )
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -1832,3 +1930,12 @@ class ManagedResponsesWebSocketHandler:
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)
             await self._send_error(f"Internal server error: {exc}")
+        finally:
+            cleared = len(self._session_history)
+            self._session_history.clear()
+            self._session_history_touched.clear()
+            if cleared:
+                verbose_logger.debug(
+                    "ManagedResponsesWS: cleared %d in-memory response histories",
+                    cleared,
+                )

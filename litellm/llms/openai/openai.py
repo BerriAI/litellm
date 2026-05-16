@@ -60,6 +60,7 @@ from .common_utils import (
     OpenAIError,
     drop_params_from_unprocessable_entity_error,
 )
+from .deepseek_reasoning_utils import patch_deepseek_v4_reasoning_messages
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 openAIGPT5Config = OpenAIGPT5Config()
@@ -267,6 +268,7 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
+        messages = patch_deepseek_v4_reasoning_messages(model=model, messages=messages)
         return {"model": model, "messages": messages, **optional_params}
 
     def transform_response(
@@ -433,6 +435,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create by default
         """
         start_time = time.time()
+        data["messages"] = patch_deepseek_v4_reasoning_messages(
+            model=data.get("model"), messages=data.get("messages", [])
+        )
         try:
             raw_response = (
                 await openai_aclient.chat.completions.with_raw_response.create(
@@ -474,6 +479,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create by default
         """
         raw_response = None
+        data["messages"] = patch_deepseek_v4_reasoning_messages(
+            model=data.get("model"), messages=data.get("messages", [])
+        )
         try:
             raw_response = openai_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout

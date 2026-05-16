@@ -1,11 +1,8 @@
-import json
 import os
 import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -14,6 +11,9 @@ import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
 )
 
 
@@ -158,6 +158,214 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         content_3 = messages[3].get("content", "")
         if isinstance(content_3, str):
             assert "Here's more detailed information about Michael Jordan" in content_3
+
+
+@pytest.mark.asyncio
+async def test_session_history_preserves_responses_reasoning_before_tool_call():
+    """
+    A Responses API turn served by chat completions is stored with output items,
+    not choices. Reconstruct the assistant tool-call message with reasoning_content
+    so thinking providers can accept the following function_call_output turn.
+    """
+    mock_spend_logs = [
+        {
+            "request_id": "resp_previous",
+            "call_type": "aresponses",
+            "session_id": "session-responses-reasoning",
+            "proxy_server_request": {
+                "input": "Call get_weather for Boston.",
+                "model": "deepseek/deepseek-v4-pro",
+            },
+            "response": {
+                "id": "resp_previous",
+                "object": "response",
+                "created_at": 1760000000,
+                "model": "deepseek/deepseek-v4-pro",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Need the weather tool before answering.",
+                                "annotations": [],
+                            }
+                        ],
+                    },
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_weather",
+                        "name": "get_weather",
+                        "arguments": '{"location":"Boston"}',
+                        "status": "completed",
+                    },
+                ],
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "resp_previous"
+        )
+
+    messages = result["messages"]
+    assert messages[0].get("role") == "user"
+    assert messages[0].get("content") == "Call get_weather for Boston."
+
+    assistant_message = messages[1]
+    assert assistant_message.get("role") == "assistant"
+    assert (
+        assistant_message.get("reasoning_content")
+        == "Need the weather tool before answering."
+    )
+    tool_calls = assistant_message.get("tool_calls") or []
+    assert len(tool_calls) == 1
+    assert tool_calls[0].get("id") == "call_weather"
+    assert tool_calls[0].get("function", {}).get("name") == "get_weather"
+    assert tool_calls[0].get("function", {}).get("arguments") == '{"location":"Boston"}'
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_output_key_uses_choices_not_responses_output():
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-custom-output",
+            "call_type": "aresponses",
+            "session_id": "session-custom-output",
+            "proxy_server_request": {
+                "input": "Return a custom provider response.",
+                "model": "custom/provider-model",
+            },
+            "response": {
+                "id": "chatcmpl-custom-output",
+                "object": "chat.completion",
+                "model": "custom/provider-model",
+                "output": [{"custom_provider_payload": "not a Responses API item"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Provider answer from choices.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-custom-output"
+        )
+
+    messages = result["messages"]
+    assert [message.get("role") for message in messages] == ["user", "assistant"]
+    assert messages[1].get("content") == "Provider answer from choices."
+
+
+@pytest.mark.asyncio
+async def test_previous_response_tool_output_continuation_replays_reasoning_content():
+    """
+    The continuation path should replay:
+    user -> assistant(reasoning_content + tool_calls) -> tool.
+    Thinking providers such as DeepSeek/Moonshot reject the continuation if
+    the assistant tool-call message loses reasoning_content.
+    """
+    mock_spend_logs = [
+        {
+            "request_id": "resp_previous",
+            "call_type": "aresponses",
+            "session_id": "session-tool-output-continuation",
+            "proxy_server_request": {
+                "input": "Call get_weather for Boston.",
+                "model": "deepseek/deepseek-v4-pro",
+            },
+            "response": {
+                "id": "resp_previous",
+                "object": "response",
+                "created_at": 1760000000,
+                "model": "deepseek/deepseek-v4-pro",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "The user asked for weather, so I need the weather tool.",
+                                "annotations": [],
+                            }
+                        ],
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call_weather",
+                        "name": "get_weather",
+                        "arguments": '{"location":"Boston"}',
+                    },
+                ],
+            },
+            "status": "success",
+        }
+    ]
+    current_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="deepseek/deepseek-v4-pro",
+        input=[
+            {
+                "type": "function_call_output",
+                "call_id": "call_weather",
+                "output": '{"temperature":"42F"}',
+            }
+        ],
+        responses_api_request={"previous_response_id": "resp_previous"},
+    )
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = (
+            await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id="resp_previous",
+                litellm_completion_request=current_request,
+            )
+        )
+
+    messages = result["messages"]
+    assert [message.get("role") for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert (
+        messages[1].get("reasoning_content")
+        == "The user asked for weather, so I need the weather tool."
+    )
+    assert messages[1].get("tool_calls")[0].get("id") == "call_weather"
+    assert messages[2].get("tool_call_id") == "call_weather"
+    assert messages[2].get("content") == '{"temperature":"42F"}'
 
 
 @pytest.mark.asyncio
@@ -355,7 +563,7 @@ async def test_should_check_cold_storage_for_full_payload():
             proxy_request_with_truncated_pdf
         )
         assert (
-            result1 == True
+            result1
         ), "Should return True for proxy request with truncated PDF content"
 
         # Test case 2: Should return False for regular content
@@ -363,20 +571,20 @@ async def test_should_check_cold_storage_for_full_payload():
             proxy_request_regular
         )
         assert (
-            result2 == False
+            not result2
         ), "Should return False for regular proxy request without truncation"
 
         # Test case 3: Should return True for empty request
         result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
             proxy_request_empty
         )
-        assert result3 == True, "Should return True for empty proxy request"
+        assert result3, "Should return True for empty proxy request"
 
         # Test case 4: Should return True for None request
         result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
             proxy_request_none
         )
-        assert result4 == True, "Should return True for None proxy request"
+        assert result4, "Should return True for None proxy request"
 
     # Test case 5: Should return False when cold storage is not configured
     with patch.object(litellm, "cold_storage_custom_logger", None):
@@ -384,7 +592,7 @@ async def test_should_check_cold_storage_for_full_payload():
             proxy_request_with_truncated_pdf
         )
         assert (
-            result5 == False
+            not result5
         ), "Should return False when cold storage is not configured, even with truncated content"
 
 
@@ -394,8 +602,6 @@ async def test_get_chat_completion_message_history_empty_response_dict():
     Test that empty response dict is handled correctly without processing.
     This tests the fix for response validation to check for empty dict responses.
     """
-    from unittest.mock import AsyncMock, patch
-
     # Mock spend logs with empty response dict
     mock_spend_logs = [
         {
