@@ -102,6 +102,7 @@ class SupportedGuardrailIntegrations(Enum):
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
+    ATR = "atr"
 
 
 class Role(Enum):
@@ -536,6 +537,19 @@ class JavelinGuardrailConfigModel(BaseModel):
     )
 
 
+class ATRGuardrailLitellmParams(BaseModel):
+    """LitellmParams fields specific to the ATR guardrail."""
+
+    rules_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem path to a directory containing ATR rule YAML files. "
+            "If omitted, the rules bundled with pyatr are loaded. Falls back "
+            "to the ATR_RULES_PATH environment variable."
+        ),
+    )
+
+
 class ContentFilterAction(str, Enum):
     """Action to take when content filter detects a match"""
 
@@ -790,6 +804,7 @@ class LitellmParams(
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    ATRGuardrailLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
