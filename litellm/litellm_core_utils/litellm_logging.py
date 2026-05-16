@@ -2679,6 +2679,7 @@ class Logging(LiteLLMLoggingBaseClass):
             model_call_details=self.model_call_details,
             span_name="litellm.logging.async_success_prepare",
             start_time=async_success_prepare_start_time,
+            end_time=time.time(),
             event_metadata={
                 "call_type": self.call_type,
                 "stream": self.stream,
@@ -2727,6 +2728,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model_call_details=self.model_call_details,
                 span_name="litellm.logging.async_logging_hook_dispatch",
                 start_time=async_callback_dispatch_start_time,
+                end_time=time.time(),
                 event_metadata={
                     "call_type": self.call_type,
                     "stream": self.stream,
@@ -2881,6 +2883,7 @@ class Logging(LiteLLMLoggingBaseClass):
             model_call_details=self.model_call_details,
             span_name="litellm.logging.async_callback_dispatch",
             start_time=async_success_callback_dispatch_start_time,
+            end_time=time.time(),
             event_metadata={
                 "call_type": self.call_type,
                 "stream": self.stream,
