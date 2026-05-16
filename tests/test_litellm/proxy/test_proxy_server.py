@@ -1543,6 +1543,43 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     assert result == test_config
 
 
+@pytest.mark.asyncio
+async def test_load_config_applies_litellm_boolean_settings(tmp_path, monkeypatch):
+    import litellm
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "provider-discovery.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [
+                    {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}
+                ],
+                "general_settings": {},
+                "router_settings": {},
+                "litellm_settings": {
+                    "check_provider_endpoint": True,
+                    "drop_params": True,
+                    "set_verbose": True,
+                },
+            }
+        )
+    )
+
+    monkeypatch.setattr("litellm.check_provider_endpoint", False)
+    monkeypatch.setattr("litellm.drop_params", False)
+    monkeypatch.setattr("litellm.set_verbose", False)
+
+    proxy_config = ProxyConfig()
+    await proxy_config.load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.check_provider_endpoint is True
+    assert litellm.drop_params is True
+    assert litellm.set_verbose is True
+
+
 def test_normalize_datetime_for_sorting():
     """
     Test the _normalize_datetime_for_sorting function.

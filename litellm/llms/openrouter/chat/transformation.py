@@ -33,6 +33,32 @@ class CacheControlSupportedModels(str, Enum):
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        from litellm.secret_managers.main import get_secret_str
+
+        return (
+            api_base
+            or get_secret_str("OPENROUTER_API_BASE")
+            or "https://openrouter.ai/api/v1"
+        )
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        api_base = self.get_api_base(api_base)
+        api_key = api_key or litellm.get_secret("OPENROUTER_API_KEY")
+
+        response = litellm.module_level_client.get(
+            url=f"{api_base.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        return [model["id"] for model in response.json()["data"]]
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Allow reasoning parameters for models flagged as reasoning-capable.

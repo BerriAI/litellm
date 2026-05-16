@@ -8667,6 +8667,8 @@ class ProviderConfigManager:
             return litellm.AnthropicModelInfo()
         elif LlmProviders.XAI == provider:
             return litellm.XAIModelInfo()
+        elif LlmProviders.DEEPSEEK == provider:
+            return litellm.DeepSeekChatConfig()
         elif LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:

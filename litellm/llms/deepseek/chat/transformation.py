@@ -4,6 +4,8 @@ Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completi
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+import litellm
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -14,6 +16,22 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com"
+        api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
+
+        response = litellm.module_level_client.get(
+            url=f"{api_base.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        return [model["id"] for model in response.json()["data"]]
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         DeepSeek reasoner models support thinking parameter.
