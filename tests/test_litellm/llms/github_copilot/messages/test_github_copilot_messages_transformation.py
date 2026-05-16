@@ -139,10 +139,40 @@ def test_github_copilot_anthropic_messages_validate_environment_auth_error():
 def test_github_copilot_anthropic_messages_supported_params():
     """Test supported parameters list."""
     config = GithubCopilotAnthropicMessagesConfig()
-    params = config.get_supported_anthropic_messages_params("github_copilot/claude-haiku-4.5")
+    params = config.get_supported_anthropic_messages_params(
+        "github_copilot/claude-haiku-4.5"
+    )
 
     # Should inherit from AnthropicMessagesConfig
     assert "messages" in params
     assert "model" in params
     assert "max_tokens" in params
     assert "thinking" in params
+
+
+def test_provider_config_manager_dispatches_claude_to_copilot_messages_config():
+    """ProviderConfigManager must return the Copilot Anthropic Messages config
+    for Claude models served via github_copilot."""
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="github_copilot/claude-haiku-4.5",
+        provider=LlmProviders.GITHUB_COPILOT,
+    )
+
+    assert isinstance(config, GithubCopilotAnthropicMessagesConfig)
+
+
+def test_provider_config_manager_skips_non_claude_copilot_models():
+    """Non-Claude github_copilot models (e.g. gpt-*) must not be routed through
+    the Anthropic Messages dispatch."""
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="github_copilot/gpt-5-mini",
+        provider=LlmProviders.GITHUB_COPILOT,
+    )
+
+    assert config is None
