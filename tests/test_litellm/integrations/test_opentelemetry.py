@@ -4808,6 +4808,41 @@ class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
         otel.set_proxy_request_route_attributes(None, url_path="/x", http_route="/x")
 
 
+class TestOpenTelemetrySetResponseStatusCodeAttribute(unittest.TestCase):
+    """http.response.status_code must land on the SERVER span on the
+    success path too (failure path sets it in _record_exception_on_span).
+    Without this the attribute is failure-only, so error-ratio /
+    status-breakdown dashboards have no 2xx bucket.
+    """
+
+    def _set(self, status_code):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        otel.set_response_status_code_attribute(span, status_code)
+        span.end()
+        return exporter.get_finished_spans()[0]
+
+    def test_success_sets_int_200(self):
+        span = self._set(200)
+        # Exact OTel-standard name, stored as int (regression guard).
+        assert span.attributes["http.response.status_code"] == 200
+        assert isinstance(span.attributes["http.response.status_code"], int)
+
+    def test_none_status_code_omits_attribute(self):
+        span = self._set(None)
+        assert "http.response.status_code" not in span.attributes
+
+    def test_none_span_is_noop(self):
+        otel = OpenTelemetry()
+        # Mirrors the Langfuse-override path (create span returns None).
+        otel.set_response_status_code_attribute(None, 200)
+
+
 class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
     """litellm.preprocessing.duration_ms (proxy-receive -> first provider
     handoff) on the SERVER span. Read from container metadata so the
