@@ -140,7 +140,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         return (
             supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and optional_params.get("thinking", {}).get("type") == "enabled"
+            and (optional_params.get("thinking") or {}).get("type") == "enabled"
         )
 
     def transform_request(
