@@ -355,11 +355,19 @@ export default function ModelInfoView({
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
 
+      // The secrets the user just typed were sent in the request and are now
+      // stored encrypted by the backend. Don't echo their plaintext into local
+      // display state — the read-only LiteLLM Params JSON would render it.
+      const displayLitellmParams = { ...updatedLitellmParams };
+      for (const key of Object.keys(authFieldUpdates)) {
+        delete displayLitellmParams[key];
+      }
+
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: displayLitellmParams,
         model_info: updatedModelInfo,
       };
 

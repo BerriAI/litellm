@@ -3738,8 +3738,8 @@ export const modelPatchUpdateCall = async (
   modelId: string,
 ) => {
   try {
-    console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
-
+    // Intentionally not logging the payload: it can contain freshly-entered
+    // provider secrets (api_key, vertex_credentials, AWS creds).
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
     const response = await fetch(url, {
       method: "PATCH",
