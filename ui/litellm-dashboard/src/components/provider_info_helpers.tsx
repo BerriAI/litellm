@@ -155,6 +155,7 @@ export const provider_map: Record<string, string> = {
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
   HUNYUAN: "hunyuan",
+  [Providers.HUNYUAN]: "hunyuan",
   HYPERBOLIC: "hyperbolic",
   Infinity: "infinity",
   JinaAI: "jina_ai",
