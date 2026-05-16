@@ -153,12 +153,13 @@ class TestResponseCompliance:
 
     def test_interaction_response_fields(self, spec_dict):
         """Verify our InteractionsAPIResponse has correct fields."""
-        # The response is the Interaction schema
-        # Check CreateModelInteractionParams which includes output fields
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        # The response is the dedicated `Interaction` schema. Google moved the
+        # output-only fields (notably the `steps` array, formerly `outputs`)
+        # off `CreateModelInteractionParams` and onto `Interaction`; the request
+        # schema no longer carries `steps`. Keep this aligned with the live spec.
+        schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly). Google renamed `outputs` → `steps` in the
-        # upstream spec; keep this list aligned with the live schema.
+        # Output fields (readOnly).
         output_fields = [
             "id",
             "status",
@@ -175,7 +176,8 @@ class TestResponseCompliance:
 
     def test_status_enum_values(self, spec_dict):
         """Verify status enum values match spec."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        # `status` is an output-only field; validate against the response schema.
+        schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
         # Google Interactions API uses lowercase status values (updated Feb 2026)
         expected_statuses = [
