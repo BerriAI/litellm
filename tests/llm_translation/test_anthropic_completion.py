@@ -262,6 +262,25 @@ def test_anthropic_tool_streaming():
             assert tool_use["index"] == correct_tool_index
 
 
+def test_anthropic_content_block_start_text_missing_field():
+    """
+    Regression for #28067: some Anthropic-compatible upstreams omit the
+    optional `text` field on a content_block_start text block. The actual
+    content arrives via subsequent content_block_delta chunks, so the parser
+    must tolerate the missing field instead of raising KeyError and aborting
+    the stream.
+    """
+    response_iter = ModelResponseIterator([], False)
+    chunk = {
+        "type": "content_block_start",
+        "index": 0,
+        # 'text' field intentionally omitted (observed in the wild)
+        "content_block": {"type": "text"},
+    }
+    # Should not raise.
+    response_iter.chunk_parser(chunk=chunk)
+
+
 def test_process_anthropic_headers_empty():
     result = process_anthropic_headers({})
     assert result == {}, "Expected empty dictionary for no input"
