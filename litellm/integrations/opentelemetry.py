@@ -68,6 +68,11 @@ HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
 # passthrough, which would name them metadata.*).
 HTTP_ROUTE_ATTRIBUTE = "http.route"
 URL_PATH_ATTRIBUTE = "url.path"
+# Total time LiteLLM spends before the upstream provider request begins
+# (proxy-receive -> first provider handoff): auth + parsing + pre-call
+# hooks. A single number, not a span — the window crosses many
+# sub-operations with no single span representing it.
+PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -701,6 +706,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 },
             )
 
+            # Pre-request latency. request_data still carries the propagated
+            # metadata here (the logging object was popped before failure
+            # callbacks ran). Omitted if the request failed before handoff.
+            self.set_preprocessing_duration_attribute(parent_otel_span, request_data)
+
             _span_name = "Failed Proxy Server Request"
 
             # Exception Logging Child Span
@@ -736,6 +746,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             parent_span = user_api_key_dict.parent_otel_span
 
             ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
+
+            # Pre-request latency on the SERVER span (model_call_details
+            # holds first_api_call_start_time + the propagated received-at).
+            self.set_preprocessing_duration_attribute(parent_span, kwargs)
 
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -2958,3 +2972,49 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.safe_set_attribute(
                 span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
             )
+
+    def set_preprocessing_duration_attribute(
+        self, span: Optional[Span], container: Any
+    ) -> None:
+        """
+        Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
+        provider handoff) on the proxy SERVER span. Called from the
+        post-call hooks where the SERVER span is in hand — the logging
+        handlers write the litellm_request child span, not this one.
+
+        ``litellm_received_at`` rides request metadata (set in the auth
+        path); ``first_api_call_start_time`` is the set-once first-handoff
+        instant (so retries/backoff are excluded). Both are read from the
+        container's metadata so success (model_call_details) and failure
+        (request_data, logging object already popped) paths work uniformly.
+        No-op if the span or either anchor is missing.
+        """
+        if span is None or not isinstance(container, dict):
+            return
+        received_at = None
+        first_handoff = container.get("first_api_call_start_time")
+        for _md in (
+            (container.get("litellm_params") or {}).get("metadata"),
+            container.get("metadata"),
+            container.get("litellm_metadata"),
+        ):
+            if isinstance(_md, dict):
+                received_at = received_at or _md.get("litellm_received_at")
+                first_handoff = first_handoff or _md.get("first_api_call_start_time")
+        if received_at is None or first_handoff is None:
+            return
+        try:
+            duration_ms = (
+                self._to_timestamp(first_handoff) - self._to_timestamp(received_at)
+            ) * 1000.0
+        except Exception:
+            return
+        # Clock skew / out-of-order anchors → omit rather than emit a
+        # negative latency.
+        if duration_ms < 0:
+            return
+        self.safe_set_attribute(
+            span=span,
+            key=PREPROCESSING_DURATION_MS_ATTRIBUTE,
+            value=duration_ms,
+        )

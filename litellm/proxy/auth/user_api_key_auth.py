@@ -683,6 +683,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    # True proxy-receive instant. Stash it so the pre-request latency
+    # (proxy-receive -> first provider handoff) can be computed later — the
+    # SERVER span is started with this but the OTel Span API exposes no
+    # start-time getter, so it must be propagated explicitly.
+    try:
+        request.state.litellm_received_at = start_time
+    except Exception:
+        pass
     route: str = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False

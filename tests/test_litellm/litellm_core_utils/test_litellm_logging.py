@@ -2685,3 +2685,51 @@ def test_success_handler_unified_helper_runs_for_typed_results():
         )
         mock_calc.assert_called_once()
         assert logging_obj.model_call_details["response_cost"] == expected_cost
+
+
+class TestFirstApiCallStartTimeSetOnce:
+    """first_api_call_start_time pins the FIRST provider handoff so
+    preprocessing latency excludes retries/backoff (api_call_start_time is
+    overwritten on every attempt). It is also mirrored onto
+    litellm_params.metadata so the failure path (logging object popped
+    from request_data) can still read it.
+    """
+
+    def _logging_obj(self):
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="set-once-1",
+            function_id="f1",
+        )
+        obj.model_call_details["litellm_params"] = {"metadata": {}}
+        return obj
+
+    def test_set_once_survives_retry_and_mirrors_to_metadata(self):
+        obj = self._logging_obj()
+
+        obj.pre_call(input="hi", api_key="sk-test")
+        first = obj.model_call_details["first_api_call_start_time"]
+        assert first == obj.model_call_details["api_call_start_time"]
+        assert (
+            obj.model_call_details["litellm_params"]["metadata"][
+                "first_api_call_start_time"
+            ]
+            == first
+        )
+
+        time.sleep(0.002)  # ensure a distinct retry timestamp
+        obj.pre_call(input="hi", api_key="sk-test")
+
+        # retry advanced api_call_start_time but NOT first_api_call_start_time
+        assert obj.model_call_details["api_call_start_time"] > first
+        assert obj.model_call_details["first_api_call_start_time"] == first
+        assert (
+            obj.model_call_details["litellm_params"]["metadata"][
+                "first_api_call_start_time"
+            ]
+            == first
+        )

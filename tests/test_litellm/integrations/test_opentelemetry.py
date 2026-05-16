@@ -4811,3 +4811,103 @@ class TestOpenTelemetrySetProxyRequestRouteAttributes(unittest.TestCase):
         otel = OpenTelemetry()
         # Mirrors the Langfuse-override path (create span returns None).
         otel.set_proxy_request_route_attributes(None, url_path="/x", http_route="/x")
+
+
+class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
+    """PR 3: litellm.preprocessing.duration_ms (proxy-receive -> first
+    provider handoff) on the SERVER span. Read from container metadata so
+    the success (model_call_details) and failure (request_data, logging
+    object popped) paths work uniformly. Excludes retries via the set-once
+    first_api_call_start_time anchor.
+    """
+
+    def _span(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        return tracer.start_span("Received Proxy Server Request"), exporter
+
+    def _attr(self, span, exporter):
+        span.end()
+        return exporter.get_finished_spans()[0].attributes
+
+    def test_success_shape_model_call_details(self):
+        # success path: first_api_call_start_time top-level,
+        # received-at under litellm_params.metadata
+        received = datetime(2026, 1, 1, 0, 0, 0)
+        handoff = datetime(2026, 1, 1, 0, 0, 0, 250000)  # +250ms
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "first_api_call_start_time": handoff,
+                "litellm_params": {"metadata": {"litellm_received_at": received}},
+            },
+        )
+        attrs = self._attr(span, exp)
+        self.assertAlmostEqual(
+            attrs["litellm.preprocessing.duration_ms"], 250.0, places=1
+        )
+
+    def test_failure_shape_request_data_metadata(self):
+        # failure path: both anchors under top-level metadata (logging
+        # object already popped from request_data)
+        received = datetime(2026, 1, 1, 0, 0, 0)
+        handoff = datetime(2026, 1, 1, 0, 0, 0, 30000)  # +30ms
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "metadata": {
+                    "litellm_received_at": received,
+                    "first_api_call_start_time": handoff,
+                }
+            },
+        )
+        attrs = self._attr(span, exp)
+        self.assertAlmostEqual(
+            attrs["litellm.preprocessing.duration_ms"], 30.0, places=1
+        )
+
+    def test_missing_received_at_omits(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span, {"first_api_call_start_time": datetime(2026, 1, 1)}
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_missing_handoff_omits(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span, {"metadata": {"litellm_received_at": datetime(2026, 1, 1)}}
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_negative_duration_omitted(self):
+        # clock skew: handoff before receive -> omit, not a negative value
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(
+            span,
+            {
+                "first_api_call_start_time": datetime(2026, 1, 1, 0, 0, 0),
+                "metadata": {"litellm_received_at": datetime(2026, 1, 1, 0, 0, 5)},
+            },
+        )
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+    def test_none_span_is_noop(self):
+        OpenTelemetry().set_preprocessing_duration_attribute(
+            None, {"first_api_call_start_time": datetime(2026, 1, 1)}
+        )
+
+    def test_non_dict_container_is_noop(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_preprocessing_duration_attribute(span, None)
+        assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)

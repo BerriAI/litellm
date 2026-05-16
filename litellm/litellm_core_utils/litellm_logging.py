@@ -1050,6 +1050,22 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+            # Set-once: the FIRST provider-handoff instant. api_call_start_time
+            # above is overwritten on every retry/fallback attempt (this
+            # logging object is reused), so it can't measure one-time
+            # preprocessing. This field is written only if absent, so it
+            # pins the first attempt — proxy-receive -> here is pure
+            # preprocessing, excluding retry loops + backoff sleeps.
+            if self.model_call_details.get("first_api_call_start_time") is None:
+                _first_handoff = self.model_call_details["api_call_start_time"]
+                self.model_call_details["first_api_call_start_time"] = _first_handoff
+                # Also stash it on metadata so it survives into request_data
+                # on the failure path, where the logging object is popped
+                # before callbacks run (the success path reads it off the
+                # logging object directly).
+                _lp = self.model_call_details.get("litellm_params")
+                if isinstance(_lp, dict) and isinstance(_lp.get("metadata"), dict):
+                    _lp["metadata"]["first_api_call_start_time"] = _first_handoff
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
