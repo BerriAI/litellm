@@ -1298,6 +1298,131 @@ async def test_apply_search_filter_matches_db_byok_case_insensitively():
 
 
 @pytest.mark.asyncio
+async def test_apply_search_filter_scopes_byok_to_caller_teams():
+    """
+    Regression test: `/v2/model/info?search=...` must not leak BYOK rows
+    from teams the caller is not a member of. The new DB branch fetches
+    every row with a `team_public_model_name` set (the JSON
+    `string_contains: ""` widening), so without team scoping a non-admin
+    user could search for a common substring like "claude" and see other
+    teams' BYOK models.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    # In-router BYOK rows: one in the caller's team, one in someone else's.
+    caller_team_byok = {
+        "model_name": "model_name_team-mine_internal",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-mine",
+            "team_id": "team-mine",
+            "team_public_model_name": "claude-sonnet-prod",
+            "db_model": True,
+        },
+    }
+    other_team_byok = {
+        "model_name": "model_name_team-other_internal",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-other",
+            "team_id": "team-other",
+            "team_public_model_name": "claude-sonnet-staging",
+            "db_model": True,
+        },
+    }
+    # Non-team row stays in the router-side result regardless of teams.
+    public_model = {
+        "model_name": "claude-public",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {"id": "public-id", "db_model": False},
+    }
+
+    # DB-only BYOK rows fetched by the over-broad JSON branch.
+    db_caller_row = MagicMock()
+    db_caller_row.model_id = "byok-db-mine"
+    db_caller_row.model_name = "model_name_team-mine_db"
+    db_caller_row.model_info = {
+        "id": "byok-db-mine",
+        "team_id": "team-mine",
+        "team_public_model_name": "Claude DB Mine",
+        "db_model": True,
+    }
+    db_other_row = MagicMock()
+    db_other_row.model_id = "byok-db-other"
+    db_other_row.model_name = "model_name_team-other_db"
+    db_other_row.model_info = {
+        "id": "byok-db-other",
+        "team_id": "team-other",
+        "team_public_model_name": "Claude DB Other",
+        "db_model": True,
+    }
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[db_caller_row, db_other_row]
+    )
+    caller_user_row = MagicMock()
+    caller_user_row.teams = ["team-mine"]
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=caller_user_row
+    )
+
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: [
+        {
+            "model_name": r.model_name,
+            "model_info": r.model_info,
+            "litellm_params": {"model": "claude-sonnet"},
+        }
+        for r in rows
+    ]
+
+    non_admin = MagicMock(spec=UserAPIKeyAuth)
+    non_admin.user_role = LitellmUserRoles.INTERNAL_USER
+    non_admin.user_id = "user-mine"
+
+    filtered, total_count = await _apply_search_filter_to_models(
+        all_models=[caller_team_byok, other_team_byok, public_model],
+        search="claude",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        user_api_key_dict=non_admin,
+    )
+
+    filtered_ids = {m["model_info"]["id"] for m in filtered}
+    assert "byok-mine" in filtered_ids
+    assert "byok-db-mine" in filtered_ids
+    assert "public-id" in filtered_ids
+    assert "byok-other" not in filtered_ids, (
+        "router-side BYOK from another team must be dropped from search "
+        "when caller doesn't belong to that team"
+    )
+    assert "byok-db-other" not in filtered_ids, (
+        "DB-only BYOK from another team must be dropped from search when "
+        "caller doesn't belong to that team"
+    )
+    # total_count is router_models_count (3: caller_team_byok, public_model
+    # would be counted; other_team_byok is dropped — 2) + 1 db row = 3.
+    assert total_count == 3
+
+    # Admins keep the un-scoped view across teams.
+    admin = MagicMock(spec=UserAPIKeyAuth)
+    admin.user_role = LitellmUserRoles.PROXY_ADMIN
+    admin.user_id = "admin-1"
+
+    filtered_admin, _ = await _apply_search_filter_to_models(
+        all_models=[caller_team_byok, other_team_byok, public_model],
+        search="claude",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        user_api_key_dict=admin,
+    )
+    admin_ids = {m["model_info"]["id"] for m in filtered_admin}
+    assert "byok-other" in admin_ids
+    assert "byok-db-other" in admin_ids
+
+
+@pytest.mark.asyncio
 async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     """
     Regression test: when the UI picks a specific team in the Current Team

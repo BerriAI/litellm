@@ -10889,11 +10889,48 @@ def _enrich_model_info_with_litellm_data(
     return model
 
 
+async def _get_caller_byok_team_scope(
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+    prisma_client: Optional[Any],
+) -> Optional[Set[str]]:
+    """
+    Return the team IDs whose BYOK rows the caller is allowed to see via
+    `/v2/model/info` search results.
+
+    `None` means "no scoping" — used for admins and for callers/paths that
+    have already been scoped upstream (or in tests that supply their own
+    pre-filtered input set). A returned set (possibly empty) means BYOK rows
+    must have `model_info.team_id` ∈ that set, otherwise they belong to a
+    team the caller is not a member of and must be dropped.
+    """
+    if user_api_key_dict is None or prisma_client is None:
+        return None
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        return set()
+    try:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to look up caller teams while scoping BYOK search; "
+            "defaulting to no team access."
+        )
+        return set()
+    if user_row is None:
+        return set()
+    return set(user_row.teams or [])
+
+
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
     prisma_client: Optional[Any],
     proxy_config: Any,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -10903,6 +10940,10 @@ async def _apply_search_filter_to_models(
         search: Search term (case-insensitive)
         prisma_client: Prisma client for database queries
         proxy_config: Proxy config for decrypting models
+        user_api_key_dict: Caller identity used to scope BYOK matches to
+            teams the caller belongs to. When omitted (None), no team
+            scoping is applied — pass it from request handlers that expose
+            this function to non-admin callers.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -10911,6 +10952,22 @@ async def _apply_search_filter_to_models(
         return all_models, None
 
     search_lower = search.lower().strip()
+
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    def _is_byok_outside_caller_teams(model_info_dict: Dict[str, Any]) -> bool:
+        # `team_id` is only set on team BYOK rows. Non-team rows fall
+        # through unaffected — they are gated by other paths (router
+        # membership, direct_access, include_team_models).
+        if allowed_team_ids is None:
+            return False
+        team_id = model_info_dict.get("team_id")
+        if team_id is None:
+            return False
+        return team_id not in allowed_team_ids
 
     def _model_matches_search(m: Dict[str, Any]) -> bool:
         # Team BYOK models persist an internal `model_name`
@@ -10924,8 +10981,16 @@ async def _apply_search_filter_to_models(
         ) or ""
         return search_lower in team_public_model_name.lower()
 
-    # Filter models in router by search term
-    filtered_router_models = [m for m in all_models if _model_matches_search(m)]
+    # Filter models in router by search term, dropping BYOK rows that
+    # belong to teams the caller is not a member of so search can't leak
+    # other teams' models when the request omits `include_team_models` /
+    # `teamId`.
+    filtered_router_models = [
+        m
+        for m in all_models
+        if _model_matches_search(m)
+        and not _is_byok_outside_caller_teams(m.get("model_info") or {})
+    ]
 
     # Separate filtered models into config vs db models, and track db model IDs
     filtered_config_models = []
@@ -10992,11 +11057,17 @@ async def _apply_search_filter_to_models(
             )
 
             def _db_row_matches_search(db_model: Any) -> bool:
-                if search_lower in (db_model.model_name or "").lower():
-                    return True
                 info = (
                     db_model.model_info if isinstance(db_model.model_info, dict) else {}
                 )
+                # Scope BYOK rows to the caller's teams before applying
+                # the display-name match, so the over-broad
+                # `string_contains: ""` JSON branch can't leak other
+                # teams' models into search results.
+                if _is_byok_outside_caller_teams(info):
+                    return False
+                if search_lower in (db_model.model_name or "").lower():
+                    return True
                 return (
                     search_lower in (info.get("team_public_model_name") or "").lower()
                 )
@@ -11491,6 +11562,7 @@ async def model_info_v2(
             search=search or "",
             prisma_client=prisma_client,
             proxy_config=proxy_config,
+            user_api_key_dict=user_api_key_dict,
         )
 
     if user_models_only:
