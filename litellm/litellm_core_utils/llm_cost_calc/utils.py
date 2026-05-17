@@ -270,16 +270,41 @@ def _get_token_base_cost(
                         ),
                     )
 
-                    # Apply tiered pricing to cache costs
-                    cache_creation_tiered_key = (
+                    # Apply tiered pricing to cache costs.  Prefer a
+                    # service_tier-specific above-threshold key when available
+                    # (e.g. cache_read_input_token_cost_above_272k_tokens_regional),
+                    # falling back to the standard above-threshold key.
+                    cache_creation_base_key = (
                         f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
                     )
-                    cache_creation_1hr_tiered_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
-                    cache_read_tiered_key = (
+                    cache_creation_1hr_base_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
+                    cache_read_base_key = (
                         f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
+                    cache_creation_tiered_key = (
+                        _get_service_tier_cost_key(
+                            cache_creation_base_key, service_tier
+                        )
+                        if service_tier
+                        else cache_creation_base_key
+                    )
+                    cache_creation_1hr_tiered_key = (
+                        _get_service_tier_cost_key(
+                            cache_creation_1hr_base_key, service_tier
+                        )
+                        if service_tier
+                        else cache_creation_1hr_base_key
+                    )
+                    cache_read_tiered_key = (
+                        _get_service_tier_cost_key(cache_read_base_key, service_tier)
+                        if service_tier
+                        else cache_read_base_key
+                    )
 
-                    if cache_creation_tiered_key in model_info:
+                    if (
+                        cache_creation_tiered_key in model_info
+                        or cache_creation_base_key in model_info
+                    ):
                         cache_creation_cost = cast(
                             float,
                             _get_cost_per_unit(
@@ -289,7 +314,10 @@ def _get_token_base_cost(
                             ),
                         )
 
-                    if cache_creation_1hr_tiered_key in model_info:
+                    if (
+                        cache_creation_1hr_tiered_key in model_info
+                        or cache_creation_1hr_base_key in model_info
+                    ):
                         cache_creation_cost_above_1hr = cast(
                             float,
                             _get_cost_per_unit(
@@ -299,7 +327,10 @@ def _get_token_base_cost(
                             ),
                         )
 
-                    if cache_read_tiered_key in model_info:
+                    if (
+                        cache_read_tiered_key in model_info
+                        or cache_read_base_key in model_info
+                    ):
                         cache_read_cost = cast(
                             float,
                             _get_cost_per_unit(
