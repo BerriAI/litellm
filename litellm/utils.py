@@ -5703,6 +5703,22 @@ def _get_model_info_helper(  # noqa: PLR0915
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         #########################
+        provider_config: Optional[BaseLLMModelInfo] = None
+        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+            provider_config = ProviderConfigManager.get_provider_model_info(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+        if provider_config is not None:
+            try:
+                provider_model_info = provider_config.get_model_info(
+                    model=model,
+                    api_base=api_base,
+                )
+                if provider_model_info is not None:
+                    return provider_model_info
+            except Exception:
+                verbose_logger.debug("Could not get dynamic model info.")
+
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
@@ -5722,14 +5738,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_prompt_caching=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
-            )
-        elif (
-            custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
-        ) and not _is_potential_model_name_in_model_cost(potential_model_names):
-            return litellm.OllamaConfig().get_model_info(model, api_base=api_base)
-        elif custom_llm_provider == "lemonade":
-            return litellm.LemonadeChatConfig().get_model_info(
-                model=model, api_base=api_base
             )
         else:
             """

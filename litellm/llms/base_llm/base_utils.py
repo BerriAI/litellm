@@ -5,7 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -13,6 +13,9 @@ from pydantic import BaseModel
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ModelInfoBase
 
 
 class BaseTokenCounter(ABC):
@@ -41,6 +44,17 @@ class BaseTokenCounter(ABC):
 
 
 class BaseLLMModelInfo(ABC):
+    def get_model_info(
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+    ) -> Optional["ModelInfoBase"]:
+        """
+        Provider-specific model metadata when it cannot be represented in the
+        static model cost map.
+        """
+        return None
+
     def get_provider_info(
         self,
         model: str,

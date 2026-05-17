@@ -1,6 +1,5 @@
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +22,7 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_mod
 
 import httpx
+import litellm
 
 from litellm.llms.ollama.common_utils import OllamaModelInfo
 
@@ -214,6 +214,23 @@ class TestOllamaGetModelInfo:
 
         assert captured_urls[0] == "http://env-server:11434/api/show"
 
+    def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
+        """When completion passes the final generate URL, model info should use the server base."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        config.get_model_info("llama3", api_base="http://localhost:11434/api/generate")
+
+        assert captured_urls[0] == "http://localhost:11434/api/show"
+
     def test_get_model_info_graceful_fallback_on_connection_error(self, monkeypatch):
         """When the Ollama server is unreachable, should return defaults instead of raising."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig
@@ -251,6 +268,51 @@ class TestOllamaGetModelInfo:
 
         config.get_model_info("ollama_chat/llama3", api_base="http://localhost:11434")
         assert captured_json[1]["name"] == "llama3"
+
+    def test_litellm_get_model_info_uses_provider_hook_for_unknown_model(
+        self, monkeypatch
+    ):
+        """Unmapped Ollama models should use the provider-level dynamic hook."""
+        captured_json = []
+
+        def mock_post(url, json, headers=None):
+            captured_json.append(json)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        try:
+            model_info = litellm.get_model_info(
+                "ollama/unknown-model", api_base="http://localhost:11434"
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["max_input_tokens"] == 32768
+        assert model_info["supports_function_calling"] is True
+        assert captured_json[0]["name"] == "unknown-model"
+
+    def test_litellm_get_model_info_keeps_static_map_for_known_model(self, monkeypatch):
+        """Mapped Ollama models should keep using the static model map."""
+
+        def mock_post(url, json, headers=None):
+            raise AssertionError("Static Ollama model should not query /api/show")
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        try:
+            model_info = litellm.get_model_info("ollama/llama2")
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["key"] == "ollama/llama2"
+        assert model_info["litellm_provider"] == "ollama"
 
 
 class TestOllamaAuthHeaders:
