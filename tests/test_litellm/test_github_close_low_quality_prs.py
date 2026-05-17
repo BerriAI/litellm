@@ -292,6 +292,84 @@ class TestEvaluatePr:
         assert score is None
 
 
+class TestMainOptoutLabelDefault:
+    """`--optout-label` must REPLACE the canonical defaults, not append."""
+
+    def _patch_no_op(self, closer_module, monkeypatch):
+        monkeypatch.setattr(closer_module, "fetch_open_prs", lambda repo: [])
+        # `optout_labels` is captured indirectly via evaluate_pr; sniff the
+        # set passed in by stubbing evaluate_pr.
+        captured: dict = {}
+
+        def fake_evaluate(pr, now, min_age_days, min_score, repo, optout_labels):
+            captured["optout_labels"] = set(optout_labels)
+            return ("skip-draft", None, None)
+
+        monkeypatch.setattr(closer_module, "evaluate_pr", fake_evaluate)
+        return captured
+
+    def test_should_use_canonical_defaults_when_flag_omitted(
+        self, closer_module, monkeypatch
+    ):
+        captured = self._patch_no_op(closer_module, monkeypatch)
+        # No PRs -> capture won't fire; instead inject one synthetic PR via
+        # fetch_open_prs so evaluate_pr is invoked at least once.
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_open_prs",
+            lambda repo: [
+                {
+                    "number": 1,
+                    "title": "p",
+                    "createdAt": "2026-05-10T00:00:00Z",
+                    "isDraft": True,
+                    "labels": [],
+                    "author": {"login": "x"},
+                }
+            ],
+        )
+        monkeypatch.setattr(sys, "argv", ["close_low_quality_prs.py"])
+        rc = closer_module.main()
+        assert rc == 0
+        assert captured["optout_labels"] == set(closer_module.DEFAULT_OPTOUT_LABELS)
+
+    def test_should_replace_defaults_when_flag_provided(
+        self, closer_module, monkeypatch
+    ):
+        captured = self._patch_no_op(closer_module, monkeypatch)
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_open_prs",
+            lambda repo: [
+                {
+                    "number": 1,
+                    "title": "p",
+                    "createdAt": "2026-05-10T00:00:00Z",
+                    "isDraft": True,
+                    "labels": [],
+                    "author": {"login": "x"},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "close_low_quality_prs.py",
+                "--optout-label",
+                "hold",
+                "--optout-label",
+                "needs-discussion",
+            ],
+        )
+        rc = closer_module.main()
+        assert rc == 0
+        # Crucially, none of the canonical defaults leak in.
+        assert captured["optout_labels"] == {"hold", "needs-discussion"}
+        for default in closer_module.DEFAULT_OPTOUT_LABELS:
+            assert default not in captured["optout_labels"], default
+
+
 class TestHasOptoutLabel:
     def test_should_match_label_case_insensitively(self, closer_module):
         pr = {"labels": [{"name": "Do Not Close"}, {"name": "bug"}]}

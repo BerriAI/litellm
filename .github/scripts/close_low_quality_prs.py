@@ -35,7 +35,7 @@ import json
 import re
 import subprocess
 import sys
-from typing import Any, Iterable
+from typing import Iterable
 
 # Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
 # and `greptile-apps` in `gh pr view --json` output. Accept either form.
@@ -54,6 +54,12 @@ SCORE_PATTERN = re.compile(
 # exempt from auto-triage.
 INTERNAL_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
+# Default labels that exempt a PR from auto-close. Defined at module scope (not
+# as a mutable argparse default) so that `--optout-label foo` REPLACES the
+# defaults instead of appending to them — the argparse `action="append"` +
+# `default=[...]` combination silently mutates the shared default list.
+DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
+
 
 def gh(*args: str) -> str:
     """Run a `gh` CLI command and return stdout. Raises on non-zero exit."""
@@ -64,11 +70,6 @@ def gh(*args: str) -> str:
         check=True,
     )
     return result.stdout
-
-
-def gh_json(*args: str) -> Any:
-    """Run a `gh` CLI command that emits JSON and return the parsed value."""
-    return json.loads(gh(*args))
 
 
 def fetch_open_prs(repo: str | None) -> list[dict]:
@@ -297,10 +298,13 @@ def main() -> int:
     parser.add_argument(
         "--optout-label",
         action="append",
-        default=["do not close", "keep open", "wip"],
+        default=None,
         help=(
-            "Label(s) that exempt a PR from auto-close. "
-            "Repeat to add more. Case-insensitive."
+            "Label(s) that exempt a PR from auto-close. Repeat to add more. "
+            "Case-insensitive. When omitted, defaults to "
+            f"{list(DEFAULT_OPTOUT_LABELS)!r}; passing this flag REPLACES the "
+            "defaults (argparse `append` with a mutable default would append "
+            "instead, which we explicitly avoid)."
         ),
     )
     parser.add_argument(
@@ -334,7 +338,7 @@ def main() -> int:
     print(f"Found {len(prs)} open PRs.\n")
 
     now = dt.datetime.now(dt.timezone.utc)
-    optout_labels = set(args.optout_label)
+    optout_labels = set(args.optout_label or DEFAULT_OPTOUT_LABELS)
 
     closed = 0
     summary = {
