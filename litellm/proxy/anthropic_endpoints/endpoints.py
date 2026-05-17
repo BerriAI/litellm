@@ -214,7 +214,7 @@ async def count_tokens(
         # Call the internal token counter function with direct request flag set to False
         token_response = await internal_token_counter(
             request=token_request,
-            call_endpoint=True,
+            call_endpoint=False,
         )
         _token_response_dict: dict = {}
         if isinstance(token_response, TokenCountResponse):
