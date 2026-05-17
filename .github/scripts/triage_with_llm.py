@@ -520,7 +520,7 @@ def render_summary(result: dict) -> str:
     comment = result.get("comment")
     if comment:
         lines.append("")
-        lines.append("### Would post comment:")
+        lines.append("### Posted comment:")
         lines.append("")
         lines.append("> " + comment.replace("\n", "\n> "))
     return "\n".join(lines)

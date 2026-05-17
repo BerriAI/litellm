@@ -116,7 +116,10 @@ def is_external_pr_author(pr: dict, repo: str | None) -> bool:
     if login.endswith("[bot]") or login in {"dependabot", "github-actions"}:
         return False
     association = fetch_pr_author_association(pr["number"], repo)
-    if association in INTERNAL_AUTHOR_ASSOCIATIONS:
+    # Fail-safe: if the API lookup failed (empty string), treat the author as
+    # internal so we don't auto-close their PR. Auto-close is destructive, so
+    # an unknown association should never make a PR eligible for closing.
+    if not association or association in INTERNAL_AUTHOR_ASSOCIATIONS:
         return False
     return True
 
