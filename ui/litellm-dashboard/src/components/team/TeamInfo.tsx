@@ -986,6 +986,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       },
                       access_group_ids: info.access_group_ids || [],
                       default_team_member_models: info.default_team_member_models || [],
+                      allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
                     }}
                     layout="vertical"
                   >
@@ -1338,12 +1339,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <PassThroughRoutesSelector
-                        onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                        value={form.getFieldValue("allowed_passthrough_routes")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select pass through routes"
-                      />
+                      <Tooltip
+                        title={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set allowed pass through routes"
+                            : !is_proxy_admin
+                              ? "Only proxy admins can set allowed pass through routes"
+                              : ""
+                        }
+                        placement="top"
+                      >
+                        <PassThroughRoutesSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                          value={form.getFieldValue("allowed_passthrough_routes")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select pass through routes"
+                          disabled={!premiumUser || !is_proxy_admin}
+                        />
+                      </Tooltip>
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
