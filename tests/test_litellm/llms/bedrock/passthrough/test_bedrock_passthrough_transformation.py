@@ -548,7 +548,14 @@ def test_handle_logging_collected_chunks_inference_profile_arn_falls_back_gracef
             endpoint="/model/some-model/invoke-with-response-stream",
         )
 
-    # With no chunks, the result is None (not an exception).
+        # The decoder must have been called — this proves the fallback resolved
+        # "global.anthropic.claude-opus-4-7" to "anthropic" and did not hit the
+        # early-exit None return that fires when provider resolution fails entirely.
+        mock_decoder.assert_called_once()
+        call_kwargs = mock_decoder.call_args.kwargs
+        assert call_kwargs["invoke_provider"] == "anthropic"
+
+    # With no chunks the assembled response is None, but no exception was raised.
     assert result is None
 
 
