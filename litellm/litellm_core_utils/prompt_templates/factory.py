@@ -5197,6 +5197,26 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             tool_block_list.append(tool)  # type: ignore
             continue
 
+        # Defensive skip: Anthropic hosted-tools (memory_20250818, web_search_*, etc.)
+        # must be forwarded via additionalModelRequestFields.tools in the
+        # Converse transformer. If one slips through to _bedrock_tools_pt the
+        # generic transform below would emit a malformed toolSpec named
+        # `litellm_unnamed_tool_X` with an empty input schema, so we skip it
+        # here to fail safely instead. The Converse transformer is the
+        # canonical separation point.
+        if isinstance(tool, dict):
+            _hosted_prefixes = (
+                "memory",
+                "web_search",
+                "web_fetch",
+                "code_execution",
+            )
+            _hosted_type = tool.get("type")
+            if isinstance(_hosted_type, str) and any(
+                _hosted_type.startswith(p) for p in _hosted_prefixes
+            ):
+                continue
+
         # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
         if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
             parameters = copy.deepcopy(

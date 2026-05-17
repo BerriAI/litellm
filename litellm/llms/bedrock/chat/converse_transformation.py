@@ -33,6 +33,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_HOSTED_TOOLS,
+)
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -82,6 +86,43 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "bash_",
     "text_editor_",
 ]
+
+# Anthropic hosted-tool type prefixes that must be forwarded via
+# `additionalModelRequestFields.tools` on Bedrock Converse instead of
+# being transformed into a Converse `toolSpec`. Bash/TextEditor are
+# already handled by the existing computer-use branch.
+BEDROCK_ANTHROPIC_HOSTED_TOOL_PREFIXES = (
+    ANTHROPIC_HOSTED_TOOLS.MEMORY.value,
+    ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value,
+    ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value,
+    ANTHROPIC_HOSTED_TOOLS.CODE_EXECUTION.value,
+)
+
+# Map from a hosted-tool type-prefix to the beta header that the model
+# requires. AWS Bedrock forwards `additionalModelRequestFields.anthropic_beta`
+# to the underlying Anthropic model.
+BEDROCK_HOSTED_TOOL_BETA_HEADERS = {
+    ANTHROPIC_HOSTED_TOOLS.MEMORY.value: (
+        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+    ),
+    ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value: (
+        ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+    ),
+    ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value: (
+        ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+    ),
+}
+
+
+def _is_anthropic_hosted_tool(tool: dict) -> bool:
+    """Return True iff `tool["type"]` matches an Anthropic hosted-tool prefix."""
+    tool_type = tool.get("type") if isinstance(tool, dict) else None
+    if not isinstance(tool_type, str):
+        return False
+    return any(
+        tool_type.startswith(prefix)
+        for prefix in BEDROCK_ANTHROPIC_HOSTED_TOOL_PREFIXES
+    )
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -1276,6 +1317,7 @@ class AmazonConverseConfig(BaseConfig):
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools = []
         pre_formatted_tools: List[ToolBlock] = []
+        hosted_tools: list = []
         if original_tools:
             for tool in original_tools:
                 # Already-formatted Bedrock tools (e.g. systemTool for Nova grounding)
@@ -1288,6 +1330,13 @@ class AmazonConverseConfig(BaseConfig):
                     "tool_search_tool_bm25_20251119",
                 ):
                     # Tool search not supported in Converse API - skip it
+                    continue
+                # Anthropic hosted tools (memory_20250818, web_search_*, etc.)
+                # must be forwarded via additionalModelRequestFields.tools
+                # rather than the Converse toolConfig.tools structure, which
+                # only supports `toolSpec` blocks.
+                if _is_anthropic_hosted_tool(tool):
+                    hosted_tools.append(tool)
                     continue
                 filtered_tools.append(tool)
 
@@ -1371,6 +1420,22 @@ class AmazonConverseConfig(BaseConfig):
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
+
+        # Forward Anthropic hosted-tools (memory, web_search, etc.) via
+        # additionalModelRequestFields.tools. Merge with any tools already
+        # placed there by the computer-use branch above.
+        if hosted_tools:
+            existing_additional_tools = additional_request_params.get("tools") or []
+            additional_request_params["tools"] = (
+                existing_additional_tools + hosted_tools
+            )
+            for hosted_tool in hosted_tools:
+                hosted_type = hosted_tool.get("type", "")
+                for prefix, beta_header in BEDROCK_HOSTED_TOOL_BETA_HEADERS.items():
+                    if hosted_type.startswith(prefix):
+                        if beta_header not in anthropic_beta_list:
+                            anthropic_beta_list.append(beta_header)
+                        break
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
