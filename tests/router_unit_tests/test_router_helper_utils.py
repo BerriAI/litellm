@@ -1026,6 +1026,9 @@ def test_get_model_group_info_alias_dict_without_hidden_key(model_list):
     )
     assert router3.get_model_group_info(model_group="visible-alias") is not None
 
+    model_list_result = router.get_model_list()
+    assert model_list_result is not None
+
 
 def test_common_checks_available_deployment(model_list):
     """Test if the 'common_checks_available_deployment' function is working correctly"""
