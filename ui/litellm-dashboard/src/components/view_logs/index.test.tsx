@@ -72,7 +72,9 @@ describe("SpendLogsTable", () => {
     renderWithProviders(<SpendLogsTable {...defaultProps} />);
 
     // Open the time range quick select dropdown (button shows current range like "Last 24 Hours")
-    const quickSelectButton = screen.getByRole("button", { name: /Last 24 Hours|Last 15 Minutes|Last Hour|Last 4 Hours|Last 7 Days/i });
+    const quickSelectButton = screen.getByRole("button", {
+      name: /Last 24 Hours|Last 15 Minutes|Last Hour|Last 4 Hours|Last 7 Days/i,
+    });
     await user.click(quickSelectButton);
 
     // Click "Custom Range" to enable custom date selection
@@ -95,6 +97,22 @@ describe("SpendLogsTable", () => {
     await waitFor(() => {
       const inputsAfterReset = document.querySelectorAll('input[type="datetime-local"]');
       expect(inputsAfterReset.length).toBe(0);
+    });
+  });
+
+  describe("auth-not-ready guard", () => {
+    it("shows a loading spinner when credentials are not yet resolved", () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} accessToken={null} />);
+
+      expect(document.querySelector(".ant-spin")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Reset Filters" })).not.toBeInTheDocument();
+    });
+
+    it("renders the table (no spinner) once all credentials are present", () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
     });
   });
 });
