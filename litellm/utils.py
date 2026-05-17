@@ -51,9 +51,6 @@ from tokenizers import Tokenizer
 import litellm
 import litellm.litellm_core_utils
 
-
-from typing import Callable, Any, Tuple, Type
-
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
