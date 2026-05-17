@@ -301,6 +301,15 @@ def test_run_claude_validates_required_params():
             api_key="k",
             runner=runner,
         )
+    with pytest.raises(ValueError, match="stdin_input"):
+        run_claude(
+            prompt=None,
+            stdin_input="",
+            model="m",
+            base_url="http://x",
+            api_key="k",
+            runner=runner,
+        )
     with pytest.raises(ValueError, match="model"):
         run_claude(
             prompt="hi",
