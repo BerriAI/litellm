@@ -485,11 +485,16 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
+        try:
+            request_content = original_error.request.content
+        except httpx.RequestNotRead:
+            request_content = b""
+
         masked_request = httpx.Request(
             method=original_error.request.method,
             url=masked_url,
             headers=original_error.request.headers,
-            content=original_error.request.content,
+            content=request_content,
         )
 
         super().__init__(

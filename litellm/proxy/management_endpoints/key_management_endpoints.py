@@ -13,6 +13,7 @@ import asyncio
 import copy
 import inspect
 import json
+import math
 import os
 import re
 import secrets
@@ -463,6 +464,52 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_routes"})
 
 
+def _validate_caller_can_change_key_ownership(
+    data: Optional[BaseModel],
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Non-admin callers must not rebind a key's ``user_id`` to a different
+    user. The ``user_id`` on a verification token is what
+    ``_return_user_api_key_auth_obj`` resolves against ``litellm_usertable``
+    to derive the request's role; a non-admin rebinding their own key's
+    ``user_id`` to a ``PROXY_ADMIN`` row promotes themselves.
+
+    ``/key/update`` already enforces this inline; ``/key/regenerate`` did
+    not. Sharing the check keeps both endpoints — and any future
+    regenerate-style endpoint — consistent.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if data is None:
+        return
+    # Distinguish "user_id omitted" from "user_id explicitly set to None".
+    # Both leave ``getattr(data, 'user_id', None)`` at None, but only the
+    # explicit-null variant survives ``model_dump(exclude_unset=True)`` in
+    # ``prepare_key_update_data`` and writes NULL to the token row —
+    # detaching the key from its user and bypassing the user-row
+    # role check on subsequent requests.
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    if "user_id" not in fields_set:
+        return
+    incoming_user_id = getattr(data, "user_id", None)
+    if incoming_user_id is None or incoming_user_id == "":
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the user_id from a key.",
+        )
+    existing_user_id = getattr(existing_key_row, "user_id", None)
+    if incoming_user_id != existing_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Non-admin caller is not allowed to rebind the key from "
+                f"user={existing_user_id} to user={incoming_user_id}"
+            ),
+        )
+
+
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
@@ -562,6 +609,11 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
+_BUDGET_NUMERIC_KEYS = frozenset(
+    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"]
+)
+
+
 def _enforce_upperbound_key_params(
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     fill_defaults: bool = True,
@@ -572,6 +624,21 @@ def _enforce_upperbound_key_params(
     For key generation (fill_defaults=True): fills None values with upperbound defaults.
     For key update (fill_defaults=False): only validates explicitly provided values.
     """
+    # Always reject NaN / Inf regardless of whether an upperbound config is set
+    # (GHSA-2rv4-xv66-fpjg): float('nan') passes every `< 0` check because
+    # nan < 0 is False, and spend >= nan is always False, permanently disabling
+    # budget enforcement for any key that carries it.
+    for elem in data:
+        key, value = elem
+        if key in _BUDGET_NUMERIC_KEYS and value is not None:
+            if not math.isfinite(value):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"{key} must be a finite number. Received: {value}"
+                    },
+                )
+
     if litellm.upperbound_key_generate_params is None:
         return
 
@@ -641,6 +708,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
+    # Capture the caller-supplied max_budget before any defaults or upperbound
+    # params can fill it, so the ceiling check only fires when the caller
+    # explicitly requested a budget.
+    _requested_max_budget = data.max_budget
+
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
         for elem in data:
@@ -663,6 +735,25 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
+
+    # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
+    # with an explicit budget cannot grant a key a higher budget than their own.
+    # Callers with max_budget=None (unlimited) can delegate any budget.
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and _requested_max_budget is not None
+        and user_api_key_dict.max_budget is not None
+        and _requested_max_budget > user_api_key_dict.max_budget
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
+                    f"own max_budget ({user_api_key_dict.max_budget})."
+                )
+            },
+        )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1370,19 +1461,24 @@ async def generate_key_fn(
 
         await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
 
-        # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        # Validate budget values are not negative and are finite numbers
+        # (GHSA-2rv4-xv66-fpjg): float('nan') passes `< 0` because nan < 0 is False.
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1834,10 +1930,12 @@ def _validate_max_budget(max_budget: Optional[float]) -> None:
     Raises:
         HTTPException: If max_budget is negative
     """
-    if max_budget is not None and max_budget < 0:
+    if max_budget is not None and (not math.isfinite(max_budget) or max_budget < 0):
         raise HTTPException(
             status_code=400,
-            detail={"error": f"max_budget cannot be negative. Received: {max_budget}"},
+            detail={
+                "error": f"max_budget must be a non-negative finite number. Received: {max_budget}"
+            },
         )
 
 
@@ -2088,23 +2186,11 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
-    if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Non-admin users cannot remove the user_id from a key.",
-        )
-
-    # sanity check - prevent non-proxy admin user from updating key to belong to a different user
-    if (
-        data.user_id is not None
-        and data.user_id != existing_key_row.user_id
-        and not _is_proxy_admin
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"User={data.user_id} is not allowed to update key={data.key} to belong to user={existing_key_row.user_id}",
-        )
+    _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
@@ -2146,23 +2232,32 @@ async def _validate_update_key_data(
     # - max_budget / spend: always require the admin check, even for the
     #   key owner or a team member (matches the existing admin-only
     #   budget semantics).
-    is_key_owner = (
-        user_api_key_dict.user_id is not None
-        and existing_key_row.user_id == user_api_key_dict.user_id
-    )
     _is_budget_change = (
         data.max_budget is not None and data.max_budget != existing_key_row.max_budget
     ) or (
         data.spend is not None
         and data.spend != getattr(existing_key_row, "spend", None)
     )
-    is_team_key = existing_key_row.team_id is not None
-    can_skip_admin_check_for_non_budget = is_key_owner or is_team_key
-    if (
-        (not _is_proxy_admin)
-        and prisma_client is not None
-        and (_is_budget_change or not can_skip_admin_check_for_non_budget)
-    ):
+
+    # Personal-key bypass: the caller both created the key AND still owns it
+    # (user_id == caller).  Checking only created_by would let a demoted admin
+    # who originally created a key for another user continue editing it without
+    # admin authorization after the key was reassigned.
+    caller_is_creator = (
+        user_api_key_dict.user_id is not None
+        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
+        and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
+    )
+    # Team keys: can_team_member_execute_key_management_endpoint (called above)
+    # already validated team membership + /key/update permission and would have
+    # raised if the caller lacked it.  Reaching this point on a team key for a
+    # non-budget change means the caller was authorized — skip the redundant
+    # _check_key_admin_access that would otherwise require team/org admin status.
+    _key_is_team_key = getattr(existing_key_row, "team_id", None) is not None
+    can_skip_admin_check = (
+        caller_is_creator or _key_is_team_key
+    ) and not _is_budget_change
+    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
         hashed_key = existing_key_row.token
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,
@@ -2379,12 +2474,14 @@ async def update_key_fn(  # noqa: PLR0915
     )
 
     try:
-        # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        # Validate budget values are not negative and are finite numbers
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
 
@@ -4152,6 +4249,13 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
 
+    # Mirror the /key/update ownership rebind guard. See helper docstring.
+    _validate_caller_can_change_key_ownership(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
@@ -4328,7 +4432,17 @@ async def regenerate_key_fn(  # noqa: PLR0915
                 allow_safe_presets=True,
             )
 
-        is_master_key_regeneration = data and data.new_master_key is not None
+        # Premium-gate bypass for master-key rotation must verify the
+        # caller actually holds the master key, not just that the request
+        # body has a ``new_master_key`` field. A presence-only check let
+        # any non-premium caller skip the enterprise gate by sending any
+        # value in that field.
+        regenerate_target_key = data.key if data and data.key else key
+        is_master_key_regeneration = (
+            data is not None
+            and data.new_master_key is not None
+            and _is_master_key(api_key=regenerate_target_key, _master_key=master_key)
+        )
 
         if (
             premium_user is not True and not is_master_key_regeneration

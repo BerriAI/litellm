@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    get_request_route_template,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -68,6 +69,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -681,6 +683,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    # Stash the proxy-receive instant for the pre-request latency calc —
+    # the OTel Span API exposes no start-time getter, so propagate it.
+    try:
+        request.state.litellm_received_at = start_time
+    except Exception:
+        pass
     route: str = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False
@@ -721,6 +729,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     start_time=start_time,
                     headers=_safe_get_request_headers(request),
                 )
+            )
+            # `route` is the literal path; template from the matched route.
+            open_telemetry_logger.set_proxy_request_route_attributes(
+                parent_otel_span,
+                url_path=route,
+                http_route=get_request_route_template(request),
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
@@ -1975,6 +1989,16 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+    )
+
+    # Merge x-litellm-tags into request_data BEFORE common_checks runs.
+    # _tag_max_budget_check inside common_checks only inspects request_data;
+    # without this pre-merge, header-supplied tags bypass tag-budget
+    # enforcement.
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        request=request,
+        request_data=request_data,
+        user_api_key_dict=user_api_key_auth_obj,
     )
 
     _ = await common_checks(

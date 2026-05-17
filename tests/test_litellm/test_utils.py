@@ -3002,7 +3002,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
 
 def test_gemini_embedding_2_ga_in_cost_map():
-    """GA gemini-embedding-2 entries align with preview multimodal unit pricing."""
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
     import json
     from pathlib import Path
 
@@ -3013,6 +3013,7 @@ def test_gemini_embedding_2_ga_in_cost_map():
     for key, provider in (
         ("gemini/gemini-embedding-2", "gemini"),
         ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
         ("gemini-embedding-2", "vertex_ai-embedding-models"),
     ):
         info = model_cost.get(key)
