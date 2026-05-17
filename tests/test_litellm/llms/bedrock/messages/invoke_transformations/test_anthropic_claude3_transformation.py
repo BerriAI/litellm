@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
+    normalize_bedrock_invoke_tool_search_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -358,6 +359,114 @@ def test_ensure_bedrock_anthropic_messages_tool_names():
     assert request["tools"][1]["name"] == "litellm_unnamed_tool_1"
     assert request["tools"][2]["name"] == "litellm_unnamed_tool_2"
     assert request["tools"][3]["name"] == "KeepMe"
+
+
+def test_normalize_bedrock_invoke_tool_search_tools():
+    """
+    Bedrock Invoke does not accept Anthropic's dated tool-search server-side tool
+    types. Normalization must:
+
+    - Rewrite ``tool_search_tool_regex_20251119`` to bare ``tool_search_tool_regex``
+      and default ``name`` when missing.
+    - Drop ``tool_search_tool_bm25_20251119`` (Bedrock does not support BM25).
+    - Preserve a custom ``name`` on the regex tool.
+    - Leave every other tool entry untouched.
+
+    Ref: https://github.com/BerriAI/litellm/issues/28083
+    """
+
+    # Mixed payload: BM25 (drop), regex with default name, regex with custom
+    # name, plus a regular function tool that must pass through.
+    request = {
+        "tools": [
+            {"type": "tool_search_tool_bm25_20251119"},
+            {"type": "tool_search_tool_regex_20251119"},
+            {
+                "type": "tool_search_tool_regex_20251119",
+                "name": "my_regex_search",
+            },
+            {
+                "name": "Read",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+    }
+
+    normalize_bedrock_invoke_tool_search_tools(request)
+
+    assert len(request["tools"]) == 3, "BM25 tool should be dropped"
+    assert request["tools"][0]["type"] == "tool_search_tool_regex"
+    assert request["tools"][0]["name"] == "tool_search_tool_regex"
+    assert request["tools"][1]["type"] == "tool_search_tool_regex"
+    assert request["tools"][1]["name"] == "my_regex_search"
+    # Unrelated function tool passes through unchanged.
+    assert request["tools"][2] == {
+        "name": "Read",
+        "input_schema": {"type": "object", "properties": {}},
+    }
+
+    # Empty / missing / non-list ``tools`` values must not raise.
+    empty = {"messages": [{"role": "user", "content": "hi"}]}
+    normalize_bedrock_invoke_tool_search_tools(empty)
+    assert "tools" not in empty
+
+    empty_list = {"tools": []}
+    normalize_bedrock_invoke_tool_search_tools(empty_list)
+    assert empty_list["tools"] == []
+
+    none_tools = {"tools": None}
+    normalize_bedrock_invoke_tool_search_tools(none_tools)
+    assert none_tools["tools"] is None
+
+    # Non-dict tool entries must pass through unchanged (no crash).
+    weird = {"tools": ["not-a-dict", 42]}
+    normalize_bedrock_invoke_tool_search_tools(weird)
+    assert weird["tools"] == ["not-a-dict", 42]
+
+
+def test_bedrock_invoke_messages_transform_normalizes_tool_search_regex():
+    """
+    Regression test for #28083: ``tool_search_tool_regex_20251119`` must be
+    rewritten to bare ``tool_search_tool_regex`` on the ``/v1/messages`` path
+    so Bedrock Invoke's Pydantic tool-type discriminator does not reject the
+    request client-side.
+
+    Before this fix the messages handler called every other tool-normalization
+    helper but skipped tool-search normalization, so any Anthropic tool-search
+    request via ``/v1/messages`` failed with ``Input tag
+    'tool_search_tool_regex_20251119' ... does not match any of the expected
+    tags``. The chat-completions handler already normalized correctly.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "stream": False,
+        "tools": [
+            {"type": "tool_search_tool_regex_20251119"},
+            {"type": "tool_search_tool_bm25_20251119"},
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Search for foo"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    tool_types = [t["type"] for t in result["tools"]]
+    assert "tool_search_tool_regex_20251119" not in tool_types, (
+        "Bedrock Invoke would reject the dated `_20251119` regex type "
+        "client-side; it must be rewritten to bare `tool_search_tool_regex`."
+    )
+    assert (
+        "tool_search_tool_bm25_20251119" not in tool_types
+    ), "Bedrock Invoke does not support the BM25 variant; it must be dropped."
+    assert tool_types == ["tool_search_tool_regex"]
+    assert result["tools"][0]["name"] == "tool_search_tool_regex"
 
 
 def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
@@ -917,9 +1026,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "compact_20260112"}]
-        },
+        "context_management": {"edits": [{"type": "compact_20260112"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -930,9 +1037,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
     assert result["max_tokens"] == 4096
 
@@ -964,9 +1069,7 @@ def test_bedrock_messages_filters_unsupported_context_management_edits():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
 
 
