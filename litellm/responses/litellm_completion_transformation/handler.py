@@ -116,12 +116,7 @@ class LiteLLMCompletionTransformationHandler:
                             fixed_args = "{}"
                             needs_rebuild = True
                             fixed_count += 1
-                            args_preview = (
-                                str(original_args)[:50] if original_args else "None"
-                            )
-                            logger.warning(
-                                f"[DomesticFilter] Fixed invalid JSON arguments, original: {args_preview}"
-                            )
+                            # 安全：不记录 original_args 内容，可能包含敏感信息
                 elif isinstance(args, dict):
                     # dict 类型需要转成 JSON string
                     fixed_args = json.dumps(args)
@@ -396,39 +391,22 @@ class LiteLLMCompletionTransformationHandler:
             actual_model = litellm_params_model
 
         if is_domestic_model_or_endpoint(actual_model, api_base):
-            # DEBUG logger（先定义，后面使用）
+            # DEBUG logger
             logger = logging.getLogger("LiteLLM.DomesticFilter")
 
-            # Codex CLI 特有参数
+            # ========== 必须过滤的参数 ==========
+
+            # Codex CLI 特有参数 - LiteLLM 内部报错
             acompletion_args.pop("client_metadata", None)
-            # OpenAI 扩展参数（国内模型不支持）
-            acompletion_args.pop("reasoning_effort", None)  # reasoning 模式
-            acompletion_args.pop("reasoning", None)  # reasoning 参数 (Codex 0.130.0+)
+
+            # Responses API 专用参数（国内厂商 Chat API 不支持）
             acompletion_args.pop("coding_plan", None)  # Codex coding plan
-            acompletion_args.pop("parallel_tool_calls", None)  # 并行工具调用
-            # 旧格式参数（国内模型只支持 tools/tool_choice，不支持 functions/function_call）
-            acompletion_args.pop("functions", None)  # OpenAI 旧格式
-            acompletion_args.pop("function_call", None)  # OpenAI 旧格式
-            # 其他国内模型可能不支持的参数
-            acompletion_args.pop("stream_options", None)  # stream 选项
-            acompletion_args.pop("modalities", None)  # 多模态参数
-            acompletion_args.pop("prediction", None)  # 预测参数
-            acompletion_args.pop("audio", None)  # 音频参数
-            acompletion_args.pop("store", None)  # 存储参数
-            acompletion_args.pop("include", None)  # 包含参数
-            acompletion_args.pop("prompt_cache_key", None)  # 缓存键
-            # OpenAI 高级参数（国内模型可能不支持）
-            acompletion_args.pop("frequency_penalty", None)  # 频率惩罚
-            acompletion_args.pop("presence_penalty", None)  # 存在惩罚
-            acompletion_args.pop("logprobs", None)  # logprobs
-            acompletion_args.pop("top_logprobs", None)  # top_logprobs
-            acompletion_args.pop("response_format", None)  # 响应格式（如 json_object）
-            acompletion_args.pop("seed", None)  # 随机种子
-            acompletion_args.pop("logit_bias", None)  # logit bias
-            acompletion_args.pop("n", None)  # 返回多个结果
-            acompletion_args.pop("service_tier", None)  # 服务等级
-            # 注意：litellm_* 内部参数必须保留，用于代理会计/spend attribution
-            # 这些参数会被 litellm.completion 正确处理，不会发送给上游 API
+
+            # 旧格式参数（国内模型只支持 tools/tool_choice）
+            acompletion_args.pop("functions", None)
+            acompletion_args.pop("function_call", None)
+
+            # LiteLLM 内部参数（不应发送给上游）
             acompletion_args.pop("shared_session", None)
             acompletion_args.pop("model_info", None)
             acompletion_args.pop("secret_fields", None)
@@ -436,35 +414,32 @@ class LiteLLMCompletionTransformationHandler:
             acompletion_args.pop("use_litellm_proxy", None)
             acompletion_args.pop("merge_reasoning_content_in_choices", None)
             acompletion_args.pop("supports_function_calling", None)
+            acompletion_args.pop("max_retries", None)
+
+            # ========== 厂商忽略的参数（保留过滤，避免无意义传输）==========
+            acompletion_args.pop("stream_options", None)
+            acompletion_args.pop("modalities", None)
+            acompletion_args.pop("prediction", None)
+            acompletion_args.pop("audio", None)
+            acompletion_args.pop("store", None)
+            acompletion_args.pop("include", None)
+            acompletion_args.pop("prompt_cache_key", None)
             acompletion_args.pop("caching", None)
             acompletion_args.pop("extra_body", None)
-            # 注意：custom_llm_provider 必须保留，LiteLLM 需要它识别提供商
-            acompletion_args.pop("max_retries", None)
+
+            # ========== 不过滤的参数（厂商支持或忽略）==========
+            # reasoning_effort - DeepSeek/Xiaomi 支持，其他厂商忽略
+            # parallel_tool_calls - 厂商支持/忽略
+            # frequency_penalty, presence_penalty - 厂商支持
+            # response_format, seed, logprobs 等 - 厂商支持/忽略
+
             # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
             tool_choice = acompletion_args.get("tool_choice")
-            logger.info(f"[DomesticFilter] tool_choice before fix: {tool_choice}")
             if tool_choice == "required":
                 acompletion_args["tool_choice"] = "auto"
                 logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证（脱敏 api_base，只显示域名）
-            # 安全：api_base 可能包含凭证或内部主机名，只显示基础域名
-            safe_api_base = (
-                api_base.split("//")[-1].split("/")[0].split("?")[0]
-                if api_base
-                else "none"
-            )
-            logger.info(
-                f"[DomesticFilter] actual_model={actual_model}, api_base_host={safe_api_base}, "
-                f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
-            )
-            logger.info(
-                f"[DomesticFilter] acompletion_args keys after filter: "
-                f"{list(acompletion_args.keys())}"
-            )
-
-            # 确保所有历史消息中的 tool_calls arguments 是有效 JSON 格式
-            # 国内模型要求 function.arguments 必须是严格 JSON
+            # 确保 tool_calls arguments 是有效 JSON
             messages = acompletion_args.get("messages")
             if messages:
                 acompletion_args["messages"] = (
@@ -472,57 +447,6 @@ class LiteLLMCompletionTransformationHandler:
                         messages
                     )
                 )
-                logger.info(
-                    "[DomesticFilter] Validated tool_calls arguments in messages"
-                )
-
-                # 打印 tools 和 messages 用于调试
-                tools_debug = acompletion_args.get("tools")
-                messages_debug = acompletion_args.get("messages")
-                logger.info(
-                    f"[DomesticFilter] tools count: {len(tools_debug) if tools_debug else 0}"
-                )
-                if tools_debug:
-                    for i, tool in enumerate(tools_debug[:3]):  # 只打印前3个
-                        tool_name = (
-                            tool.get("function", {}).get("name", "unknown")
-                            if isinstance(tool, dict)
-                            else "unknown"
-                        )
-                        logger.info(f"[DomesticFilter] tool[{i}] name: {tool_name}")
-                logger.info(
-                    f"[DomesticFilter] messages count: {len(messages_debug) if messages_debug else 0}"
-                )
-                if messages_debug:
-                    for i, msg in enumerate(messages_debug[:5]):  # 只打印前5条
-                        role = (
-                            msg.get("role", "unknown")
-                            if isinstance(msg, dict)
-                            else "unknown"
-                        )
-                        has_tools = (
-                            "tool_calls" in msg if isinstance(msg, dict) else False
-                        )
-                        logger.info(
-                            f"[DomesticFilter] msg[{i}] role={role}, has_tool_calls={has_tools}"
-                        )
-
-                # 打印第一个有 tool_calls 的消息详情（不含 arguments，安全）
-                for i, msg in enumerate(messages_debug or []):
-                    if isinstance(msg, dict) and msg.get("tool_calls"):
-                        tc = msg.get("tool_calls", [])
-                        if tc and isinstance(tc, list) and len(tc) > 0:
-                            first_tc = tc[0]
-                            func_name = (
-                                first_tc.get("function", {}).get("name", "unknown")
-                                if isinstance(first_tc, dict)
-                                else "unknown"
-                            )
-                            # 安全：不打印 arguments，可能包含敏感内容
-                            logger.info(
-                                f"[DomesticFilter] First tool_call msg[{i}] function={func_name}"
-                            )
-                            break
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
