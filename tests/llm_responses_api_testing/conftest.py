@@ -13,8 +13,9 @@ sys.path.insert(
 
 import litellm  # noqa: E402
 
-from tests._vcr_conftest_common import (  # noqa: E402
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,

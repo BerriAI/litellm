@@ -185,6 +185,14 @@ def pin_httpx_multipart_boundary(monkeypatch) -> None:
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _pin_multipart_boundary():
+    monkeypatch = pytest.MonkeyPatch()
+    pin_httpx_multipart_boundary(monkeypatch)
+    yield
+    monkeypatch.undo()
+
+
 def _scrub_response(response):
     if not isinstance(response, dict):
         return response
