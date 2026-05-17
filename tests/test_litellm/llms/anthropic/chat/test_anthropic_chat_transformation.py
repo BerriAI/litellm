@@ -3717,6 +3717,20 @@ def test_map_tool_helper_responses_custom_tool_without_function_schema():
     assert result["input_schema"].get("properties") == {}
 
 
+def test_map_tool_helper_responses_namespace_tool_is_skipped():
+    """
+    OpenAI Responses clients may include namespace declarations for tool groups.
+    Anthropic does not accept them as executable tools, so LiteLLM should skip
+    them instead of failing the entire request.
+    """
+    config = AnthropicConfig()
+    tool = {"type": "namespace", "name": "tools"}
+
+    result, mcp_server = config._map_tool_helper(tool)  # type: ignore[arg-type]
+    assert result is None
+    assert mcp_server is None
+
+
 def test_extract_response_content_thinking_block_null_thinking():
     """
     Test that thinking blocks are not dropped when the 'thinking' field is null
