@@ -172,6 +172,7 @@ _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
+    usage_object: Optional[Usage] = None,
     response_time_ms: Optional[float] = 0.0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
@@ -182,7 +183,36 @@ def _cost_per_token_custom_pricing_helper(
         return None
 
     if custom_cost_per_token is not None:
-        input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
+        input_cost_per_token = custom_cost_per_token["input_cost_per_token"]
+        custom_cost_map = cast(dict[str, float], custom_cost_per_token)
+        cache_read_input_token_cost = custom_cost_map.get(
+            "cache_read_input_token_cost", input_cost_per_token
+        )
+        cache_creation_input_token_cost = custom_cost_map.get(
+            "cache_creation_input_token_cost", input_cost_per_token
+        )
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
+        if usage_object is not None:
+            if usage_object.prompt_tokens_details is not None:
+                prompt_tokens_details = _parse_prompt_tokens_details(usage_object)
+                cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
+                cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
+            cache_read_tokens = cache_read_tokens or (
+                getattr(usage_object, "cache_read_input_tokens", None) or 0
+            )
+            cache_creation_tokens = cache_creation_tokens or (
+                getattr(usage_object, "cache_creation_input_tokens", None) or 0
+            )
+
+        uncached_prompt_tokens = max(
+            0, prompt_tokens - cache_read_tokens - cache_creation_tokens
+        )
+        input_cost = (
+            uncached_prompt_tokens * input_cost_per_token
+            + cache_read_tokens * cache_read_input_token_cost
+            + cache_creation_tokens * cache_creation_input_token_cost
+        )
         output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
@@ -326,6 +356,7 @@ def cost_per_token(  # noqa: PLR0915
     response_cost = _cost_per_token_custom_pricing_helper(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        usage_object=usage_block,
         response_time_ms=response_time_ms,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
