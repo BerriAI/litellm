@@ -57,6 +57,30 @@ def vcr_diag_write_line(msg: str) -> None:
         pass
 
 
+def reset_vcr_diag_dir() -> None:
+    """Delete any leftover per-PID diagnostic logs from a previous session.
+
+    No-op when running on an xdist worker -- the controller does the
+    cleanup once and the workers inherit the (now-empty) directory.
+    Safe to call from any conftest's ``pytest_configure``.
+    """
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    directory = _vcr_diag_dir()
+    if not os.path.isdir(directory):
+        return
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if name.endswith(".log"):
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
+
+
 def emit_vcr_diagnostic_log(terminalreporter) -> None:
     directory = _vcr_diag_dir()
     if not os.path.isdir(directory):
