@@ -15,6 +15,7 @@ from tests._vcr_conftest_common import (  # noqa: E402
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
     install_live_call_probe,
+    pin_httpx_multipart_boundary,
     record_vcr_outcome,
     register_persister_if_enabled,
     vcr_config_dict,
@@ -31,6 +32,23 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pin_multipart_boundary():
+    """Pin httpx's random multipart boundary to a constant for the
+    entire image-gen test session. Without this, async multipart bodies
+    contain a fresh ``boundary=<random hex>`` on every run; the
+    ``safe_body`` matcher misses, and ``record_mode="new_episodes"``
+    grows each cassette by one entry per run until it crosses the
+    50-episode persister cap and stops being saved — leaving the test
+    to hit the real provider on every CI run. See
+    ``pin_httpx_multipart_boundary`` for the full rationale.
+    """
+    monkeypatch = pytest.MonkeyPatch()
+    pin_httpx_multipart_boundary(monkeypatch)
+    yield
+    monkeypatch.undo()
 
 
 @pytest.fixture(scope="module")

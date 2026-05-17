@@ -91,6 +91,55 @@ VCR_IMAGE_B64_PLACEHOLDER = "dGVzdA=="
 VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
 
 
+def pin_httpx_multipart_boundary(monkeypatch) -> None:
+    """Force every httpx multipart request to use a constant boundary.
+
+    httpx's ``MultipartStream`` generates a fresh ``boundary=<random hex>``
+    via ``os.urandom(16)`` whenever the caller does not supply one
+    (see ``httpx._multipart.MultipartStream.__init__``). That random
+    boundary appears both in the ``Content-Type`` header and verbatim in
+    the request body between each part.
+
+    ``_normalize_multipart_boundary`` rewrites the header reliably, but
+    on the async transport path the body is not always handed to
+    ``before_record_request`` as a contiguous ``bytes`` object — so the
+    body replacement silently no-ops and the recorded cassette retains
+    the random boundary string. Subsequent runs generate a *different*
+    random boundary, the ``safe_body`` matcher misses, and
+    ``record_mode="new_episodes"`` appends a fresh episode until the
+    cassette crosses ``MAX_EPISODES_PER_CASSETTE`` and the persister
+    refuses to save — re-billing live providers on every CI run.
+
+    Pinning the boundary at the source removes the variance entirely:
+    every run emits byte-identical multipart bodies, the existing
+    ``safe_body`` matcher succeeds on the first request, and one
+    recorded episode per unique call satisfies replays for the cassette
+    TTL.
+
+    This wraps ``MultipartStream.__init__`` instead of patching the
+    boundary-generation helper directly because httpx inlines
+    ``os.urandom(16).hex().encode("ascii")`` in the constructor body
+    rather than calling a named function. We preserve the caller's
+    boundary when one is explicitly supplied so production-style code
+    that pins its own boundary keeps working.
+    """
+    try:
+        import httpx._multipart as _httpx_multipart
+    except ImportError:  # pragma: no cover - httpx is a hard test dep
+        return
+
+    _original_init = _httpx_multipart.MultipartStream.__init__
+
+    def _init_with_fixed_boundary(self, data, files, boundary=None):
+        if boundary is None:
+            boundary = VCR_FIXED_MULTIPART_BOUNDARY.encode("ascii")
+        return _original_init(self, data=data, files=files, boundary=boundary)
+
+    monkeypatch.setattr(
+        _httpx_multipart.MultipartStream, "__init__", _init_with_fixed_boundary
+    )
+
+
 def _scrub_response(response):
     if not isinstance(response, dict):
         return response

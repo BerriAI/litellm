@@ -103,12 +103,16 @@ class BaseLLMImageEditTest(ABC):
 pwd = os.path.dirname(os.path.realpath(__file__))
 
 
-# Image fixtures must be regenerated per access — module-level
-# ``open(...)`` handles get consumed after a single multipart upload, leaving
-# subsequent tests in the same process to send empty bodies. That non-determinism
-# (a) blows the recorded cassette past ``MAX_EPISODES_PER_CASSETTE`` so the
-# persister refuses to save (see ``tests/_vcr_redis_persister.py``), and
-# (b) re-bills the live image edit endpoint on every CI run.
+# Image fixtures are returned as raw ``bytes`` (not file handles or
+# ``BytesIO`` streams) so that every SDK / Router retry sees the same
+# payload. A ``BytesIO`` whose file pointer is left at EOF by the first
+# multipart upload silently encodes an empty image on the second
+# attempt, producing a different request body — VCR records that
+# divergent body as a fresh episode, the cassette eventually crosses
+# ``MAX_EPISODES_PER_CASSETTE`` in ``tests/_vcr_redis_persister.py``,
+# the persister refuses to save, and every subsequent CI run re-bills
+# the live image-edit endpoint. Raw bytes are immutable, position-less,
+# and re-encoded identically on every retry attempt.
 def _read_image_bytes(filename: str) -> bytes:
     with open(os.path.join(pwd, filename), "rb") as f:
         return f.read()
@@ -119,30 +123,34 @@ _LITELLM_SITE_BYTES = _read_image_bytes("litellm_site.png")
 
 
 def _make_test_images() -> list:
-    """Return a fresh pair of image streams seeded with the fixture bytes.
+    """Return the pair of fixture images as raw ``bytes`` payloads.
 
-    Use this everywhere you'd previously have used the module-level
-    ``TEST_IMAGES``. Each call returns brand new ``BytesIO`` objects whose
-    file pointers start at 0, so multipart uploads encode the full image
-    bytes on every test invocation. Parametrized and ``flaky``-retried
-    test methods call ``get_base_image_edit_call_args`` once per
-    invocation, so a fresh stream per call is sufficient — the factory
-    must not auto-rewind on EOF or the SDK's multipart writer will read
-    the same bytes forever (worker OOM).
+    ``httpx`` accepts a ``bytes`` value anywhere a file-like upload is
+    expected and re-encodes it identically on every multipart attempt
+    — so SDK-level retries can never produce a divergent empty-body
+    episode (the root cause of the cassette-overflow leak that bills
+    ``gpt-image-1`` on every CI run).
+    """
+    return [_ISHAAN_GITHUB_BYTES, _LITELLM_SITE_BYTES]
+
+
+def _make_single_test_image() -> bytes:
+    return _ISHAAN_GITHUB_BYTES
+
+
+def get_test_images_as_bytesio():
+    """Return the fixture images as fresh ``BytesIO`` streams.
+
+    Kept distinct from ``_make_test_images`` so the BytesIO-specific
+    smoke tests (``test_openai_image_edit_with_bytesio``,
+    ``test_multiple_image_edit_with_different_formats``) still exercise
+    the file-like upload path. Each call yields brand new streams so
+    the file pointer always starts at 0 for that test invocation.
     """
     return [
         BytesIO(_ISHAAN_GITHUB_BYTES),
         BytesIO(_LITELLM_SITE_BYTES),
     ]
-
-
-def _make_single_test_image() -> BytesIO:
-    return BytesIO(_ISHAAN_GITHUB_BYTES)
-
-
-def get_test_images_as_bytesio():
-    """Helper function to get test images as BytesIO objects"""
-    return _make_test_images()
 
 
 class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
@@ -710,9 +718,9 @@ async def test_multiple_image_edit_with_different_formats():
     try:
         prompt = "Create a cohesive artistic style across all images"
 
-        # Test with mixed BytesIO and file objects
+        # Test with mixed raw-bytes and BytesIO inputs
         mixed_images = [
-            _make_single_test_image(),  # File object
+            _make_single_test_image(),  # raw ``bytes`` payload
             get_test_images_as_bytesio()[1],  # BytesIO object
         ]
 
