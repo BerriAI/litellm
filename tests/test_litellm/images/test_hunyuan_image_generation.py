@@ -6,11 +6,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from litellm.llms.hunyuan.image_generation import (
+    HunyuanImageGeneration,
     HunyuanImageGenerationConfig,
     get_hunyuan_image_generation_config,
+    hunyuan_image_generation,
 )
 from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+# ---------------------------------------------------------------------------
+# HunyuanImageGenerationConfig (transformation only)
+# ---------------------------------------------------------------------------
 
 
 class TestHunyuanImageGenerationConfig:
@@ -34,6 +41,17 @@ class TestHunyuanImageGenerationConfig:
         )
         assert headers["Authorization"] == "sk-test-123"
         assert headers["Content-Type"] == "application/json"
+
+    def test_validate_environment_explicit_key(self):
+        headers = self.cfg.validate_environment(
+            headers={},
+            model="gpt-image-2",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-explicit",
+        )
+        assert headers["Authorization"] == "sk-explicit"
 
     def test_validate_environment_missing_key(self):
         env_backup = os.environ.pop("HUNYUAN_API_KEY", None)
@@ -94,44 +112,34 @@ class TestHunyuanImageGenerationConfig:
         assert body["size"] == "1024x1024"
         assert "response_format" not in body
 
-    def test_transform_image_generation_response_success(self):
-        class MockRequest:
-            headers = {"Authorization": "sk-test", "Content-Type": "application/json"}
+    def test_transform_image_generation_response_pure_conversion(self):
+        """transform_image_generation_response is now a pure format conversion."""
 
-        class MockSubmitResponse:
-            request = MockRequest()
+        class MockFinalResponse:
             status_code = 200
             headers = {}
 
             def json(self):
-                return {"request_id": "abc", "job_id": "12345"}
-
-            def raise_for_status(self):
-                pass
-
-        def mock_poll(job_id, query_url, headers, timeout_secs=600):
-            assert job_id == "12345"
-            return {
-                "status": "DONE",
-                "data": [{"url": "https://example.com/img.png"}],
-            }
-
-        self.cfg._poll_task_sync = mock_poll
+                return {
+                    "status": "DONE",
+                    "data": [{"url": "https://example.com/img.png"}],
+                }
 
         model_response = ImageResponse()
         model_response.data = []
         result = self.cfg.transform_image_generation_response(
             model="gpt-image-2",
-            raw_response=MockSubmitResponse(),
+            raw_response=MockFinalResponse(),
             model_response=model_response,
             logging_obj=MagicMock(),
             request_data={},
             optional_params={},
-            litellm_params={"api_base": None},
+            litellm_params={},
             encoding=None,
         )
         assert len(result.data) == 1
         assert result.data[0].url == "https://example.com/img.png"
+        assert result.created is not None
 
     def test_check_task_status_done(self):
         assert self.cfg._check_task_status({"status": "DONE"}) == "done"
@@ -144,9 +152,173 @@ class TestHunyuanImageGenerationConfig:
         with pytest.raises(ValueError, match="failed"):
             self.cfg._check_task_status({"status": "FAIL", "message": "error"})
 
-    def test_build_query_url(self):
-        url = self.cfg._build_query_url("https://api.cloudai.tencent.com")
-        assert url == "https://api.cloudai.tencent.com/v1/aiart/openai/image/query"
+
+# ---------------------------------------------------------------------------
+# HunyuanImageGeneration handler
+# ---------------------------------------------------------------------------
+
+
+class TestHunyuanImageGenerationHandler:
+    def setup_method(self):
+        self.handler = HunyuanImageGeneration()
+
+    def test_extract_poll_context(self):
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"request_id": "abc", "job_id": "j-123"}
+
+        job_id, poll_headers, query_url = self.handler._extract_poll_context(
+            MockSubmitResponse(),
+            api_key="sk-test",
+            litellm_params={"api_base": None},
+        )
+        assert job_id == "j-123"
+        assert poll_headers["Authorization"] == "sk-test"
+        assert "Content-Type" in poll_headers
+        assert "v1/aiart/openai/image/query" in query_url
+
+    def test_extract_poll_context_custom_base(self):
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"job_id": "j-456"}
+
+        _, _, query_url = self.handler._extract_poll_context(
+            MockSubmitResponse(),
+            api_key="sk-x",
+            litellm_params={"api_base": "https://custom.example.com"},
+        )
+        assert query_url.startswith("https://custom.example.com")
+
+    def test_extract_poll_context_missing_job_id(self):
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"request_id": "abc"}
+
+        with pytest.raises(ValueError, match="missing job_id"):
+            self.handler._extract_poll_context(
+                MockSubmitResponse(),
+                api_key="sk-test",
+                litellm_params={},
+            )
+
+    def test_poll_for_result_sync_success(self):
+        from unittest.mock import MagicMock
+
+        class MockDoneResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {
+                    "status": "DONE",
+                    "data": [{"url": "https://example.com/img.png"}],
+                }
+
+            def raise_for_status(self):
+                pass
+
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"job_id": "j-abc"}
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = MockDoneResponse()
+
+        result = self.handler._poll_for_result_sync(
+            submit_response=MockSubmitResponse(),
+            api_key="sk-test",
+            litellm_params={},
+            sync_client=mock_client,
+        )
+        assert result.json()["status"] == "DONE"
+        mock_client.post.assert_called_once()
+
+    def test_poll_for_result_sync_timeout(self):
+        import time
+
+        from unittest.mock import MagicMock
+
+        class MockRunningResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"status": "RUN"}
+
+            def raise_for_status(self):
+                pass
+
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"job_id": "j-timeout"}
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = MockRunningResponse()
+
+        with pytest.raises(TimeoutError, match="timed out"):
+            self.handler._poll_for_result_sync(
+                submit_response=MockSubmitResponse(),
+                api_key="sk-test",
+                litellm_params={},
+                sync_client=mock_client,
+                max_wait=0.05,
+                interval=0.01,
+            )
+
+    def test_poll_for_result_sync_fail_status(self):
+        from unittest.mock import MagicMock
+
+        class MockFailResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"status": "FAIL", "message": "generation failed"}
+
+            def raise_for_status(self):
+                pass
+
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"job_id": "j-fail"}
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = MockFailResponse()
+
+        with pytest.raises(ValueError, match="generation failed"):
+            self.handler._poll_for_result_sync(
+                submit_response=MockSubmitResponse(),
+                api_key="sk-test",
+                litellm_params={},
+                sync_client=mock_client,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Singleton & ProviderConfigManager
+# ---------------------------------------------------------------------------
+
+
+def test_hunyuan_image_generation_singleton():
+    assert isinstance(hunyuan_image_generation, HunyuanImageGeneration)
 
 
 def test_provider_config_manager_returns_hunyuan_config():
