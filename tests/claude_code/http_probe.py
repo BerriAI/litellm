@@ -32,6 +32,12 @@ from typing import Any, Mapping, Optional
 
 import httpx
 
+from tests.claude_code.rate_limiter import (
+    RateLimiter,
+    get_default_limiter,
+    infer_provider,
+)
+
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
@@ -60,6 +66,7 @@ def probe_count_tokens(
     model: str,
     message: str = "hello world",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    rate_limiter: Optional[RateLimiter] = None,
 ) -> ProbeResult:
     """POST to `{base_url}/v1/messages/count_tokens` for `model` and return the parsed result.
 
@@ -68,7 +75,18 @@ def probe_count_tokens(
     returns `{"input_tokens": N}` for a successful response. Anything
     else -- non-200 status, non-JSON body, missing/non-int
     `input_tokens` -- is a regression we want the cell to flip red on.
+
+    The same cross-process token-bucket limiter `cli_driver.run_claude`
+    uses is acquired here too, so probe rows count against the
+    aggregate per-provider budget. Without this, an HTTP-probe row
+    would fire unthrottled requests in parallel with throttled CLI
+    rows and silently violate the limiter's aggregate-rate guarantee.
+    `rate_limiter` is an injection seam for unit tests; production
+    callers should leave it unset to use the process-wide default.
     """
+    limiter = rate_limiter if rate_limiter is not None else get_default_limiter()
+    limiter.acquire(infer_provider(model))
+
     url = base_url.rstrip("/") + "/v1/messages/count_tokens"
     try:
         response = httpx.post(
@@ -107,6 +125,7 @@ def probe_tool_search(
     api_key: str,
     model: str,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    rate_limiter: Optional[RateLimiter] = None,
 ) -> ProbeResult:
     """POST to `{base_url}/v1/messages` with a `tool_search_tool_regex_20251119`
     tool definition and return the result.
@@ -127,7 +146,15 @@ def probe_tool_search(
     response, not to test whether the model decided to invoke
     tool_search. That kind of behavior test would couple this row to
     Claude Code's model behavior heuristics, which change weekly.
+
+    Like `probe_count_tokens`, this acquires one token from the
+    process-wide rate limiter so probe traffic counts against the
+    same aggregate per-provider budget as the CLI rows. `rate_limiter`
+    is a test seam; production callers should leave it unset.
     """
+    limiter = rate_limiter if rate_limiter is not None else get_default_limiter()
+    limiter.acquire(infer_provider(model))
+
     url = base_url.rstrip("/") + "/v1/messages"
     payload = {
         "model": model,
