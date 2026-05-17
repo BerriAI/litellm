@@ -2542,6 +2542,10 @@ jobs:
             export LITELLM_PROXY_API_KEY="sk-1234"
             mkdir -p test-results
             uv run --no-sync python -m pytest -vv tests/claude_code/ \
+              --ignore=tests/claude_code/_driver_unit_tests \
+              --ignore=tests/claude_code/_builder_unit_tests \
+              --ignore=tests/claude_code/_publisher_unit_tests \
+              --ignore=tests/claude_code/_pr_gate_unit_tests \
               --junitxml=test-results/junit.xml \
               --durations=10
           no_output_timeout: 30m

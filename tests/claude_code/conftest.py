@@ -450,6 +450,7 @@ def pytest_sessionstart(session):
        the controller while it's wiping the directory.
     """
     _COLLECTOR.items.clear()
+    _manifest_feature_ids.cache_clear()
 
     if _is_xdist_worker(session):
         return
