@@ -241,6 +241,16 @@ def pytest_runtest_makereport(item, call):
     elif report.when != "call":
         return
 
+    # A skipped test (e.g. `pytest.skip(...)` called inside the body or
+    # by a `pytest.mark.skipif` evaluated at call time) is neither a
+    # pass nor a fail — it just didn't run. Recording it as anything
+    # here would produce a spurious row (the not-failed/empty-collected
+    # branch below would mark it as a fail with "test passed without
+    # reporting via compat_result"), so bail out and let the cell stay
+    # "not_tested" in the published matrix.
+    if report.skipped:
+        return
+
     inferred = _infer_feature_and_provider(Path(str(item.path)))
     if inferred is None:
         return

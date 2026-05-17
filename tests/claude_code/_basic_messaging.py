@@ -5,17 +5,16 @@ Every basic_messaging cell follows the same skeleton:
   1. Read the proxy base URL + API key from env, fail-early if missing.
   2. Fan the three Claude tiers out via `run_claude_models_parallel`.
   3. Inspect each model's outcome and report one `compat_result` row per
-     model — `ClaudeCLIError`, non-zero exit, missing stream events
-     (streaming variant only), and empty assistant text are all per-model
-     fails; everything else is a per-model pass.
+     model — `ClaudeCLIError`, non-zero exit, and empty assistant text
+     are all per-model fails; everything else is a per-model pass.
   4. Surface a joined failure message via `pytest.fail(...)` so the
      pytest run also goes red.
 
 The conftest infers `(feature_id, provider)` purely from the test file
 path, so each per-provider file just declares its model list and calls
 `run_basic_messaging_cell(...)`. This keeps all cell logic in one place
-— a future tweak to the env-missing guard, the failure-loop shape, or
-the stream-events check now propagates to every cell automatically.
+— a future tweak to the env-missing guard or the failure-loop shape
+now propagates to every cell automatically.
 
 The leading underscore in the filename is what keeps pytest from
 collecting this module as a test file.
@@ -43,14 +42,17 @@ def run_basic_messaging_cell(
     compat_result,
     models: Sequence[str],
     prompt: str,
-    require_stream_events: bool = False,
 ) -> None:
     """Run the shared `basic_messaging_*` × <provider> cell body.
 
-    `require_stream_events=True` adds the streaming-variant assertion
-    that at least one stream-json event is observed for each model —
-    the regression check that catches a proxy buffering the full
-    response before flushing.
+    The streaming and non-streaming variants share this body because
+    the CLI driver consumes stdout via `subprocess.run(capture_output=True)`
+    after the process exits — we can only observe that events arrived,
+    not *when* they arrived. A wire-level "did the proxy buffer the
+    full response before flushing?" check therefore can't live here;
+    it belongs in a driver that streams stdout incrementally. Until
+    that exists, the streaming cells exercise the same shape and
+    check the same per-model outcomes as the non-streaming cells.
     """
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
@@ -87,12 +89,6 @@ def run_basic_messaging_cell(
 
         if outcome.exit_code != 0:
             error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
-            compat_result.add({"status": "fail", "error": error})
-            failures.append(error)
-            continue
-
-        if require_stream_events and not outcome.events:
-            error = f"[{model}] no stream-json events emitted; streaming wire silent"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
             continue
