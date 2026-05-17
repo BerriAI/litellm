@@ -43,7 +43,9 @@ class TestEnsureToolCallsValidJsonArguments(unittest.TestCase):
             }
         ]
         result = self.handler._ensure_all_tool_calls_have_valid_json_arguments(messages)
-        self.assertEqual(result[0]["tool_calls"][0]["function"]["arguments"], '{"key": "value"}')
+        self.assertEqual(
+            result[0]["tool_calls"][0]["function"]["arguments"], '{"key": "value"}'
+        )
 
     def test_empty_arguments(self):
         """Test that empty arguments are converted to '{}'."""
@@ -128,7 +130,10 @@ class TestEnsureToolCallsValidJsonArguments(unittest.TestCase):
         ]
         result = self.handler._ensure_all_tool_calls_have_valid_json_arguments(messages)
         # dict should be converted to JSON string
-        self.assertEqual(result[0]["tool_calls"][0]["function"]["arguments"], '{"key": "value", "number": 42}')
+        self.assertEqual(
+            result[0]["tool_calls"][0]["function"]["arguments"],
+            '{"key": "value", "number": 42}',
+        )
 
     def test_whitespace_arguments(self):
         """Test that whitespace-only arguments are converted to '{}'."""
@@ -206,7 +211,9 @@ class TestEnsureToolCallsValidJsonArguments(unittest.TestCase):
         ]
         result = self.handler._ensure_all_tool_calls_have_valid_json_arguments(messages)
         # First should be preserved (valid)
-        self.assertEqual(result[0]["tool_calls"][0]["function"]["arguments"], '{"valid": true}')
+        self.assertEqual(
+            result[0]["tool_calls"][0]["function"]["arguments"], '{"valid": true}'
+        )
         # Second should be fixed (invalid -> {})
         self.assertEqual(result[0]["tool_calls"][1]["function"]["arguments"], "{}")
         # Third should be fixed (None -> {})
@@ -219,15 +226,13 @@ class TestEnsureToolCallsValidJsonArguments(unittest.TestCase):
 
     def test_complex_valid_json(self):
         """Test that complex valid JSON is preserved."""
-        complex_json = json.dumps({
-            "nested": {
-                "deep": {
-                    "value": [1, 2, 3]
-                }
-            },
-            "string": "with \"escaped\" quotes",
-            "number": 123.456
-        })
+        complex_json = json.dumps(
+            {
+                "nested": {"deep": {"value": [1, 2, 3]}},
+                "string": 'with "escaped" quotes',
+                "number": 123.456,
+            }
+        )
         messages = [
             {
                 "role": "assistant",
@@ -245,7 +250,9 @@ class TestEnsureToolCallsValidJsonArguments(unittest.TestCase):
             }
         ]
         result = self.handler._ensure_all_tool_calls_have_valid_json_arguments(messages)
-        self.assertEqual(result[0]["tool_calls"][0]["function"]["arguments"], complex_json)
+        self.assertEqual(
+            result[0]["tool_calls"][0]["function"]["arguments"], complex_json
+        )
 
 
 if __name__ == "__main__":

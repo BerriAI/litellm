@@ -142,25 +142,37 @@ class TestIsDomesticModelOrEndpoint(unittest.TestCase):
 
     def test_domestic_model_non_domestic_endpoint(self):
         """Test domestic model with non-domestic endpoint."""
-        self.assertTrue(is_domestic_model_or_endpoint("qwen3.5-plus", "https://api.openai.com/v1"))
+        self.assertTrue(
+            is_domestic_model_or_endpoint("qwen3.5-plus", "https://api.openai.com/v1")
+        )
 
     def test_non_domestic_model_domestic_endpoint(self):
         """Test non-domestic model with domestic endpoint."""
-        self.assertTrue(is_domestic_model_or_endpoint("gpt-4", "https://dashscope.aliyuncs.com/v1"))
+        self.assertTrue(
+            is_domestic_model_or_endpoint("gpt-4", "https://dashscope.aliyuncs.com/v1")
+        )
 
     def test_both_domestic(self):
         """Test both model and endpoint are domestic."""
-        self.assertTrue(is_domestic_model_or_endpoint("deepseek-coder", "https://api.deepseek.com/v1"))
+        self.assertTrue(
+            is_domestic_model_or_endpoint(
+                "deepseek-coder", "https://api.deepseek.com/v1"
+            )
+        )
 
     def test_both_non_domestic(self):
         """Test both model and endpoint are non-domestic."""
-        self.assertFalse(is_domestic_model_or_endpoint("gpt-4", "https://api.openai.com/v1"))
+        self.assertFalse(
+            is_domestic_model_or_endpoint("gpt-4", "https://api.openai.com/v1")
+        )
 
     def test_none_values(self):
         """Test None values."""
         self.assertFalse(is_domestic_model_or_endpoint(None, None))
         self.assertTrue(is_domestic_model_or_endpoint("minimax", None))
-        self.assertFalse(is_domestic_model_or_endpoint(None, "https://api.openai.com/v1"))
+        self.assertFalse(
+            is_domestic_model_or_endpoint(None, "https://api.openai.com/v1")
+        )
 
     def test_empty_values(self):
         """Test empty values."""
