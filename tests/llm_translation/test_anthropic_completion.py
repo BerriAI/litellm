@@ -1924,3 +1924,101 @@ def test_anthropic_streaming_completion_replay():
     assert chunk_count > 1, "expected multiple SSE chunks from streaming response"
     assert collected_text.strip(), collected_text
     assert finish_reason in {"stop", "length"}
+
+
+def test_adaptive_thinking_model_response_format_fallback_no_forced_tool_choice(
+    monkeypatch,
+):
+    """Adaptive-thinking models must not get a forced ``tool_choice`` when
+    response_format falls back to the synthetic-tool path.
+
+    ``thinking.type == "adaptive"`` is not matched by ``is_thinking_enabled``
+    (which only recognises ``"enabled"`` or ``reasoning_effort``), so the
+    ``if not is_thinking_enabled`` guard around the synthetic
+    ``RESPONSE_FORMAT_TOOL_NAME`` tool_choice would fire and pin the model to
+    that tool. Anthropic / Bedrock then reject the request with
+    "Thinking may not be enabled when tool_choice forces tool use".
+
+    We construct a model name outside the response-format whitelist so the
+    fallback branch is reached, and force ``_is_adaptive_thinking_model`` to
+    True via monkeypatch so the test does not depend on which models the
+    model_cost map happens to flag as adaptive.
+
+    See vercel/ai#14773 for the parallel symptom in another SDK.
+    """
+    config = litellm.AnthropicConfig()
+    monkeypatch.setattr(
+        litellm.AnthropicConfig,
+        "_is_adaptive_thinking_model",
+        staticmethod(lambda model: True),
+    )
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "integer"}},
+                        "required": ["answer"],
+                    },
+                    "name": "out",
+                },
+            },
+        },
+        optional_params={},
+        # Deliberately outside the hardcoded response_format whitelist so the
+        # synthetic-tool fallback branch is exercised.
+        model="some-future-adaptive-model",
+        drop_params=False,
+    )
+
+    assert "tool_choice" not in mapped, (
+        "Adaptive-thinking models must not have a forced tool_choice "
+        "synthesised on the response_format fallback path; got: "
+        f"{mapped.get('tool_choice')!r}"
+    )
+    # The tool itself is still added so the model can still emit JSON via
+    # the synthetic tool when it chooses to — only the *forcing* is removed.
+    assert mapped.get("json_mode") is True
+    assert any(
+        t.get("name") == "json_tool_call" for t in mapped.get("tools", [])
+    ), f"expected synthetic json_tool_call tool to be present, got tools={mapped.get('tools')}"
+
+
+def test_non_adaptive_model_response_format_fallback_still_forces_tool_choice():
+    """Regression guard: non-adaptive, non-thinking models keep the existing
+    forced ``tool_choice`` behaviour on the response_format fallback path.
+
+    This test exists to make sure the adaptive-thinking carve-out added in
+    the same change does not silently widen and stop forcing tool_choice
+    for the original (non-thinking) callers, which depend on it to make
+    the model actually invoke the synthetic JSON tool.
+    """
+    mapped = litellm.AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "integer"}},
+                        "required": ["answer"],
+                    },
+                    "name": "out",
+                },
+            },
+        },
+        optional_params={},
+        # claude-3-5-sonnet is not in the response_format output_format
+        # whitelist and is not flagged as adaptive in the model_cost map,
+        # so the fallback branch runs with the original behaviour.
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    assert mapped.get("tool_choice") == {
+        "name": "json_tool_call",
+        "type": "tool",
+    }, f"expected forced json_tool_call tool_choice, got {mapped.get('tool_choice')!r}"

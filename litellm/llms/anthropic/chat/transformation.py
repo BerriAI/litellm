@@ -1486,7 +1486,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     )
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled:
+                    # Adaptive thinking models (Claude 4.7+) use
+                    # ``thinking.type == "adaptive"`` rather than
+                    # ``"enabled"``, so ``is_thinking_enabled`` (which only
+                    # matches ``"enabled"`` / ``reasoning_effort``) reports
+                    # False. Without this extra check we set a forced
+                    # ``tool_choice`` while ``thinking: adaptive`` is still on
+                    # the wire body, and Anthropic / Bedrock reject the
+                    # request with "Thinking may not be enabled when
+                    # tool_choice forces tool use".
+                    is_adaptive_thinking = self._is_adaptive_thinking_model(
+                        model
+                    )
+                    if not is_thinking_enabled and not is_adaptive_thinking:
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
                             "type": "tool",
