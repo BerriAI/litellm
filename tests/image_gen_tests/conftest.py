@@ -11,9 +11,11 @@ import litellm  # noqa: E402,F401
 
 from tests._vcr_conftest_common import (  # noqa: E402
     VerboseReporterState,
+    _vcr_diag_dir,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
     install_live_call_probe,
     pin_httpx_multipart_boundary,
     record_vcr_outcome,
@@ -76,6 +78,20 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    # Clear any leftover per-PID diagnostic logs from a previous local
+    # run so the controller's terminal summary at session end only
+    # surfaces this session's data. Worker processes inherit the same
+    # directory and append by PID, so the controller doing the cleanup
+    # once is sufficient.
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        directory = _vcr_diag_dir()
+        if os.path.isdir(directory):
+            for name in os.listdir(directory):
+                if name.endswith(".log"):
+                    try:
+                        os.remove(os.path.join(directory, name))
+                    except OSError:
+                        pass
 
 
 def pytest_runtest_logreport(report):
@@ -89,3 +105,4 @@ def pytest_collection_modifyitems(config, items):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     emit_cassette_cache_session_banner(terminalreporter)
     emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)

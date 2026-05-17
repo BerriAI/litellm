@@ -223,6 +223,9 @@ def make_redis_persister(
 def _maybe_log_episode_body_hashes(key: str, cassette_dict) -> None:
     import hashlib
 
+    # Imported lazily to avoid a circular import at module load.
+    from tests._vcr_conftest_common import vcr_diag_write_line
+
     requests = cassette_dict.get("requests", []) or []
     if not requests:
         return
@@ -235,27 +238,19 @@ def _maybe_log_episode_body_hashes(key: str, cassette_dict) -> None:
         elif isinstance(body, str):
             body_bytes = body.encode("utf-8")
         else:
-            _log.warning(
-                "[vcr-episode-body-hash] %s episode[%d]: body type=%r is "
-                "not bytes/bytearray/str -- cannot hash. This is the "
-                "smoking gun for matcher-side bugs on async multipart.",
-                key,
-                i,
-                type(body).__name__,
+            vcr_diag_write_line(
+                f"[vcr-episode-body-hash] {key} episode[{i}]: body type="
+                f"{type(body).__name__!r} is not bytes/bytearray/str -- "
+                "cannot hash. This is the smoking gun for matcher-side "
+                "bugs on async multipart."
             )
             continue
         method = getattr(req, "method", "?")
         uri = getattr(req, "uri", getattr(req, "url", "?"))
-        _log.warning(
-            "[vcr-episode-body-hash] %s episode[%d] %s %s body sha256=%s "
-            "len=%d preview=%r",
-            key,
-            i,
-            method,
-            uri,
-            hashlib.sha256(body_bytes).hexdigest(),
-            len(body_bytes),
-            body_bytes[:120],
+        vcr_diag_write_line(
+            f"[vcr-episode-body-hash] {key} episode[{i}] {method} {uri} "
+            f"body sha256={hashlib.sha256(body_bytes).hexdigest()} "
+            f"len={len(body_bytes)} preview={body_bytes[:120]!r}"
         )
 
 

@@ -36,6 +36,78 @@ SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
+# Directory for per-process VCR diagnostic logs that bypass pytest's
+# stdout/stderr capture. ``sys.stderr.write`` from inside vcrpy
+# machinery is swallowed by xdist for any test that ultimately passes,
+# so a diagnostic that fires on a body-matcher miss but the test still
+# records and passes will never reach the CI log. Each xdist worker
+# (or the main process) writes line-buffered to a per-PID file under
+# this directory, and the controller's ``pytest_terminal_summary``
+# concatenates them into the terminal at session end. ``test-results/``
+# is already collected by ``store_test_results`` in CI, so the raw
+# files survive as build artifacts too.
+VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
+VCR_DIAG_DIR_DEFAULT = "test-results/vcr-diagnostics"
+
+
+def _vcr_diag_dir() -> str:
+    return os.environ.get(VCR_DIAG_DIR_ENV) or VCR_DIAG_DIR_DEFAULT
+
+
+def vcr_diag_write_line(msg: str) -> None:
+    """Append a single diagnostic line to the current process's
+    per-PID file. Atomic against other workers in the same xdist
+    session because each PID owns its own file.
+
+    Errors are swallowed -- diagnostic logging must never fail a test.
+    """
+    try:
+        directory = _vcr_diag_dir()
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{os.getpid()}.log")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(msg.rstrip("\n") + "\n")
+    except OSError:
+        pass
+
+
+def emit_vcr_diagnostic_log(terminalreporter) -> None:
+    """Concatenate every per-PID diagnostic file into the controller's
+    terminal at session end. Each file is dumped under a header that
+    names the originating worker PID so cross-process events can still
+    be ordered if needed.
+    """
+    directory = _vcr_diag_dir()
+    if not os.path.isdir(directory):
+        return
+    try:
+        files = sorted(f for f in os.listdir(directory) if f.endswith(".log"))
+    except OSError:
+        return
+    if not files:
+        return
+    terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
+    terminalreporter.write_line(
+        f"  source dir: {directory}  (also archived as a CI artifact)"
+    )
+    for name in files:
+        path = os.path.join(directory, name)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError as exc:
+            terminalreporter.write_line(
+                f"  [failed to read {name}: {type(exc).__name__}: {exc}]"
+            )
+            continue
+        if not content.strip():
+            continue
+        terminalreporter.write_sep("-", name, bold=False)
+        for line in content.splitlines():
+            terminalreporter.write_line(line)
+    terminalreporter.write_sep("=", bold=True)
+
+
 # Intentionally narrower than ``FILTERED_REQUEST_HEADERS``: AWS SigV4 headers
 # carry secrets but their values rotate on every call, so fingerprinting them
 # would defeat caching.
@@ -324,7 +396,7 @@ def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
         lines.append(f"  first divergent byte offset: {offset}")
         lines.append(f"  window[a] @ {start}..{end_a}: {n1[start:end_a]!r}")
         lines.append(f"  window[b] @ {start}..{end_b}: {n2[start:end_b]!r}")
-    sys.stderr.write("\n".join(lines) + "\n")
+    vcr_diag_write_line("\n".join(lines))
 
 
 def _iter_header_values(headers, name: str):
@@ -478,12 +550,12 @@ def _normalize_multipart_boundary(request) -> None:
         # because body type was X". The header was still rewritten
         # above, so the recorded Content-Type stays stable; only the
         # body bytes carry the random boundary verbatim.
-        sys.stderr.write(
+        vcr_diag_write_line(
             f"[vcr-multipart-normalize] body normalization SKIPPED: "
             f"body type {type(body).__name__!r} is not bytes/bytearray/str. "
             f"content-type={content_type_value!r}. "
             f"Recorded body will retain the random boundary substring "
-            f"and the safe_body matcher will miss on the next run.\n"
+            f"and the safe_body matcher will miss on the next run."
         )
         return
 
