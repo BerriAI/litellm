@@ -36,8 +36,6 @@ SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
-# Per-PID files bypass pytest/xdist stdout capture, which swallows
-# stderr from passing tests.
 VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
 VCR_DIAG_DIR_DEFAULT = "test-results/vcr-diagnostics"
 
@@ -58,12 +56,6 @@ def vcr_diag_write_line(msg: str) -> None:
 
 
 def reset_vcr_diag_dir() -> None:
-    """Delete any leftover per-PID diagnostic logs from a previous session.
-
-    No-op when running on an xdist worker -- the controller does the
-    cleanup once and the workers inherit the (now-empty) directory.
-    Safe to call from any conftest's ``pytest_configure``.
-    """
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return
     directory = _vcr_diag_dir()
@@ -169,11 +161,9 @@ VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
 
 
 def pin_httpx_multipart_boundary(monkeypatch) -> None:
-    """Force every httpx multipart request to use a constant boundary so
-    request bodies are byte-stable across runs (vcrpy match-on-body)."""
     try:
         import httpx._multipart as _httpx_multipart
-    except ImportError:  # pragma: no cover - httpx is a hard test dep
+    except ImportError:
         return
 
     _original_init = _httpx_multipart.MultipartStream.__init__
@@ -300,17 +290,6 @@ def _before_record_response(response):
 
 
 def _canonical_body(request) -> tuple[bytes, str]:
-    """Return ``(body_bytes, original_type_name)`` for a vcrpy request.
-
-    Materializes iterables / generators (httpx async wraps the body in a
-    ``list_iterator`` or ``bytes_iterator``), then coerces the result to
-    ``bytes``. Routing every matcher through this helper makes the
-    "compare object identity by mistake" failure mode structurally
-    impossible -- the comparison always operates on bytes.
-
-    Logs a diagnostic line when a body falls into the empty-fallback
-    branch (unknown shape). Never raises.
-    """
     pre_type = type(getattr(request, "body", None)).__name__
     _materialize_iterable_body(request)
     body = getattr(request, "body", None)
@@ -581,45 +560,26 @@ def _before_record_request(request):
 
 
 def _materialize_iterable_body(request) -> None:
-    """Coalesce an iterable / generator request body to ``bytes`` in-place
-    so the body matcher and boundary normalizer see a contiguous buffer.
-
-    Once ``list(body)`` runs the original iterator is exhausted, so this
-    function must always write some bytes value back -- leaving the body
-    as a dead iterator silently makes the next HTTP send transmit an
-    empty payload. Also clears vcrpy's sticky ``_was_iter`` / ``_was_file``
-    flags, which otherwise make the ``body`` getter re-wrap the stored
-    bytes in ``iter()`` on every access (so a freshly-materialized body
-    would look like ``bytes_iterator`` to the next reader).
-    """
     body = getattr(request, "body", None)
     if body is None or isinstance(body, (bytes, bytearray, str)):
         return
-    if not hasattr(body, "__iter__"):
+    if not hasattr(body, "__next__"):
         return
     try:
         chunks = list(body)
     except TypeError:
         return
 
-    out = b""
-    if chunks:
-        first = chunks[0]
-        if isinstance(first, int):
-            try:
-                out = bytes(chunks)
-            except (TypeError, ValueError):
-                out = b""
-        elif isinstance(first, (bytes, bytearray)):
-            try:
-                out = b"".join(c if isinstance(c, bytes) else bytes(c) for c in chunks)
-            except (TypeError, ValueError):
-                out = b""
-        elif isinstance(first, str):
-            try:
-                out = "".join(chunks).encode("utf-8")
-            except (TypeError, ValueError):
-                out = b""
+    out = _coalesce_chunks_to_bytes(chunks)
+    if out is None:
+        method = getattr(request, "method", "?")
+        uri = getattr(request, "uri", getattr(request, "url", "?"))
+        first_type = type(chunks[0]).__name__ if chunks else "empty"
+        vcr_diag_write_line(
+            f"[vcr-materialize] FALLBACK: {method} {uri} chunk type "
+            f"{first_type!r} not coerced to bytes; storing b''"
+        )
+        out = b""
 
     try:
         request.body = out
@@ -631,6 +591,22 @@ def _materialize_iterable_body(request) -> None:
             setattr(request, attr, False)
         except (AttributeError, TypeError):
             pass
+
+
+def _coalesce_chunks_to_bytes(chunks):
+    if not chunks:
+        return b""
+    first = chunks[0]
+    try:
+        if isinstance(first, int):
+            return bytes(chunks)
+        if isinstance(first, (bytes, bytearray)):
+            return b"".join(c if isinstance(c, bytes) else bytes(c) for c in chunks)
+        if isinstance(first, str):
+            return "".join(chunks).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def _key_fingerprint_matcher(r1, r2) -> None:

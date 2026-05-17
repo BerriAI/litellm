@@ -212,14 +212,6 @@ def make_redis_persister(
 
 
 def _log_episode_body_hashes(key: str, cassette_dict) -> None:
-    """Record a per-episode body SHA-256 for every cassette save.
-
-    Lets two consecutive CI runs be diffed: if the same test records a
-    different hash run-to-run, the live request body varies; if both
-    runs record the same hash but the matcher still misses, the bug is
-    in the matcher itself. Negligible cost (~1ms hashing + ~200B file
-    write per saved episode; nothing at all when cassettes replay).
-    """
     import hashlib
 
     from tests._vcr_conftest_common import vcr_diag_write_line

@@ -103,9 +103,6 @@ class BaseLLMImageEditTest(ABC):
 pwd = os.path.dirname(os.path.realpath(__file__))
 
 
-# Fixtures must be raw ``bytes``, not ``BytesIO``: an SDK retry that
-# reads a BytesIO twice gets an empty second body, which records as a
-# divergent VCR episode and eventually trips MAX_EPISODES_PER_CASSETTE.
 def _read_image_bytes(filename: str) -> bytes:
     with open(os.path.join(pwd, filename), "rb") as f:
         return f.read()
