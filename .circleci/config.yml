@@ -2540,7 +2540,15 @@ jobs:
           command: |
             export LITELLM_PROXY_BASE_URL="http://localhost:4000"
             export LITELLM_PROXY_API_KEY="sk-1234"
-            mkdir -p test-results
+            mkdir -p test-results compat-artifacts
+            # Point the conftest's tagged-union artifacts at a directory
+            # we explicitly persist below via store_artifacts. Without
+            # this override, the conftest defaults to compat-results.json
+            # / compat-rate-limit-summary.json in the working directory,
+            # which no CI step collects -- so reviewers can't pull the
+            # per-cell pass/fail breakdown when a red gate needs triage.
+            export COMPAT_RESULTS_PATH="$(pwd)/compat-artifacts/compat-results.json"
+            export COMPAT_RATE_LIMIT_SUMMARY_PATH="$(pwd)/compat-artifacts/compat-rate-limit-summary.json"
             uv run --no-sync python -m pytest -vv tests/claude_code/ \
               --ignore=tests/claude_code/_driver_unit_tests \
               --ignore=tests/claude_code/_builder_unit_tests \
@@ -2550,9 +2558,17 @@ jobs:
               --durations=10
           no_output_timeout: 30m
 
-      # Store test results
+      # Store test results (JUnit) for CircleCI's test-summary view.
       - store_test_results:
           path: test-results
+      # Persist the compat-matrix artifacts (per-cell tagged-union JSON
+      # + per-provider rate-limit summary) so a red gate can be triaged
+      # from the CircleCI UI without re-running. `store_test_results`
+      # only handles JUnit-shaped XML, so these JSON blobs need their
+      # own store_artifacts step.
+      - store_artifacts:
+          path: compat-artifacts
+          destination: compat-artifacts
 
   upload-coverage:
     docker:
