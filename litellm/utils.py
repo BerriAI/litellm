@@ -9744,7 +9744,9 @@ def retry_with_backoff(
    retry_on: Optional[Tuple[Type[Exception], ...]] = None,
 ) -> Any:
    """
-   Retries a callable with exponential backoff and jitter.
+   Retries a synchronous callable with exponential backoff and jitter.
+
+   For async callables, use async_retry_with_backoff instead.
 
    Args:
        fn:             The callable to retry (e.g. lambda: litellm.completion(...))
@@ -9759,6 +9761,7 @@ def retry_with_backoff(
        The return value of fn() on success.
 
    Raises:
+       TypeError: If fn is a coroutine function (use async_retry_with_backoff).
        The last exception if all retries are exhausted.
 
    Example:
@@ -9774,22 +9777,33 @@ def retry_with_backoff(
            base_delay=2.0,
        )
    """
+   if inspect.iscoroutinefunction(fn):
+       raise TypeError(
+           "retry_with_backoff does not support async callables. "
+           "Use async_retry_with_backoff instead."
+       )
 
    if retry_on is None:
        retry_on = (RateLimitError, ServiceUnavailableError)
 
-   last_exception = None
+   last_exception: Optional[Exception] = None
 
    for attempt in range(max_retries + 1):
        try:
-           return fn()
+           result = fn()
+           if inspect.iscoroutine(result):
+               result.close()
+               raise TypeError(
+                   "retry_with_backoff received a coroutine from fn(). "
+                   "Use async_retry_with_backoff for async callables."
+               )
+           return result
 
        except retry_on as e:
            last_exception = e
 
            if attempt == max_retries:
-               # Exhausted all retries
-               raise last_exception
+               raise
 
            # Exponential backoff with full jitter
            delay = min(
@@ -9798,9 +9812,81 @@ def retry_with_backoff(
            )
 
            verbose_logger.warning(
-               f"[LiteLLM] Attempt {attempt + 1}/{max_retries} failed "
+               f"[LiteLLM] Attempt {attempt + 1}/{max_retries + 1} failed "
                f"({type(e).__name__}). Retrying in {delay:.2f}s..."
            )
            time.sleep(delay)
 
-   raise last_exception
+   raise last_exception  # pragma: no cover
+
+
+async def async_retry_with_backoff(
+   fn: Callable,
+   max_retries: int = 3,
+   base_delay: float = 1.0,
+   max_delay: float = 60.0,
+   backoff_factor: float = 2.0,
+   retry_on: Optional[Tuple[Type[Exception], ...]] = None,
+) -> Any:
+   """
+   Retries an async callable with exponential backoff and jitter.
+
+   Args:
+       fn:             The async callable to retry (e.g. lambda: litellm.acompletion(...))
+       max_retries:    Maximum number of retry attempts (default: 3)
+       base_delay:     Initial delay in seconds (default: 1.0)
+       max_delay:      Maximum delay cap in seconds (default: 60.0)
+       backoff_factor: Multiplier per retry (default: 2.0)
+       retry_on:       Tuple of exception types to retry on.
+                       Defaults to (RateLimitError, ServiceUnavailableError)
+
+   Returns:
+       The return value of await fn() on success.
+
+   Raises:
+       The last exception if all retries are exhausted.
+
+   Example:
+       import litellm
+       from litellm.utils import async_retry_with_backoff
+
+       response = await async_retry_with_backoff(
+           lambda: litellm.acompletion(
+               model="gpt-4o",
+               messages=[{"role": "user", "content": "Hello"}]
+           ),
+           max_retries=5,
+           base_delay=2.0,
+       )
+   """
+   if retry_on is None:
+       retry_on = (RateLimitError, ServiceUnavailableError)
+
+   last_exception: Optional[Exception] = None
+
+   for attempt in range(max_retries + 1):
+       try:
+           result = fn()
+           if inspect.iscoroutine(result):
+               result = await result
+           return result
+
+       except retry_on as e:
+           last_exception = e
+
+           if attempt == max_retries:
+               raise
+
+           # Exponential backoff with full jitter
+           delay = min(
+               base_delay * (backoff_factor ** attempt) + random.uniform(0, 1),
+               max_delay,
+           )
+
+           verbose_logger.warning(
+               f"[LiteLLM] Attempt {attempt + 1}/{max_retries + 1} failed "
+               f"({type(e).__name__}). Retrying in {delay:.2f}s..."
+           )
+           await asyncio.sleep(delay)
+
+   raise last_exception  # pragma: no cover

@@ -4110,7 +4110,7 @@ class TestValidateAndFixThinkingParam:
 
 
 # ── Tests for retry_with_backoff ──────────────────────
-from litellm.utils import retry_with_backoff
+from litellm.utils import retry_with_backoff, async_retry_with_backoff
 from litellm.exceptions import RateLimitError
 
 
@@ -4187,3 +4187,78 @@ class TestRetryWithBackoff:
         )
         elapsed = time.time() - attempts["start"]
         assert elapsed < 1.0  # Should be fast with tiny delays
+
+    def test_retry_rejects_async_callable(self):
+        """Should raise TypeError if fn is a coroutine function."""
+
+        async def async_fn():
+            return "async result"
+
+        with pytest.raises(TypeError, match="does not support async"):
+            retry_with_backoff(async_fn)
+
+    def test_retry_rejects_lambda_returning_coroutine(self):
+        """Should raise TypeError if fn() returns a coroutine."""
+
+        async def async_fn():
+            return "async result"
+
+        with pytest.raises(TypeError, match="received a coroutine"):
+            retry_with_backoff(lambda: async_fn())
+
+
+class TestAsyncRetryWithBackoff:
+    """Tests for the async_retry_with_backoff utility function."""
+
+    @pytest.mark.asyncio
+    async def test_async_retry_succeeds_on_first_try(self):
+        """Should return immediately with no retries."""
+
+        async def async_fn():
+            return "async success"
+
+        result = await async_retry_with_backoff(lambda: async_fn())
+        assert result == "async success"
+
+    @pytest.mark.asyncio
+    async def test_async_retry_succeeds_after_failures(self):
+        """Should retry and succeed after initial failures."""
+        attempts = {"count": 0}
+
+        async def flaky_async():
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise RateLimitError(
+                    message="rate limited",
+                    model="gpt-4o",
+                    llm_provider="openai",
+                )
+            return "recovered"
+
+        result = await async_retry_with_backoff(
+            lambda: flaky_async(), max_retries=3, base_delay=0.01
+        )
+        assert result == "recovered"
+        assert attempts["count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_async_retry_raises_after_max_retries(self):
+        """Should raise the exception after exhausting retries."""
+
+        async def always_fails():
+            raise RateLimitError(
+                message="always rate limited",
+                model="gpt-4o",
+                llm_provider="openai",
+            )
+
+        with pytest.raises(RateLimitError):
+            await async_retry_with_backoff(
+                lambda: always_fails(), max_retries=2, base_delay=0.01
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_retry_works_with_sync_fn(self):
+        """Should also work with a synchronous callable."""
+        result = await async_retry_with_backoff(lambda: "sync result")
+        assert result == "sync result"
