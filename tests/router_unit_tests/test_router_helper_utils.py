@@ -995,6 +995,9 @@ def test_update_settings_none_int_values(model_list):
     router.update_settings(cooldown_time=None)
     assert router.cooldown_time is None
 
+    router.update_settings(retry_after=None)
+    assert router.retry_after is None
+
     # Valid int values must still work after None resets
     router.update_settings(timeout=60)
     assert router.timeout == 60
