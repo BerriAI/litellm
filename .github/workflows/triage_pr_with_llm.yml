@@ -82,8 +82,16 @@ jobs:
           # summary before any contributor sees a comment. Only the manual
           # workflow_dispatch path (with close=true) closes PRs.
           if [ "${GITHUB_EVENT_NAME:-}" = "pull_request_target" ]; then
-            # strip any --close added above
-            ARGS=("${ARGS[@]/--close/}")
+            # strip any --close added above (filter out, don't substitute
+            # to empty string — that would leave a stray "" positional arg
+            # that argparse rejects)
+            FILTERED=()
+            for arg in "${ARGS[@]}"; do
+              if [ "${arg}" != "--close" ]; then
+                FILTERED+=("${arg}")
+              fi
+            done
+            ARGS=("${FILTERED[@]}")
             echo "::notice::pull_request_target trigger -> forcing dry-run."
           fi
           python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"

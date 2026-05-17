@@ -69,7 +69,15 @@ jobs:
           # Automatic `issues` events stay dry-run regardless until the team
           # explicitly invokes workflow_dispatch with close=true.
           if [ "${GITHUB_EVENT_NAME:-}" = "issues" ]; then
-            ARGS=("${ARGS[@]/--close/}")
+            # filter out --close rather than substituting to "" (which would
+            # leave an empty positional arg that argparse rejects)
+            FILTERED=()
+            for arg in "${ARGS[@]}"; do
+              if [ "${arg}" != "--close" ]; then
+                FILTERED+=("${arg}")
+              fi
+            done
+            ARGS=("${FILTERED[@]}")
             echo "::notice::issues trigger -> forcing dry-run."
           fi
           python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
