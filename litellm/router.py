@@ -321,6 +321,7 @@ class Router:
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: Optional[int] = None,
         health_check_ignore_transient_errors: bool = False,
+        enable_weighted_failover: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -356,6 +357,7 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
+            enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -491,6 +493,17 @@ class Router:
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
 
+        # Initialize cache attributes that ``_invalidate_model_group_info_cache``
+        # touches *before* the first ``set_model_list`` below (which calls
+        # that invalidation as part of building the model index).
+        self._access_groups_cache: Optional[Dict[str, List[str]]] = None
+        # Per-router cache for the proxy auth-layer "is this model explicitly
+        # zero-cost?" check. Lives on the router so it is invalidated alongside
+        # ``_cached_get_model_group_info`` and dies with the router (no
+        # ``id()``-reuse risk after GC). See
+        # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
+        self._zero_cost_cache: Dict[str, bool] = {}
+
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
@@ -503,8 +516,6 @@ class Router:
                 []
             )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
-        self._access_groups_cache: Optional[Dict[str, List[str]]] = None
-
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
         else:
@@ -515,6 +526,7 @@ class Router:
         )
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
+        self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         _staleness = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
@@ -1851,6 +1863,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
+                self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
 
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
@@ -2516,6 +2529,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
+                self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
         except Exception as e:
             verbose_router_logger.info(
@@ -2526,6 +2540,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
+                self._set_failed_deployment_id_on_exception(e, deployment)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -2569,6 +2584,27 @@ class Router:
                 exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
+
+    def _set_failed_deployment_id_on_exception(
+        self, exception: Exception, deployment: dict
+    ) -> None:
+        """
+        Stamp the failed deployment's `model_info.id` on the exception so the
+        fallback layer can exclude it from subsequent re-picks within the same
+        request (used by weighted-routing failover).
+
+        Idempotent: never overwrites an existing value, so the id of the
+        deployment that *first* failed in a chain is preserved if multiple
+        layers re-raise.
+        """
+        if getattr(exception, "failed_deployment_id", None):
+            return
+        deployment_id = (deployment.get("model_info") or {}).get("id")
+        if deployment_id:
+            try:
+                exception.failed_deployment_id = deployment_id  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
@@ -5632,6 +5668,85 @@ class Router:
 
     #### [END] ASSISTANTS API ####
 
+    async def _maybe_run_weighted_failover(
+        self,
+        exception: Exception,
+        original_model_group: str,
+        all_deployments: List[DeploymentTypedDict],
+        args: tuple,
+        kwargs: dict,
+        input_kwargs: dict,
+    ) -> Optional[Any]:
+        """Same-model-group retry after a failed deployment; returns None if not applicable."""
+        strategy, _ = self._get_routing_context(original_model_group)
+        if strategy != "simple-shuffle":
+            return None
+
+        failed_id: Optional[str] = getattr(exception, "failed_deployment_id", None)
+        if not failed_id:
+            return None
+
+        metadata_variable_name = self._get_metadata_variable_name_from_kwargs(kwargs)
+        meta = kwargs.get(metadata_variable_name)
+        if meta is None:
+            meta = {}
+            kwargs[metadata_variable_name] = meta
+        if not isinstance(meta, dict):
+            return None
+        prev_excluded = set(meta.get("_failover_excluded_ids") or [])
+        excluded = prev_excluded | {failed_id}
+
+        all_ids = {
+            (d.get("model_info") or {}).get("id")
+            for d in all_deployments
+            if (d.get("model_info") or {}).get("id") is not None
+        }
+        # Only consider deployments that are currently healthy (not in cooldown).
+        # Using all_ids here would cause a wasteful run_async_fallback invocation
+        # that fails with RouterRateLimitError whenever the "remaining" entries
+        # are all in cooldown — the inner async_get_healthy_deployments call
+        # would find an empty list and raise immediately.
+        cooldown_ids = set(
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self, parent_otel_span=None
+            )
+        )
+        remaining = (all_ids - cooldown_ids) - excluded
+        if not remaining:
+            return None
+
+        verbose_router_logger.debug(
+            f"Weighted failover: exclude={excluded!r}, remaining={len(remaining)} "
+            f"for model_group={original_model_group!r}"
+        )
+
+        meta["_failover_excluded_ids"] = list(excluded)
+
+        entry = {
+            "model": original_model_group,
+            "_excluded_deployment_ids": list(excluded),
+        }
+        # Build a local copy so the weighted-failover keys do not leak back to
+        # the caller's shared kwargs dict (any downstream fallback path reads
+        # the same dict and must not inherit our `_excluded_deployment_ids`
+        # entry).
+        failover_kwargs = {
+            **input_kwargs,
+            "fallback_model_group": [entry],
+            "original_model_group": original_model_group,
+        }
+        try:
+            return await run_async_fallback(*args, **failover_kwargs)
+        except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
+            # Expected model-level failure on the retried deployment. All
+            # litellm provider errors derive from openai.APIError; if every
+            # remaining deployment in the group is in cooldown the router
+            # raises RouterRateLimitError (a ValueError, not an APIError).
+            # In either case defer to the regular fallback path. Programming
+            # errors (AttributeError, KeyError, TypeError, etc.) intentionally
+            # propagate so they remain visible.
+            return None
+
     async def async_function_with_fallbacks_common_utils(  # noqa: PLR0915
         self,
         e: Exception,
@@ -5732,6 +5847,23 @@ class Router:
                     *args,
                     **input_kwargs,
                 )
+                return response
+
+        # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
+        if (
+            self.enable_weighted_failover
+            and not _skip_order_fallback
+            and original_model_group is not None
+        ):
+            response = await self._maybe_run_weighted_failover(
+                exception=e,
+                original_model_group=original_model_group,
+                all_deployments=all_deployments,
+                args=args,
+                kwargs=kwargs,
+                input_kwargs=input_kwargs,
+            )
+            if response is not None:
                 return response
 
         try:
@@ -8771,9 +8903,29 @@ class Router:
                     model_group
                 )
 
+                # get_remaining_model_group_usage reads the router's TPM/RPM
+                # counter, which is incremented post-response by
+                # deployment_callback_on_success. So the values returned here
+                # are pre-decrement for the current request, while vendor
+                # headers (OpenAI/Anthropic/Azure) are post-decrement. Replay
+                # the in-flight increment so router-derived headers match
+                # vendor-derived semantics — for both the HTTP response sent
+                # to the client and the prometheus gauges that read these
+                # headers downstream (LIT-2719).
+                in_flight_tokens = 0
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
+                in_flight_delta = {
+                    "x-ratelimit-remaining-tokens": in_flight_tokens,
+                    "x-ratelimit-remaining-requests": 1,
+                }
+
                 for header, value in remaining_usage.items():
                     if value is not None:
-                        additional_headers[header] = value
+                        additional_headers[header] = value - in_flight_delta.get(
+                            header, 0
+                        )
         return response
 
     def _build_model_name_index(self, model_list: list) -> None:
@@ -9208,8 +9360,13 @@ class Router:
         """Invalidate the cached model group info.
 
         Call this whenever self.model_list is modified to ensure the cache is rebuilt.
+        Also clears the auth-layer zero-cost cache, which depends on the same
+        ``ModelGroupInfo`` data — without this, an in-place pricing update on
+        an existing deployment (same model count) would keep a stale ``True``
+        result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self._zero_cost_cache.clear()
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.
@@ -9310,6 +9467,7 @@ class Router:
             "model_group_retry_policy",
             "retry_policy",
             "model_group_alias",
+            "enable_weighted_failover",
         ]
 
         for var in vars_to_include:
@@ -9346,6 +9504,7 @@ class Router:
             "context_window_fallbacks",
             "model_group_retry_policy",
             "model_group_alias",
+            "enable_weighted_failover",
         ]
 
         _int_settings = [
@@ -10039,6 +10198,17 @@ class Router:
             cast(List[Dict], healthy_deployments), target_order=_target_order
         )
 
+        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+        ## this request via weighted-failover. Always honored, regardless of the
+        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
+        _excluded_deployment_ids = (request_kwargs or {}).pop(
+            "_excluded_deployment_ids", None
+        )
+        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+            cast(List[Dict], healthy_deployments),
+            excluded_deployment_ids=_excluded_deployment_ids,
+        )
+
         if len(healthy_deployments) == 0:
             exception = await async_raise_no_deployment_exception(
                 litellm_router_instance=self,
@@ -10428,6 +10598,17 @@ class Router:
         _target_order = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             healthy_deployments, target_order=_target_order
+        )
+
+        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+        ## this request via weighted-failover. See async counterpart in
+        ## async_get_healthy_deployments for details.
+        _excluded_deployment_ids = (request_kwargs or {}).pop(
+            "_excluded_deployment_ids", None
+        )
+        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+            healthy_deployments,
+            excluded_deployment_ids=_excluded_deployment_ids,
         )
 
         if len(healthy_deployments) == 0:

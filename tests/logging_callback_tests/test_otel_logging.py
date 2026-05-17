@@ -48,7 +48,7 @@ async def test_async_otel_callback(streaming):
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
 
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "hi"}],
         temperature=0.1,
         user="OTEL_USER",
@@ -76,7 +76,7 @@ async def test_async_otel_callback(streaming):
         if span.name == "litellm_request":
             validate_litellm_request(span)
             # Additional specific checks
-            assert span._attributes["gen_ai.request.model"] == "gpt-3.5-turbo"
+            assert span._attributes["gen_ai.request.model"] == "gpt-4.1-mini"
             assert span._attributes["gen_ai.system"] == "openai"
             assert span._attributes["gen_ai.request.temperature"] == 0.1
             assert span._attributes["llm.is_streaming"] == str(streaming)
@@ -185,7 +185,7 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     litellm.failure_callback = []
 
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hi",
         stream=streaming,
@@ -293,7 +293,7 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     # Simulate a proxy request by injecting proxy_server_request as a top-level kwarg.
     # This triggers ArizePhoenixLogger._get_phoenix_context to create its own parent span.
     await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "ping"}],
         mock_response="pong",
         proxy_server_request={

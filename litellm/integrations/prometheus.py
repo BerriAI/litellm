@@ -1226,6 +1226,17 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        # Provider-agnostic fallback: providers like Bedrock and Vertex don't return
+        # x-ratelimit-remaining-* headers, so the gauges above only fire for OpenAI /
+        # Anthropic / Azure. When the proxy router has tpm/rpm configured for the
+        # model_group, derive remaining from configured-limit minus current usage so
+        # the same metric is populated for any provider.
+        await self._async_set_router_remaining_metrics(
+            standard_logging_payload=standard_logging_payload,  # type: ignore
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+
         # cache metrics
         self._increment_cache_metrics(
             standard_logging_payload=standard_logging_payload,  # type: ignore
@@ -2198,6 +2209,99 @@ class PrometheusLogger(CustomLogger):
                 ),
             )
             self.litellm_deployment_rpm_limit.labels(**_labels).set(rpm)
+
+    async def _async_set_router_remaining_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+    ) -> None:
+        """
+        Populate ``litellm_remaining_tokens_metric`` /
+        ``litellm_remaining_requests_metric`` from the router's internal usage
+        counters when the upstream provider did not return
+        ``x-ratelimit-remaining-*`` response headers.
+
+        OpenAI / Anthropic / Azure return remaining tokens/requests in response
+        headers, but Bedrock and Vertex AI do not. This fallback computes
+        ``configured_limit - current_usage`` via
+        ``Router.get_remaining_model_group_usage`` so the same gauges are
+        emitted for every provider when tpm/rpm is configured on the
+        deployment.
+        """
+        try:
+            additional_headers = (
+                standard_logging_payload.get("hidden_params", {}) or {}
+            ).get("additional_headers") or {}
+
+            already_have_tokens = (
+                additional_headers.get("x_ratelimit_remaining_tokens") is not None
+            )
+            already_have_requests = (
+                additional_headers.get("x_ratelimit_remaining_requests") is not None
+            )
+            if already_have_tokens and already_have_requests:
+                return
+
+            model_group = standard_logging_payload.get("model_group")
+            if not model_group:
+                return
+
+            try:
+                from litellm.proxy.proxy_server import llm_router
+            except ImportError:
+                llm_router = None
+
+            if llm_router is None:
+                return
+
+            try:
+                remaining_usage = await llm_router.get_remaining_model_group_usage(
+                    model_group
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Prometheus: get_remaining_model_group_usage failed for "
+                    "model_group=%s: %s",
+                    model_group,
+                    e,
+                )
+                return
+
+            if not remaining_usage:
+                return
+
+            remaining_tokens = remaining_usage.get("x-ratelimit-remaining-tokens")
+            remaining_requests = remaining_usage.get("x-ratelimit-remaining-requests")
+
+            if not already_have_tokens and remaining_tokens is not None:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_remaining_tokens_metric"
+                    ),
+                    enum_values=enum_values,
+                    label_context=label_context,
+                )
+                self.litellm_remaining_tokens_metric.labels(**_labels).set(
+                    remaining_tokens
+                )
+
+            if not already_have_requests and remaining_requests is not None:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_remaining_requests_metric"
+                    ),
+                    enum_values=enum_values,
+                    label_context=label_context,
+                )
+                self.litellm_remaining_requests_metric.labels(**_labels).set(
+                    remaining_requests
+                )
+        except Exception as e:
+            verbose_logger.exception(
+                "Prometheus Error: _async_set_router_remaining_metrics. "
+                "Exception occured - {}".format(str(e))
+            )
 
     def set_llm_deployment_success_metrics(
         self,
