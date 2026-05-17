@@ -145,6 +145,30 @@ def _warn_on_server_name_fields(
     _warn("server_name", server_name)
 
 
+def _warn_internal_delegate_pkce_if_applicable(
+    server: MCPServer, *, source: str
+) -> None:
+    """Surface internal + upstream PKCE delegate in logs for operators."""
+    if server.auth_type != MCPAuth.oauth2:
+        return
+    if getattr(server, "delegate_auth_to_upstream", False) is not True:
+        return
+    if getattr(server, "available_on_public_internet", True):
+        return
+    if server.has_client_credentials:
+        return
+    label = get_server_prefix(server)
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=%s): internal-only (available_on_public_internet=false) "
+        "with delegate_auth_to_upstream=true. Anonymous callers can reach the upstream OAuth2 "
+        "/authorize flow and complete PKCE without a LiteLLM API key session; ensure the "
+        "upstream IdP and network enforce your access policy.",
+        label,
+        server.server_id,
+        source,
+    )
+
+
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -297,32 +321,6 @@ class MCPServerManager:
             )()
             name_for_prefix = get_server_prefix(temp_server)
 
-            # Use alias for name if present, else server_name
-            alias = server_config.get("alias", None)
-
-            # Apply mcp_aliases mapping if provided
-            if mcp_aliases and alias is None:
-                # Check if this server_name has an alias in mcp_aliases
-                for alias_name, target_server_name in mcp_aliases.items():
-                    if (
-                        target_server_name == server_name
-                        and alias_name not in used_aliases
-                    ):
-                        alias = alias_name
-                        used_aliases.add(alias_name)
-                        verbose_logger.debug(
-                            f"Mapped alias '{alias_name}' to server '{server_name}'"
-                        )
-                        break
-
-            # Create a temporary server object to use with get_server_prefix utility
-            temp_server = type(
-                "TempServer",
-                (),
-                {"alias": alias, "server_name": server_name, "server_id": None},
-            )()
-            name_for_prefix = get_server_prefix(temp_server)
-
             server_url = server_config.get("url", None) or ""
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
@@ -425,6 +423,7 @@ class MCPServerManager:
                 ),
             )
             self._assign_unique_short_prefix(new_server)
+            _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -834,6 +833,7 @@ class MCPServerManager:
             )
             or "urn:ietf:params:oauth:token-type:access_token",
         )
+        _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
 
     async def _maybe_register_openapi_tools(
@@ -995,9 +995,6 @@ class MCPServerManager:
                     # unauthenticated caller would get LiteLLM to proxy tool
                     # calls using its stored client_credentials.
                     and not server.has_client_credentials
-                    # Internal-only servers must not be reachable from public
-                    # internet callers who happen to carry an upstream token.
-                    and getattr(server, "available_on_public_internet", True)
                 ]
                 combined_servers.update(delegate_server_ids)
 
@@ -3566,6 +3563,7 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

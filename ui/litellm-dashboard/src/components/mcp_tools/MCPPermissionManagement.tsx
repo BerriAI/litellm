@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
+import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer, AUTH_TYPE } from "./types";
 const { Panel } = Collapse;
@@ -25,6 +25,12 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   const form = Form.useFormInstance();
   const watchedAuthType = Form.useWatch("auth_type", form);
   const isOAuth2 = watchedAuthType === AUTH_TYPE.OAUTH2;
+  const watchedDelegateAuth = Form.useWatch("delegate_auth_to_upstream", form);
+  const watchedPublicInternet = Form.useWatch("available_on_public_internet", form);
+  const showInternalDelegatePkceWarning =
+    isOAuth2 &&
+    watchedDelegateAuth === true &&
+    watchedPublicInternet === false;
 
   // Set initial values when mcpServer changes
   useEffect(() => {
@@ -142,6 +148,16 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <Switch />
               </Form.Item>
             </div>
+          )}
+
+          {showInternalDelegatePkceWarning && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb-2"
+              message="Internal server with upstream OAuth delegation"
+              description="This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream provider and network enforce access controls."
+            />
           )}
 
           <Form.Item

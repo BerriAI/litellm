@@ -115,6 +115,47 @@ async def test_route_request_no_model_required_with_router_settings():
 
 
 @pytest.mark.asyncio
+async def test_route_request_vector_store_routes_model_none_no_api_key_in_body():
+    """
+    GET /vector_stores/{id} and related routes do not send api_key in the body.
+    Router must still accept model=None (as set by common_processing_pre_call_logic).
+    """
+    cases: list[tuple[str, dict]] = [
+        ("avector_store_retrieve", {"vector_store_id": "vs_123", "model": None}),
+        ("avector_store_list", {"model": None}),
+        (
+            "avector_store_update",
+            {"vector_store_id": "vs_123", "name": "n", "model": None},
+        ),
+        ("avector_store_delete", {"vector_store_id": "vs_123", "model": None}),
+    ]
+
+    for route_type, data in cases:
+        llm_router = MagicMock()
+        llm_router.router_general_settings.pass_through_all_models = False
+        llm_router.default_deployment = None
+        llm_router.pattern_router.patterns = []
+        llm_router.model_names = []
+        llm_router.has_model_id.return_value = False
+        llm_router.deployment_names = []
+        llm_router.model_group_alias = None
+
+        getattr(llm_router, route_type).return_value = "fake_response"
+
+        response = await route_request(dict(data), llm_router, None, route_type)
+
+        assert response == "fake_response"
+        mock_method = getattr(llm_router, route_type)
+        mock_method.assert_called_once()
+        actual_kwargs = mock_method.call_args.kwargs
+        for key, value in data.items():
+            assert actual_kwargs.get(key) == value, (
+                f"{route_type}: expected {key}={value!r}, got {actual_kwargs.get(key)!r}"
+            )
+        llm_router.reset_mock()
+
+
+@pytest.mark.asyncio
 async def test_route_request_no_model_required_with_router_settings_and_no_router():
     """Test route types that don't require model parameter with router settings and no router"""
     from unittest.mock import patch

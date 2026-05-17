@@ -10,6 +10,7 @@ All /team management endpoints
 """
 
 import asyncio
+import math
 import json
 import traceback
 from datetime import datetime, timezone
@@ -914,25 +915,31 @@ async def new_team(  # noqa: PLR0915
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1595,25 +1602,31 @@ async def update_team(  # noqa: PLR0915
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 

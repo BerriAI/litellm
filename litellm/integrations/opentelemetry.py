@@ -1,7 +1,7 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,6 +10,12 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
+    OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
+    OTELGenAISemconvMixin,
+    OTELSemconvCategory,
+    parse_semconv_opt_in,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
@@ -53,6 +59,11 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
 LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
+# OTel-standard names. status is also kept under error.code for back compat.
+HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
+HTTP_ROUTE_ATTRIBUTE = "http.route"
+URL_PATH_ATTRIBUTE = "url.path"
+PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -85,6 +96,7 @@ class OpenTelemetryConfig:
     # Programmatic override for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
     # One of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT (or "true" as legacy alias).
     capture_message_content: Optional[str] = None
+    semconv_stability_opt_in: Set[OTELSemconvCategory] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -110,6 +122,11 @@ class OpenTelemetryConfig:
             self.ignore_context_propagation = str_to_bool(
                 os.getenv("OTEL_IGNORE_CONTEXT_PROPAGATION")
             )
+        # Resolve the env opt-in once here so self.semconv_stability_opt_in is the
+        # single source of truth: the union of programmatic and env categories.
+        self.semconv_stability_opt_in |= parse_semconv_opt_in(
+            os.getenv(OTEL_SEMCONV_STABILITY_OPT_IN_ENV)
+        )
 
     @classmethod
     def from_env(cls):
@@ -157,7 +174,7 @@ class OpenTelemetryConfig:
         )
 
 
-class OpenTelemetry(CustomLogger):
+class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def __init__(
         self,
         config: Optional[OpenTelemetryConfig] = None,
@@ -655,6 +672,31 @@ class OpenTelemetry(CustomLogger):
         parent_otel_span = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
             parent_otel_span.set_status(Status(StatusCode.ERROR))
+
+            # Stamp structured error attrs on the SERVER span itself; the
+            # failure path otherwise only sets its status (_handle_failure
+            # records on the litellm_request child span). Inline import:
+            # litellm_logging <-> integrations is circular.
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+
+            error_information = StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
+            self._record_exception_on_span(
+                span=parent_otel_span,
+                kwargs={
+                    "exception": original_exception,
+                    "standard_logging_object": {"error_information": error_information},
+                },
+            )
+
+            # Pre-request latency (request_data carries the propagated
+            # metadata on the failure path; omitted if it failed before handoff).
+            self.set_preprocessing_duration_attribute(parent_otel_span, request_data)
+
             _span_name = "Failed Proxy Server Request"
 
             # Exception Logging Child Span
@@ -690,6 +732,14 @@ class OpenTelemetry(CustomLogger):
             parent_span = user_api_key_dict.parent_otel_span
 
             ctx, _ = self._get_span_context(kwargs, default_span=parent_span)
+
+            # Pre-request latency on the SERVER span (success path).
+            self.set_preprocessing_duration_attribute(parent_span, kwargs)
+
+            # http.response.status_code on the SERVER span (success path).
+            # A successful proxy response is HTTP 200; the failure path sets
+            # this from the error code in _record_exception_on_span.
+            self.set_response_status_code_attribute(parent_span, 200)
 
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -979,13 +1029,14 @@ class OpenTelemetry(CustomLogger):
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
 
-        # Always create a new span
-        # The parent relationship is preserved through the context parameter
-        span = otel_tracer.start_span(
-            name=self._get_span_name(kwargs),
-            start_time=self._to_ns(start_time),
-            context=context,
-        )
+        span_kwargs: Dict[str, Any] = {
+            "name": self._get_span_name(kwargs),
+            "start_time": self._to_ns(start_time),
+            "context": context,
+        }
+        if self._gen_ai_semconv_latest_experimental:
+            span_kwargs["kind"] = self.span_kind.CLIENT
+        span = otel_tracer.start_span(**span_kwargs)
 
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
@@ -997,6 +1048,10 @@ class OpenTelemetry(CustomLogger):
     ):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
+
+        # raw_gen_ai_request is non-standard in semconv mode.
+        if self._gen_ai_semconv_latest_experimental:
+            return
 
         if not self._capture_in_span():
             return
@@ -1023,7 +1078,11 @@ class OpenTelemetry(CustomLogger):
         provider = params.get("custom_llm_provider", "Unknown")
 
         common_attrs = {
-            "gen_ai.operation.name": "chat",
+            "gen_ai.operation.name": (
+                self._gen_ai_operation_name(kwargs)
+                if self._gen_ai_semconv_latest_experimental
+                else "chat"
+            ),
             "gen_ai.system": provider,
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
@@ -1246,6 +1305,24 @@ class OpenTelemetry(CustomLogger):
                 response_duration_seconds, attributes=common_attrs
             )
 
+    @staticmethod
+    def _otel_log_types():
+        """Resolve ``(LogRecord, SeverityNumber)`` across OTEL SDK versions.
+
+        ``LogRecord`` moved out of ``opentelemetry.sdk._logs`` in OTEL >= 1.39.0
+        (open-telemetry/opentelemetry-python#4676). Imports stay function-local
+        because the SDK is an optional dependency.
+        """
+        from opentelemetry._logs import SeverityNumber
+
+        try:
+            from opentelemetry.sdk._logs import LogRecord  # OTEL < 1.39.0
+        except ImportError:
+            from opentelemetry.sdk._logs._internal import (  # OTEL >= 1.39.0
+                LogRecord,
+            )
+        return LogRecord, SeverityNumber
+
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
             return
@@ -1259,16 +1336,7 @@ class OpenTelemetry(CustomLogger):
         # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
-        from opentelemetry._logs import SeverityNumber
-
-        try:
-            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
-                LogRecord as SdkLogRecord,
-            )
-        except ImportError:
-            from opentelemetry.sdk._logs._internal import (
-                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL >= 1.39.0
-            )
+        SdkLogRecord, SeverityNumber = self._otel_log_types()
 
         # Resolve through the handler's own LoggerProvider (which may be a
         # private one when skip_set_global=True) rather than the module-level
@@ -1279,6 +1347,16 @@ class OpenTelemetry(CustomLogger):
         provider = (kwargs.get("litellm_params") or {}).get(
             "custom_llm_provider", "Unknown"
         )
+
+        if self._gen_ai_semconv_latest_experimental:
+            self._emit_inference_details_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                provider=provider,
+                otel_logger=otel_logger,
+                parent_ctx=parent_ctx,
+            )
+            return
 
         # per-message events
         for msg in kwargs.get("messages", []):
@@ -1496,11 +1574,14 @@ class OpenTelemetry(CustomLogger):
         if should_create_primary_span:
             # Span 1: Request sent to litellm SDK
             otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-            span = otel_tracer.start_span(
-                name=self._get_span_name(kwargs),
-                start_time=self._to_ns(start_time),
-                context=_parent_context,
-            )
+            span_kwargs: Dict[str, Any] = {
+                "name": self._get_span_name(kwargs),
+                "start_time": self._to_ns(start_time),
+                "context": _parent_context,
+            }
+            if self._gen_ai_semconv_latest_experimental:
+                span_kwargs["kind"] = self.span_kind.CLIENT
+            span = otel_tracer.start_span(**span_kwargs)
             span.set_status(Status(StatusCode.ERROR))
             self.set_attributes(span, kwargs, response_obj)
 
@@ -1583,6 +1664,19 @@ class OpenTelemetry(CustomLogger):
                     key=ErrorAttributes.ERROR_CODE,
                     value=error_information["error_code"],
                 )
+
+                # Also expose under the OTel-standard name as an int
+                # (error_code is a str, may be non-numeric).
+                _error_code_val = error_information["error_code"]
+                if _error_code_val is not None:
+                    try:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                            value=int(_error_code_val),
+                        )
+                    except (ValueError, TypeError):
+                        pass
 
             if error_information.get("error_class"):
                 self.safe_set_attribute(
@@ -1782,11 +1876,21 @@ class OpenTelemetry(CustomLogger):
             )
 
             # The Generative AI Provider: Azure, OpenAI, etc.
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider", "Unknown"),
-            )
+            provider_name = litellm_params.get("custom_llm_provider", "Unknown")
+            # Latest-experimental semconv replaced gen_ai.system with
+            # gen_ai.provider.name; emit only the conformant key in that mode.
+            if self._gen_ai_semconv_latest_experimental:
+                self.safe_set_attribute(
+                    span=span,
+                    key="gen_ai.provider.name",
+                    value=provider_name,
+                )
+            else:
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_SYSTEM.value,
+                    value=provider_name,
+                )
 
             # The maximum number of tokens the LLM generates for a request.
             if optional_params.get("max_tokens"):
@@ -1812,11 +1916,17 @@ class OpenTelemetry(CustomLogger):
                     value=optional_params.get("top_p"),
                 )
 
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.LLM_IS_STREAMING.value,
-                value=str(optional_params.get("stream", False)),
-            )
+            if self._gen_ai_semconv_latest_experimental:
+                # Semconv emits gen_ai.request.stream (only when streaming) via
+                # _set_semconv_request_attributes; skip the legacy llm.is_streaming.
+                self._set_semconv_request_attributes(span, optional_params)
+                self._set_semconv_cache_token_attributes(span, standard_logging_payload)
+            else:
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_IS_STREAMING.value,
+                    value=str(optional_params.get("stream", False)),
+                )
 
             if optional_params.get("user"):
                 self.safe_set_attribute(
@@ -1937,14 +2047,18 @@ class OpenTelemetry(CustomLogger):
                         value=safe_dumps(transformed_system_instructions),
                     )
 
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
-                value=(
+            if self._gen_ai_semconv_latest_experimental:
+                operation_name = self._gen_ai_operation_name(kwargs)
+            else:
+                operation_name = (
                     "chat"
                     if standard_logging_payload.get("call_type") == "completion"
                     else standard_logging_payload.get("call_type") or "chat"
-                ),
+                )
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
+                value=operation_name,
             )
 
             if standard_logging_payload.get("request_id"):
@@ -2280,6 +2394,10 @@ class OpenTelemetry(CustomLogger):
 
         if generation_name:
             return generation_name
+
+        if self._gen_ai_semconv_latest_experimental:
+            model = kwargs.get("model") or "unknown"
+            return f"{self._gen_ai_operation_name(kwargs)} {model}"
 
         return LITELLM_REQUEST_SPAN_NAME
 
@@ -2821,4 +2939,87 @@ class OpenTelemetry(CustomLogger):
             start_time=self._to_ns(start_time),
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,
+        )
+
+    def set_proxy_request_route_attributes(
+        self,
+        span: Optional[Span],
+        *,
+        url_path: Optional[str] = None,
+        http_route: Optional[str] = None,
+    ) -> None:
+        """
+        Set OTel-standard ``http.route`` / ``url.path`` on the proxy SERVER
+        span. Called from the auth path, the only point where both the
+        SERVER span and the request are in hand. No-op if span/value missing.
+        """
+        if span is None:
+            return
+        if url_path:
+            self.safe_set_attribute(span=span, key=URL_PATH_ATTRIBUTE, value=url_path)
+        if http_route:
+            self.safe_set_attribute(
+                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
+            )
+
+    def set_response_status_code_attribute(
+        self, span: Optional[Span], status_code: Optional[int]
+    ) -> None:
+        """
+        Set OTel-standard ``http.response.status_code`` (int) on the proxy
+        SERVER span. The failure path sets this from the error code in
+        ``_record_exception_on_span``; this is the success-path counterpart
+        so the attribute is present on every SERVER span regardless of
+        outcome (required by the HTTP semconv, and needed for error-ratio /
+        status-breakdown dashboards). No-op if span/value missing.
+        """
+        if span is None or status_code is None:
+            return
+        self.safe_set_attribute(
+            span=span,
+            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+            value=int(status_code),
+        )
+
+    def set_preprocessing_duration_attribute(
+        self, span: Optional[Span], container: Any
+    ) -> None:
+        """
+        Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
+        provider handoff) on the proxy SERVER span. ``litellm_received_at``
+        rides request metadata; ``first_api_call_start_time`` is the
+        set-once first-handoff instant (retries/backoff excluded). Works
+        uniformly for the success (model_call_details) and failure
+        (request_data) containers. No-op if span/either anchor is missing.
+        """
+        if span is None or not isinstance(container, dict):
+            return
+        received_at = None
+        # first_api_call_start_time is top-level (never in user metadata).
+        first_handoff = container.get("first_api_call_start_time")
+        _lp = container.get("litellm_params")
+        for _md in (
+            (_lp or {}).get("metadata") if isinstance(_lp, dict) else None,
+            container.get("metadata"),
+            container.get("litellm_metadata"),
+        ):
+            if isinstance(_md, dict):
+                received_at = received_at or _md.get("litellm_received_at")
+        if received_at is None or first_handoff is None:
+            return
+        try:
+            start_ts = self._to_timestamp(received_at)
+            end_ts = self._to_timestamp(first_handoff)
+        except Exception:
+            return
+        if start_ts is None or end_ts is None:
+            return
+        duration_ms = (end_ts - start_ts) * 1000.0
+        # Clock skew → omit rather than emit a negative latency.
+        if duration_ms < 0:
+            return
+        self.safe_set_attribute(
+            span=span,
+            key=PREPROCESSING_DURATION_MS_ATTRIBUTE,
+            value=duration_ms,
         )

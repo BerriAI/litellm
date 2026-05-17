@@ -34,7 +34,7 @@ async def test_async_sqs_logger_flush():
     litellm.callbacks = [sqs_logger]
 
     await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "hello"}],
         mock_response="hi",
     )
@@ -74,7 +74,7 @@ async def test_async_sqs_logger_flush():
     assert "model" in payload_data
     assert "messages" in payload_data
     assert "response" in payload_data
-    assert payload_data["model"] == "gpt-4o"
+    assert payload_data["model"] == "gpt-5.5"
     assert len(payload_data["messages"]) == 1
     assert payload_data["messages"][0]["role"] == "user"
     assert payload_data["messages"][0]["content"] == "hello"
@@ -99,7 +99,7 @@ async def test_async_sqs_logger_error_flush():
     litellm.callbacks = [sqs_logger]
 
     await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "hello"}],
         mock_response="Error occurred",
     )
@@ -139,7 +139,7 @@ async def test_async_sqs_logger_error_flush():
     assert "model" in payload_data
     assert "messages" in payload_data
     assert "response" in payload_data
-    assert payload_data["model"] == "gpt-4o"
+    assert payload_data["model"] == "gpt-5.5"
     assert len(payload_data["messages"]) == 1
     assert payload_data["messages"][0]["role"] == "user"
     assert payload_data["messages"][0]["content"] == "hello"

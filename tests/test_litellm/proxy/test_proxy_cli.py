@@ -538,7 +538,13 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
-    def test_keepalive_timeout_flag(self, mock_print, mock_uvicorn_run):
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_keepalive_timeout_flag(
+        self, mock_should_update, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
         """Test that the keepalive_timeout flag is properly passed to uvicorn"""
         from click.testing import CliRunner
 
@@ -551,7 +557,18 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
+        # Strip DATABASE_URL/DIRECT_URL so run_server doesn't enter the prisma
+        # DB-setup block (un-timeout'd `subprocess.run(["prisma"])` +
+        # migrate-deploy retry loop) — same isolation every other run_server
+        # test in this file uses.
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+
         with (
+            patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
                 "sys.modules",
                 {
@@ -596,7 +613,13 @@ class TestProxyInitializationHelpers:
 
     @patch("uvicorn.run")
     @patch("builtins.print")
-    def test_timeout_worker_healthcheck_flag(self, mock_print, mock_uvicorn_run):
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_timeout_worker_healthcheck_flag(
+        self, mock_should_update, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
         """Test that the --timeout_worker_healthcheck flag is threaded through to the uvicorn init helper."""
         from click.testing import CliRunner
 
@@ -609,7 +632,18 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
+        # Strip DATABASE_URL/DIRECT_URL so run_server doesn't enter the prisma
+        # DB-setup block (un-timeout'd `subprocess.run(["prisma"])` +
+        # migrate-deploy retry loop) — same isolation every other run_server
+        # test in this file uses.
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+
         with (
+            patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
                 "sys.modules",
                 {

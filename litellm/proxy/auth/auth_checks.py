@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import math
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
@@ -119,6 +120,22 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
+def _get_router_zero_cost_cache(llm_router: Router) -> Optional[Dict[str, bool]]:
+    """
+    Return the router's per-instance zero-cost cache, or ``None`` for objects
+    that don't expose one (e.g. ``MagicMock`` stand-ins in unit tests).
+
+    The cache lives on the ``Router`` instance so it:
+        * is invalidated by ``Router._invalidate_model_group_info_cache`` on
+          any model add/remove/upsert (including in-place pricing changes via
+          ``/model/update``, which go through ``upsert_deployment``);
+        * dies with the router itself — no risk of CPython reusing the
+          previous router's ``id()`` and serving its cached entries.
+    """
+    cache = getattr(llm_router, "_zero_cost_cache", None)
+    return cache if isinstance(cache, dict) else None
+
+
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
 ) -> bool:
@@ -140,7 +157,15 @@ def _is_model_cost_zero(
     # Handle list of models
     model_list = [model] if isinstance(model, str) else model
 
+    zero_cost_cache = _get_router_zero_cost_cache(llm_router)
+
     for model_name in model_list:
+        if zero_cost_cache is not None:
+            cached = zero_cost_cache.get(model_name)
+            if cached is not None:
+                if cached is False:
+                    return False
+                continue
         try:
             # Use router's get_model_group_info method directly for better reliability
             model_group_info = llm_router.get_model_group_info(model_group=model_name)
@@ -151,6 +176,8 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"No model group info found for {model_name}, assuming it has cost"
                 )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
                 return False
 
             # Check costs for this model
@@ -163,6 +190,8 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
                 )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
                 return False
 
             # If either cost is non-zero, return False
@@ -170,6 +199,8 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
                 )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
                 return False
 
             # Costs are 0 — verify this is from explicit configuration,
@@ -183,6 +214,8 @@ def _is_model_cost_zero(
                     "cost (enforce budget)",
                     safe_name,
                 )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
                 return False
 
             verbose_proxy_logger.debug(
@@ -191,6 +224,8 @@ def _is_model_cost_zero(
                 input_cost,
                 output_cost,
             )
+            if zero_cost_cache is not None:
+                zero_cost_cache[model_name] = True
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
@@ -328,7 +363,10 @@ def _global_proxy_budget_check(
         and route != "/v1/models"
         and route != "/models"
     ):
-        if global_proxy_spend > litellm.max_budget:
+        if (
+            math.isfinite(litellm.max_budget)
+            and global_proxy_spend > litellm.max_budget
+        ):
             raise litellm.BudgetExceededError(
                 current_cost=global_proxy_spend, max_budget=litellm.max_budget
             )
@@ -645,7 +683,7 @@ async def common_checks(  # noqa: PLR0915
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
             )
-            if user_spend >= user_budget:
+            if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=user_spend,
                     max_budget=user_budget,
@@ -3280,7 +3318,10 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if spend >= valid_token.max_budget:
+        # Defense-in-depth (GHSA-2rv4-xv66-fpjg): spend >= NaN is always False,
+        # so a NaN max_budget would silently disable enforcement.  Treat a
+        # non-finite max_budget as "no configured limit" rather than as a bypass.
+        if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
@@ -3313,7 +3354,7 @@ async def _virtual_key_multi_budget_check(
             counter_key=counter_key,
             fallback_spend=0.0,
         )
-        if window_spend >= w["max_budget"]:
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
@@ -3568,7 +3609,10 @@ async def _check_team_member_budget(
                 fallback_spend=team_member_spend,
             )
 
-            if team_member_spend >= team_member_budget:
+            if (
+                math.isfinite(team_member_budget)
+                and team_member_spend >= team_member_budget
+            ):
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
@@ -3650,7 +3694,7 @@ async def _team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
         )
 
-        if spend > team_object.max_budget:
+        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             if valid_token:
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -3698,7 +3742,7 @@ async def _team_multi_budget_check(
             counter_key=counter_key,
             fallback_spend=0.0,
         )
-        if window_spend >= w["max_budget"]:
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
@@ -3812,6 +3856,7 @@ async def _project_max_budget_check(
     if (
         max_budget is not None
         and project_object.spend is not None
+        and math.isfinite(max_budget)
         and project_object.spend > max_budget
     ):
         if valid_token:
@@ -4004,7 +4049,7 @@ async def _organization_max_budget_check(
     )
 
     # Check if organization spend exceeds max budget
-    if org_spend >= org_max_budget:
+    if math.isfinite(org_max_budget) and org_spend >= org_max_budget:
         # Trigger budget alert
         call_info = CallInfo(
             token=valid_token.token,

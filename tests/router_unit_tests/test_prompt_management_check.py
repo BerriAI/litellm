@@ -19,7 +19,7 @@ def test_is_prompt_management_model_optimization():
 
     Optimization: Check if "/" in model name before calling expensive
     get_model_list(). This short-circuits 99% of requests that use
-    standard model names like "gpt-4", "claude-3", etc.
+    standard model names like "gpt-5.5", "claude-3", etc.
 
     Tests both negative (early exit) and positive (actual detection) cases.
     """
@@ -29,17 +29,17 @@ def test_is_prompt_management_model_optimization():
     router = Router(
         model_list=[
             {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4"},
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "gpt-5.5"},
             },
             {
                 "model_name": "claude-3",
-                "litellm_params": {"model": "anthropic/claude-3-sonnet-20240229"},
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5-20250929"},
             },
         ]
     )
 
-    assert router._is_prompt_management_model("gpt-4") is False
+    assert router._is_prompt_management_model("gpt-5.5") is False
     assert router._is_prompt_management_model("claude-3") is False
 
     # Test 2: Models with "/" but not in model_list -> False after check
