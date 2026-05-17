@@ -146,8 +146,11 @@ def has_linked_issue(text: str) -> bool:
 
 def build_pr_prompt(*, title: str, body: str) -> str:
     cleaned_body = strip_html_comments(body or "").strip() or "(empty)"
-    return textwrap.dedent(
-        f"""
+    # Dedent the static template *before* interpolating dynamic fields so that
+    # multi-line bodies (whose 2nd+ lines start at column 0) don't defeat the
+    # common-indent computation in textwrap.dedent.
+    template = textwrap.dedent(
+        """
         You are "Agent Shin", the OSS triage bot for the LiteLLM open-source
         repository (BerriAI/litellm). Decide whether this external pull request
         meets the project's contribution standards.
@@ -195,12 +198,16 @@ def build_pr_prompt(*, title: str, body: str) -> str:
         ---
         """
     ).strip()
+    return template.format(title=title, cleaned_body=cleaned_body)
 
 
 def build_issue_prompt(*, title: str, body: str) -> str:
     cleaned_body = strip_html_comments(body or "").strip() or "(empty)"
-    return textwrap.dedent(
-        f"""
+    # Dedent the static template *before* interpolating dynamic fields so that
+    # multi-line bodies (whose 2nd+ lines start at column 0) don't defeat the
+    # common-indent computation in textwrap.dedent.
+    template = textwrap.dedent(
+        """
         You are "Agent Shin", the OSS triage bot for the LiteLLM open-source
         repository (BerriAI/litellm). Decide whether this GitHub issue meets
         the project's reporting standards.
@@ -245,6 +252,7 @@ def build_issue_prompt(*, title: str, body: str) -> str:
         ---
         """
     ).strip()
+    return template.format(title=title, cleaned_body=cleaned_body)
 
 
 # ---------------------------------------------------------------------------
