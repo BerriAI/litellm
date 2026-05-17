@@ -723,6 +723,13 @@ def _count_content_list(
                 num_tokens += _count_image_tokens(
                     image_url, use_default_image_token_count
                 )
+            elif c["type"] == "video_url":
+                video_url = c.get("video_url", "")
+                if isinstance(video_url, dict):
+                    video_url = video_url.get("url")
+                if video_url is None:
+                    video_url = ""
+                num_tokens += DEFAULT_IMAGE_TOKEN_COUNT + count_function(str(video_url))
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -744,7 +751,7 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field (text, image_url, video_url, tool_use, tool_result, thinking)."
                 )
         return num_tokens
     except Exception as e:

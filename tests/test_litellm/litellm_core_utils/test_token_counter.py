@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
+from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
@@ -906,6 +907,75 @@ def test_token_counter_with_image_url():
         assert "Invalid detail value" in str(
             e
         ), f"Expected detail validation error, got: {e}"
+
+
+def test_token_counter_with_video_url():
+    messages_dict = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "data:video/mp4;base64,AAAA",
+                    },
+                },
+            ],
+        }
+    ]
+
+    tokens_dict = token_counter(model="gpt-4o", messages=messages_dict)
+    assert tokens_dict > 0, f"Expected positive token count, got {tokens_dict}"
+
+    messages_str = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": "https://example.com/video.mp4",
+                }
+            ],
+        }
+    ]
+
+    tokens_str = token_counter(model="gpt-4o", messages=messages_str)
+    assert (
+        tokens_str > 0
+    ), f"Expected positive token count for string video_url, got {tokens_str}"
+    assert (
+        tokens_str > DEFAULT_IMAGE_TOKEN_COUNT
+    ), f"Expected default video token budget, got {tokens_str}"
+
+    messages_empty_url = [
+        {
+            "role": "user",
+            "content": [{"type": "video_url", "video_url": ""}],
+        }
+    ]
+    messages_none_url = [
+        {
+            "role": "user",
+            "content": [{"type": "video_url", "video_url": None}],
+        }
+    ]
+    messages_none_nested_url = [
+        {
+            "role": "user",
+            "content": [{"type": "video_url", "video_url": {"url": None}}],
+        }
+    ]
+
+    tokens_empty_url = token_counter(model="gpt-4o", messages=messages_empty_url)
+    assert tokens_empty_url > DEFAULT_IMAGE_TOKEN_COUNT
+    assert (
+        token_counter(model="gpt-4o", messages=messages_none_url) == tokens_empty_url
+    )
+    assert (
+        token_counter(model="gpt-4o", messages=messages_none_nested_url)
+        == tokens_empty_url
+    )
 
 
 def test_token_counter_with_thinking_content():
