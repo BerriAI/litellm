@@ -168,7 +168,6 @@ def make_redis_persister(
             key = redis_key_for(cassette_path)
             passed = _passed_by_cassette_key.pop(key, True)
             episode_count = len(cassette_dict.get("requests", []) or [])
-            _maybe_log_episode_body_hashes(key, cassette_dict)
             if episode_count > MAX_EPISODES_PER_CASSETTE:
                 _log.warning(
                     "VCR redis save refused for %s; cassette has %d episodes "
@@ -209,49 +208,6 @@ def make_redis_persister(
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
 
     return _RedisPersister
-
-
-# TEMP DIAGNOSTIC -- intended to be reverted once the async image-edit
-# cassette variance is root-caused. Logs a per-episode body SHA-256
-# at save time so two consecutive CI runs can be diffed: if the same
-# test records ``sha=abc`` on run 1 and ``sha=def`` on run 2, the live
-# request body genuinely varies; if both runs record the same hash
-# but the matcher still misses, the bug is in the matcher (e.g. it is
-# comparing a bytes object to a stream object). Always-on for any
-# session that loads this persister -- ungated because we are
-# specifically trying to capture data from CI right now.
-def _maybe_log_episode_body_hashes(key: str, cassette_dict) -> None:
-    import hashlib
-
-    # Imported lazily to avoid a circular import at module load.
-    from tests._vcr_conftest_common import vcr_diag_write_line
-
-    requests = cassette_dict.get("requests", []) or []
-    if not requests:
-        return
-    for i, req in enumerate(requests):
-        body = getattr(req, "body", None)
-        if body is None:
-            body_bytes = b""
-        elif isinstance(body, (bytes, bytearray)):
-            body_bytes = bytes(body)
-        elif isinstance(body, str):
-            body_bytes = body.encode("utf-8")
-        else:
-            vcr_diag_write_line(
-                f"[vcr-episode-body-hash] {key} episode[{i}]: body type="
-                f"{type(body).__name__!r} is not bytes/bytearray/str -- "
-                "cannot hash. This is the smoking gun for matcher-side "
-                "bugs on async multipart."
-            )
-            continue
-        method = getattr(req, "method", "?")
-        uri = getattr(req, "uri", getattr(req, "url", "?"))
-        vcr_diag_write_line(
-            f"[vcr-episode-body-hash] {key} episode[{i}] {method} {uri} "
-            f"body sha256={hashlib.sha256(body_bytes).hexdigest()} "
-            f"len={len(body_bytes)} preview={body_bytes[:120]!r}"
-        )
 
 
 def filter_non_2xx_response(response):
