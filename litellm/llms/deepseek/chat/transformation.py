@@ -35,7 +35,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Map OpenAI params to DeepSeek params.
 
         Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
-        DeepSeek only supports `{"type": "enabled"}` - no budget_tokens like Anthropic.
+        DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` for thinking,
+        and `reasoning_effort` values of `"high"` or `"max"` for V4 models.
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
@@ -49,18 +50,51 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
-        if thinking_value is not None:
-            if (
-                isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "enabled"
-            ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+        is_always_on_reasoner = supports_reasoning(
+            model=model, custom_llm_provider="deepseek"
+        )
 
-        # Handle reasoning_effort - map to thinking enabled
-        elif reasoning_effort is not None and reasoning_effort != "none":
-            optional_params["thinking"] = {"type": "enabled"}
+        # Handle thinking parameter - accepts {"type": "enabled"} or {"type": "disabled"}.
+        # Guard: deepseek-reasoner has always-on thinking and rejects {"type": "disabled"}.
+        if thinking_value is not None:
+            if isinstance(thinking_value, dict) and thinking_value.get("type") in (
+                "enabled",
+                "disabled",
+            ):
+                thinking_type = thinking_value.get("type")
+                if thinking_type == "disabled" and is_always_on_reasoner:
+                    pass  # no-op: deepseek-reasoner rejects {"type": "disabled"}
+                else:
+                    optional_params["thinking"] = {"type": thinking_type}
+
+        # Handle reasoning_effort when thinking was not explicitly provided.
+        if reasoning_effort is not None and "thinking" not in optional_params:
+            if reasoning_effort == "none":
+                # Only send thinking: disabled on V4 opt-in models.
+                # deepseek-reasoner/R1 have always-on thinking and reject {"type": "disabled"}.
+                if not is_always_on_reasoner:
+                    optional_params["thinking"] = {"type": "disabled"}
+            else:
+                # Normalize to DeepSeek's two supported values
+                normalized = "max" if reasoning_effort in ("max", "xhigh") else "high"
+                optional_params["thinking"] = {"type": "enabled"}
+                # Only forward reasoning_effort on V4 opt-in models.
+                # deepseek-reasoner/R1 have supports_reasoning=True but don't accept reasoning_effort field.
+                if not is_always_on_reasoner:
+                    optional_params["reasoning_effort"] = normalized
+
+        # When both thinking=enabled and reasoning_effort are provided for V4 models,
+        # also forward the effort level (not dropped by the thinking branch above).
+        if (
+            reasoning_effort is not None
+            and reasoning_effort != "none"
+            and optional_params.get("thinking", {}).get("type") == "enabled"
+            and "reasoning_effort" not in optional_params
+            and not is_always_on_reasoner
+        ):
+            optional_params["reasoning_effort"] = (
+                "max" if reasoning_effort in ("max", "xhigh") else "high"
+            )
 
         return optional_params
 
@@ -137,14 +171,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True only when thinking mode is actually active for this request:
-          - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+        Returns True when thinking mode is active for this request:
+          - deepseek-reasoner/R1: always-on thinking, no explicit param needed
+          - V4 opt-in models: only when user explicitly passed thinking={"type": "enabled"}
         """
-        return (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
-        )
+        if supports_reasoning(model=model, custom_llm_provider="deepseek"):
+            return True  # deepseek-reasoner always has thinking on
+        return (optional_params.get("thinking") or {}).get("type") == "enabled"
 
     def transform_request(
         self,
@@ -158,10 +191,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Ensures `reasoning_content` is forwarded on assistant messages for
         multi-turn thinking-mode conversations (issue #28045).
 
-        Only runs when thinking mode is actually active - guarded by both
-        supports_reasoning() (model capability) and optional_params["thinking"]
-        (user explicitly enabled it), preventing spurious injection on models
-        like deepseek-v3.2 that support thinking as opt-in but not always-on.
+        Runs when thinking mode is active: always for deepseek-reasoner (always-on),
+        and for V4 opt-in models only when the user explicitly enabled thinking.
         """
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
