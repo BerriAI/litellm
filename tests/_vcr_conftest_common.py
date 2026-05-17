@@ -677,6 +677,27 @@ def _materialize_iterable_body(request) -> None:
     except (AttributeError, TypeError):
         pass
 
+    # vcrpy's ``Request`` keeps two internal flags - ``_was_iter`` and
+    # ``_was_file`` - that are set in ``__init__`` based on the type
+    # of the original body and never cleared by the setter. Their job
+    # is to make the ``body`` *getter* re-wrap the stored value in
+    # ``iter()`` or ``BytesIO()`` on every access, so callers that
+    # expect a stream still get one even after the body has been
+    # consumed once. The side effect is that even after we write
+    # plain ``bytes`` back via ``request.body = out``, the next
+    # access still returns ``iter(self._body)`` - which gives every
+    # matcher comparison a fresh ``bytes_iterator`` and makes
+    # ``body_a == body_b`` an object-identity check that can never
+    # succeed. Touching the private flags is the only escape hatch;
+    # vcrpy exposes no public API for resetting them. After this
+    # point the body really is ``bytes`` from the getter's
+    # perspective.
+    for attr in ("_was_iter", "_was_file"):
+        try:
+            setattr(request, attr, False)
+        except (AttributeError, TypeError):
+            pass
+
 
 def _key_fingerprint_matcher(r1, r2) -> None:
     def _fp(req):
