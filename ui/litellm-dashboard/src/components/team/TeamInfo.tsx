@@ -502,6 +502,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             (n) => !(values.guardrails || []).includes(n),
           );
 
+      // Non-proxy-admins can't set allowed_passthrough_routes; preserve the
+      // stored value so an unrelated save can't wipe it.
+      const passthroughRoutesMetadata = is_proxy_admin
+        ? { allowed_passthrough_routes: values.allowed_passthrough_routes || [] }
+        : info.metadata?.allowed_passthrough_routes
+          ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
+          : {};
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -515,7 +523,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          allowed_passthrough_routes: values.allowed_passthrough_routes || [],
+          ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
