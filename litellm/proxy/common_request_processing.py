@@ -923,9 +923,11 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
-        ### WEB SEARCH REDIRECT (per-deployment force) ###
-        # if request only contains a web_search tool and has any deployment that has
-        # `force_websearch_model`, redirect to that model.
+        ### WEB SEARCH REDIRECT ###
+        # if request only contains web_search tools, check for redirect:
+        # 1. per-deployment force: always redirect to `force_websearch_model`
+        # 2. global fallback: redirect to `websearch_fallback_model` only when
+        #    the current model group does not support web search
         if (
             isinstance(self.data.get("model"), str)
             and llm_router is not None
@@ -937,6 +939,13 @@ class ProxyBaseLLMRequestProcessing:
         ):
             for dep in llm_router.get_model_list(model_name=self.data["model"]) or []:
                 if model := dep.get("litellm_params", {}).get("force_websearch_model"):
+                    self.data["model"] = model
+                    break
+                if (
+                    (dep_model := dep.get("litellm_params", {}).get("model", ""))
+                    and not litellm.supports_web_search(dep_model)
+                    and (model := getattr(litellm, "websearch_fallback_model", None))
+                ):
                     self.data["model"] = model
                     break
 
