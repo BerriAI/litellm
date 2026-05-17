@@ -65,6 +65,7 @@ def _check_passthrough_routes_caller_permission(
     `metadata`) — it short-circuits the role-based route gate, so keys and teams
     must be gated identically.
     """
+    # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if getattr(data, "allowed_passthrough_routes", None):
