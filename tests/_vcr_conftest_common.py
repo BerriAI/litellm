@@ -212,9 +212,17 @@ def _strip_image_b64_payloads(response):
     preserves all those checks while shrinking cassettes by ~99%.
     """
     if not isinstance(response, dict):
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response is {type(response).__name__!r}, not "
+            "dict; skipping b64 scrub"
+        )
         return response
     body = response.get("body")
     if not isinstance(body, dict):
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response['body'] is {type(body).__name__!r}, "
+            "not dict; skipping b64 scrub"
+        )
         return response
     raw = body.get("string")
     if raw is None:
@@ -224,12 +232,20 @@ def _strip_image_b64_payloads(response):
         try:
             text = bytes(raw).decode("utf-8")
         except UnicodeDecodeError:
+            vcr_diag_write_line(
+                "[vcr-strip-b64] response body bytes are not valid UTF-8; "
+                "skipping b64 scrub"
+            )
             return response
         was_bytes = True
     elif isinstance(raw, str):
         text = raw
         was_bytes = False
     else:
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response['body']['string'] is "
+            f"{type(raw).__name__!r}, not bytes/str; skipping b64 scrub"
+        )
         return response
 
     try:
@@ -259,6 +275,38 @@ def _before_record_response(response):
     return filter_non_2xx_response(_scrub_response(_strip_image_b64_payloads(response)))
 
 
+def _canonical_body(request) -> tuple[bytes, str]:
+    """Return ``(body_bytes, original_type_name)`` for a vcrpy request.
+
+    Materializes iterables / generators (httpx async wraps the body in a
+    ``list_iterator`` or ``bytes_iterator``), then coerces the result to
+    ``bytes``. Routing every matcher through this helper makes the
+    "compare object identity by mistake" failure mode structurally
+    impossible -- the comparison always operates on bytes.
+
+    Logs a diagnostic line when a body falls into the empty-fallback
+    branch (unknown shape). Never raises.
+    """
+    pre_type = type(getattr(request, "body", None)).__name__
+    _materialize_iterable_body(request)
+    body = getattr(request, "body", None)
+    if body is None:
+        return b"", pre_type
+    if isinstance(body, bytes):
+        return body, pre_type
+    if isinstance(body, bytearray):
+        return bytes(body), pre_type
+    if isinstance(body, str):
+        return body.encode("utf-8"), pre_type
+    method = getattr(request, "method", "?")
+    uri = getattr(request, "uri", getattr(request, "url", "?"))
+    vcr_diag_write_line(
+        f"[vcr-canonical-body] FALLBACK: {method} {uri} body type "
+        f"{type(body).__name__!r} not coerced to bytes; comparing as b''"
+    )
+    return b"", pre_type
+
+
 def _safe_body_matcher(r1, r2) -> None:
     """Compare request bodies as bytes; never invokes ``json.loads``.
 
@@ -268,40 +316,18 @@ def _safe_body_matcher(r1, r2) -> None:
     This matcher is strictly more conservative — the only equivalence
     it gives up vs. the default is "JSON key order doesn't matter".
     """
-    _materialize_iterable_body(r1)
-    _materialize_iterable_body(r2)
-    body1 = getattr(r1, "body", None)
-    body2 = getattr(r2, "body", None)
+    body1, pre1 = _canonical_body(r1)
+    body2, pre2 = _canonical_body(r2)
     if body1 == body2:
         return
-
-    def _to_bytes(b):
-        if b is None:
-            return b""
-        if isinstance(b, bytes):
-            return b
-        if isinstance(b, str):
-            return b.encode("utf-8")
-        return None
-
-    n1 = _to_bytes(body1)
-    n2 = _to_bytes(body2)
-    if n1 is not None and n2 is not None and n1 == n2:
-        return
-    _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2)
+    _emit_body_mismatch_diagnostic(r1, r2, body1, body2, pre1, pre2)
     raise AssertionError("request bodies differ")
 
 
-def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
-    def _describe(label, raw, asbytes):
-        t = type(raw).__name__
-        if asbytes is None:
-            return (
-                f"  {label}: type={t!r} length=unknown sha256=N/A "
-                f"(body could not be coerced to bytes)"
-            )
+def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, pre1, pre2) -> None:
+    def _describe(label, asbytes, pre_type):
         return (
-            f"  {label}: type={t!r} length={len(asbytes)} "
+            f"  {label}: pre_canonical_type={pre_type!r} length={len(asbytes)} "
             f"sha256={hashlib.sha256(asbytes).hexdigest()} "
             f"preview={asbytes[:120]!r}"
         )
@@ -314,20 +340,20 @@ def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
         "[vcr-safe-body-matcher] request body mismatch",
         f"  request[a]: {method_a} {url_a}",
         f"  request[b]: {method_b} {url_b}",
-        _describe("body[a]", body1, n1),
-        _describe("body[b]", body2, n2),
+        _describe("body[a]", body1, pre1),
+        _describe("body[b]", body2, pre2),
     ]
-    if n1 is not None and n2 is not None and n1 != n2:
+    if body1 != body2:
         offset = next(
-            (i for i in range(min(len(n1), len(n2))) if n1[i] != n2[i]),
-            min(len(n1), len(n2)),
+            (i for i in range(min(len(body1), len(body2))) if body1[i] != body2[i]),
+            min(len(body1), len(body2)),
         )
         start = max(0, offset - 100)
-        end_a = min(len(n1), offset + 100)
-        end_b = min(len(n2), offset + 100)
+        end_a = min(len(body1), offset + 100)
+        end_b = min(len(body2), offset + 100)
         lines.append(f"  first divergent byte offset: {offset}")
-        lines.append(f"  window[a] @ {start}..{end_a}: {n1[start:end_a]!r}")
-        lines.append(f"  window[b] @ {start}..{end_b}: {n2[start:end_b]!r}")
+        lines.append(f"  window[a] @ {start}..{end_a}: {body1[start:end_a]!r}")
+        lines.append(f"  window[b] @ {start}..{end_b}: {body2[start:end_b]!r}")
     vcr_diag_write_line("\n".join(lines))
 
 
@@ -386,6 +412,13 @@ def _compute_key_fingerprint(request) -> str:
             stable = _stable_key_value(header_name, text)
             parts.append(f"{header_name}={stable}")
     if not parts:
+        method = getattr(request, "method", "?")
+        uri = getattr(request, "uri", getattr(request, "url", "?"))
+        vcr_diag_write_line(
+            f"[vcr-key-fingerprint] no API key header found on {method} "
+            f"{uri}; falling back to 'no-key'. If this request should have "
+            "carried auth, something earlier in the pipeline stripped it."
+        )
         return "no-key"
     digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
     return digest[:16]
@@ -586,7 +619,17 @@ def _key_fingerprint_matcher(r1, r2) -> None:
             return value if isinstance(value, str) else str(value)
         return "no-key"
 
-    if _fp(r1) != _fp(r2):
+    fp1, fp2 = _fp(r1), _fp(r2)
+    if fp1 != fp2:
+        method_a = getattr(r1, "method", "?")
+        method_b = getattr(r2, "method", "?")
+        url_a = getattr(r1, "uri", getattr(r1, "url", "?"))
+        url_b = getattr(r2, "uri", getattr(r2, "url", "?"))
+        vcr_diag_write_line(
+            "[vcr-key-fingerprint-matcher] API key fingerprints differ\n"
+            f"  request[a]: {method_a} {url_a} fingerprint={fp1!r}\n"
+            f"  request[b]: {method_b} {url_b} fingerprint={fp2!r}"
+        )
         raise AssertionError("API key fingerprints differ")
 
 

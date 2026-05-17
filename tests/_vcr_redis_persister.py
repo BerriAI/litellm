@@ -168,6 +168,7 @@ def make_redis_persister(
             key = redis_key_for(cassette_path)
             passed = _passed_by_cassette_key.pop(key, True)
             episode_count = len(cassette_dict.get("requests", []) or [])
+            _log_episode_body_hashes(key, cassette_dict)
             if episode_count > MAX_EPISODES_PER_CASSETTE:
                 _log.warning(
                     "VCR redis save refused for %s; cassette has %d episodes "
@@ -208,6 +209,43 @@ def make_redis_persister(
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
 
     return _RedisPersister
+
+
+def _log_episode_body_hashes(key: str, cassette_dict) -> None:
+    """Record a per-episode body SHA-256 for every cassette save.
+
+    Lets two consecutive CI runs be diffed: if the same test records a
+    different hash run-to-run, the live request body varies; if both
+    runs record the same hash but the matcher still misses, the bug is
+    in the matcher itself. Negligible cost (~1ms hashing + ~200B file
+    write per saved episode; nothing at all when cassettes replay).
+    """
+    import hashlib
+
+    from tests._vcr_conftest_common import vcr_diag_write_line
+
+    requests = cassette_dict.get("requests", []) or []
+    for i, req in enumerate(requests):
+        body = getattr(req, "body", None)
+        if body is None:
+            body_bytes = b""
+        elif isinstance(body, (bytes, bytearray)):
+            body_bytes = bytes(body)
+        elif isinstance(body, str):
+            body_bytes = body.encode("utf-8")
+        else:
+            vcr_diag_write_line(
+                f"[vcr-episode-body-hash] {key} episode[{i}]: body type="
+                f"{type(body).__name__!r} not bytes/bytearray/str -- cannot hash"
+            )
+            continue
+        method = getattr(req, "method", "?")
+        uri = getattr(req, "uri", getattr(req, "url", "?"))
+        vcr_diag_write_line(
+            f"[vcr-episode-body-hash] {key} episode[{i}] {method} {uri} "
+            f"body sha256={hashlib.sha256(body_bytes).hexdigest()} "
+            f"len={len(body_bytes)} preview={body_bytes[:120]!r}"
+        )
 
 
 def filter_non_2xx_response(response):
