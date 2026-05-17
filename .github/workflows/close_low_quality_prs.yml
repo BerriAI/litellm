@@ -20,7 +20,7 @@ on:
       close:
         description: "Actually close matching PRs (false = dry run)."
         required: false
-        default: "true"
+        default: "false"
         type: choice
         options:
           - "true"
@@ -62,7 +62,11 @@ jobs:
       - name: Run low-quality PR closer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CLOSE_FLAG: ${{ github.event.inputs.close || 'true' }}
+          # Default to dry-run for scheduled triggers as well. The repo
+          # variable AGENT_SHIN_ENABLED must be "true" before scheduled runs
+          # actually close PRs, AND workflow_dispatch must opt-in via close=true.
+          CLOSE_FLAG: ${{ github.event.inputs.close || 'false' }}
+          AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
           MIN_AGE_DAYS: ${{ github.event.inputs.min_age_days || '7' }}
           MIN_SCORE: ${{ github.event.inputs.min_score || '4' }}
           LIMIT: ${{ github.event.inputs.limit || '25' }}
@@ -74,7 +78,12 @@ jobs:
             --min-score "${MIN_SCORE}"
             --limit "${LIMIT}"
           )
-          if [ "${CLOSE_FLAG}" = "true" ]; then
+          if [ "${AGENT_SHIN_ENABLED:-false}" != "true" ]; then
+            echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> forcing dry-run regardless of close input."
+          elif [ "${CLOSE_FLAG}" = "true" ]; then
             ARGS+=(--close)
+            echo "::notice::Running in close-on-fail mode."
+          else
+            echo "::notice::AGENT_SHIN_ENABLED is true but close=false -> dry-run."
           fi
           python3 .github/scripts/close_low_quality_prs.py "${ARGS[@]}"

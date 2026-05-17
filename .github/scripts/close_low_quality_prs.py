@@ -50,6 +50,10 @@ SCORE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# `author_association` values for internal BerriAI contributors who should be
+# exempt from auto-triage.
+INTERNAL_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
 
 def gh(*args: str) -> str:
     """Run a `gh` CLI command and return stdout. Raises on non-zero exit."""
@@ -83,6 +87,38 @@ def fetch_open_prs(repo: str | None) -> list[dict]:
         *repo_args,
     )
     return json.loads(raw)
+
+
+def fetch_pr_author_association(pr_number: int, repo: str | None) -> str:
+    """Return the GitHub `author_association` for a PR, uppercase.
+
+    Values: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
+    FIRST_TIMER, MANNEQUIN, NONE. Returns "" on lookup failure.
+    """
+    endpoint = (
+        f"repos/{repo}/pulls/{pr_number}"
+        if repo
+        else f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"
+    )
+    try:
+        data = json.loads(gh("api", endpoint))
+    except subprocess.CalledProcessError:
+        return ""
+    return (data.get("author_association") or "").upper()
+
+
+def is_external_pr_author(pr: dict, repo: str | None) -> bool:
+    """Return True if the PR author is an external OSS contributor.
+
+    Internal = `OWNER` / `MEMBER` / `COLLABORATOR` association, or a bot login.
+    """
+    login = ((pr.get("author") or {}).get("login") or "").lower()
+    if login.endswith("[bot]") or login in {"dependabot", "github-actions"}:
+        return False
+    association = fetch_pr_author_association(pr["number"], repo)
+    if association in INTERNAL_AUTHOR_ASSOCIATIONS:
+        return False
+    return True
 
 
 def fetch_pr_comments(pr_number: int, repo: str | None) -> list[dict]:
@@ -203,7 +239,7 @@ def evaluate_pr(
     """Decide whether to close `pr`.
 
     Returns (action, score_or_none, age_days_or_none) where action is one of:
-        "skip-draft", "skip-too-young", "skip-optout-label",
+        "skip-draft", "skip-too-young", "skip-optout-label", "skip-internal",
         "skip-no-greptile-score", "skip-score-ok", or "close".
     """
     if pr.get("isDraft"):
@@ -216,6 +252,11 @@ def evaluate_pr(
     age_days = (now - created).days
     if age_days < min_age_days:
         return ("skip-too-young", None, age_days)
+
+    # Only auto-close external OSS contributors. Internal contributors
+    # (BerriAI org members) handle their own backlog.
+    if not is_external_pr_author(pr, repo):
+        return ("skip-internal", None, age_days)
 
     comments = fetch_pr_comments(pr["number"], repo)
     extraction = extract_greptile_score(comments)
@@ -298,6 +339,7 @@ def main() -> int:
         "skip-draft": 0,
         "skip-too-young": 0,
         "skip-optout-label": 0,
+        "skip-internal": 0,
         "skip-no-greptile-score": 0,
         "skip-score-ok": 0,
     }

@@ -139,6 +139,13 @@ class TestEvaluatePr:
             "url": f"https://example.com/pr/{number}",
         }
 
+    @pytest.fixture(autouse=True)
+    def _external_author(self, closer_module, monkeypatch):
+        """Treat every test PR as external unless overridden."""
+        monkeypatch.setattr(
+            closer_module, "is_external_pr_author", lambda pr, repo: True
+        )
+
     def test_should_skip_drafts(self, closer_module, _now, monkeypatch):
         monkeypatch.setattr(
             closer_module,
@@ -262,6 +269,27 @@ class TestEvaluatePr:
         )
         assert action == "close"
         assert score == 1
+
+    def test_should_skip_internal_authors(self, closer_module, _now, monkeypatch):
+        # Override the fixture for this one test.
+        monkeypatch.setattr(
+            closer_module, "is_external_pr_author", lambda pr, repo: False
+        )
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: pytest.fail("should not fetch comments for internal"),
+        )
+        action, score, _ = closer_module.evaluate_pr(
+            self._make_pr(created_days_ago=14),
+            now=_now,
+            min_age_days=7,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+        )
+        assert action == "skip-internal"
+        assert score is None
 
 
 class TestHasOptoutLabel:
