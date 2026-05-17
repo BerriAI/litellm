@@ -126,15 +126,31 @@ class TestDeepSeekThinkingParams:
         assert result["thinking"] == {"type": "enabled"}
         assert result["reasoning_effort"] == "max"
 
-    def test_map_reasoning_effort_none_disables_thinking(self):
-        """Test that reasoning_effort='none' sends thinking disabled."""
+    def test_map_reasoning_effort_none_is_noop_for_reasoner(self):
+        """Test that reasoning_effort='none' is a no-op for deepseek-reasoner (always-on thinking)."""
         non_default_params = {"reasoning_effort": "none"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model=self.model,  # deepseek-reasoner
+            drop_params=False,
+        )
+
+        # deepseek-reasoner has always-on thinking, API rejects {"type": "disabled"}
+        assert "thinking" not in result
+        assert "reasoning_effort" not in result
+
+    def test_map_reasoning_effort_none_disables_thinking_for_v4(self):
+        """Test that reasoning_effort='none' sends thinking disabled for V4 opt-in models."""
+        non_default_params = {"reasoning_effort": "none"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
