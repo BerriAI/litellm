@@ -993,6 +993,21 @@ def test_token_counter_with_video_url():
     )
 
 
+def test_token_counter_invalid_content_type_lists_video_url():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "audio_url", "audio_url": "https://example.com"}],
+        }
+    ]
+
+    try:
+        token_counter(model="gpt-4o", messages=messages)
+        assert False, "Expected ValueError for invalid content item type"
+    except ValueError as e:
+        assert "video_url" in str(e)
+
+
 def test_token_counter_with_thinking_content():
     """
     Test that _count_content_list() correctly handles Claude's extended thinking content blocks.
