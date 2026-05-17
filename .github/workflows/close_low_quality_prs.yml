@@ -1,0 +1,80 @@
+name: Close Low-Quality Stale PRs
+
+# Auto-close PRs that have been open for a week or more and that Greptile has
+# reviewed with a confidence score below 4/5. Closures are explained in a
+# comment so contributors know how to bring the PR back (rebase, request a new
+# Greptile review, reopen on a 4+/5).
+#
+# Manual one-off run:
+#   gh workflow run "Close Low-Quality Stale PRs" -f close=true
+#
+# Dry-run preview (no PRs are touched):
+#   gh workflow run "Close Low-Quality Stale PRs" -f close=false
+
+on:
+  schedule:
+    # Daily at 09:00 UTC. Pairs well with the stale-issue workflow at midnight.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      close:
+        description: "Actually close matching PRs (false = dry run)."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      min_age_days:
+        description: "Minimum PR age in days before it is eligible."
+        required: false
+        default: "7"
+      min_score:
+        description: "Greptile score below which a PR is closed (1-5)."
+        required: false
+        default: "4"
+      limit:
+        description: "Maximum number of PRs to close in a single run."
+        required: false
+        default: "25"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  close-low-quality-prs:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triage script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Run low-quality PR closer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOSE_FLAG: ${{ github.event.inputs.close || 'true' }}
+          MIN_AGE_DAYS: ${{ github.event.inputs.min_age_days || '7' }}
+          MIN_SCORE: ${{ github.event.inputs.min_score || '4' }}
+          LIMIT: ${{ github.event.inputs.limit || '25' }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --repo "${{ github.repository }}"
+            --min-age-days "${MIN_AGE_DAYS}"
+            --min-score "${MIN_SCORE}"
+            --limit "${LIMIT}"
+          )
+          if [ "${CLOSE_FLAG}" = "true" ]; then
+            ARGS+=(--close)
+          fi
+          python3 .github/scripts/close_low_quality_prs.py "${ARGS[@]}"
