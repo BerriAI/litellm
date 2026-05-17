@@ -1495,9 +1495,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # the wire body, and Anthropic / Bedrock reject the
                     # request with "Thinking may not be enabled when
                     # tool_choice forces tool use".
-                    is_adaptive_thinking = self._is_adaptive_thinking_model(
-                        model
-                    )
+                    is_adaptive_thinking = self._is_adaptive_thinking_model(model)
                     if not is_thinking_enabled and not is_adaptive_thinking:
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
