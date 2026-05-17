@@ -2298,6 +2298,41 @@ async def test_team_budget_check_reads_from_spend_counter():
 
 
 @pytest.mark.asyncio
+async def test_team_budget_check_blocks_when_spend_equals_max_budget():
+    """Team budget check should block when spend == max_budget, matching
+    the >= comparator used by key, key-window, team-window, and org checks.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28020.
+    """
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        spend=0.0,
+        max_budget=1.0,
+    )
+    valid_token = UserAPIKeyAuth(token="test-token", team_id="test-team")
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:team:test-team":
+            return 1.0  # exactly at max_budget
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _team_max_budget_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.current_cost == 1.0
+        assert exc_info.value.max_budget == 1.0
+
+
+@pytest.mark.asyncio
 async def test_end_user_budget_check_reads_from_spend_counter():
     """End-user budget check should use get_current_spend when counter exists."""
     end_user_object = LiteLLM_EndUserTable(
