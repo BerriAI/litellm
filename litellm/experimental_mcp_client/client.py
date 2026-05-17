@@ -4,6 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import logging
 from typing import (
     Any,
     Awaitable,
@@ -261,16 +262,27 @@ class _LiteLLMMCPClientSession(ClientSession):
             method = "elicitation/create"
 
         if method is not None:
-            params = getattr(request_root, "params", None)
             verbose_logger.warning(
                 "MCP upstream %s sent %s; the LiteLLM MCP Gateway does not "
                 "implement this capability yet. Responding with JSON-RPC "
-                "error %d. params=%r",
+                "error %d.",
                 self._litellm_server_url or "stdio",
                 method,
                 METHOD_NOT_FOUND,
-                params,
             )
+            # Params from sampling/createMessage can include the full
+            # conversation history and system prompt; params from
+            # elicitation/create can include sensitive instructions. Keep
+            # them at DEBUG level so they never land in production log
+            # aggregators unless operators explicitly opt in.
+            if verbose_logger.isEnabledFor(logging.DEBUG):
+                params = getattr(request_root, "params", None)
+                verbose_logger.debug(
+                    "MCP unsupported server->client request payload: "
+                    "method=%s params=%r",
+                    method,
+                    params,
+                )
             with responder:
                 await responder.respond(
                     _build_unsupported_method_error(method, self._litellm_server_url)

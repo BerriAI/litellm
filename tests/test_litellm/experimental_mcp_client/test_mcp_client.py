@@ -520,6 +520,57 @@ class TestUnsupportedServerToClientMethods:
         )
 
     @pytest.mark.asyncio
+    async def test_sampling_warning_log_does_not_contain_message_content(self, caplog):
+        """
+        Regression: WARNING-level logs must NOT include `sampling/createMessage`
+        params, which can contain conversation history, system prompts, or
+        other user-supplied content. Operators opt into the payload via DEBUG.
+        """
+        import logging
+
+        from mcp.types import (
+            CreateMessageRequest,
+            CreateMessageRequestParams,
+            SamplingMessage,
+            TextContent,
+        )
+
+        from litellm.experimental_mcp_client.client import (
+            _LiteLLMMCPClientSession,
+        )
+
+        session = _LiteLLMMCPClientSession.__new__(_LiteLLMMCPClientSession)
+        session._litellm_server_url = "https://upstream.example/mcp"
+
+        secret = "tenant-A-conversation-snippet-do-not-leak"
+        params = CreateMessageRequestParams(
+            messages=[
+                SamplingMessage(
+                    role="user",
+                    content=TextContent(type="text", text=secret),
+                )
+            ],
+            maxTokens=16,
+        )
+        responder = _FakeResponder(
+            CreateMessageRequest(method="sampling/createMessage", params=params)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await session._received_request(responder)
+
+        # No WARNING record may contain the user-supplied conversation text.
+        warnings_with_secret = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.WARNING and secret in r.getMessage()
+        ]
+        assert warnings_with_secret == [], (
+            f"Sensitive sampling params leaked to WARNING log: "
+            f"{[r.getMessage() for r in warnings_with_secret]}"
+        )
+
+    @pytest.mark.asyncio
     async def test_other_server_requests_fall_through_to_default(self):
         """
         Server -> client methods that aren't sampling/elicitation must
