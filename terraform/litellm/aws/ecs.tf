@@ -5,26 +5,36 @@ resource "aws_ecs_cluster" "this" {
     name  = "containerInsights"
     value = "enabled"
   }
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "gateway" {
   name              = "/ecs/${local.name}/gateway"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${local.name}/backend"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "ui" {
   name              = "/ecs/${local.name}/ui"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "migrations" {
   name              = "/ecs/${local.name}/migrations"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 # Shared env block fed to gateway, backend, and the migration task. Mirrors
@@ -169,6 +179,8 @@ resource "aws_ecs_task_definition" "gateway" {
       local.gateway_proxy_overrides,
     )
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "gateway" {
@@ -206,6 +218,8 @@ resource "aws_ecs_service" "gateway" {
     aws_lb_listener.https,
     terraform_data.migration,
   ]
+
+  tags = local.tags
 }
 
 # ---------- Backend ----------
@@ -246,6 +260,8 @@ resource "aws_ecs_task_definition" "backend" {
       local.backend_proxy_overrides,
     )
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "backend" {
@@ -279,6 +295,8 @@ resource "aws_ecs_service" "backend" {
     aws_lb_listener.https,
     terraform_data.migration,
   ]
+
+  tags = local.tags
 }
 
 # ---------- UI ----------
@@ -312,6 +330,8 @@ resource "aws_ecs_task_definition" "ui" {
       }
     }
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "ui" {
@@ -344,4 +364,6 @@ resource "aws_ecs_service" "ui" {
     aws_lb_listener.http,
     aws_lb_listener.https,
   ]
+
+  tags = local.tags
 }

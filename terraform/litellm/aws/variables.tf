@@ -24,7 +24,7 @@ variable "env" {
 }
 
 variable "tags" {
-  description = "Additional tags merged into the provider default_tags."
+  description = "Per-deployment tags applied to every taggable resource the module creates, on top of the module's own `litellm:stack` / `managed-by` tags. Caller-level provider `default_tags` (if any) merge with these."
   type        = map(string)
   default     = {}
 }

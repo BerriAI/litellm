@@ -160,10 +160,21 @@ resource "google_compute_global_forwarding_rule" "http" {
 
 resource "google_compute_managed_ssl_certificate" "this" {
   count = local.tls_enabled ? 1 : 0
-  name  = "${local.name}-cert"
+
+  # A managed cert's `domains` is immutable, so changing var.lb_domains
+  # forces replacement, and the cert is referenced by the HTTPS target
+  # proxy — a destroy-then-create replacement fails with
+  # `resourceInUseByAnotherResource`. Hashing the domains into the name
+  # makes the name change with the domain set, so create_before_destroy
+  # builds the new cert + repoints the proxy before deleting the old one.
+  name = "${local.name}-cert-${substr(sha1(join(",", var.lb_domains)), 0, 8)}"
 
   managed {
     domains = var.lb_domains
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 

@@ -19,12 +19,16 @@
 resource "aws_db_subnet_group" "this" {
   name       = "${local.name}-db"
   subnet_ids = aws_subnet.private[*].id
+
+  tags = local.tags
 }
 
 resource "aws_rds_cluster_parameter_group" "this" {
   name        = "${local.name}-cluster-pg"
   family      = "aurora-postgresql${split(".", var.db_engine_version)[0]}"
   description = "LiteLLM Aurora Postgres cluster parameters."
+
+  tags = local.tags
 }
 
 resource "aws_rds_cluster" "this" {
@@ -52,6 +56,8 @@ resource "aws_rds_cluster" "this" {
 
   backup_retention_period = 7
   preferred_backup_window = "07:00-09:00"
+
+  tags = local.tags
 }
 
 resource "aws_rds_cluster_instance" "writer" {
@@ -67,6 +73,8 @@ resource "aws_rds_cluster_instance" "writer" {
   # Promotion tier 0 — first in line during failover, so this instance stays
   # the writer unless it goes unhealthy.
   promotion_tier = 0
+
+  tags = local.tags
 }
 
 resource "aws_rds_cluster_instance" "reader" {
@@ -82,4 +90,6 @@ resource "aws_rds_cluster_instance" "reader" {
   # Higher promotion tier — won't be picked as writer during a failover
   # unless the writer instance itself is gone.
   promotion_tier = 15
+
+  tags = local.tags
 }

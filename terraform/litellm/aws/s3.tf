@@ -18,6 +18,8 @@ resource "aws_s3_bucket" "this" {
   # cached responses, archived request logs, and /v1/files storage stay put.
   # Flip to true only for ephemeral / CI stacks (`var.s3_force_destroy`).
   force_destroy = var.s3_force_destroy
+
+  tags = local.tags
 }
 
 resource "aws_s3_bucket_versioning" "this" {
@@ -72,6 +74,8 @@ data "aws_iam_policy_document" "s3_access" {
 resource "aws_iam_policy" "s3_access" {
   name   = "${local.name}-s3-access"
   policy = data.aws_iam_policy_document.s3_access.json
+
+  tags = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "task_s3_access" {

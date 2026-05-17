@@ -26,19 +26,12 @@ env    = "stage"
 # non-empty bucket. Flip to true only for ephemeral / CI stacks.
 # s3_force_destroy = false
 
-# Component images. Defaults pin all four to the same GHCR release tag —
-# bump them together when bumping LiteLLM. Override here to pull from a
-# private registry or to mix-and-match versions.
-# gateway_image    = "ghcr.io/berriai/litellm-gateway:1.86.0-dev"
-# backend_image    = "ghcr.io/berriai/litellm-backend:1.86.0-dev"
-# ui_image         = "ghcr.io/berriai/litellm-ui:1.86.0-dev"
-# migrations_image = "ghcr.io/berriai/litellm-migrations:1.86.0-dev"
-
-# Per-task sizing for the gateway. Defaults are 1 vCPU / 4 GiB / 1 worker.
-# uvicorn rule of thumb for CPU-bound work is (2 * vCPU) + 1 workers.
-# gateway_cpu         = 1024   # 1024 = 1 vCPU
-# gateway_memory      = 4096   # MiB
-# gateway_num_workers = 1
+# Component images and per-task sizing/autoscaling are NOT exposed as
+# variables in this example (it keeps the curated surface small). They
+# default to working public GHCR images. To pin images or tune
+# CPU/memory/workers/autoscaling, set those inputs directly on the
+# `module "litellm"` block in main.tf — the full list is in
+# ../../variables.tf — or call the module from your own root config.
 
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 # proxy_config = {
