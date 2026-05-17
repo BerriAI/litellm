@@ -115,6 +115,18 @@ fi
 # day, so it's common to need to walk past 30+ entries before hitting
 # the most recent v*-stable. We cap at 5 pages (500 releases) which is
 # conservatively beyond the worst observed gap.
+#
+# We deliberately do NOT short-circuit on the first page that contains a
+# v*-stable tag. The /releases endpoint orders by `created_at`, not by
+# semver, so a backport on an older series (e.g. v1.80.1-stable cut
+# today) can show up on an earlier page than a higher-versioned release
+# (v1.83.0-stable cut two weeks ago). Breaking early on first-stable-seen
+# would silently pin the cron to the stale tag because the
+# higher-versioned release still on a later page would never make it
+# into the merged set the `sort_by` below consumes. The only break we
+# keep is the empty-page guard, which means a quiet period in the
+# release feed doesn't waste API quota — we just always walk far enough
+# to be confident we've seen the highest stable tag.
 GH_AUTH_HEADER=()
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
@@ -131,11 +143,6 @@ for page in 1 2 3 4 5; do
     >"${PAGE_JSON}"
   jq -s '.[0] + .[1]' "${RELEASES_JSON}" "${PAGE_JSON}" >"${RELEASES_JSON}.merged"
   mv "${RELEASES_JSON}.merged" "${RELEASES_JSON}"
-  # Stop early once we've seen at least one v*-stable tag — no point
-  # paging further for a daily script that only needs the newest.
-  if jq -e '[.[] | .tag_name // "" | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))] | length > 0' "${PAGE_JSON}" >/dev/null; then
-    break
-  fi
   # No more pages? GitHub returns an empty array past the last page.
   if [[ "$(jq 'length' "${PAGE_JSON}")" == "0" ]]; then
     break
