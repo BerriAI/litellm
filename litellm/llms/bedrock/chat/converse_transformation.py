@@ -1035,11 +1035,20 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params=optional_params, tools=[_tool]
             )
 
+            # Adaptive-thinking models (Claude 4.7+) need the same carve-out
+            # as anthropic/chat/transformation.py: ``is_thinking_enabled``
+            # does not match ``thinking.type == "adaptive"``, so without
+            # this check we set a forced ``tool_choice`` while
+            # ``thinking: adaptive`` is still on the wire body and Bedrock
+            # rejects with "Thinking may not be enabled when tool_choice
+            # forces tool use".
+            is_adaptive_thinking = AnthropicConfig._is_adaptive_thinking_model(model)
             if (
                 litellm.utils.supports_tool_choice(
                     model=model, custom_llm_provider=self.custom_llm_provider
                 )
                 and not is_thinking_enabled
+                and not is_adaptive_thinking
             ):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)

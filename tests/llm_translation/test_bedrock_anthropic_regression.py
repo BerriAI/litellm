@@ -539,3 +539,76 @@ class TestBedrockAnthropicCombinedRegressions:
                 for c in user_msg["content"]
             )
             assert has_cache_control
+
+
+def test_bedrock_converse_adaptive_thinking_response_format_no_forced_tool_choice(
+    monkeypatch,
+):
+    """Bedrock converse fallback path: same fix as PR #28114's anthropic-side
+    fix needs to apply here too.
+
+    AmazonConverseConfig._add_response_format_to_optional_params (the
+    response_format → synthetic-tool fallback) used to force tool_choice
+    when not is_thinking_enabled. Adaptive-thinking models (Claude 4.7+)
+    use ``thinking.type == "adaptive"`` and so are not matched by
+    is_thinking_enabled, leading to a forced tool_choice while thinking
+    is on the wire body — Bedrock returns:
+        Thinking may not be enabled when tool_choice forces tool use.
+
+    Reproduces the same bug in this provider as the anthropic-side
+    fallback. See PR #28114 description for full background.
+    """
+    import litellm
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    # Force the helper True so the test does not depend on which models
+    # the model_cost map happens to flag adaptive.
+    monkeypatch.setattr(
+        AnthropicConfig,
+        "_is_adaptive_thinking_model",
+        staticmethod(lambda model: True),
+    )
+    # Make sure supports_tool_choice is True so the original guard doesn't
+    # short-circuit for the test model.
+    monkeypatch.setattr(
+        litellm.utils, "supports_tool_choice", lambda model, custom_llm_provider=None: True
+    )
+
+    config = AmazonConverseConfig()
+    response_format_value = {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "integer"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+            "name": "out",
+        },
+    }
+    optional_params = config._translate_response_format_param(
+        value=response_format_value,
+        # Use a model name that is not on the native-structured-output list
+        # so we hit the synthetic-tool fallback path.
+        model="some-future-adaptive-model",
+        optional_params={},
+        non_default_params={"response_format": response_format_value},
+        is_thinking_enabled=False,
+    )
+
+    assert "tool_choice" not in optional_params, (
+        "Adaptive-thinking models must not have a forced tool_choice "
+        "synthesised by the Bedrock response_format fallback path; got: "
+        f"{optional_params.get('tool_choice')!r}"
+    )
+    # The synthetic tool should still be present so the model can still
+    # emit JSON via it when it chooses to. ``_translate_response_format_param``
+    # runs early in the chain and tools are still in OpenAI shape at this
+    # point (function/parameters); they get converted to Bedrock toolSpec
+    # later in transform_request.
+    tools = optional_params.get("tools") or []
+    assert any(
+        t.get("function", {}).get("name") == "json_tool_call" for t in tools
+    ), f"expected synthetic json_tool_call tool, got tools={tools}"
