@@ -212,6 +212,66 @@ def test_streaming(m: _M, oci_params):
         assert len(content) > 0
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["cohere.command-latest", "cohere.command-r-plus-08-2024"],
+)
+def test_cohere_streaming_no_doubling(model, oci_params):
+    """Regression: OCI Cohere's terminal SSE event re-sends the full assembled
+    response in `text` alongside a populated `chatHistory`. Emitting that text
+    as another delta would concatenate the whole response onto the
+    already-streamed output (e.g. "How can I help?How can I help?").
+
+    Reported by @gotsysdba on PR #25177. Fix: drop terminal text when
+    `chatHistory` is present in `handle_cohere_stream_chunk`.
+    """
+    import litellm
+
+    streamed = "".join(
+        (c.choices[0].delta.content or "")
+        for c in litellm.completion(
+            model=f"oci/{model}",
+            messages=[{"role": "user", "content": "Hello!"}],
+            max_tokens=64,
+            stream=True,
+            **oci_params,
+        )
+        if c.choices
+    ).strip()
+
+    assert streamed, "expected non-empty streamed content"
+
+    # Compare against a non-streamed call. With the doubling bug the streamed
+    # assembly is ~2x the real response; without it the two are the same order
+    # of magnitude (the model is non-deterministic, so allow generous slack).
+    non_streamed = (
+        litellm.completion(
+            model=f"oci/{model}",
+            messages=[{"role": "user", "content": "Hello!"}],
+            max_tokens=64,
+            **oci_params,
+        )
+        .choices[0]
+        .message.content
+        or ""
+    ).strip()
+
+    assert len(streamed) < 2 * len(non_streamed) + 10, (
+        f"streamed output appears doubled — "
+        f"streamed={len(streamed)} chars vs non_streamed={len(non_streamed)} chars\n"
+        f"streamed:     {streamed!r}\n"
+        f"non_streamed: {non_streamed!r}"
+    )
+
+    # Stronger signal: the very start of the response should not appear twice.
+    head = streamed[:12]
+    assert streamed.count(head) == 1, (
+        f"streamed output contains its own prefix {head!r} more than once — "
+        f"likely the terminal chunk re-emitted the full response.\n"
+        f"streamed: {streamed!r}"
+    )
+
+
 @pytest.mark.parametrize("m", CHAT_MODELS)
 def test_multi_turn(m: _M, oci_params):
     import litellm

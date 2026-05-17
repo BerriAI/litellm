@@ -585,21 +585,89 @@ def test_handle_cohere_stream_chunk_text():
 
 
 def test_handle_cohere_stream_chunk_complete():
-    chunk = {"apiFormat": "COHERE", "text": "", "finishReason": "COMPLETE"}
+    # Real OCI Cohere terminal events carry the full response in `text` plus a
+    # populated `chatHistory`; the parser must drop that text to avoid doubling.
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "How can I help you today?",
+        "finishReason": "COMPLETE",
+        "chatHistory": [
+            {"role": "USER", "message": "Hello!"},
+            {"role": "CHATBOT", "message": "How can I help you today?"},
+        ],
+    }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].delta.content == ""
 
 
 def test_handle_cohere_stream_chunk_max_tokens():
-    chunk = {"apiFormat": "COHERE", "text": "", "finishReason": "MAX_TOKENS"}
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "truncated full response",
+        "finishReason": "MAX_TOKENS",
+        "chatHistory": [{"role": "CHATBOT", "message": "truncated full response"}],
+    }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].delta.content == ""
 
 
 def test_handle_cohere_stream_chunk_tool_call():
-    chunk = {"apiFormat": "COHERE", "text": "", "finishReason": "TOOL_CALL"}
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "",
+        "finishReason": "TOOL_CALL",
+        "chatHistory": [{"role": "CHATBOT", "message": ""}],
+    }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "tool_calls"
+    assert result.choices[0].delta.content == ""
+
+
+def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
+    """Regression for double-output on cohere.command-* streaming.
+
+    OCI's terminal SSE event re-sends the full assembled response in `text`
+    alongside a populated `chatHistory`. That text must be dropped — otherwise
+    it gets concatenated onto the already-streamed incremental deltas.
+    """
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "How can I help you today?",
+        "finishReason": "COMPLETE",
+        "chatHistory": [
+            {"role": "USER", "message": "Hello!"},
+            {"role": "CHATBOT", "message": "How can I help you today?"},
+        ],
+    }
+    result = handle_cohere_stream_chunk(chunk)
+    assert result.choices[0].delta.content == ""
+
+
+def test_handle_cohere_stream_chunk_incremental_passes_text_through():
+    """Non-terminal chunks (no chatHistory) must emit their incremental text."""
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "How can I ",
+        "finishReason": None,
+    }
+    result = handle_cohere_stream_chunk(chunk)
+    assert result.choices[0].delta.content == "How can I "
+    assert result.choices[0].finish_reason is None
+
+
+def test_handle_cohere_stream_chunk_finish_reason_without_chathistory_keeps_text():
+    """`finishReason` alone (no `chatHistory`) must NOT trigger the drop —
+    `chatHistory` is the discriminator for the consolidated terminal event."""
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "tail delta",
+        "finishReason": "COMPLETE",
+    }
+    result = handle_cohere_stream_chunk(chunk)
+    assert result.choices[0].delta.content == "tail delta"
+    assert result.choices[0].finish_reason == "stop"
 
 
 # ===========================================================================
