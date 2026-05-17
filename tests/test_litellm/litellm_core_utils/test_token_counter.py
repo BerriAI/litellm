@@ -948,6 +948,21 @@ def test_token_counter_with_video_url():
         tokens_str > DEFAULT_IMAGE_TOKEN_COUNT
     ), f"Expected default video token budget, got {tokens_str}"
 
+    messages_base64_str = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": "data:video/mp4;base64," + ("A" * 4000),
+                }
+            ],
+        }
+    ]
+    assert (
+        token_counter(model="gpt-4o", messages=messages_base64_str) == tokens_str
+    )
+
     messages_empty_url = [
         {
             "role": "user",
