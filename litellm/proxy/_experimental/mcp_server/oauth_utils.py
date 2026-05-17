@@ -30,29 +30,16 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
 
-# One-shot flag for the malformed-``PROXY_BASE_URL`` warning so the
-# proxy logs the misconfig once at first use instead of on every request.
 _warned_invalid_proxy_base_url: Optional[str] = None
 
 
 def _resolve_proxy_base_url_env() -> Optional[str]:
-    """Return ``PROXY_BASE_URL`` if it parses as an http(s) URL with a
-    netloc; otherwise log a one-shot warning naming the bad value and
-    return ``None`` so the caller falls back to the request-derived
-    origin. A bare hostname like ``litellm.example.com`` would otherwise
-    sail through ``urlparse`` with empty scheme + netloc, silently
-    breaking every same-origin compare and leaving the operator staring
-    at the same opaque 400 the env var was meant to fix.
-    """
     global _warned_invalid_proxy_base_url
     configured = os.environ.get("PROXY_BASE_URL", "").strip()
     if not configured:
         return None
     parsed = urlparse(configured)
     if parsed.scheme in ("http", "https") and parsed.netloc:
-        # Normalize by dropping query/params/fragment so callers doing
-        # f"{base_url}/callback" don't end up with the path glued onto a
-        # query string or fragment. Mirrors the X-Forwarded-* path below.
         normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
         return normalized.rstrip("/")
     if _warned_invalid_proxy_base_url != configured:
@@ -70,24 +57,11 @@ def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    Resolution order:
-      1. ``PROXY_BASE_URL`` env var — operator-declared canonical public
-         origin. Honoured unconditionally when it parses as a full
-         http(s) URL; a malformed value (e.g. missing scheme) is logged
-         once and ignored so the proxy still serves traffic.
-      2. X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port — only
-         when the request comes from a configured trusted proxy
-         (``use_x_forwarded_for`` enabled AND caller in
-         ``mcp_trusted_proxy_ranges``). Otherwise an untrusted caller
-         could poison OAuth-discovery / redirect_uri values by injecting
-         headers.
-      3. The request's literal ``base_url``.
-
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
+    Resolution order: ``PROXY_BASE_URL`` env var, then X-Forwarded-* when
+    the caller is a trusted proxy (``use_x_forwarded_for`` enabled AND
+    caller in ``mcp_trusted_proxy_ranges``), otherwise the request's
+    literal ``base_url``. Untrusted callers cannot poison OAuth-discovery
+    / redirect_uri values by injecting headers.
     """
     configured = _resolve_proxy_base_url_env()
     if configured:
@@ -330,10 +304,6 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             if _matches_trusted_origin_entry(redirect_netloc, entry):
                 return
 
-    # Diagnose: a bare 400 ``invalid_request`` is opaque to operators
-    # debugging an ingress / X-Forwarded-* mismatch. Surface the three
-    # inputs that drive the same-origin compare so a single log line is
-    # enough to tell the customer which knob is wrong.
     verbose_logger.warning(
         "MCP OAuth: rejecting redirect_uri %r as invalid_request. "
         "Computed proxy base=%r (PROXY_BASE_URL=%r). "

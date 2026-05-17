@@ -1279,14 +1279,6 @@ def test_xff_misconfig_warning_emitted_once(caplog):
 
 
 def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
-    """When ``PROXY_BASE_URL`` is set, ``get_request_base_url`` must return
-    it verbatim regardless of inbound ``X-Forwarded-*`` or the trust gate.
-
-    This is the escape hatch for deployments behind ingresses that mangle
-    X-Forwarded-* — operators can declare the canonical public origin once
-    and the same-origin check in ``validate_trusted_redirect_uri`` will
-    compare against it.
-    """
     try:
         from fastapi import Request
 
@@ -1302,15 +1294,12 @@ def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
     mock_request.client.host = "10.0.0.7"
     headers = {
         "X-Forwarded-Proto": "https",
-        "X-Forwarded-Host": "litellm-internal:4000",  # ingress lies
+        "X-Forwarded-Host": "litellm-internal:4000",
         "X-Forwarded-Port": "9999",
     }
     mock_request.headers.get = lambda name, default=None: headers.get(name, default)
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
-
-    # Trailing slash on the env value must be stripped; trust gate
-    # outcome doesn't matter because PROXY_BASE_URL takes precedence.
     assert get_request_base_url(mock_request) == "https://litellm.example.com"
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/")
@@ -1320,11 +1309,6 @@ def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
 def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
     caplog, monkeypatch
 ):
-    """A bare ``{"detail":"invalid_request"}`` is undiagnosable for the
-    operator. Verify the rejection path emits a WARN log carrying the
-    redirect_uri, computed proxy base, and the X-Forwarded-* headers so
-    a single log line tells the customer which knob is wrong.
-    """
     try:
         from fastapi import HTTPException, Request
 
@@ -1340,7 +1324,7 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm-internal:4000/"
     mock_request.client = MagicMock()
-    mock_request.client.host = "203.0.113.5"  # not in any trusted range
+    mock_request.client.host = "203.0.113.5"
     headers = {
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": "litellm.example.com",
@@ -1370,31 +1354,24 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
     )
     msg = matching[0].getMessage()
     assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
-    assert "litellm-internal:4000" in msg  # computed proxy base
+    assert "litellm-internal:4000" in msg
     assert "X-Forwarded-Host" in msg
 
 
 @pytest.mark.parametrize(
     "bad_value",
     [
-        "litellm.example.com",  # no scheme — bare hostname
+        "litellm.example.com",
         "litellm.example.com/",
-        "://litellm.example.com",  # scheme-relative-ish, still no scheme
-        "ftp://litellm.example.com",  # wrong scheme
-        "https://",  # scheme but no netloc
+        "://litellm.example.com",
+        "ftp://litellm.example.com",
+        "https://",
         "not a url at all",
     ],
 )
 def test_get_request_base_url_rejects_malformed_proxy_base_url(
     bad_value, monkeypatch, caplog
 ):
-    """A scheme-less or otherwise malformed ``PROXY_BASE_URL`` must NOT
-    silently win the resolution order — that would leave every same-origin
-    compare in ``validate_trusted_redirect_uri`` failing (empty scheme,
-    empty netloc) and the operator staring at the same opaque 400 the
-    env var was meant to fix. Verify the helper falls through to the
-    request's literal base_url and emits a one-shot diagnostic.
-    """
     try:
         from fastapi import Request
 
@@ -1405,7 +1382,6 @@ def test_get_request_base_url_rejects_malformed_proxy_base_url(
     except ImportError:
         pytest.skip("MCP oauth_utils not available")
 
-    # Reset one-shot flag so each parametrize iteration logs.
     oauth_utils._warned_invalid_proxy_base_url = None
 
     mock_request = MagicMock(spec=Request)
@@ -1445,11 +1421,6 @@ def test_get_request_base_url_rejects_malformed_proxy_base_url(
 def test_get_request_base_url_malformed_proxy_base_url_warning_is_one_shot(
     monkeypatch, caplog
 ):
-    """Two requests in a row with the same bad ``PROXY_BASE_URL`` must
-    log the warning exactly once — the proxy can take thousands of
-    requests per minute and we don't want one misconfig to drown the
-    log stream.
-    """
     try:
         from fastapi import Request
 
