@@ -73,13 +73,7 @@ def reset_vcr_diag_dir() -> None:
                 pass
 
 
-_vcr_diagnostic_log_emitted = False
-
-
 def emit_vcr_diagnostic_log(terminalreporter) -> None:
-    global _vcr_diagnostic_log_emitted
-    if _vcr_diagnostic_log_emitted:
-        return
     directory = _vcr_diag_dir()
     if not os.path.isdir(directory):
         return
@@ -89,7 +83,6 @@ def emit_vcr_diagnostic_log(terminalreporter) -> None:
         return
     if not files:
         return
-    _vcr_diagnostic_log_emitted = True
     terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
     terminalreporter.write_line(
         f"  source dir: {directory}  (also archived as a CI artifact)"
