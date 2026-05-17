@@ -129,6 +129,65 @@ def test_chatgpt_image_generation_raises_provider_error_event():
         )
 
 
+def test_chatgpt_image_generation_preserves_response_error_status():
+    config = ChatGPTImageGenerationConfig()
+
+    with pytest.raises(OpenAIError, match="token expired") as exc_info:
+        config._extract_images_from_payload(
+            {
+                "type": "response.failed",
+                "response": {"error": {"message": "token expired", "status": 401}},
+            }
+        )
+
+    assert exc_info.value.status_code == 401
+
+
+def test_chatgpt_image_generation_preserves_top_level_error_status_code():
+    config = ChatGPTImageGenerationConfig()
+
+    with pytest.raises(OpenAIError, match="rate limited") as exc_info:
+        config._extract_images_from_payload(
+            {
+                "type": "error",
+                "error": {"message": "rate limited", "status_code": 429},
+            }
+        )
+
+    assert exc_info.value.status_code == 429
+
+
+def test_chatgpt_image_generation_parses_string_error_status():
+    config = ChatGPTImageGenerationConfig()
+
+    with pytest.raises(OpenAIError, match="server error") as exc_info:
+        config._extract_images_from_payload(
+            {
+                "type": "error",
+                "error": {"message": "server error", "status": "500"},
+            }
+        )
+
+    assert exc_info.value.status_code == 500
+
+
+def test_chatgpt_image_generation_error_status_falls_back_to_400():
+    config = ChatGPTImageGenerationConfig()
+
+    with pytest.raises(OpenAIError, match="rate limit code") as exc_info:
+        config._extract_images_from_payload(
+            {
+                "type": "error",
+                "error": {
+                    "message": "rate limit code",
+                    "code": "rate_limit_exceeded",
+                },
+            }
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_chatgpt_image_generation_handles_invalid_json_payloads():
     config = ChatGPTImageGenerationConfig()
     raw_response = httpx.Response(

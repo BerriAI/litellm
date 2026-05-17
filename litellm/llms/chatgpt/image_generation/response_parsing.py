@@ -164,6 +164,33 @@ def parse_sse_payloads(body_text: str) -> List[dict]:
     return payloads
 
 
+def extract_error_status_code(payload: dict, error_obj: Any) -> int:
+    possible_status_codes: List[Any] = []
+    if isinstance(error_obj, dict):
+        possible_status_codes.extend(
+            [error_obj.get("status_code"), error_obj.get("status")]
+        )
+
+    response_payload = payload.get("response")
+    if isinstance(response_payload, dict):
+        possible_status_codes.extend(
+            [response_payload.get("status_code"), response_payload.get("status")]
+        )
+
+    possible_status_codes.extend([payload.get("status_code"), payload.get("status")])
+
+    for status_code in possible_status_codes:
+        if isinstance(status_code, bool):
+            continue
+        if isinstance(status_code, int) and 100 <= status_code <= 599:
+            return status_code
+        if isinstance(status_code, str) and status_code.isdigit():
+            parsed_status_code = int(status_code)
+            if 100 <= parsed_status_code <= 599:
+                return parsed_status_code
+    return 400
+
+
 def extract_images_from_payload(payload: dict) -> Tuple[List[str], List[str]]:
     event_type = payload.get("type")
     if event_type in (
@@ -171,7 +198,10 @@ def extract_images_from_payload(payload: dict) -> Tuple[List[str], List[str]]:
         ResponsesAPIStreamEvents.ERROR,
     ):
         error_obj = payload.get("error") or (payload.get("response") or {}).get("error")
-        raise OpenAIError(message=str(error_obj or payload), status_code=400)
+        raise OpenAIError(
+            message=str(error_obj or payload),
+            status_code=extract_error_status_code(payload, error_obj),
+        )
 
     partial_images: List[str] = []
     if event_type in (
