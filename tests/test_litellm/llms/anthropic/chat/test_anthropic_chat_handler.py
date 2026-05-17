@@ -1013,6 +1013,26 @@ def test_current_content_block_type_tracking():
     assert iterator.current_content_block_type is None
 
 
+def test_content_block_start_text_field_missing():
+    """
+    Some Anthropic-compatible providers emit content_block_start for text blocks
+    without the optional "text" field: {"type": "text"} instead of {"type": "text", "text": ""}.
+    chunk_parser should not raise KeyError and should treat it as an empty string.
+    Regression test for https://github.com/BerriAI/litellm/issues/28067
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunk = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text"},  # "text" field intentionally absent
+    }
+    # should not raise KeyError
+    response = iterator.chunk_parser(chunk=chunk)
+    assert response.choices[0].delta.content == ""
+
+
 def test_web_search_tool_result_captured_in_provider_specific_fields():
     """
     Test that web_search_tool_result content is captured in provider_specific_fields.
