@@ -243,6 +243,13 @@ def _safe_body_matcher(r1, r2) -> None:
     (e.g. the Bedrock batch S3 PUT) before it can return "no match".
     This matcher is strictly more conservative — the only equivalence
     it gives up vs. the default is "JSON key order doesn't matter".
+
+    On mismatch, emits a structured diagnostic to stderr (type of each
+    body, length, SHA-256, first divergent offset, ±100-byte window).
+    Without this, vcrpy returns "request bodies differ" with zero
+    context, and bugs where the live request body is an unbytes-like
+    object (e.g. an httpx ``MultipartStream`` for async requests) look
+    indistinguishable from genuine content drift.
     """
     body1 = getattr(r1, "body", None)
     body2 = getattr(r2, "body", None)
@@ -262,7 +269,62 @@ def _safe_body_matcher(r1, r2) -> None:
     n2 = _to_bytes(body2)
     if n1 is not None and n2 is not None and n1 == n2:
         return
+    _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2)
     raise AssertionError("request bodies differ")
+
+
+def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
+    """Dump enough info to a single stderr block to root-cause why two
+    requests that look semantically identical failed the body matcher.
+
+    Always-on (matcher mismatches are signal, not noise): the volume
+    is bounded by the number of stored episodes a live request is
+    compared against, and we already log a per-test verdict line for
+    every test.
+    """
+
+    def _describe(label, raw, asbytes):
+        t = type(raw).__name__
+        if asbytes is None:
+            return (
+                f"  {label}: type={t!r} length=unknown sha256=N/A "
+                f"(body could not be coerced to bytes)"
+            )
+        length = len(asbytes)
+        digest = hashlib.sha256(asbytes).hexdigest()
+        preview = asbytes[:120]
+        return (
+            f"  {label}: type={t!r} length={length} sha256={digest} "
+            f"preview={preview!r}"
+        )
+
+    method_a = getattr(r1, "method", "?")
+    method_b = getattr(r2, "method", "?")
+    url_a = getattr(r1, "uri", getattr(r1, "url", "?"))
+    url_b = getattr(r2, "uri", getattr(r2, "url", "?"))
+    lines = [
+        "[vcr-safe-body-matcher] request body mismatch",
+        f"  request[a]: {method_a} {url_a}",
+        f"  request[b]: {method_b} {url_b}",
+        _describe("body[a]", body1, n1),
+        _describe("body[b]", body2, n2),
+    ]
+    if n1 is not None and n2 is not None and n1 != n2:
+        # Find the first divergent byte offset and dump a ±100 window
+        # around it so the human reading the CI log can see at a glance
+        # whether the variance is a UUID, a timestamp, a random multipart
+        # boundary, or something else.
+        offset = next(
+            (i for i in range(min(len(n1), len(n2))) if n1[i] != n2[i]),
+            min(len(n1), len(n2)),
+        )
+        start = max(0, offset - 100)
+        end_a = min(len(n1), offset + 100)
+        end_b = min(len(n2), offset + 100)
+        lines.append(f"  first divergent byte offset: {offset}")
+        lines.append(f"  window[a] @ {start}..{end_a}: {n1[start:end_a]!r}")
+        lines.append(f"  window[b] @ {start}..{end_b}: {n2[start:end_b]!r}")
+    sys.stderr.write("\n".join(lines) + "\n")
 
 
 def _iter_header_values(headers, name: str):
@@ -409,6 +471,20 @@ def _normalize_multipart_boundary(request) -> None:
     elif isinstance(body, str):
         new_body = body.replace(current_boundary, VCR_FIXED_MULTIPART_BOUNDARY)
     else:
+        # The body is something other than bytes/bytearray/str -- most
+        # likely an httpx ``MultipartStream`` or an aiter chunked stream
+        # we cannot rewrite in place. Log it so a body-matcher miss on a
+        # multipart request can be correlated with "normalizer skipped
+        # because body type was X". The header was still rewritten
+        # above, so the recorded Content-Type stays stable; only the
+        # body bytes carry the random boundary verbatim.
+        sys.stderr.write(
+            f"[vcr-multipart-normalize] body normalization SKIPPED: "
+            f"body type {type(body).__name__!r} is not bytes/bytearray/str. "
+            f"content-type={content_type_value!r}. "
+            f"Recorded body will retain the random boundary substring "
+            f"and the safe_body matcher will miss on the next run.\n"
+        )
         return
 
     try:
