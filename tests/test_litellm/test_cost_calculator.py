@@ -1705,6 +1705,67 @@ def test_completion_cost_extracts_service_tier_from_usage():
     ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
 
 
+def test_completion_cost_extracts_regional_service_tier_from_response():
+    """completion_cost should apply OpenAI's regional 10% uplift when the
+    response carries service_tier='regional'."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5"
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    response_regional = ModelResponse(usage=usage, model=model)
+    setattr(response_regional, "service_tier", "regional")
+    regional_cost = completion_cost(
+        completion_response=response_regional,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    response_standard = ModelResponse(usage=usage, model=model)
+    standard_cost = completion_cost(
+        completion_response=response_standard,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert regional_cost > standard_cost
+    ratio = regional_cost / standard_cost
+    assert (
+        abs(ratio - 1.10) < 0.001
+    ), f"Regional pricing should be 10% above standard, got {ratio:.4f}"
+
+
+def test_completion_cost_regional_service_tier_from_optional_params():
+    """Regional uplift should also be picked up from optional_params."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5"
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response = ModelResponse(usage=usage, model=model)
+
+    standard_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    regional_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "regional"},
+    )
+
+    assert regional_cost > standard_cost
+    ratio = regional_cost / standard_cost
+    assert abs(ratio - 1.10) < 0.001
+
+
 def test_completion_cost_service_tier_priority():
     """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
     from litellm import completion_cost

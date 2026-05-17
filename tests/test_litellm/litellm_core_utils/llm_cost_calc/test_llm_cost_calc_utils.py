@@ -1091,6 +1091,169 @@ def test_service_tier_fallback_pricing():
     ), f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
+def test_service_tier_regional_pricing():
+    """Regional service tier should apply a 10% uplift over standard pricing.
+
+    OpenAI charges a 10% premium when using regional/data-residency processing
+    on the latest GPT models (see https://developers.openai.com/api/docs/pricing).
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5"
+    custom_llm_provider = "openai"
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    std_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None,
+    )
+    regional_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="regional",
+    )
+
+    std_total = std_cost[0] + std_cost[1]
+    regional_total = regional_cost[0] + regional_cost[1]
+
+    assert std_total > 0
+    assert regional_total > 0
+
+    ratio = regional_total / std_total
+    assert (
+        abs(ratio - 1.10) < 0.001
+    ), f"Regional pricing should be 10% above standard, got ratio {ratio:.4f}"
+
+    # gpt-5 standard: input=1.25e-06, output=1e-05
+    # gpt-5 regional: input=1.375e-06, output=1.1e-05
+    expected_regional_prompt = 1000 * 1.375e-06
+    expected_regional_completion = 500 * 1.1e-05
+    assert abs(regional_cost[0] - expected_regional_prompt) < 1e-10
+    assert abs(regional_cost[1] - expected_regional_completion) < 1e-10
+
+
+def test_service_tier_regional_pricing_case_insensitive():
+    """Regional service tier should be matched case-insensitively."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    lower = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="regional",
+    )
+    upper = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="REGIONAL",
+    )
+
+    assert abs(lower[0] - upper[0]) < 1e-12
+    assert abs(lower[1] - upper[1]) < 1e-12
+
+
+def test_service_tier_regional_pricing_fallback():
+    """If a model has no regional pricing keys, regional tier falls back to standard."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # gpt-4 has no regional pricing keys
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    std_cost = generic_cost_per_token(
+        model="gpt-4",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None,
+    )
+    regional_cost = generic_cost_per_token(
+        model="gpt-4",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="regional",
+    )
+
+    assert abs(std_cost[0] - regional_cost[0]) < 1e-10
+    assert abs(std_cost[1] - regional_cost[1]) < 1e-10
+
+
+def test_service_tier_regional_pricing_above_threshold():
+    """Regional uplift should also apply to above-threshold pricing on models
+    like gpt-5.4 that price prompts above 272k tokens at a higher rate."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Prompt above the 272k threshold
+    usage = Usage(prompt_tokens=300_000, completion_tokens=1000, total_tokens=301_000)
+
+    std_cost = generic_cost_per_token(
+        model="gpt-5.4",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None,
+    )
+    regional_cost = generic_cost_per_token(
+        model="gpt-5.4",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="regional",
+    )
+
+    std_total = std_cost[0] + std_cost[1]
+    regional_total = regional_cost[0] + regional_cost[1]
+
+    assert std_total > 0
+    ratio = regional_total / std_total
+    assert (
+        abs(ratio - 1.10) < 0.001
+    ), f"Regional pricing above threshold should be 10% above standard, got {ratio:.4f}"
+
+
+def test_service_tier_regional_cost_key_resolution():
+    """_get_service_tier_cost_key should produce the regional suffix for known
+    tiers (including 'regional')."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        _get_service_tier_cost_key,
+    )
+
+    assert (
+        _get_service_tier_cost_key("input_cost_per_token", "regional")
+        == "input_cost_per_token_regional"
+    )
+    assert (
+        _get_service_tier_cost_key("input_cost_per_token", "REGIONAL")
+        == "input_cost_per_token_regional"
+    )
+    # Unknown tier falls back to base key
+    assert (
+        _get_service_tier_cost_key("input_cost_per_token", "made-up-tier")
+        == "input_cost_per_token"
+    )
+    # None returns base key
+    assert (
+        _get_service_tier_cost_key("input_cost_per_token", None)
+        == "input_cost_per_token"
+    )
+
+
+def test_service_tier_enum_contains_regional():
+    """ServiceTier enum should expose REGIONAL alongside FLEX and PRIORITY."""
+    from litellm.types.utils import ServiceTier
+
+    assert ServiceTier.REGIONAL.value == "regional"
+    values = {t.value for t in ServiceTier}
+    assert {"flex", "priority", "regional"}.issubset(values)
+
+
 @pytest.mark.parametrize(
     "model",
     [
