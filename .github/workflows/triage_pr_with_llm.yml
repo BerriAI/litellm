@@ -69,11 +69,18 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--repo "${{ github.repository }}" --pr "${PR_NUMBER}")
-          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" != "false" ]; then
+          # Fail-safe gating: only the EXACT string "true" enables the
+          # destructive --close path. The workflow_dispatch input is a
+          # `choice` dropdown of "true"/"false" so the UI is constrained,
+          # but the API (`gh workflow run -f close=...`) accepts any
+          # string, and a `!= "false"` check would treat "True", "yes",
+          # "1", "TRUE", typos, and accidental whitespace as enabling
+          # closure. Mirror the Greptile closer's `= "true"` pattern.
+          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
             ARGS+=(--close)
             echo "::notice::Agent Shin is ENABLED and running in close-on-fail mode."
           elif [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
-            echo "::notice::Agent Shin is ENABLED but this trigger is dry-run (workflow_dispatch close=false or scheduled event)."
+            echo "::notice::Agent Shin is ENABLED but this trigger is dry-run (workflow_dispatch close != 'true' or scheduled event)."
           else
             echo "::notice::Agent Shin is in DRY-RUN mode (AGENT_SHIN_ENABLED is not 'true'). No comments will be posted; no PRs will be closed."
           fi
