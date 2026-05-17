@@ -26,11 +26,10 @@ BEDROCK_CONVERSE_MODELS = [
 
 def test_basic_messaging_streaming_bedrock_converse(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
-    non-empty streamed reply (at least one stream-json event observed).
+    non-empty streamed reply (one row per Claude tier).
     """
     run_basic_messaging_cell(
         compat_result=compat_result,
         models=BEDROCK_CONVERSE_MODELS,
         prompt="Count from 1 to 5, one number per line.",
-        require_stream_events=True,
     )

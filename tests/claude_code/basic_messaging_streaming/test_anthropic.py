@@ -6,10 +6,16 @@ report the outcome via `compat_result`.
 
 The CLI is run with `--print --output-format stream-json`, which streams
 incremental events as the upstream produces tokens. The cell goes green
-only when every Claude tier returns a non-empty reply over a streamed
-wire (i.e. at least one stream-json event is observed). This catches
-regressions where the proxy buffers the full response before flushing,
-silently degrading the streaming experience customers rely on.
+only when every Claude tier returns a non-empty reply.
+
+Note: a true "did the proxy buffer the full response before flushing?"
+check would require observing event arrival times on the wire, which
+the `cli_driver` cannot do today — it consumes stdout via
+`subprocess.run(capture_output=True)` after the process exits, so a
+buffered-then-flushed response is indistinguishable from a truly
+streamed one. That regression check belongs in a streaming-aware
+driver; until then this cell verifies the same shape as the
+non-streaming variant.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -21,9 +27,7 @@ The (feature, provider) for this cell is inferred from the file path by
 The shared `run_basic_messaging_cell` helper fans the three Claude tiers
 out in parallel inside this single test, with one
 `compat_result.add(...)` entry per model so the matrix builder still
-sees three rows for this (feature, provider). The `require_stream_events`
-flag adds the streaming-only assertion that at least one stream-json
-event was observed per model.
+sees three rows for this (feature, provider).
 """
 
 from __future__ import annotations
@@ -39,11 +43,10 @@ ANTHROPIC_MODELS = [
 
 def test_basic_messaging_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
-    non-empty streamed reply (at least one stream-json event observed).
+    non-empty streamed reply (one row per Claude tier).
     """
     run_basic_messaging_cell(
         compat_result=compat_result,
         models=ANTHROPIC_MODELS,
         prompt="Count from 1 to 5, one number per line.",
-        require_stream_events=True,
     )
