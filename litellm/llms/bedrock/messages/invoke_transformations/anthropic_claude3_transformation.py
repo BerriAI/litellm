@@ -35,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_invoke_tool_search_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -563,6 +564,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        # Rewrite/drop Anthropic tool-search server-side tool types so Bedrock
+        # Invoke's Pydantic tool-type discriminator does not reject
+        # ``tool_search_tool_regex_20251119`` client-side. Runs before
+        # ``ensure_bedrock_anthropic_messages_tool_names`` so the canonical
+        # ``tool_search_tool_regex`` name default is preserved rather than
+        # masked by the unnamed-tool fallback.
+        # Ref: https://github.com/BerriAI/litellm/issues/28083
+        normalize_bedrock_invoke_tool_search_tools(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
