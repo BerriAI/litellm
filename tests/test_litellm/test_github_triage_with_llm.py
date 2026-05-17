@@ -1,0 +1,357 @@
+"""Unit tests for `.github/scripts/triage_with_llm.py` (Agent Shin)."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / ".github" / "scripts" / "triage_with_llm.py"
+)
+
+
+@pytest.fixture(scope="module")
+def triage_module():
+    spec = importlib.util.spec_from_file_location("triage_with_llm", SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["triage_with_llm"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestIsInternalContributor:
+    @pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+    def test_should_mark_org_associations_as_internal(self, triage_module, association):
+        item = {
+            "author_association": association,
+            "user": {"login": "krrishdholakia"},
+        }
+        assert triage_module.is_internal_contributor(item) is True
+
+    @pytest.mark.parametrize(
+        "association",
+        ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", ""],
+    )
+    def test_should_mark_outside_associations_as_external(
+        self, triage_module, association
+    ):
+        item = {
+            "author_association": association,
+            "user": {"login": "random-oss-dev"},
+        }
+        assert triage_module.is_internal_contributor(item) is False
+
+    @pytest.mark.parametrize(
+        "login",
+        ["dependabot[bot]", "greptile-apps[bot]", "dependabot", "github-actions"],
+    )
+    def test_should_skip_bot_accounts_regardless_of_association(
+        self, triage_module, login
+    ):
+        item = {"author_association": "NONE", "user": {"login": login}}
+        assert triage_module.is_internal_contributor(item) is True
+
+
+class TestHasLinkedIssue:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "Fixes #1234",
+            "closes #1",
+            "Resolves #99",
+            "fix #42 — this addresses the regression",
+            "Refs https://github.com/BerriAI/litellm/issues/27000",
+        ],
+    )
+    def test_should_detect_common_link_phrases(self, triage_module, body):
+        assert triage_module.has_linked_issue(body) is True
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "",
+            "Some change",
+            "See #1234",  # "see" is allowed per regex but we want documented coverage
+        ],
+    )
+    def test_should_handle_empty_and_unrelated_bodies(self, triage_module, body):
+        # "See #1234" is intentionally accepted as a related-issue reference.
+        # Just make sure empty/unrelated bodies don't crash.
+        triage_module.has_linked_issue(body)
+
+    def test_should_not_detect_when_only_html_comment_template(self, triage_module):
+        body = "<!-- e.g. Fixes #1234 -->"
+        assert triage_module.has_linked_issue(body) is False
+
+
+class TestStripHtmlComments:
+    def test_should_remove_single_line_comments(self, triage_module):
+        text = "before <!-- placeholder --> after"
+        assert "placeholder" not in triage_module.strip_html_comments(text)
+
+    def test_should_remove_multiline_comments(self, triage_module):
+        text = "kept\n<!--\nlots of placeholder text\nFixes #1\n-->\nkept2"
+        cleaned = triage_module.strip_html_comments(text)
+        assert "Fixes #1" not in cleaned
+        assert "kept" in cleaned and "kept2" in cleaned
+
+    def test_should_handle_none(self, triage_module):
+        assert triage_module.strip_html_comments(None) == ""
+
+
+class TestParseVerdict:
+    def test_should_parse_plain_json(self, triage_module):
+        raw = '{"verdict": "pass", "missing": []}'
+        assert triage_module.parse_verdict(raw)["verdict"] == "pass"
+
+    def test_should_strip_markdown_fence(self, triage_module):
+        raw = '```json\n{"verdict": "fail", "missing": ["foo"]}\n```'
+        result = triage_module.parse_verdict(raw)
+        assert result["verdict"] == "fail"
+        assert result["missing"] == ["foo"]
+
+    def test_should_extract_embedded_json_from_prose(self, triage_module):
+        raw = 'Here you go: {"verdict": "pass", "missing": []}\nThanks.'
+        assert triage_module.parse_verdict(raw)["verdict"] == "pass"
+
+    def test_should_raise_for_unparseable_text(self, triage_module):
+        with pytest.raises(ValueError):
+            triage_module.parse_verdict("not even close to json")
+
+    def test_should_raise_for_empty(self, triage_module):
+        with pytest.raises(ValueError):
+            triage_module.parse_verdict("")
+
+
+class TestBuildPrompts:
+    def test_should_include_pr_title_and_body(self, triage_module):
+        prompt = triage_module.build_pr_prompt(
+            title="Add foo", body="<!-- comment --> Real body"
+        )
+        assert "Add foo" in prompt
+        assert "Real body" in prompt
+        assert "comment" not in prompt  # HTML comments are stripped
+
+    def test_should_show_empty_marker_for_empty_pr_body(self, triage_module):
+        prompt = triage_module.build_pr_prompt(title="t", body="<!-- nothing -->")
+        assert "(empty)" in prompt
+
+    def test_should_include_issue_title_and_body(self, triage_module):
+        prompt = triage_module.build_issue_prompt(title="Bug", body="repro here")
+        assert "Bug" in prompt
+        assert "repro here" in prompt
+
+
+class TestTriageOrchestration:
+    """End-to-end-ish tests that mock both gh fetchers and the LLM."""
+
+    def _make_pr(self, **overrides):
+        base = {
+            "number": 1,
+            "title": "PR title",
+            "body": "PR body",
+            "state": "open",
+            "author_association": "NONE",
+            "user": {"login": "outside-dev"},
+        }
+        base.update(overrides)
+        return base
+
+    def test_should_skip_internal_author(self, triage_module, monkeypatch):
+        pr = self._make_pr(
+            author_association="MEMBER", user={"login": "krrishdholakia"}
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+
+        def boom(*a, **kw):
+            pytest.fail("LLM should not be called for internal authors")
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=boom,
+        )
+        assert result["action"] == "skip-internal-author"
+
+    def test_should_skip_closed_pr(self, triage_module, monkeypatch):
+        pr = self._make_pr(state="closed")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("should not run on closed PRs"),
+        )
+        assert result["action"] == "skip-not-open"
+
+    def test_should_short_circuit_on_linked_issue(self, triage_module, monkeypatch):
+        pr = self._make_pr(body="Fixes #1234\n\nFoo bar")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM should not be called"),
+        )
+        assert result["action"] == "pass-linked-issue"
+        assert result["verdict"]["verdict"] == "pass"
+
+    def test_should_return_pass_llm_when_judge_passes(self, triage_module, monkeypatch):
+        pr = self._make_pr(body="Long body, no linked issue.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        captured = {}
+
+        def judge(prompt):
+            captured["prompt"] = prompt
+            return json.dumps({"verdict": "pass", "missing": [], "explanation": "ok"})
+
+        result = triage_module.triage(
+            repo="o/r", kind="pr", number=1, close=True, model="m", judge=judge
+        )
+        assert result["action"] == "pass-llm"
+        assert "Long body" in captured["prompt"]
+
+    def test_should_return_would_close_in_dry_run(self, triage_module, monkeypatch):
+        pr = self._make_pr(body="just a sentence.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+
+        def fake_post(*a, **kw):
+            pytest.fail("should not post comments in dry-run")
+
+        def fake_close(*a, **kw):
+            pytest.fail("should not close in dry-run")
+
+        monkeypatch.setattr(triage_module, "post_comment", fake_post)
+        monkeypatch.setattr(triage_module, "close_pr", fake_close)
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["problem description", "QA proof"],
+            "explanation": "Body is one sentence.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "would-close"
+        assert result["verdict"]["missing"] == ["problem description", "QA proof"]
+
+    def test_should_post_comment_and_close_when_close_enabled(
+        self, triage_module, monkeypatch
+    ):
+        pr = self._make_pr(body="just a sentence.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        posted = {}
+        closed = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"repo": repo, "n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda repo, n: closed.update({"repo": repo, "n": n}),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Body too thin.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "closed"
+        assert posted["n"] == 42 and closed["n"] == 42
+        assert "Agent Shin" in posted["body"]
+        assert "QA proof" in posted["body"]
+
+    def test_should_skip_on_llm_error_in_close_mode(self, triage_module, monkeypatch):
+        pr = self._make_pr(body="something.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not comment on LLM error"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close on LLM error"),
+        )
+
+        def broken_judge(prompt):
+            raise RuntimeError("upstream 500")
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=broken_judge,
+        )
+        assert result["action"] == "skip-llm-error"
+        assert "upstream 500" in result["error"]
+
+    def test_should_triage_issues_kind(self, triage_module, monkeypatch):
+        issue = {
+            "number": 7,
+            "title": "Bug: X is broken",
+            "body": "no detail",
+            "state": "open",
+            "author_association": "NONE",
+            "user": {"login": "outside"},
+        }
+        monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        closed = {}
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update(body=body),
+        )
+        monkeypatch.setattr(
+            triage_module, "close_issue", lambda repo, n: closed.update(n=n)
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "kind": "bug",
+            "has_repro": False,
+            "missing": ["reproduction", "expected vs. actual"],
+            "explanation": "No repro provided.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="issue",
+            number=7,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "closed"
+        assert closed["n"] == 7
+        assert "reproduction" in posted["body"]
