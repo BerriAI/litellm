@@ -638,18 +638,42 @@ def _materialize_iterable_body(request) -> None:
         chunks = list(body)
     except TypeError:
         return
-    out = bytearray()
-    for chunk in chunks:
-        if isinstance(chunk, (bytes, bytearray)):
-            out.extend(chunk)
-        elif isinstance(chunk, str):
-            out.extend(chunk.encode("utf-8"))
-        else:
-            # Heterogeneous, non-text/binary chunk - bail rather than
-            # silently corrupt the body.
-            return
+
+    # IMPORTANT: ``list(body)`` has already exhausted the original
+    # iterator. From this point we MUST write something bytes-shaped
+    # back to ``request.body`` -- bailing out and leaving the body as
+    # an exhausted iterator makes the next access (cassette
+    # serialization, retry replay, or the actual httpx send) see an
+    # empty stream. In a previous attempt at this fix the bail path
+    # was taken for ``bytes_iterator`` bodies (chunks were ints) and
+    # the live send ended up with an empty multipart upload, which
+    # the SDK retried until the cassette ballooned to ~10 episodes
+    # per test. Fall through to ``out = b""`` rather than ``return``
+    # so an unrecognized chunk shape still leaves a stable body.
+    out = b""
+    if chunks:
+        first = chunks[0]
+        if isinstance(first, int):
+            # ``iter(b"...")`` yields integer byte values (its type
+            # name is ``bytes_iterator``). ``bytes(list_of_ints)`` is
+            # the inverse and reconstructs the original buffer.
+            try:
+                out = bytes(chunks)
+            except (TypeError, ValueError):
+                out = b""
+        elif isinstance(first, (bytes, bytearray)):
+            try:
+                out = b"".join(c if isinstance(c, bytes) else bytes(c) for c in chunks)
+            except (TypeError, ValueError):
+                out = b""
+        elif isinstance(first, str):
+            try:
+                out = "".join(chunks).encode("utf-8")
+            except (TypeError, ValueError):
+                out = b""
+
     try:
-        request.body = bytes(out)
+        request.body = out
     except (AttributeError, TypeError):
         pass
 
