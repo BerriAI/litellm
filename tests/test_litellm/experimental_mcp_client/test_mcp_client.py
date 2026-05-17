@@ -48,7 +48,7 @@ class TestMCPClient:
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.stdio_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client._LiteLLMMCPClientSession")
     async def test_mcp_client_stdio_connect_success(
         self, mock_session, mock_stdio_client
     ):
@@ -107,7 +107,7 @@ class TestMCPClient:
 
         # Mock the session
         with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
+            "litellm.experimental_mcp_client.client._LiteLLMMCPClientSession"
         ) as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
@@ -155,7 +155,7 @@ class TestMCPClient:
 
         # Mock the session
         with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
+            "litellm.experimental_mcp_client.client._LiteLLMMCPClientSession"
         ) as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
@@ -209,7 +209,7 @@ class TestMCPClient:
 
         # Mock the session
         with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
+            "litellm.experimental_mcp_client.client._LiteLLMMCPClientSession"
         ) as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
@@ -330,7 +330,7 @@ class TestMCPClientInstructionsCapture:
         assert client._last_initialize_instructions is None
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client._LiteLLMMCPClientSession")
     async def test_captures_instructions_from_initialize(self, mock_session_cls):
         """Instructions from upstream initialize() are captured and stripped."""
         client = MCPClient(
@@ -359,7 +359,7 @@ class TestMCPClientInstructionsCapture:
         assert client._last_initialize_instructions == "upstream says hello"
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch("litellm.experimental_mcp_client.client._LiteLLMMCPClientSession")
     async def test_none_instructions_stays_none(self, mock_session_cls):
         """When upstream returns no instructions the field stays None."""
         client = MCPClient(
@@ -386,6 +386,219 @@ class TestMCPClientInstructionsCapture:
 
         await client._execute_session_operation(transport_ctx, _op)
         assert client._last_initialize_instructions is None
+
+
+class TestUnsupportedServerToClientMethods:
+    """
+    Tests for `_LiteLLMMCPClientSession`, which handles upstream MCP server
+    requests for methods the LiteLLM MCP Gateway does not implement yet
+    (`sampling/createMessage`, `elicitation/create`).
+
+    Previously these requests were silently dropped at the LiteLLM logging
+    layer — the SDK auto-replied to the server with a generic error, but
+    operators saw nothing. The subclass logs a warning and replies with a
+    descriptive JSON-RPC `METHOD_NOT_FOUND` error so the upstream server can
+    fall back gracefully. See https://github.com/BerriAI/litellm/issues/23761.
+    """
+
+    def test_unsupported_method_error_includes_litellm_and_server(self):
+        from litellm.experimental_mcp_client.client import (
+            _build_unsupported_method_error,
+        )
+        from mcp.types import METHOD_NOT_FOUND
+
+        err = _build_unsupported_method_error(
+            "sampling/createMessage", "https://upstream.example/mcp"
+        )
+        assert err.code == METHOD_NOT_FOUND
+        assert "sampling/createMessage" in err.message
+        assert "LiteLLM MCP Gateway" in err.message
+        assert "https://upstream.example/mcp" in err.message
+
+    def test_unsupported_method_error_handles_empty_server_url(self):
+        from litellm.experimental_mcp_client.client import (
+            _build_unsupported_method_error,
+        )
+
+        err = _build_unsupported_method_error("elicitation/create", "")
+        assert "stdio" in err.message
+        assert "elicitation/create" in err.message
+
+    @pytest.mark.asyncio
+    async def test_sampling_request_logs_and_responds_with_method_not_found(
+        self, caplog
+    ):
+        import logging
+
+        from mcp.types import (
+            METHOD_NOT_FOUND,
+            CreateMessageRequest,
+            CreateMessageRequestParams,
+            ErrorData,
+            SamplingMessage,
+            TextContent,
+        )
+
+        from litellm.experimental_mcp_client.client import (
+            _LiteLLMMCPClientSession,
+        )
+
+        session = _LiteLLMMCPClientSession.__new__(_LiteLLMMCPClientSession)
+        session._litellm_server_url = "https://upstream.example/mcp"
+
+        params = CreateMessageRequestParams(
+            messages=[
+                SamplingMessage(
+                    role="user",
+                    content=TextContent(type="text", text="hi"),
+                )
+            ],
+            maxTokens=16,
+        )
+        responder = _FakeResponder(
+            CreateMessageRequest(method="sampling/createMessage", params=params)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await session._received_request(responder)
+
+        assert responder.responded_with is not None
+        assert isinstance(responder.responded_with, ErrorData)
+        assert responder.responded_with.code == METHOD_NOT_FOUND
+        assert "sampling/createMessage" in responder.responded_with.message
+        assert "https://upstream.example/mcp" in responder.responded_with.message
+        # A warning was logged with the server URL and the method name —
+        # the previous behaviour logged nothing at all.
+        assert any(
+            "sampling/createMessage" in record.getMessage()
+            and "https://upstream.example/mcp" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_elicitation_request_logs_and_responds_with_method_not_found(
+        self, caplog
+    ):
+        import logging
+
+        from mcp.types import (
+            METHOD_NOT_FOUND,
+            ElicitRequest,
+            ElicitRequestFormParams,
+            ErrorData,
+        )
+
+        from litellm.experimental_mcp_client.client import (
+            _LiteLLMMCPClientSession,
+        )
+
+        session = _LiteLLMMCPClientSession.__new__(_LiteLLMMCPClientSession)
+        session._litellm_server_url = ""  # stdio
+
+        params = ElicitRequestFormParams(
+            message="Confirm deletion?",
+            requestedSchema={
+                "type": "object",
+                "properties": {"confirm": {"type": "boolean"}},
+                "required": ["confirm"],
+            },
+        )
+        responder = _FakeResponder(
+            ElicitRequest(method="elicitation/create", params=params)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await session._received_request(responder)
+
+        assert isinstance(responder.responded_with, ErrorData)
+        assert responder.responded_with.code == METHOD_NOT_FOUND
+        assert "elicitation/create" in responder.responded_with.message
+        # stdio servers (no URL) are identified as "stdio" in the message.
+        assert "stdio" in responder.responded_with.message
+        assert any(
+            "elicitation/create" in record.getMessage() for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_other_server_requests_fall_through_to_default(self):
+        """
+        Server -> client methods that aren't sampling/elicitation must
+        still go to the SDK's default handler (e.g. ping/roots/list).
+        """
+        from litellm.experimental_mcp_client.client import (
+            _LiteLLMMCPClientSession,
+        )
+
+        session = _LiteLLMMCPClientSession.__new__(_LiteLLMMCPClientSession)
+        session._litellm_server_url = "https://upstream.example/mcp"
+
+        # Use a sentinel object that does not match CreateMessageRequest
+        # or ElicitRequest — it should fall through to super().
+        unrelated_root = object()
+        responder = _FakeResponder(unrelated_root)
+
+        with patch(
+            "mcp.ClientSession._received_request", new_callable=AsyncMock
+        ) as super_handler:
+            await session._received_request(responder)
+
+        super_handler.assert_awaited_once_with(responder)
+        # We didn't respond ourselves — the parent does.
+        assert responder.responded_with is None
+
+    def test_client_session_does_not_declare_unsupported_capabilities(self):
+        """
+        Guards against a future regression that wires custom callbacks into
+        the SDK — doing so would make the SDK declare `sampling` and
+        `elicitation` capabilities to the upstream server during `initialize`,
+        which we explicitly do NOT support yet.
+        """
+        from mcp.client.session import (
+            _default_elicitation_callback,
+            _default_sampling_callback,
+        )
+
+        from litellm.experimental_mcp_client.client import (
+            _LiteLLMMCPClientSession,
+        )
+
+        # We can't call __init__ without real streams, so just verify the
+        # subclass does not override the class-level callback identity.
+        # Both attributes are set in ClientSession.__init__; instead verify
+        # the subclass does not bind class-level overrides for them.
+        assert "_sampling_callback" not in vars(_LiteLLMMCPClientSession)
+        assert "_elicitation_callback" not in vars(_LiteLLMMCPClientSession)
+        # And the module-level defaults are importable — sanity check that
+        # the SDK API we depend on hasn't been removed under us.
+        assert _default_sampling_callback is not None
+        assert _default_elicitation_callback is not None
+
+
+class _FakeResponder:
+    """
+    Minimal stand-in for `mcp.shared.session.RequestResponder` used by the
+    `_received_request` tests above. It records the response value and
+    behaves as a no-op context manager.
+    """
+
+    def __init__(self, request_root: object) -> None:
+        self.request = MagicMock()
+        self.request.root = request_root
+        self.responded_with: object = None
+        self._completed = False
+        self._entered = False
+
+    def __enter__(self) -> "_FakeResponder":
+        self._entered = True
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._entered = False
+
+    async def respond(self, response: object) -> None:
+        assert self._entered, "RequestResponder must be used as a context manager"
+        self.responded_with = response
+        self._completed = True
 
 
 if __name__ == "__main__":

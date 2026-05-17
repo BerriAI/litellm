@@ -34,6 +34,10 @@ except ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    METHOD_NOT_FOUND,
+    CreateMessageRequest,
+    ElicitRequest,
+    ErrorData,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
@@ -192,6 +196,93 @@ class MCPSigV4Auth(httpx.Auth):
         yield request
 
 
+_UNSUPPORTED_METHODS_ISSUE_URL = "https://github.com/BerriAI/litellm/issues/23761"
+
+
+def _build_unsupported_method_error(method: str, server_url: str) -> ErrorData:
+    """
+    Build a JSON-RPC error for an unsupported server -> client method.
+
+    Per the MCP spec, when an upstream server sends a server -> client
+    request (e.g. `sampling/createMessage` or `elicitation/create`) and the
+    client does not implement that capability, the client must respond with
+    a JSON-RPC error so the server can fall back gracefully rather than
+    waiting on a response that will never arrive. The MCP Python SDK's
+    default callbacks already return a generic `INVALID_REQUEST` error in
+    this case; this helper returns a more descriptive error that identifies
+    LiteLLM as the responding peer and points operators at the tracking
+    issue.
+    """
+    return ErrorData(
+        code=METHOD_NOT_FOUND,
+        message=(
+            f"{method} is not supported by the LiteLLM MCP Gateway "
+            f"(upstream MCP server: {server_url or 'stdio'}). "
+            f"See {_UNSUPPORTED_METHODS_ISSUE_URL} for status."
+        ),
+    )
+
+
+class _LiteLLMMCPClientSession(ClientSession):
+    """
+    `mcp.ClientSession` subclass used by LiteLLM to handle server -> client
+    requests for methods the gateway does not yet implement.
+
+    Behaviour vs. the SDK default:
+      * Capabilities are unchanged — the gateway still does NOT declare
+        `sampling` or `elicitation` support during `initialize`, because the
+        SDK's identity check (`callback is not _default_*_callback`) is
+        bypassed: we override `_received_request` directly instead of
+        installing custom callbacks.
+      * Incoming `sampling/createMessage` and `elicitation/create` requests
+        are logged at WARNING level so operators can see when an upstream
+        server attempts to use these capabilities, instead of the silent
+        drop the previous code path produced at the LiteLLM logging layer.
+      * The JSON-RPC error sent back to the upstream server names LiteLLM
+        as the responding peer and uses `METHOD_NOT_FOUND` (-32601), which
+        matches "the method exists in the spec but this peer doesn't
+        implement it".
+    """
+
+    def __init__(self, *args: Any, server_url: str = "", **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._litellm_server_url = server_url
+
+    async def _received_request(self, responder: Any) -> None:
+        # `responder.request` is a `types.ServerRequest` pydantic union.
+        # `.root` is the actual variant (CreateMessageRequest, ElicitRequest,
+        # etc.). We branch on isinstance to avoid coupling to private
+        # `match`/`case` shape in the SDK.
+        request_root = getattr(responder.request, "root", responder.request)
+        method: Optional[str] = None
+        if isinstance(request_root, CreateMessageRequest):
+            method = "sampling/createMessage"
+        elif isinstance(request_root, ElicitRequest):
+            method = "elicitation/create"
+
+        if method is not None:
+            params = getattr(request_root, "params", None)
+            verbose_logger.warning(
+                "MCP upstream %s sent %s; the LiteLLM MCP Gateway does not "
+                "implement this capability yet. Responding with JSON-RPC "
+                "error %d. params=%r",
+                self._litellm_server_url or "stdio",
+                method,
+                METHOD_NOT_FOUND,
+                params,
+            )
+            with responder:
+                await responder.respond(
+                    _build_unsupported_method_error(method, self._litellm_server_url)
+                )
+            return None
+
+        # Fall through to the SDK's default handling for every other
+        # server -> client request (`ping`, `roots/list`, task callbacks,
+        # etc.).
+        return await super()._received_request(responder)
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -294,7 +385,22 @@ class MCPClient:
         transport = await transport_ctx.__aenter__()
         try:
             read_stream, write_stream = transport[0], transport[1]
-            session_ctx = ClientSession(read_stream, write_stream)
+            # Use a LiteLLM-specific `ClientSession` subclass that handles
+            # `sampling/createMessage` and `elicitation/create` requests from
+            # the upstream server: it logs a warning so the event is visible
+            # in proxy logs (previously LiteLLM was silent at the logging
+            # layer even though the SDK replied to the server with a generic
+            # `INVALID_REQUEST` error) and returns a more descriptive
+            # JSON-RPC error that names LiteLLM as the responding peer.
+            # `sampling` / `elicitation` capabilities are deliberately NOT
+            # declared during `initialize` — the override is done in
+            # `_received_request`, not via the SDK's callback hooks, so the
+            # SDK's identity check on the default callbacks still passes.
+            session_ctx = _LiteLLMMCPClientSession(
+                read_stream,
+                write_stream,
+                server_url=self.server_url,
+            )
             session = await session_ctx.__aenter__()
             try:
                 init_result = await session.initialize()
