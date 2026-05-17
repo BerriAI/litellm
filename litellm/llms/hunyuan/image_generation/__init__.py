@@ -2,10 +2,13 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 
+from .handler import HunyuanImageGeneration, hunyuan_image_generation
 from .transformation import HunyuanImageGenerationConfig
 
 __all__ = [
+    "HunyuanImageGeneration",
     "HunyuanImageGenerationConfig",
+    "hunyuan_image_generation",
 ]
 
 
