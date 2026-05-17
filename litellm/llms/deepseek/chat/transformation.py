@@ -70,7 +70,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 # Normalize to DeepSeek's two supported values
                 normalized = "max" if reasoning_effort in ("max", "xhigh") else "high"
                 optional_params["thinking"] = {"type": "enabled"}
-                optional_params["reasoning_effort"] = normalized
+                # Only forward reasoning_effort on V4 opt-in models.
+                # deepseek-reasoner/R1 have supports_reasoning=True but don't accept reasoning_effort field.
+                if not supports_reasoning(model=model, custom_llm_provider="deepseek"):
+                    optional_params["reasoning_effort"] = normalized
 
         return optional_params
 

@@ -52,14 +52,14 @@ class TestDeepSeekThinkingParams:
         assert "budget_tokens" not in result.get("thinking", {})
 
     def test_map_reasoning_effort_medium(self):
-        """Test that reasoning_effort='medium' normalizes to high."""
+        """Test that reasoning_effort='medium' normalizes to high for V4 models."""
         non_default_params = {"reasoning_effort": "medium"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
@@ -67,14 +67,14 @@ class TestDeepSeekThinkingParams:
         assert result["reasoning_effort"] == "high"
 
     def test_map_reasoning_effort_low(self):
-        """Test that reasoning_effort='low' normalizes to high."""
+        """Test that reasoning_effort='low' normalizes to high for V4 models."""
         non_default_params = {"reasoning_effort": "low"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
@@ -82,14 +82,14 @@ class TestDeepSeekThinkingParams:
         assert result["reasoning_effort"] == "high"
 
     def test_map_reasoning_effort_high(self):
-        """Test that reasoning_effort='high' passes through as high."""
+        """Test that reasoning_effort='high' passes through as high for V4 models."""
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
@@ -97,14 +97,14 @@ class TestDeepSeekThinkingParams:
         assert result["reasoning_effort"] == "high"
 
     def test_map_reasoning_effort_max(self):
-        """Test that reasoning_effort='max' passes through as max."""
+        """Test that reasoning_effort='max' passes through as max for V4 models."""
         non_default_params = {"reasoning_effort": "max"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
@@ -112,19 +112,35 @@ class TestDeepSeekThinkingParams:
         assert result["reasoning_effort"] == "max"
 
     def test_map_reasoning_effort_xhigh_normalizes_to_max(self):
-        """Test that reasoning_effort='xhigh' normalizes to max."""
+        """Test that reasoning_effort='xhigh' normalizes to max for V4 models."""
         non_default_params = {"reasoning_effort": "xhigh"}
         optional_params = {}
 
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=self.model,
+            model="deepseek-v4-pro",
             drop_params=False,
         )
 
         assert result["thinking"] == {"type": "enabled"}
         assert result["reasoning_effort"] == "max"
+
+    def test_map_reasoning_effort_not_forwarded_for_reasoner(self):
+        """Test that reasoning_effort is not forwarded to deepseek-reasoner (R1 doesn't accept it)."""
+        non_default_params = {"reasoning_effort": "max"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,  # deepseek-reasoner
+            drop_params=False,
+        )
+
+        # thinking should still be enabled but reasoning_effort must NOT be forwarded
+        assert result["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in result
 
     def test_map_reasoning_effort_none_is_noop_for_reasoner(self):
         """Test that reasoning_effort='none' is a no-op for deepseek-reasoner (always-on thinking)."""
