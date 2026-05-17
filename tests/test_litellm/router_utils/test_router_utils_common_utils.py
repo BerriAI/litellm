@@ -516,3 +516,37 @@ class TestAddModelFileIdMappings:
     def test_should_return_empty_mapping_when_given_empty_list(self):
         result = add_model_file_id_mappings([], [])
         assert result == {}
+
+
+def test_update_settings_none_int_values():
+    """Regression test: update_settings must not crash when None is passed for int settings.
+
+    Previously raised TypeError: int() argument must be a string... not 'NoneType'
+    The proxy server calls update_settings(**combined_router_settings) on every
+    startup with settings from a JSON DB where null maps to Python None.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-5-mini",
+            "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake"},
+        }
+    ]
+    router = Router(model_list=model_list, timeout=30, allowed_fails=5)
+
+    router.update_settings(timeout=None)
+    assert router.timeout is None
+
+    router.update_settings(allowed_fails=None)
+    assert router.allowed_fails is None
+
+    router.update_settings(num_retries=None)
+    assert router.num_retries is None
+
+    router.update_settings(cooldown_time=None)
+    assert router.cooldown_time is None
+
+    router.update_settings(retry_after=None)
+    assert router.retry_after is None
+
+    router.update_settings(timeout=60)
+    assert router.timeout == 60
