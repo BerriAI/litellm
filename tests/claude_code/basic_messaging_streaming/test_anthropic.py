@@ -1,21 +1,14 @@
 """basic_messaging_streaming x Anthropic.
 
-Drive the real `claude` CLI in headless `--output-format stream-json`
-mode against a running LiteLLM proxy that routes to Anthropic, and
-report the outcome via `compat_result`.
+Drive the real `claude` CLI in headless `--output-format stream-json
+--include-partial-messages` mode against a running LiteLLM proxy that
+routes to Anthropic, and report the outcome via `compat_result`.
 
-The CLI is run with `--print --output-format stream-json`, which streams
-incremental events as the upstream produces tokens. The cell goes green
-only when every Claude tier returns a non-empty reply.
-
-Note: a true "did the proxy buffer the full response before flushing?"
-check would require observing event arrival times on the wire, which
-the `cli_driver` cannot do today — it consumes stdout via
-`subprocess.run(capture_output=True)` after the process exits, so a
-buffered-then-flushed response is indistinguishable from a truly
-streamed one. That regression check belongs in a streaming-aware
-driver; until then this cell verifies the same shape as the
-non-streaming variant.
+The cell goes green only when every Claude tier (a) returns a non-empty
+reply and (b) the proxy actually streamed it — i.e. the CLI observed
+multiple `stream_event` records carrying raw SSE deltas. A proxy that
+buffers the upstream stream and returns a single non-streaming chunk
+emits zero such records, which is the regression this row catches.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -49,4 +42,5 @@ def test_basic_messaging_streaming_anthropic(compat_result):
         compat_result=compat_result,
         models=ANTHROPIC_MODELS,
         prompt="Count from 1 to 5, one number per line.",
+        verify_streaming=True,
     )
