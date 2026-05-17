@@ -1,3 +1,5 @@
+import math
+
 """
 Endpoints for /organization operations
 
@@ -220,18 +222,22 @@ async def new_organization(
         )
 
     # Validate budget values are not negative
-    if data.max_budget is not None and data.max_budget < 0:
+    if data.max_budget is not None and (
+        not math.isfinite(data.max_budget) or data.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
             },
         )
-    if data.soft_budget is not None and data.soft_budget < 0:
+    if data.soft_budget is not None and (
+        not math.isfinite(data.soft_budget) or data.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
             },
         )
 
@@ -482,23 +488,42 @@ async def update_organization(
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
 
     # Validate budget values are not negative
-    if data.max_budget is not None and data.max_budget < 0:
+    if data.max_budget is not None and (
+        not math.isfinite(data.max_budget) or data.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
             },
         )
-    if data.soft_budget is not None and data.soft_budget < 0:
+    if data.soft_budget is not None and (
+        not math.isfinite(data.soft_budget) or data.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
             },
         )
 
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
+
+    if data.organization_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "organization_id is required"},
+        )
+
+    # IDOR guard: only proxy admins / org admins of THIS org may update
+    # it. Without this, any authenticated key holder could rewrite
+    # another organization's metadata, budgets, and object permissions.
+    await _verify_org_access(
+        organization_id=data.organization_id,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
     existing_organization_row = (
         await prisma_client.db.litellm_organizationtable.find_unique(
@@ -909,6 +934,16 @@ async def organization_member_add(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        # IDOR guard: docstring says "Only proxy_admin or org_admin of
+        # organization, allowed to access this endpoint" — but the code
+        # never enforced that. Any authenticated key holder could add
+        # members to any org. Now gated explicitly.
+        await _verify_org_access(
+            organization_id=data.organization_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         # Check if organization exists
         existing_organization_row = (
             await prisma_client.db.litellm_organizationtable.find_unique(
@@ -1018,6 +1053,16 @@ async def organization_member_update(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
+        # IDOR guard: only proxy admins / org admins of THIS org may
+        # update member roles. The PROXY_ADMIN-target check below was
+        # the only access control; without this, any authenticated user
+        # could change any non-admin member's role in any org.
+        await _verify_org_access(
+            organization_id=data.organization_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         # Check if organization exists
         existing_organization_row = (
             await prisma_client.db.litellm_organizationtable.find_unique(
@@ -1078,10 +1123,7 @@ async def organization_member_update(
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ):
-            if (
-                user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
-            ):
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -1181,6 +1223,15 @@ async def organization_member_delete(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+
+        # IDOR guard: only proxy admins / org admins of THIS org may
+        # delete members. Without this, any authenticated key holder
+        # could remove any user from any org.
+        await _verify_org_access(
+            organization_id=data.organization_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         if data.user_email is not None and data.user_id is None:
             existing_user_email_row = await find_member_if_email(

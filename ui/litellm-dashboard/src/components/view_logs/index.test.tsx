@@ -5,27 +5,19 @@ import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 
 const mockHandleFilterResetFromHook = vi.fn();
-vi.mock("./log_filter_logic", () => ({
-  useLogFilterLogic: vi.fn(() => ({
-    logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
-    filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
-    allTeams: [],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: mockHandleFilterResetFromHook,
-  })),
-  defaultFilters: {
-    "Team ID": "",
-    "Key Hash": "",
-    "Request ID": "",
-    "Model": "",
-    "User ID": "",
-    "End User": "",
-    "Status": "",
-    "Key Alias": "",
-    "Error Code": "",
-    "Error Message": "",
-  },
-}));
+vi.mock("./log_filter_logic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./log_filter_logic")>();
+  return {
+    ...actual,
+    useLogFilterLogic: vi.fn(() => ({
+      logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
+      filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
+      allTeams: [],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: mockHandleFilterResetFromHook,
+    })),
+  };
+});
 
 vi.mock("../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../networking")>();

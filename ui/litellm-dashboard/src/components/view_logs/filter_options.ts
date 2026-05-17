@@ -4,6 +4,7 @@ import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/Pagina
 import { FilterOption } from "../molecules/filter";
 import { allEndUsersCall } from "../networking";
 import { ERROR_CODE_OPTIONS } from "./constants";
+import { FILTER_KEYS } from "./log_filter_logic";
 
 export function getLogFilterOptions(accessToken: string): FilterOption[] {
   return [
@@ -25,6 +26,11 @@ export function getLogFilterOptions(accessToken: string): FilterOption[] {
       name: "Model",
       label: "Model",
       customComponent: PaginatedModelSelect,
+    },
+    {
+      name: FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
+      label: "Public model / search tool",
+      isSearchable: false,
     },
     {
       name: "Key Alias",

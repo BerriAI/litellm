@@ -3,7 +3,10 @@
 from typing import Optional, Union
 
 import litellm
-from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
+from litellm.utils import (
+    _is_explicitly_disabled_factory,
+    _supports_factory,
+)
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -53,9 +56,21 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        # gpt-5-chat* behaves like a regular chat model (supports temperature, etc.)
-        # Don't route it through GPT-5 reasoning-specific parameter restrictions.
-        return "gpt-5" in model and "gpt-5-chat" not in model
+        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
+        # …) are regular chat models: they support temperature and tool_choice but NOT
+        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
+        #
+        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
+        # models and must stay on the GPT-5 path.  The distinguishing feature is that
+        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
+        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
+        # number (i.e. "gpt-5.<digit>-chat").
+        #
+        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
+        # than a substring check) makes this boundary explicit and avoids any ambiguity
+        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
+        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
+        return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -232,9 +247,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         ),
                         status_code=400,
                     )
-        elif effective_effort == "minimal":
-            # minimal is opt-out: unknown models pass through; only block when
-            # the model map explicitly sets supports_minimal_reasoning_effort=false.
+        elif effective_effort in ("minimal", "low"):
+            # minimal/low are opt-out: unknown models pass through; only block when
+            # the model map explicitly sets supports_{level}_reasoning_effort=false.
+            # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
+            # supports_low_reasoning_effort=false (and supports_minimal=false).
             if self._is_reasoning_effort_level_explicitly_disabled(
                 model, effective_effort
             ):

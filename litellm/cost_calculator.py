@@ -513,7 +513,10 @@ def cost_per_token(  # noqa: PLR0915
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
         return azure_openai_cost_per_token(
-            model=model, usage=usage_block, response_time_ms=response_time_ms
+            model=model,
+            usage=usage_block,
+            response_time_ms=response_time_ms,
+            service_tier=service_tier,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(
@@ -539,6 +542,7 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block,
             response_time_ms=response_time_ms,
             request_model=request_model,
+            service_tier=service_tier,
         )
     else:
         model_info = _cached_get_model_info_helper(
@@ -2116,6 +2120,26 @@ def batch_cost_calculator(
             )
         except Exception:
             model_info = None
+    elif not any(
+        model_info.get(k) is not None
+        for k in (
+            "input_cost_per_token_batches",
+            "input_cost_per_token",
+            "output_cost_per_token_batches",
+            "output_cost_per_token",
+        )
+    ):
+        # model_info was provided (e.g. deployment metadata with only id/db_model)
+        # but carries no pricing fields. Fall back to the global pricing table so
+        # that standard model pricing is used instead of silently returning $0.
+        try:
+            global_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            if global_info:
+                model_info = global_info
+        except Exception:
+            pass
 
     if not model_info:
         return 0.0, 0.0

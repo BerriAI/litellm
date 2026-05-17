@@ -217,6 +217,7 @@ describe("useLogFilterLogic", () => {
       { filterKey: "End User", paramName: "end_user", value: "user-a" },
       { filterKey: "Status", paramName: "status_filter", value: "error" },
       { filterKey: "Model", paramName: "model_id", value: "gpt-4" },
+      { filterKey: "Public model / search tool", paramName: "model", value: "tavily-marketing" },
       { filterKey: "Error Code", paramName: "error_code", value: "429" },
       { filterKey: "Error Message", paramName: "error_message", value: "rate limit exceeded" },
     ];

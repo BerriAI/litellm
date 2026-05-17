@@ -114,7 +114,7 @@ The Levo callback is registered in:
 ## Documentation
 
 For detailed documentation, see:
-- [LiteLLM Levo Integration Docs](../../../../docs/my-website/docs/observability/levo_integration.md)
+- [LiteLLM Levo Integration Docs](https://docs.litellm.ai/docs/observability/levo_integration)
 - [Levo Documentation](https://docs.levo.ai)
 
 ## Support

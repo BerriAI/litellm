@@ -1,0 +1,140 @@
+name: Guard fork dependency changes
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+    paths:
+      - "uv.lock"
+      - "pyproject.toml"
+      - "litellm-proxy-extras/pyproject.toml"
+      - "enterprise/pyproject.toml"
+
+permissions: {}
+
+jobs:
+  guard:
+    name: Block fork dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.base_ref }}
+          persist-credentials: false
+          path: base
+
+      - name: Checkout PR head (read-only)
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          path: pr
+
+      - name: Reject uv.lock changes
+        run: |
+          if ! diff -q base/uv.lock pr/uv.lock >/dev/null 2>&1; then
+            echo "::error::Fork PRs must not modify uv.lock. Dependency lockfile changes must come from a branch in the canonical repository."
+            exit 1
+          fi
+          echo "uv.lock is unchanged."
+
+      - name: Reject new dependencies in pyproject.toml files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Write the checker script to a temp file to avoid shell quoting issues.
+          cat > /tmp/extract_deps.py << 'SCRIPT'
+          import re
+          import sys
+          import tomllib
+
+
+          def normalize(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+
+          def extract_dep_names(path: str) -> set[str]:
+              with open(path, "rb") as f:
+                  data = tomllib.load(f)
+
+              deps: set[str] = set()
+              pep508 = re.compile(r"^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+
+              # [project].dependencies
+              for spec in data.get("project", {}).get("dependencies", []):
+                  m = pep508.match(spec)
+                  if m:
+                      deps.add(normalize(m.group(1)))
+
+              # [project.optional-dependencies]
+              for group in data.get("project", {}).get("optional-dependencies", {}).values():
+                  for spec in group:
+                      m = pep508.match(spec)
+                      if m:
+                          deps.add(normalize(m.group(1)))
+
+              # [dependency-groups]
+              for group in data.get("dependency-groups", {}).values():
+                  for item in group:
+                      if isinstance(item, str):
+                          m = pep508.match(item)
+                          if m:
+                              deps.add(normalize(m.group(1)))
+
+              return deps
+
+
+          if __name__ == "__main__":
+              for name in sorted(extract_dep_names(sys.argv[1])):
+                  print(name)
+          SCRIPT
+
+          had_error=0
+
+          check_deps() {
+            local base_file="$1"
+            local pr_file="$2"
+            local label="$3"
+
+            if [ ! -f "$base_file" ] && [ ! -f "$pr_file" ]; then
+              return 0
+            fi
+
+            if [ ! -f "$base_file" ] && [ -f "$pr_file" ]; then
+              echo "::error::Fork PR introduces a new $label that does not exist on the base branch."
+              return 1
+            fi
+
+            base_deps=$(python3 /tmp/extract_deps.py "$base_file")
+            pr_deps=$(python3 /tmp/extract_deps.py "$pr_file")
+
+            new_deps=$(comm -13 <(echo "$base_deps") <(echo "$pr_deps"))
+
+            if [ -n "$new_deps" ]; then
+              echo "::error::Fork PR adds new dependencies in $label: $(echo $new_deps | tr '\n' ', ')"
+              echo "New packages detected:"
+              echo "$new_deps"
+              return 1
+            fi
+
+            echo "$label: no new dependencies."
+            return 0
+          }
+
+          check_deps base/pyproject.toml pr/pyproject.toml "pyproject.toml" || had_error=1
+          check_deps base/litellm-proxy-extras/pyproject.toml pr/litellm-proxy-extras/pyproject.toml "litellm-proxy-extras/pyproject.toml" || had_error=1
+          check_deps base/enterprise/pyproject.toml pr/enterprise/pyproject.toml "enterprise/pyproject.toml" || had_error=1
+
+          if [ "$had_error" -ne 0 ]; then
+            echo ""
+            echo "::error::Fork PRs must not add new dependencies. Please open an issue or coordinate with a maintainer to update dependencies from within the canonical repository."
+            exit 1
+          fi
+
+          echo "All pyproject.toml files passed dependency check."

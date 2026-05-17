@@ -104,11 +104,16 @@ async def get_router_settings(
         config = await proxy_config.get_config()
         router_settings_from_config = config.get("router_settings", {})
 
-        # Get current values from llm_router if initialized
-        current_values = {}
+        current_values: Dict[str, Any] = {}
         if llm_router is not None:
-            # Check all field names from the fields list
+            # Router exposes routing groups as private `_routing_groups`; the
+            # generic `hasattr` loop below would miss them.
+            current_values["routing_groups"] = [
+                group.model_dump() for group in llm_router._routing_groups.values()
+            ]
             for field in router_fields:
+                if field.field_name == "routing_groups":
+                    continue
                 if hasattr(llm_router, field.field_name):
                     value = getattr(llm_router, field.field_name)
                     current_values[field.field_name] = value

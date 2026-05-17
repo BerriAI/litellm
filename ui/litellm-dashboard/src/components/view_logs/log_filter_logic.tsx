@@ -27,11 +27,14 @@ function useDebouncedValue<T>(
   return [debounced, setDebounced];
 }
 
+/** Spend log `model` column (LLM public model name or `search_tool_name` for /search). */
 export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
   MODEL: "Model",
+  /** Exact match on LiteLLM_SpendLogs.model — use for search tools and public model names. */
+  PUBLIC_MODEL_OR_SEARCH_TOOL: "Public model / search tool",
   USER_ID: "User ID",
   END_USER: "End User",
   STATUS: "Status",
@@ -56,6 +59,7 @@ export const defaultFilters: LogFilterState = {
   [FILTER_KEYS.KEY_HASH]: "",
   [FILTER_KEYS.REQUEST_ID]: "",
   [FILTER_KEYS.MODEL]: "",
+  [FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "",
   [FILTER_KEYS.USER_ID]: "",
   [FILTER_KEYS.END_USER]: "",
   [FILTER_KEYS.STATUS]: "",
@@ -156,6 +160,7 @@ export function useLogFilterLogic({
           end_user: effectiveFilters[FILTER_KEYS.END_USER] || undefined,
           status_filter: effectiveFilters[FILTER_KEYS.STATUS] || undefined,
           model_id: effectiveFilters[FILTER_KEYS.MODEL] || undefined,
+          model: effectiveFilters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
           key_alias: effectiveFilters[FILTER_KEYS.KEY_ALIAS] || undefined,
           error_code: effectiveFilters[FILTER_KEYS.ERROR_CODE] || undefined,
           error_message: effectiveFilters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
