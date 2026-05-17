@@ -50,8 +50,15 @@ INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 GPT5_FAMILY_PREFIX = "gpt-5"
 
 # Regexes for picking off "obvious passes" without burning LLM tokens.
+#
+# Keep this list to GitHub's documented PR-closing keywords only
+# (https://docs.github.com/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
+# Casual mentions like "see #1234" or "ref #1234" are intentionally NOT
+# auto-passed — they should fall through to the LLM judge, which has the
+# stricter rubric "a bare issue number without a closing keyword counts only
+# if it's clearly the related issue (not a passing mention)".
 LINKED_ISSUE_PATTERN = re.compile(
-    r"\b(?:fixes|fix|closes|close|resolves|resolve|refs|ref|see|addresses)\s+"
+    r"\b(?:fixes|fix|fixed|closes|close|closed|resolves|resolve|resolved)\s+"
     r"(?:#\d+|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)",
     re.IGNORECASE,
 )
@@ -127,12 +134,19 @@ def close_issue(repo: str, number: int, *, not_planned: bool = True) -> None:
 
 
 def is_internal_contributor(item: dict) -> bool:
-    """Return True if the PR/issue author should be exempted from triage."""
-    association = (item.get("author_association") or "").upper()
-    if association in INTERNAL_ASSOCIATIONS:
-        return True
+    """Return True if the PR/issue author should be exempted from triage.
+
+    Fail-safe: if `author_association` is missing or empty (which should never
+    happen on a successful GitHub REST response but is possible on schema
+    changes or partial responses), treat the author as INTERNAL so the
+    destructive close path never fires on an unknown contributor. This matches
+    the sibling `is_external_pr_author` in `close_low_quality_prs.py`.
+    """
     login = ((item.get("user") or {}).get("login") or "").lower()
     if login.endswith("[bot]") or login in {"dependabot", "github-actions"}:
+        return True
+    association = (item.get("author_association") or "").upper()
+    if not association or association in INTERNAL_ASSOCIATIONS:
         return True
     return False
 
@@ -553,7 +567,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("TRIAGE_MODEL", DEFAULT_MODEL),
+        # `os.environ.get("TRIAGE_MODEL", DEFAULT_MODEL)` would return "" when
+        # GitHub Actions exposes an unset repo variable as an empty-string env
+        # var, silently bypassing DEFAULT_MODEL and causing every call to fail
+        # as `skip-llm-error`. The `or` guard collapses empty -> default.
+        default=os.environ.get("TRIAGE_MODEL") or DEFAULT_MODEL,
         help=f"OpenAI-compatible model name (default: {DEFAULT_MODEL}).",
     )
     parser.add_argument(

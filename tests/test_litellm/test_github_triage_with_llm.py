@@ -35,7 +35,7 @@ class TestIsInternalContributor:
 
     @pytest.mark.parametrize(
         "association",
-        ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", ""],
+        ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"],
     )
     def test_should_mark_outside_associations_as_external(
         self, triage_module, association
@@ -45,6 +45,20 @@ class TestIsInternalContributor:
             "user": {"login": "random-oss-dev"},
         }
         assert triage_module.is_internal_contributor(item) is False
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            {"author_association": "", "user": {"login": "random-oss-dev"}},
+            {"user": {"login": "random-oss-dev"}},  # association field absent
+        ],
+    )
+    def test_should_fail_safe_when_author_association_is_missing(
+        self, triage_module, item
+    ):
+        # Fail-safe: an empty/missing association must never make a PR
+        # eligible for the destructive close path. Treat as internal (skip).
+        assert triage_module.is_internal_contributor(item) is True
 
     @pytest.mark.parametrize(
         "login",
@@ -65,7 +79,8 @@ class TestHasLinkedIssue:
             "closes #1",
             "Resolves #99",
             "fix #42 — this addresses the regression",
-            "Refs https://github.com/BerriAI/litellm/issues/27000",
+            "Closes https://github.com/BerriAI/litellm/issues/27000",
+            "Resolved https://github.com/BerriAI/litellm/issues/27001",
         ],
     )
     def test_should_detect_common_link_phrases(self, triage_module, body):
@@ -76,13 +91,17 @@ class TestHasLinkedIssue:
         [
             "",
             "Some change",
-            "See #1234",  # "see" is allowed per regex but we want documented coverage
+            # Casual mentions must NOT auto-pass — they should fall through to
+            # the LLM judge so the stricter "not a passing mention" rule fires.
+            "See #1234",
+            "see #1234 for context",
+            "ref #1234",
+            "Refs https://github.com/BerriAI/litellm/issues/27000",
+            "this addresses #1234",
         ],
     )
-    def test_should_handle_empty_and_unrelated_bodies(self, triage_module, body):
-        # "See #1234" is intentionally accepted as a related-issue reference.
-        # Just make sure empty/unrelated bodies don't crash.
-        triage_module.has_linked_issue(body)
+    def test_should_not_auto_pass_casual_mentions(self, triage_module, body):
+        assert triage_module.has_linked_issue(body) is False
 
     def test_should_not_detect_when_only_html_comment_template(self, triage_module):
         body = "<!-- e.g. Fixes #1234 -->"
@@ -145,6 +164,54 @@ class TestBuildPrompts:
         prompt = triage_module.build_issue_prompt(title="Bug", body="repro here")
         assert "Bug" in prompt
         assert "repro here" in prompt
+
+
+class TestMainModelDefault:
+    """`--model` falls back to DEFAULT_MODEL even when TRIAGE_MODEL is empty."""
+
+    def _stub_triage(self, triage_module, monkeypatch):
+        captured: dict = {}
+
+        def fake_triage(**kwargs):
+            captured.update(kwargs)
+            return {
+                "kind": kwargs["kind"],
+                "number": kwargs["number"],
+                "title": "",
+                "author": "x",
+                "author_association": "NONE",
+                "state": "open",
+                "action": "skip-no-llm-key",
+            }
+
+        monkeypatch.setattr(triage_module, "triage", fake_triage)
+        return captured
+
+    def test_should_fall_back_to_default_when_triage_model_env_empty(
+        self, triage_module, monkeypatch
+    ):
+        captured = self._stub_triage(triage_module, monkeypatch)
+        monkeypatch.setenv("TRIAGE_MODEL", "")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["triage_with_llm.py", "--repo", "o/r", "--pr", "1"],
+        )
+        rc = triage_module.main()
+        assert rc == 0
+        assert captured["model"] == triage_module.DEFAULT_MODEL
+
+    def test_should_respect_explicit_triage_model_env(self, triage_module, monkeypatch):
+        captured = self._stub_triage(triage_module, monkeypatch)
+        monkeypatch.setenv("TRIAGE_MODEL", "gpt-4o-mini")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["triage_with_llm.py", "--repo", "o/r", "--pr", "1"],
+        )
+        rc = triage_module.main()
+        assert rc == 0
+        assert captured["model"] == "gpt-4o-mini"
 
 
 class TestCallLlmJudge:
@@ -295,6 +362,32 @@ class TestTriageOrchestration:
         )
         assert result["action"] == "pass-linked-issue"
         assert result["verdict"]["verdict"] == "pass"
+
+    def test_should_not_short_circuit_on_casual_mention(
+        self, triage_module, monkeypatch
+    ):
+        # "See #1234" is a passing mention, not a closing keyword. The LLM
+        # must get a chance to apply the stricter rubric.
+        pr = self._make_pr(body="See #1234 for context. No QA proof here.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        called = {"judge": False}
+
+        def judge(prompt):
+            called["judge"] = True
+            return json.dumps(
+                {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin."}
+            )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=False,
+            model="m",
+            judge=judge,
+        )
+        assert called["judge"] is True
+        assert result["action"] == "would-close"
 
     def test_should_return_pass_llm_when_judge_passes(self, triage_module, monkeypatch):
         pr = self._make_pr(body="Long body, no linked issue.")
