@@ -51,6 +51,10 @@ from tokenizers import Tokenizer
 import litellm
 import litellm.litellm_core_utils
 
+
+from typing import Callable, Any, Tuple, Type
+
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
@@ -9722,3 +9726,81 @@ def __getattr__(name: str) -> Any:
         return handler_func(name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+
+# ─────────────────────────────────────────────
+# Retry with Exponential Backoff Utility
+# Handles RateLimitError and ServiceUnavailableError
+# automatically with jitter to avoid thundering herd
+# ─────────────────────────────────────────────
+
+def retry_with_backoff(
+   fn: Callable,
+   max_retries: int = 3,
+   base_delay: float = 1.0,
+   max_delay: float = 60.0,
+   backoff_factor: float = 2.0,
+   retry_on: Optional[Tuple[Type[Exception], ...]] = None,
+) -> Any:
+   """
+   Retries a callable with exponential backoff and jitter.
+
+   Args:
+       fn:             The callable to retry (e.g. lambda: litellm.completion(...))
+       max_retries:    Maximum number of retry attempts (default: 3)
+       base_delay:     Initial delay in seconds (default: 1.0)
+       max_delay:      Maximum delay cap in seconds (default: 60.0)
+       backoff_factor: Multiplier per retry (default: 2.0)
+       retry_on:       Tuple of exception types to retry on.
+                       Defaults to (RateLimitError, ServiceUnavailableError)
+
+   Returns:
+       The return value of fn() on success.
+
+   Raises:
+       The last exception if all retries are exhausted.
+
+   Example:
+       import litellm
+       from litellm.utils import retry_with_backoff
+
+       response = retry_with_backoff(
+           lambda: litellm.completion(
+               model="gpt-4o",
+               messages=[{"role": "user", "content": "Hello"}]
+           ),
+           max_retries=5,
+           base_delay=2.0,
+       )
+   """
+
+   if retry_on is None:
+       retry_on = (RateLimitError, ServiceUnavailableError)
+
+   last_exception = None
+
+   for attempt in range(max_retries + 1):
+       try:
+           return fn()
+
+       except retry_on as e:
+           last_exception = e
+
+           if attempt == max_retries:
+               # Exhausted all retries
+               raise last_exception
+
+           # Exponential backoff with full jitter
+           delay = min(
+               base_delay * (backoff_factor ** attempt) + random.uniform(0, 1),
+               max_delay,
+           )
+
+           verbose_logger.warning(
+               f"[LiteLLM] Attempt {attempt + 1}/{max_retries} failed "
+               f"({type(e).__name__}). Retrying in {delay:.2f}s..."
+           )
+           time.sleep(delay)
+
+   raise last_exception
