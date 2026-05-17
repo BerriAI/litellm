@@ -94,7 +94,6 @@ class LiteLLMCompletionTransformationHandler:
                     args = None
 
                 # 检查并修复 arguments
-                original_args = args
                 fixed_args = None
 
                 if args is None:
