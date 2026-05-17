@@ -15,10 +15,7 @@ export interface PaginatedResponse {
   total_pages: number;
 }
 
-function useDebouncedValue<T>(
-  value: T,
-  delayMs: number,
-): [T, React.Dispatch<React.SetStateAction<T>>] {
+function useDebouncedValue<T>(value: T, delayMs: number): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(value), delayMs);
@@ -52,7 +49,13 @@ const TEXT_FILTER_KEYS: readonly (keyof LogFilterState)[] = [
   FILTER_KEYS.ERROR_MESSAGE,
   FILTER_KEYS.REQUEST_ID,
   FILTER_KEYS.USER_ID,
+  FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
 ];
+
+// Live-tail polls every 15s, but only on page 1 (newest) while live tail is on.
+export const LIVE_TAIL_INTERVAL_MS = 15000;
+export const getLiveTailRefetchInterval = (isLiveTail: boolean, currentPage: number): number | false =>
+  isLiveTail && currentPage === 1 ? LIVE_TAIL_INTERVAL_MS : false;
 
 export const defaultFilters: LogFilterState = {
   [FILTER_KEYS.TEAM_ID]: "",
@@ -172,9 +175,10 @@ export function useLogFilterLogic({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    refetchInterval: getLiveTailRefetchInterval(isLiveTail, currentPage),
     placeholderData: keepPreviousData,
-    refetchIntervalInBackground: true,
+    // Only live-tail-poll while the tab is visible.
+    refetchIntervalInBackground: false,
   });
 
   const filteredLogs: PaginatedResponse = logsQuery.data ?? {

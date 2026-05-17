@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogsSortField } from "./columns";
 import {
   defaultFilters,
+  getLiveTailRefetchInterval,
+  LIVE_TAIL_INTERVAL_MS,
   useLogFilterLogic,
   type LogFilterState,
   type PaginatedResponse,
@@ -134,24 +136,27 @@ describe("useLogFilterLogic", () => {
         result.current.handleFilterReset();
       });
 
-      await waitFor(() => {
-        expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            params: expect.objectContaining({
-              team_id: undefined,
-              api_key: undefined,
-              request_id: undefined,
-              user_id: undefined,
-              end_user: undefined,
-              status_filter: undefined,
-              model_id: undefined,
-              key_alias: undefined,
-              error_code: undefined,
-              error_message: undefined,
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({
+                team_id: undefined,
+                api_key: undefined,
+                request_id: undefined,
+                user_id: undefined,
+                end_user: undefined,
+                status_filter: undefined,
+                model_id: undefined,
+                key_alias: undefined,
+                error_code: undefined,
+                error_message: undefined,
+              }),
             }),
-          }),
-        );
-      }, { timeout: 500 });
+          );
+        },
+        { timeout: 500 },
+      );
     });
   });
 
@@ -344,6 +349,35 @@ describe("useLogFilterLogic", () => {
         { timeout: 100 },
       );
     });
+
+    // Guards the TEXT_FILTER_KEYS fix: this free-text filter must debounce, not fire per keystroke.
+    it("debounces the 'Public model / search tool' text filter", async () => {
+      const { result } = renderFilterHook();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      vi.mocked(uiSpendLogsCall).mockClear();
+
+      act(() => {
+        result.current.handleFilterChange({ "Public model / search tool": "tavily-marketing" });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(uiSpendLogsCall).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ model: "tavily-marketing" }),
+        }),
+      );
+
+      await waitFor(
+        () =>
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ model: "tavily-marketing" }),
+            }),
+          ),
+        { timeout: 500 },
+      );
+    });
   });
 
   describe("handleFilterReset", () => {
@@ -484,9 +518,7 @@ describe("useLogFilterLogic", () => {
       rerender({ currentPage: 2 });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
-      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-        expect.objectContaining({ page: 2 }),
-      );
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
     });
 
     it("refetches when startTime changes", async () => {
@@ -509,9 +541,7 @@ describe("useLogFilterLogic", () => {
       rerender({ startTime: "2025-01-02T00:00:00Z" });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
-      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-        expect.objectContaining({ start_date: "2025-01-02 00:00:00" }),
-      );
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: "2025-01-02 00:00:00" }));
     });
 
     it("refetches with a different end_date when isCustomDate toggles", async () => {
@@ -552,20 +582,17 @@ describe("useLogFilterLogic", () => {
       { name: "userID", override: { userID: null } },
     ];
 
-    it.each(nullCredentialCases)(
-      "does not call uiSpendLogsCall when $name is null",
-      async ({ override }) => {
-        const { result } = renderFilterHook(override);
+    it.each(nullCredentialCases)("does not call uiSpendLogsCall when $name is null", async ({ override }) => {
+      const { result } = renderFilterHook(override);
 
-        act(() => {
-          result.current.handleFilterChange({ "Key Alias": "alias-1" });
-        });
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
 
-        await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) => setTimeout(resolve, 350));
 
-        expect(uiSpendLogsCall).not.toHaveBeenCalled();
-      },
-    );
+      expect(uiSpendLogsCall).not.toHaveBeenCalled();
+    });
 
     it("does not call uiSpendLogsCall when activeTab is not 'request logs'", async () => {
       const { result } = renderFilterHook({ activeTab: "audit logs" });
@@ -618,5 +645,19 @@ describe("useLogFilterLogic", () => {
       expect(result.current.filteredLogs).toBeDefined();
       expect(result.current.filteredLogs.data).toEqual([]);
     });
+  });
+});
+
+describe("getLiveTailRefetchInterval", () => {
+  it("polls every 15s when live tail is on and on page 1", () => {
+    expect(getLiveTailRefetchInterval(true, 1)).toBe(LIVE_TAIL_INTERVAL_MS);
+  });
+
+  it("does not poll when live tail is off", () => {
+    expect(getLiveTailRefetchInterval(false, 1)).toBe(false);
+  });
+
+  it("does not poll when not on page 1, even with live tail on", () => {
+    expect(getLiveTailRefetchInterval(true, 2)).toBe(false);
   });
 });

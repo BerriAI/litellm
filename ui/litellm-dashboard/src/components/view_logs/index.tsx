@@ -1,5 +1,5 @@
 import moment from "moment";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
@@ -16,6 +16,7 @@ import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_fi
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
+import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -25,13 +26,7 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
-export default function SpendLogsTable({
-  accessToken,
-  token,
-  userRole,
-  userID,
-  premiumUser,
-}: SpendLogsTableProps) {
+export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
@@ -54,7 +49,6 @@ export default function SpendLogsTable({
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
     value: 24,
     unit: "hours",
@@ -69,7 +63,6 @@ export default function SpendLogsTable({
   useEffect(() => {
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
-
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -86,7 +79,6 @@ export default function SpendLogsTable({
     };
     fetchKeyInfo();
   }, [selectedKeyIdInfoView, accessToken]);
-
 
   useEffect(() => {
     if (userRole && internalUserRoles.includes(userRole)) {
@@ -129,14 +121,11 @@ export default function SpendLogsTable({
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
-  const handleSortChange = useCallback(
-    (newSortBy: LogsSortField, newSortOrder: "asc" | "desc") => {
-      setSortBy(newSortBy);
-      setSortOrder(newSortOrder);
-      setCurrentPage(1);
-    },
-    [],
-  );
+  const handleSortChange = useCallback((newSortBy: LogsSortField, newSortOrder: "asc" | "desc") => {
+    setSortBy(newSortBy);
+    setSortOrder(newSortOrder);
+    setCurrentPage(1);
+  }, []);
 
   const columns = useMemo(
     () => createColumns({ sortBy, sortOrder, onSortChange: handleSortChange }),
@@ -155,20 +144,23 @@ export default function SpendLogsTable({
       return matchesSearch;
     });
 
-    const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
-      if (!log.session_id) return acc;
-      if (!acc[log.session_id]) {
-        acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
-      }
-      if (MCP_CALL_TYPES.includes(log.call_type)) {
-        acc[log.session_id].mcp += 1;
-      } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
-        acc[log.session_id].agent += 1;
-      } else {
-        acc[log.session_id].llm += 1;
-      }
-      return acc;
-    }, {});
+    const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>(
+      (acc, log) => {
+        if (!log.session_id) return acc;
+        if (!acc[log.session_id]) {
+          acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
+        }
+        if (MCP_CALL_TYPES.includes(log.call_type)) {
+          acc[log.session_id].mcp += 1;
+        } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
+          acc[log.session_id].agent += 1;
+        } else {
+          acc[log.session_id].llm += 1;
+        }
+        return acc;
+      },
+      {},
+    );
 
     // Build a single-pass map of session_id → representative request_id.
     // Prefers an LLM row over an MCP row as the representative.
@@ -210,8 +202,19 @@ export default function SpendLogsTable({
     );
   }, [filteredLogs.data, searchTerm]);
 
+  // Keep the Fetch button busy until the table has actually committed the new
+  // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
+  // without this the button clears while stale rows are still on screen.
+  const deferredData = useDeferredValue(filteredData);
+  const isStale = deferredData !== filteredData;
+  const isButtonLoading = logsQuery.isFetching || isStale;
+
   if (!accessToken || !token || !userRole || !userID) {
-    return null;
+    return (
+      <div className="flex items-center justify-center h-64">
+        <AntDLoadingSpinner size="large" />
+      </div>
+    );
   }
 
   const handleRowClick = (log: LogEntry) => {
@@ -275,13 +278,13 @@ export default function SpendLogsTable({
                     onCurrentPageChange={setCurrentPage}
                     pageSize={pageSize}
                     isLoading={logsQuery.isLoading}
-                    isButtonLoading={logsQuery.isFetching}
+                    isButtonLoading={isButtonLoading}
                     onRefetch={() => logsQuery.refetch()}
                     filteredLogs={filteredLogs}
                   />
                   <DataTable
                     columns={columns}
-                    data={filteredData}
+                    data={deferredData}
                     onRowClick={handleRowClick}
                     isLoading={logsQuery.isLoading}
                   />
@@ -299,15 +302,22 @@ export default function SpendLogsTable({
               premiumUser={premiumUser}
             />
           </TabPanel>
-          <TabPanel><DeletedKeysPage /></TabPanel>
-          <TabPanel><DeletedTeamsPage /></TabPanel>
+          <TabPanel>
+            <DeletedKeysPage />
+          </TabPanel>
+          <TabPanel>
+            <DeletedTeamsPage />
+          </TabPanel>
         </TabPanels>
       </TabGroup>
 
       {/* Log Details Drawer */}
       <LogDetailsDrawer
         open={isDrawerOpen}
-        onClose={() => { setIsDrawerOpen(false); setSelectedSessionId(null); }}
+        onClose={() => {
+          setIsDrawerOpen(false);
+          setSelectedSessionId(null);
+        }}
         logEntry={selectedLog}
         sessionId={selectedSessionId}
         accessToken={accessToken}
