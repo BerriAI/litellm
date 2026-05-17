@@ -799,6 +799,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if _tool_dict.get("caching") is not None:
                 _advisor_tool["caching"] = _tool_dict["caching"]
             returned_tool = _advisor_tool  # type: ignore[assignment]
+        elif tool["type"] == "namespace":
+            # OpenAI Responses clients may send namespace declarations to group
+            # tools. They are not executable Anthropic tools, so skip them.
+            return None, None
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
