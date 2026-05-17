@@ -147,6 +147,94 @@ class TestBuildPrompts:
         assert "repro here" in prompt
 
 
+class TestCallLlmJudge:
+    """call_llm_judge sets gpt-5 specific kwargs correctly."""
+
+    def _stub_openai(self, monkeypatch, captured: dict):
+        """Install a fake `openai.OpenAI` client into sys.modules.
+
+        The fake client records the kwargs passed to chat.completions.create
+        and returns a minimal response object whose .choices[0].message.content
+        is "ok".
+        """
+        import types
+
+        class FakeMessage:
+            content = '{"verdict": "pass"}'
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices = [FakeChoice()]
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeClient:
+            def __init__(self, api_key, base_url=None):
+                captured["__client_kwargs__"] = {
+                    "api_key": api_key,
+                    "base_url": base_url,
+                }
+                self.chat = FakeChat()
+
+        fake_module = types.ModuleType("openai")
+        fake_module.OpenAI = FakeClient
+        monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    def test_should_set_reasoning_effort_none_for_gpt5_family(
+        self, triage_module, monkeypatch
+    ):
+        captured: dict = {}
+        self._stub_openai(monkeypatch, captured)
+        triage_module.call_llm_judge(
+            "prompt", model="gpt-5.4-mini", api_key="sk-test", base_url=None
+        )
+        assert captured["model"] == "gpt-5.4-mini"
+        assert captured["temperature"] == 0
+        assert captured["extra_body"] == {"reasoning_effort": "none"}
+
+    def test_should_set_reasoning_effort_for_capitalized_or_dated_gpt5(
+        self, triage_module, monkeypatch
+    ):
+        for model in ("GPT-5.4-mini", "gpt-5.4-mini-2026-03-17", "gpt-5"):
+            captured: dict = {}
+            self._stub_openai(monkeypatch, captured)
+            triage_module.call_llm_judge(
+                "prompt", model=model, api_key="sk-test", base_url=None
+            )
+            assert captured["extra_body"] == {"reasoning_effort": "none"}, model
+
+    def test_should_omit_reasoning_effort_for_non_gpt5(
+        self, triage_module, monkeypatch
+    ):
+        captured: dict = {}
+        self._stub_openai(monkeypatch, captured)
+        triage_module.call_llm_judge(
+            "prompt", model="gpt-4o-mini", api_key="sk-test", base_url=None
+        )
+        assert "extra_body" not in captured
+
+    def test_should_pass_base_url_when_provided(self, triage_module, monkeypatch):
+        captured: dict = {}
+        self._stub_openai(monkeypatch, captured)
+        triage_module.call_llm_judge(
+            "p",
+            model="gpt-5.4-mini",
+            api_key="sk-test",
+            base_url="https://proxy.example.com/v1",
+        )
+        assert (
+            captured["__client_kwargs__"]["base_url"] == "https://proxy.example.com/v1"
+        )
+
+
 class TestTriageOrchestration:
     """End-to-end-ish tests that mock both gh fetchers and the LLM."""
 

@@ -24,7 +24,7 @@ Environment:
     GH_TOKEN / GITHUB_TOKEN  - for `gh` CLI auth (auto-set in Actions)
     OPENAI_API_KEY           - required when --close is passed
     OPENAI_BASE_URL          - optional (route to any OpenAI-compatible API)
-    TRIAGE_MODEL             - optional model override (default: gpt-4o-mini)
+    TRIAGE_MODEL             - optional model override (default: gpt-5.4-mini)
 """
 
 from __future__ import annotations
@@ -38,9 +38,16 @@ import sys
 import textwrap
 from typing import Any
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-5.4-mini"
 
 INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+# Model families that require `reasoning_effort` to be set, and that reject
+# `temperature != 1` unless `reasoning_effort` is "none". For these models we
+# pass `reasoning_effort="none"` so a `temperature=0` deterministic judgment
+# is still accepted. See litellm/llms/openai/chat/gpt_5_transformation.py for
+# the full set of constraints LiteLLM applies to these models.
+GPT5_FAMILY_PREFIX = "gpt-5"
 
 # Regexes for picking off "obvious passes" without burning LLM tokens.
 LINKED_ISSUE_PATTERN = re.compile(
@@ -272,12 +279,19 @@ def call_llm_judge(
         if base_url
         else OpenAI(api_key=api_key)
     )
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+    # gpt-5.x reasoning models reject `temperature != 1` unless
+    # `reasoning_effort` is explicitly "none". Set it via `extra_body` so this
+    # works across openai SDK versions regardless of whether the SDK natively
+    # types `reasoning_effort` as a top-level chat-completions param yet.
+    if model.lower().startswith(GPT5_FAMILY_PREFIX):
+        kwargs["extra_body"] = {"reasoning_effort": "none"}
+    response = client.chat.completions.create(**kwargs)
     return response.choices[0].message.content or ""
 
 
