@@ -1,4 +1,5 @@
 """Unit tests for Tencent Hunyuan image generation provider."""
+
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -37,7 +38,11 @@ class TestHunyuanImageGenerationConfig:
     def test_validate_environment_from_env(self):
         os.environ["HUNYUAN_API_KEY"] = "sk-test-123"
         headers = self.cfg.validate_environment(
-            headers={}, model="gpt-image-2", messages=[], optional_params={}, litellm_params={}
+            headers={},
+            model="gpt-image-2",
+            messages=[],
+            optional_params={},
+            litellm_params={},
         )
         assert headers["Authorization"] == "sk-test-123"
         assert headers["Content-Type"] == "application/json"
@@ -58,7 +63,11 @@ class TestHunyuanImageGenerationConfig:
         try:
             with pytest.raises(ValueError, match="HUNYUAN_API_KEY is not set"):
                 self.cfg.validate_environment(
-                    headers={}, model="gpt-image-2", messages=[], optional_params={}, litellm_params={}
+                    headers={},
+                    model="gpt-image-2",
+                    messages=[],
+                    optional_params={},
+                    litellm_params={},
                 )
         finally:
             if env_backup:
@@ -331,3 +340,54 @@ def test_provider_config_manager_returns_hunyuan_config():
 def test_hunyuan_in_llm_providers():
     assert LlmProviders.HUNYUAN == "hunyuan"
     assert LlmProviders.HUNYUAN.value == "hunyuan"
+
+
+class TestHunyuanImageGenerationPostCall:
+    """Verify logging_obj.post_call is invoked after successful polling."""
+
+    def _make_mock_client(self, job_id: str = "job-gen") -> MagicMock:
+        submit_resp = MagicMock()
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {"job_id": job_id}
+        submit_resp.raise_for_status = MagicMock()
+
+        poll_resp = MagicMock()
+        poll_resp.status_code = 200
+        poll_resp.text = (
+            '{"status":"DONE","data":[{"url":"https://example.com/gen.png"}]}'
+        )
+        poll_resp.json.return_value = {
+            "status": "DONE",
+            "data": [{"url": "https://example.com/gen.png"}],
+        }
+        poll_resp.raise_for_status = MagicMock()
+
+        client = MagicMock()
+        client.post.side_effect = [submit_resp, poll_resp]
+        return client
+
+    def test_post_call_invoked_sync(self):
+        handler = HunyuanImageGeneration()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_generation.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            result = handler.image_generation(
+                model="gpt-image-2",
+                prompt="一只跳舞的小狗",
+                model_response=ImageResponse(),
+                optional_params={"size": "1024x1024"},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        assert isinstance(result, ImageResponse)
+        mock_logging.post_call.assert_called_once()
+        call_kwargs = mock_logging.post_call.call_args[1]
+        assert call_kwargs["input"] == "一只跳舞的小狗"
+        assert call_kwargs["api_key"] == "sk-test"

@@ -139,6 +139,13 @@ class HunyuanImageGeneration:
             sync_client=sync_client,
         )
 
+        logging_obj.post_call(
+            input=prompt,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=final_response.text,
+        )
+
         return self.config.transform_image_generation_response(
             model=model,
             raw_response=final_response,
@@ -227,6 +234,13 @@ class HunyuanImageGeneration:
             async_client=async_client,
         )
 
+        logging_obj.post_call(
+            input=prompt,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=final_response.text,
+        )
+
         return self.config.transform_image_generation_response(
             model=model,
             raw_response=final_response,
@@ -261,9 +275,7 @@ class HunyuanImageGeneration:
 
         job_id = submit_data.get("job_id")
         if not job_id:
-            raise ValueError(
-                f"Hunyuan submit response missing job_id: {submit_data}"
-            )
+            raise ValueError(f"Hunyuan submit response missing job_id: {submit_data}")
 
         poll_headers = {
             "Authorization": api_key or "",
@@ -304,9 +316,7 @@ class HunyuanImageGeneration:
 
             time.sleep(interval)
 
-        raise TimeoutError(
-            f"Hunyuan task polling timed out after {max_wait} seconds"
-        )
+        raise TimeoutError(f"Hunyuan task polling timed out after {max_wait} seconds")
 
     async def _poll_for_result_async(
         self,
@@ -337,9 +347,7 @@ class HunyuanImageGeneration:
 
             await asyncio.sleep(interval)
 
-        raise TimeoutError(
-            f"Hunyuan task polling timed out after {max_wait} seconds"
-        )
+        raise TimeoutError(f"Hunyuan task polling timed out after {max_wait} seconds")
 
 
 hunyuan_image_generation = HunyuanImageGeneration()

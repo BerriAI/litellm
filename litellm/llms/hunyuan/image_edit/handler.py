@@ -26,7 +26,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageResponse
 
 from ..image_generation.transformation import HUNYUAN_BASE_URL, HUNYUAN_QUERY_ENDPOINT
-from .transformation import HunyuanImageEditConfig, _image_to_url
+from .transformation import HunyuanImageEditConfig
 
 HUNYUAN_EDIT_POLLING_INTERVAL = 1.5
 HUNYUAN_EDIT_MAX_POLLING_TIME = 300
@@ -95,21 +95,14 @@ class HunyuanImageEdit:
             litellm_params=litellm_params_dict,
         )
 
-        # Pass the first image (or the image itself) to transform_image_edit_request
-        image_input = image[0] if isinstance(image, list) and image else image
-
         data, _ = self.config.transform_image_edit_request(
             model=model,
             prompt=prompt,
-            image=image_input,
+            image=image,
             image_edit_optional_request_params=image_edit_optional_request_params,
             litellm_params=litellm_params_dict,
             headers=headers,
         )
-
-        # If caller passed a list of images, inject all of them
-        if isinstance(image, list) and len(image) > 1:
-            data["images"] = [_image_to_url(img) for img in image]
 
         logging_obj.pre_call(
             input=prompt,
@@ -134,6 +127,13 @@ class HunyuanImageEdit:
             api_key=api_key,
             litellm_params=litellm_params_dict,
             sync_client=sync_client,
+        )
+
+        logging_obj.post_call(
+            input=prompt,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=final_response.text,
         )
 
         return self.config.transform_image_edit_response(
@@ -180,21 +180,14 @@ class HunyuanImageEdit:
             litellm_params=litellm_params_dict,
         )
 
-        image_input = image[0] if isinstance(image, list) and image else image
-
         data, _ = self.config.transform_image_edit_request(
             model=model,
             prompt=prompt,
-            image=image_input,
+            image=image,
             image_edit_optional_request_params=image_edit_optional_request_params,
             litellm_params=litellm_params_dict,
             headers=headers,
         )
-
-        if isinstance(image, list) and len(image) > 1:
-            from .transformation import _image_to_url
-
-            data["images"] = [_image_to_url(img) for img in image]
 
         logging_obj.pre_call(
             input=prompt,
@@ -219,6 +212,13 @@ class HunyuanImageEdit:
             api_key=api_key,
             litellm_params=litellm_params_dict,
             async_client=async_client,
+        )
+
+        logging_obj.post_call(
+            input=prompt,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=final_response.text,
         )
 
         return self.config.transform_image_edit_response(

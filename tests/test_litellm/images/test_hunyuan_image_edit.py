@@ -453,3 +453,110 @@ def test_get_hunyuan_image_edit_config_factory():
 
 def test_hunyuan_image_edit_singleton():
     assert isinstance(hunyuan_image_edit, HunyuanImageEdit)
+
+
+class TestHunyuanImageEditPostCall:
+    """Verify logging_obj.post_call is invoked after successful polling."""
+
+    def _make_mock_client(self, job_id: str = "job-123") -> MagicMock:
+        submit_resp = MagicMock(spec=httpx.Response)
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {"job_id": job_id}
+        submit_resp.raise_for_status = MagicMock()
+
+        poll_resp = MagicMock(spec=httpx.Response)
+        poll_resp.status_code = 200
+        poll_resp.text = (
+            '{"status":"DONE","data":[{"url":"https://example.com/out.png"}]}'
+        )
+        poll_resp.json.return_value = {
+            "status": "DONE",
+            "data": [{"url": "https://example.com/out.png"}],
+        }
+        poll_resp.raise_for_status = MagicMock()
+
+        client = MagicMock()
+        client.post.side_effect = [submit_resp, poll_resp]
+        return client
+
+    def test_post_call_invoked_sync(self):
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            result = handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/src.png",
+                prompt="edit me",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        assert isinstance(result, ImageResponse)
+        mock_logging.post_call.assert_called_once()
+        call_kwargs = mock_logging.post_call.call_args[1]
+        assert call_kwargs["input"] == "edit me"
+        assert call_kwargs["api_key"] == "sk-test"
+
+    def test_multi_image_file_objects_no_double_read(self):
+        """File objects in a list must not be read twice (bug fix)."""
+        handler = HunyuanImageEdit()
+
+        png1 = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        png2 = b"\x89PNG\r\n\x1a\n" + b"\xff" * 16
+        file1 = io.BytesIO(png1)
+        file2 = io.BytesIO(png2)
+
+        submit_resp = MagicMock(spec=httpx.Response)
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {"job_id": "job-multi"}
+        submit_resp.raise_for_status = MagicMock()
+
+        poll_resp = MagicMock(spec=httpx.Response)
+        poll_resp.status_code = 200
+        poll_resp.text = (
+            '{"status":"DONE","data":[{"url":"https://example.com/multi.png"}]}'
+        )
+        poll_resp.json.return_value = {
+            "status": "DONE",
+            "data": [{"url": "https://example.com/multi.png"}],
+        }
+        poll_resp.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.post.side_effect = [submit_resp, poll_resp]
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            result = handler.image_edit(
+                model="gpt-image-2",
+                image=[file1, file2],
+                prompt="merge images",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        assert isinstance(result, ImageResponse)
+        submit_call = mock_client.post.call_args_list[0]
+        sent_json = submit_call[1].get("json") or submit_call[0][1]
+        images = sent_json.get("images", [])
+        assert len(images) == 2
+        # Both images must be non-empty base64 data URLs
+        for img_url in images:
+            assert img_url.startswith("data:image/png;base64,")
+            encoded = img_url.split(",", 1)[1]
+            decoded = base64.b64decode(encoded)
+            assert len(decoded) > 0, "File object was read twice (empty data)"
