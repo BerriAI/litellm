@@ -9118,6 +9118,10 @@ class ProviderConfigManager:
             )
 
             return FalAIImageEditConfig()
+        elif LlmProviders.HUNYUAN == provider:
+            from litellm.llms.hunyuan.image_edit import get_hunyuan_image_edit_config
+
+            return get_hunyuan_image_edit_config(model)
         return None
 
     @staticmethod
