@@ -323,6 +323,13 @@ def _safe_body_matcher(r1, r2) -> None:
     object (e.g. an httpx ``MultipartStream`` for async requests) look
     indistinguishable from genuine content drift.
     """
+    # Defense in depth: ``_before_record_request`` already coalesces
+    # iterable bodies, but if vcrpy invokes the matcher on a request
+    # that did not flow through that hook (or if a future code path
+    # bypasses it), do it again here so iterator==iterator never
+    # silently fails.
+    _materialize_iterable_body(r1)
+    _materialize_iterable_body(r2)
     body1 = getattr(r1, "body", None)
     body2 = getattr(r2, "body", None)
     if body1 == body2:
@@ -586,6 +593,7 @@ def _before_record_request(request):
     headers = getattr(request, "headers", None)
     if headers is None:
         return request
+    _materialize_iterable_body(request)
     if not any(_iter_header_values(headers, KEY_FINGERPRINT_HEADER)):
         fingerprint = _compute_key_fingerprint(request)
         try:
@@ -595,6 +603,55 @@ def _before_record_request(request):
     _strip_headers(headers, FILTERED_REQUEST_HEADERS)
     _normalize_multipart_boundary(request)
     return request
+
+
+def _materialize_iterable_body(request) -> None:
+    """Coalesce an iterable / generator request body into ``bytes`` in-place.
+
+    httpx's async transport hands vcrpy a ``request.body`` that is a
+    ``list_iterator`` (or generator) over the multipart chunks rather
+    than a contiguous ``bytes`` object. Two consequences fall out:
+
+    1. ``_safe_body_matcher`` compares the two iterator objects with
+       ``==``, which is identity comparison for arbitrary iterators -
+       so two semantically identical bodies never match and
+       ``record_mode="new_episodes"`` appends a fresh episode every
+       run until the cassette hits ``MAX_EPISODES_PER_CASSETTE`` and
+       the persister refuses to save.
+    2. ``_normalize_multipart_boundary`` falls through its
+       ``else: return`` branch because the body is not bytes/str, so
+       the random multipart boundary in the body is never rewritten.
+
+    Materializing the iterator once - and writing the result back to
+    ``request.body`` so downstream uses see bytes - fixes both bugs.
+    The vcrpy ``Request`` is a wrapper that vcrpy uses for matching
+    and recording; the underlying httpx transport sends its own
+    request body separately, so replacing the iterator here does not
+    starve the live HTTP send.
+    """
+    body = getattr(request, "body", None)
+    if body is None or isinstance(body, (bytes, bytearray, str)):
+        return
+    if not hasattr(body, "__iter__"):
+        return
+    try:
+        chunks = list(body)
+    except TypeError:
+        return
+    out = bytearray()
+    for chunk in chunks:
+        if isinstance(chunk, (bytes, bytearray)):
+            out.extend(chunk)
+        elif isinstance(chunk, str):
+            out.extend(chunk.encode("utf-8"))
+        else:
+            # Heterogeneous, non-text/binary chunk - bail rather than
+            # silently corrupt the body.
+            return
+    try:
+        request.body = bytes(out)
+    except (AttributeError, TypeError):
+        pass
 
 
 def _key_fingerprint_matcher(r1, r2) -> None:
