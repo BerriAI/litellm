@@ -188,6 +188,33 @@ def test_anthropic_provider_fields_support_byok():
     )
 
 
+def test_hunyuan_provider_fields():
+    """HUNYUAN must expose api_key (required) and api_base (optional) credential fields."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    hunyuan = next((p for p in providers if p["provider"] == "HUNYUAN"), None)
+    assert hunyuan is not None, "HUNYUAN provider entry not found in /public/providers/fields"
+    assert hunyuan["litellm_provider"] == "hunyuan"
+    assert hunyuan["default_model_placeholder"] == "hunyuan/gpt-image-2"
+
+    fields_by_key = {f["key"]: f for f in hunyuan["credential_fields"]}
+    assert "api_key" in fields_by_key, "HUNYUAN must have api_key field"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+    assert "api_base" in fields_by_key, "HUNYUAN must have api_base field"
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    field_order = [f["key"] for f in hunyuan["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index("api_key")
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()
