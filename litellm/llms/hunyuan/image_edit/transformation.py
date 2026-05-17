@@ -12,7 +12,9 @@ HTTP requests and polling are handled by handler.py.
 This class only handles data transformation.
 """
 
+import base64
 import time
+from io import IOBase
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -39,22 +41,67 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _image_to_url(image: Any) -> str:
-    """Convert a FileTypes value to a URL string accepted by Hunyuan.
+def _bytes_to_data_url(data: bytes) -> str:
+    """Encode raw image bytes as a base64 data URL.
 
-    Hunyuan's OpenAI-compatible submit endpoint accepts URL strings only.
-    Bytes and file-like objects are not supported.
+    Detects common image formats from magic bytes; defaults to image/png.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    elif data[:2] == b"\xff\xd8":
+        mime = "image/jpeg"
+    elif data[:4] in (b"GIF8", b"GIF8"):
+        mime = "image/gif"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        mime = "image/webp"
+    else:
+        mime = "image/png"
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _image_to_url(image: Any) -> str:
+    """Convert a FileTypes value to a URL or base64 data URL accepted by Hunyuan.
+
+    Supports:
+    - HTTP/HTTPS URL strings (passed through as-is)
+    - base64 data URLs (passed through as-is)
+    - bytes (converted to base64 data URL)
+    - file-like objects with .read() (read then converted to base64 data URL)
+    - httpx-style tuples: (filename, bytes_or_file) and variants
     """
     if isinstance(image, str):
-        if image.startswith(("http://", "https://")):
+        if image.startswith(("http://", "https://", "data:")):
             return image
         raise ValueError(
-            f"Hunyuan image edit requires HTTP/HTTPS URL strings as images, "
-            f"got: {image[:80]!r}. Pass publicly accessible image URLs."
+            f"Hunyuan image edit: string image must be an HTTP/HTTPS URL or data URL, "
+            f"got: {image[:80]!r}."
         )
+
+    if isinstance(image, bytes):
+        return _bytes_to_data_url(image)
+
+    if hasattr(image, "read"):
+        raw = image.read()
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        return _bytes_to_data_url(raw)
+
+    if isinstance(image, tuple) and len(image) >= 2:
+        file_content = image[1]
+        if isinstance(file_content, bytes):
+            return _bytes_to_data_url(file_content)
+        if hasattr(file_content, "read"):
+            raw = file_content.read()
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+            return _bytes_to_data_url(raw)
+        if isinstance(file_content, str):
+            return _bytes_to_data_url(file_content.encode("utf-8"))
+
     raise TypeError(
-        f"Hunyuan image edit only supports URL strings as input images, "
-        f"got {type(image).__name__}. Pass publicly accessible HTTP/HTTPS URLs."
+        f"Hunyuan image edit: unsupported image type {type(image).__name__}. "
+        f"Pass an HTTP/HTTPS URL string, bytes, a file-like object, or an httpx-style tuple."
     )
 
 

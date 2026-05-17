@@ -1,5 +1,7 @@
 """Unit tests for Tencent Hunyuan image edit provider."""
 
+import base64
+import io
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +14,10 @@ from litellm.llms.hunyuan.image_edit import (
     HunyuanImageEditConfig,
     get_hunyuan_image_edit_config,
     hunyuan_image_edit,
+)
+from litellm.llms.hunyuan.image_edit.transformation import (
+    _bytes_to_data_url,
+    _image_to_url,
 )
 from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -119,16 +125,32 @@ class TestHunyuanImageEditConfig:
         assert "images" not in data
         assert data["prompt"] == "generate something"
 
-    def test_transform_image_edit_request_rejects_bytes(self):
-        with pytest.raises(TypeError, match="only supports URL strings"):
-            self.cfg.transform_image_edit_request(
-                model="gpt-image-2",
-                prompt="edit",
-                image=b"\x89PNG\r\n",
-                image_edit_optional_request_params={},
-                litellm_params={},
-                headers={},
-            )
+    def test_transform_image_edit_request_with_bytes(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        data, files = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image=png_bytes,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert len(data["images"]) == 1
+        assert data["images"][0].startswith("data:image/png;base64,")
+        assert files == []
+
+    def test_transform_image_edit_request_with_file_object(self):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        file_obj = io.BytesIO(png_bytes)
+        data, _ = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image=file_obj,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert data["images"][0].startswith("data:image/png;base64,")
 
     def test_transform_image_edit_request_rejects_local_path(self):
         with pytest.raises(ValueError, match="HTTP/HTTPS URL"):
@@ -177,6 +199,100 @@ class TestHunyuanImageEditConfig:
         )
 
         assert len(result.data) == 2
+
+
+# ---------------------------------------------------------------------------
+# _bytes_to_data_url / _image_to_url helpers
+# ---------------------------------------------------------------------------
+
+
+class TestImageToUrl:
+    def test_http_url_passthrough(self):
+        assert (
+            _image_to_url("https://example.com/img.png")
+            == "https://example.com/img.png"
+        )
+
+    def test_data_url_passthrough(self):
+        data_url = "data:image/png;base64,abc123"
+        assert _image_to_url(data_url) == data_url
+
+    def test_bytes_png(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_url(png)
+        assert result.startswith("data:image/png;base64,")
+        encoded = result.split(",", 1)[1]
+        assert base64.b64decode(encoded) == png
+
+    def test_bytes_jpeg(self):
+        jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+        result = _image_to_url(jpeg)
+        assert result.startswith("data:image/jpeg;base64,")
+
+    def test_bytes_webp(self):
+        webp = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 4
+        result = _image_to_url(webp)
+        assert result.startswith("data:image/webp;base64,")
+
+    def test_bytes_unknown_defaults_to_png(self):
+        unknown = b"\x00\x01\x02\x03" * 4
+        result = _image_to_url(unknown)
+        assert result.startswith("data:image/png;base64,")
+
+    def test_file_like_object(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_url(io.BytesIO(png))
+        assert result.startswith("data:image/png;base64,")
+
+    def test_tuple_filename_bytes(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_url(("image.png", png))
+        assert result.startswith("data:image/png;base64,")
+
+    def test_tuple_filename_file_object(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_url(("image.png", io.BytesIO(png)))
+        assert result.startswith("data:image/png;base64,")
+
+    def test_tuple_with_content_type(self):
+        jpeg = b"\xff\xd8\xff" + b"\x00" * 16
+        result = _image_to_url(("image.jpg", jpeg, "image/jpeg"))
+        assert result.startswith("data:image/jpeg;base64,")
+
+    def test_local_path_raises(self):
+        with pytest.raises(ValueError, match="HTTP/HTTPS URL"):
+            _image_to_url("/local/path.png")
+
+    def test_unsupported_type_raises(self):
+        with pytest.raises(TypeError, match="unsupported image type"):
+            _image_to_url(12345)  # type: ignore
+
+
+class TestBytesToDataUrl:
+    def test_png_mime(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        url = _bytes_to_data_url(png)
+        assert url.startswith("data:image/png;base64,")
+
+    def test_jpeg_mime(self):
+        jpeg = b"\xff\xd8" + b"\x00" * 8
+        url = _bytes_to_data_url(jpeg)
+        assert url.startswith("data:image/jpeg;base64,")
+
+    def test_webp_mime(self):
+        webp = b"RIFF\x00\x00\x00\x00WEBP"
+        url = _bytes_to_data_url(webp)
+        assert url.startswith("data:image/webp;base64,")
+
+    def test_unknown_defaults_png(self):
+        url = _bytes_to_data_url(b"\xde\xad\xbe\xef")
+        assert url.startswith("data:image/png;base64,")
+
+    def test_base64_roundtrip(self):
+        data = b"hello world"
+        url = _bytes_to_data_url(data)
+        encoded = url.split(",", 1)[1]
+        assert base64.b64decode(encoded) == data
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +397,40 @@ class TestHunyuanImageEditHandler:
 
         assert isinstance(result, ImageResponse)
         assert result.data[0].url == "https://example.com/edited.png"
+
+    def test_image_edit_sync_with_bytes(self):
+        """Handler accepts raw bytes and converts them to base64 data URL internally."""
+        submit_resp = self._make_submit_response()
+        poll_resp = self._make_poll_response("DONE")
+        mock_client = MagicMock()
+        mock_client.post.side_effect = [submit_resp, poll_resp]
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            result = self.handler.image_edit(
+                model="gpt-image-2",
+                image=png_bytes,
+                prompt="油画风格",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        assert isinstance(result, ImageResponse)
+        # Verify the submit payload used a base64 data URL, not raw bytes
+        submit_call_kwargs = mock_client.post.call_args_list[0]
+        sent_json = submit_call_kwargs[1].get("json") or submit_call_kwargs[0][1]
+        images = sent_json.get("images", [])
+        assert len(images) == 1
+        assert images[0].startswith("data:image/png;base64,")
 
 
 # ---------------------------------------------------------------------------
