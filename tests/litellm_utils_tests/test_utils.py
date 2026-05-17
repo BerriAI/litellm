@@ -289,6 +289,7 @@ def test_trimming_with_model_cost_max_input_tokens(model):
 
 def test_shorten_message_content_never_grows():
     """Regression test: shorten_message_to_fit_limit must never make content longer."""
+    # Regression: https://github.com/BerriAI/litellm/issues/28128
     from litellm.utils import shorten_message_to_fit_limit
 
     content = "hello world this is a moderately long message"
