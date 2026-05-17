@@ -154,10 +154,10 @@ def pin_httpx_multipart_boundary(monkeypatch) -> None:
 
     _original_init = _httpx_multipart.MultipartStream.__init__
 
-    def _init_with_fixed_boundary(self, data, files, boundary=None):
+    def _init_with_fixed_boundary(self, data, files, boundary=None, **kwargs):
         if boundary is None:
             boundary = VCR_FIXED_MULTIPART_BOUNDARY.encode("ascii")
-        return _original_init(self, data=data, files=files, boundary=boundary)
+        return _original_init(self, data=data, files=files, boundary=boundary, **kwargs)
 
     monkeypatch.setattr(
         _httpx_multipart.MultipartStream, "__init__", _init_with_fixed_boundary
