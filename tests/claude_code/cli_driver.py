@@ -279,6 +279,20 @@ def run_claude_models_parallel(
         except ClaudeCLIError as exc:
             elapsed = time.monotonic() - started
             return model, exc, elapsed
+        except Exception as exc:
+            # Honor the documented "errors as values" contract for any
+            # exception type — not just ClaudeCLIError. The rate
+            # limiter does file I/O (OSError), `infer_provider` can
+            # raise ValueError on edge-case model strings, and a future
+            # bug elsewhere in the call stack must not abort the entire
+            # parallel batch and lose the other models' outcomes.
+            elapsed = time.monotonic() - started
+            wrapped = ClaudeCLIError(
+                f"unexpected error running model {model!r}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            wrapped.__cause__ = exc
+            return model, wrapped, elapsed
 
     outcomes: Dict[str, ModelResult] = {}
     durations: Dict[str, float] = {}

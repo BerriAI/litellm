@@ -86,12 +86,8 @@ def test_run_claude_places_extra_args_before_prompt():
         runner=runner,
     )
     cmd = captured["cmd"]
-    assert cmd[-3:] == ["--allowed-tools", "Bash", "--"] or cmd[-2:] == [
-        "--",
-        "say hi",
-    ]
-    # Stronger: prompt is last, `--` immediately precedes it, and the
-    # caller's extra_args sit somewhere earlier in the command.
+    # Prompt is last, `--` immediately precedes it, and the caller's
+    # extra_args sit somewhere earlier in the command.
     assert cmd[-2:] == ["--", "say hi"]
     assert "--allowed-tools" in cmd
     assert cmd.index("--allowed-tools") < cmd.index("--")

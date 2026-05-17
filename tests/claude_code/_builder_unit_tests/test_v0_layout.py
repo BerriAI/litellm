@@ -116,11 +116,18 @@ def test_azure_test_file_drives_the_proxy(feature_id):
     so every Azure cell in the v0 matrix exercises a real route through
     the LiteLLM proxy — same shape as the other provider columns. Pin
     that here so a future regression doesn't silently revert these
-    cells to the old `not_applicable` boilerplate."""
+    cells to the old `not_applicable` boilerplate.
+
+    We accept either the direct `run_claude(...)` family of entrypoints
+    or a per-feature shared helper (e.g. `run_basic_messaging_cell`)
+    that wraps them — both shapes drive the proxy, and we don't want
+    this layout pin to block legitimate de-duplication of test bodies.
+    """
     text = (REPO_ROOT / feature_id / "test_azure.py").read_text()
-    assert "run_claude" in text, (
-        f"{feature_id}/test_azure.py must drive the claude CLI via run_claude(); "
-        "the not_applicable stub was removed when Foundry started hosting Claude."
+    assert "run_claude" in text or "run_basic_messaging_cell" in text, (
+        f"{feature_id}/test_azure.py must drive the claude CLI via run_claude() "
+        "or a shared helper that wraps it; the not_applicable stub was removed "
+        "when Foundry started hosting Claude."
     )
     assert '"status": "not_applicable"' not in text, (
         f"{feature_id}/test_azure.py still reports not_applicable; Microsoft Foundry "
