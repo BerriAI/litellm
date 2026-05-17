@@ -426,11 +426,23 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
         from litellm.types.llms.openai import ResponseAPIUsage
+        from litellm.types.responses.main import GenericResponseOutputItem
 
         content: List[Dict[str, Any]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
+        # Items produced by the chat-completions -> Responses API bridge arrive as
+        # GenericResponseOutputItem (litellm type), not OpenAI SDK ResponseOutputMessage.
+        # Normalize them to dicts so the existing dict branch can handle them, and
+        # add a "reasoning" type alongside the "message" / "function_call" types.
+        def _coerce(raw: Any) -> Any:
+            if isinstance(raw, GenericResponseOutputItem):
+                return raw.model_dump()
+            return raw
+
         for item in response.output:
+            item = _coerce(item)
+
             if isinstance(item, ResponseReasoningItem):
                 for summary in item.summary:
                     text = getattr(summary, "text", "")
@@ -472,11 +484,27 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 if item_type == "message":
                     for part in item.get("content", []):
                         if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(
-                                    type="text", text=part.get("text", "")
-                                ).model_dump()
-                            )
+                            text = part.get("text", "")
+                            if text:
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=text
+                                    ).model_dump()
+                                )
+                elif item_type == "reasoning":
+                    # GenericResponseOutputItem wraps reasoning_content as OutputText
+                    # entries (type="output_text"), not as OpenAI SDK summary entries.
+                    for part in item.get("content", []):
+                        if isinstance(part, dict) and part.get("type") == "output_text":
+                            text = part.get("text", "")
+                            if text:
+                                content.append(
+                                    AnthropicResponseContentBlockThinking(
+                                        type="thinking",
+                                        thinking=text,
+                                        signature=None,
+                                    ).model_dump()
+                                )
                 elif item_type == "function_call":
                     try:
                         input_data = json.loads(item.get("arguments", "{}"))
