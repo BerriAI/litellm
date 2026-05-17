@@ -247,40 +247,22 @@ class LiteLLMCompletionTransformationHandler:
             actual_model = litellm_params_model
 
         if is_domestic_model_or_endpoint(actual_model, api_base):
-            # DEBUG logger（先定义，后面使用）
+            # DEBUG logger
             logger = logging.getLogger("LiteLLM.DomesticFilter")
 
-            # Codex CLI 特有参数
+            # ========== 必须过滤的参数 ==========
+
+            # Codex CLI 特有参数 - LiteLLM 内部报错
             completion_args.pop("client_metadata", None)
-            # OpenAI 扩展参数（国内模型不支持）
-            completion_args.pop("reasoning_effort", None)  # reasoning 模式
-            completion_args.pop("reasoning", None)  # reasoning 参数 (Codex 0.130.0+)
+
+            # Responses API 专用参数（国内厂商 Chat API 不支持）
             completion_args.pop("coding_plan", None)  # Codex coding plan
-            completion_args.pop("parallel_tool_calls", None)  # 并行工具调用
-            # 旧格式参数（国内模型只支持 tools/tool_choice，不支持 functions/function_call）
-            completion_args.pop("functions", None)  # OpenAI 旧格式
-            completion_args.pop("function_call", None)  # OpenAI 旧格式
-            # 其他国内模型可能不支持的参数
-            completion_args.pop("stream_options", None)  # stream 选项
-            completion_args.pop("modalities", None)  # 多模态参数
-            completion_args.pop("prediction", None)  # 预测参数
-            completion_args.pop("audio", None)  # 音频参数
-            completion_args.pop("store", None)  # 存储参数
-            completion_args.pop("include", None)  # 包含参数
-            completion_args.pop("prompt_cache_key", None)  # 缓存键
-            # OpenAI 高级参数（国内模型可能不支持）
-            completion_args.pop("frequency_penalty", None)  # 频率惩罚
-            completion_args.pop("presence_penalty", None)  # 存在惩罚
-            completion_args.pop("logprobs", None)  # logprobs
-            completion_args.pop("top_logprobs", None)  # top_logprobs
-            completion_args.pop("response_format", None)  # 响应格式（如 json_object）
-            completion_args.pop("seed", None)  # 随机种子
-            completion_args.pop("logit_bias", None)  # logit bias
-            completion_args.pop("n", None)  # 返回多个结果
-            completion_args.pop("service_tier", None)  # 服务等级
-            # 注意：litellm_* 内部参数（litellm_metadata, litellm_logging_obj, litellm_call_id 等）
-            # 必须保留！这些是代理会计/spend attribution 必需的参数，不应删除。
-            # 只有发送给上游 API 的参数才需要过滤，LiteLLM 内部参数会被 litellm.completion 正确处理。
+
+            # 旧格式参数（国内模型只支持 tools/tool_choice）
+            completion_args.pop("functions", None)
+            completion_args.pop("function_call", None)
+
+            # LiteLLM 内部参数（不应发送给上游）
             completion_args.pop("shared_session", None)
             completion_args.pop("model_info", None)
             completion_args.pop("secret_fields", None)
@@ -288,44 +270,42 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.pop("use_litellm_proxy", None)
             completion_args.pop("merge_reasoning_content_in_choices", None)
             completion_args.pop("supports_function_calling", None)
+            completion_args.pop("max_retries", None)
+
+            # ========== 厂商忽略的参数（保留过滤，避免无意义传输）==========
+            # 这些参数厂商 Chat API 不支持，发送也不会报错但无意义
+            completion_args.pop("stream_options", None)
+            completion_args.pop("modalities", None)
+            completion_args.pop("prediction", None)
+            completion_args.pop("audio", None)
+            completion_args.pop("store", None)
+            completion_args.pop("include", None)
+            completion_args.pop("prompt_cache_key", None)
             completion_args.pop("caching", None)
             completion_args.pop("extra_body", None)
-            # 注意：custom_llm_provider 必须保留，LiteLLM 需要它识别提供商
-            completion_args.pop("max_retries", None)
+
+            # ========== 不过滤的参数（厂商支持或忽略）==========
+            # reasoning_effort - DeepSeek/Xiaomi 支持，其他厂商忽略
+            # parallel_tool_calls - 厂商支持/忽略
+            # frequency_penalty, presence_penalty - 厂商支持
+            # logprobs, top_logprobs - 厂商支持/忽略
+            # response_format - 厂商支持（json_object 等）
+            # seed - 厂商支持/忽略
+            # logit_bias, n, service_tier - 厂商支持/忽略
+
             # tool_choice 兼容：国内模型不支持 "required"，改成 "auto"
             tool_choice = completion_args.get("tool_choice")
-            logger.info(f"[DomesticFilter] tool_choice before fix: {tool_choice}")
             if tool_choice == "required":
                 completion_args["tool_choice"] = "auto"
                 logger.info("[DomesticFilter] tool_choice converted: required -> auto")
 
-            # DEBUG: 国内模型参数过滤验证（脱敏 api_base，只显示域名）
-            # 安全：api_base 可能包含凭证或内部主机名，只显示基础域名
-            safe_api_base = (
-                api_base.split("//")[-1].split("/")[0].split("?")[0]
-                if api_base
-                else "none"
-            )
-            logger.info(
-                f"[DomesticFilter] actual_model={actual_model}, api_base_host={safe_api_base}, "
-                f"is_domestic={is_domestic_model_or_endpoint(actual_model, api_base)}"
-            )
-            logger.info(
-                f"[DomesticFilter] completion_args keys after filter: "
-                f"{list(completion_args.keys())}"
-            )
-
-            # 确保所有历史消息中的 tool_calls arguments 是有效 JSON 格式
-            # 国内模型要求 function.arguments 必须是严格 JSON
+            # 确保 tool_calls arguments 是有效 JSON
             messages = completion_args.get("messages")
             if messages:
                 completion_args["messages"] = (
                     LiteLLMCompletionTransformationHandler._ensure_all_tool_calls_have_valid_json_arguments(
                         messages
                     )
-                )
-                logger.info(
-                    "[DomesticFilter] Validated tool_calls arguments in messages"
                 )
 
         litellm_completion_response: Union[
