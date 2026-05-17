@@ -301,6 +301,14 @@ def _canonical_body(request) -> tuple[bytes, str]:
         return bytes(body), pre_type
     if isinstance(body, str):
         return body.encode("utf-8"), pre_type
+    if isinstance(body, (dict, list)):
+        try:
+            return (
+                json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                pre_type,
+            )
+        except (TypeError, ValueError):
+            pass
     method = getattr(request, "method", "?")
     uri = getattr(request, "uri", getattr(request, "url", "?"))
     vcr_diag_write_line(
