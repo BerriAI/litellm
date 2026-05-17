@@ -113,6 +113,49 @@ def test_pr_gate_job_exports_proxy_env_used_by_tests(
     assert "LITELLM_PROXY_API_KEY" in commands
 
 
+def test_pr_gate_job_persists_compat_result_artifacts(
+    circleci_config: dict,
+) -> None:
+    """The conftest writes per-cell tagged-union JSON + the per-provider
+    rate-limit summary to paths controlled by COMPAT_RESULTS_PATH /
+    COMPAT_RATE_LIMIT_SUMMARY_PATH. The PR gate must (1) point both env
+    vars at a known directory, and (2) `store_artifacts` that directory
+    so reviewers can pull the breakdown when a red gate needs triage.
+
+    Without this, the conftest silently writes the artifacts to the
+    working directory and no CI step persists them.
+    """
+    job = circleci_config["jobs"][JOB_NAME]
+    commands = "\n".join(_job_step_runs(job))
+    assert "COMPAT_RESULTS_PATH" in commands, (
+        "PR gate must override COMPAT_RESULTS_PATH so the compat JSON "
+        "lands in a directory we explicitly persist below."
+    )
+    assert "COMPAT_RATE_LIMIT_SUMMARY_PATH" in commands, (
+        "PR gate must override COMPAT_RATE_LIMIT_SUMMARY_PATH so the "
+        "per-provider rate-limit summary lands in a persisted directory."
+    )
+    # The chosen directory must be wired into a store_artifacts step.
+    store_artifacts_paths: list[str] = []
+    for step in job.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        sa = step.get("store_artifacts")
+        if isinstance(sa, dict) and isinstance(sa.get("path"), str):
+            store_artifacts_paths.append(sa["path"])
+    assert store_artifacts_paths, (
+        "PR gate must declare at least one store_artifacts step so the "
+        "compat-results.json / compat-rate-limit-summary.json can be "
+        "downloaded from the CircleCI artifact browser."
+    )
+    # And the export must point at that directory (any of them), so the
+    # conftest actually writes inside the persisted tree.
+    assert any(path in commands for path in store_artifacts_paths), (
+        "PR gate exports COMPAT_RESULTS_PATH but not into any directory "
+        f"declared by store_artifacts (declared: {store_artifacts_paths})."
+    )
+
+
 def test_existing_proxy_e2e_anthropic_job_unchanged(circleci_config: dict) -> None:
     """No regression to the existing `proxy_e2e_anthropic_messages_tests`
     job (acceptance criterion). We don't lock its full body, but we do
