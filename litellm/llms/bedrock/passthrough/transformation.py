@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, Optional, cast
 
 from httpx import Response
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
@@ -200,9 +201,24 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
         all_translated_chunks: Final = []
         if "invoke" in endpoint:
-            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
+            invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
             if invoke_provider is None:
-                raise ValueError(f"Invalid invoke provider: {invoke_provider}, for model: {model}")
+                # Application Inference Profile ARNs don't encode provider info in the ARN
+                # itself. Try to derive the provider from the original LiteLLM model name
+                # (e.g. "global.anthropic.claude-opus-4-7") stored in logging context.
+                fallback_model: Final = litellm_logging_obj.model_call_details.get(
+                    "litellm_params", {}
+                ).get("model", "")
+                if fallback_model:
+                    invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(
+                        fallback_model
+                    )
+            if invoke_provider is None:
+                verbose_logger.warning(
+                    f"Could not determine Bedrock invoke provider for model: {model!r}. "
+                    "Skipping streaming response logging for this passthrough request."
+                )
+                return None
             obj = get_bedrock_event_stream_decoder(
                 invoke_provider=invoke_provider,
                 model=model,
