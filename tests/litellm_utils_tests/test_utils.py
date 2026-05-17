@@ -287,6 +287,43 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     )
 
 
+def test_shorten_message_content_never_grows():
+    """Regression test: shorten_message_to_fit_limit must never make content longer.
+
+    Bug: when half_length==0, content[-0:] == content[0:] (entire string) due to
+    Python's -0 == 0 identity, so trimmed = '' + '..' + full_content was longer
+    than the original.  This caused the loop to grow content on every subsequent
+    iteration instead of shrinking it.
+    """
+    from litellm.utils import get_token_count
+    from litellm.constants import MAX_TOKEN_TRIMMING_ATTEMPTS
+
+    content = "hello world this is a moderately long message"
+    msg_copy = {"role": "user", "content": content}
+    max_len_seen = len(content)
+    tokens_needed = 1
+    model = None
+
+    for _ in range(MAX_TOKEN_TRIMMING_ATTEMPTS):
+        total_tokens = get_token_count([msg_copy], model)
+        if total_tokens <= tokens_needed:
+            break
+        ratio = tokens_needed / total_tokens
+        new_length = max(0, int(len(msg_copy["content"]) * ratio) - 1)
+        half_length = new_length // 2
+        if half_length == 0:
+            trimmed = msg_copy["content"][:new_length]
+        else:
+            c = msg_copy["content"]
+            trimmed = c[:half_length] + ".." + c[-half_length:]
+        assert len(trimmed) <= max_len_seen, (
+            f"Content grew from {max_len_seen} to {len(trimmed)} chars — "
+            "half_length==0 guard is missing"
+        )
+        max_len_seen = len(trimmed)
+        msg_copy["content"] = trimmed
+
+
 def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
