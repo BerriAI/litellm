@@ -189,6 +189,25 @@ class TestHunyuanImageGenerationHandler:
         assert "Content-Type" in poll_headers
         assert "v1/aiart/openai/image/query" in query_url
 
+    def test_extract_poll_context_none_api_key_falls_back_to_env(self, monkeypatch):
+        """When api_key=None, poll headers must resolve key from HUNYUAN_API_KEY env var."""
+        monkeypatch.setenv("HUNYUAN_API_KEY", "sk-from-env")
+
+        class MockSubmitResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {"request_id": "abc", "job_id": "j-env-123"}
+
+        job_id, poll_headers, query_url = self.handler._extract_poll_context(
+            MockSubmitResponse(),
+            api_key=None,
+            litellm_params={"api_base": None},
+        )
+        assert job_id == "j-env-123"
+        assert poll_headers["Authorization"] == "sk-from-env"
+
     def test_extract_poll_context_custom_base(self):
         class MockSubmitResponse:
             status_code = 200

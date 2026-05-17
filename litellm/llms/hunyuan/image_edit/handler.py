@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageResponse
 
@@ -29,7 +30,7 @@ from ..image_generation.transformation import HUNYUAN_BASE_URL, HUNYUAN_QUERY_EN
 from .transformation import HunyuanImageEditConfig
 
 HUNYUAN_EDIT_POLLING_INTERVAL = 1.5
-HUNYUAN_EDIT_MAX_POLLING_TIME = 300
+HUNYUAN_EDIT_MAX_POLLING_TIME = 600
 
 
 class HunyuanImageEdit:
@@ -246,8 +247,9 @@ class HunyuanImageEdit:
         if not job_id:
             raise ValueError(f"Hunyuan submit response missing job_id: {submit_data}")
 
+        resolved_key = api_key or get_secret_str("HUNYUAN_API_KEY") or ""
         poll_headers = {
-            "Authorization": api_key or "",
+            "Authorization": resolved_key,
             "Content-Type": "application/json",
         }
 

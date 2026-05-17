@@ -332,6 +332,18 @@ class TestHunyuanImageEditHandler:
         assert poll_headers["Authorization"] == "sk-test"
         assert "image/query" in query_url
 
+    def test_extract_poll_context_none_api_key_falls_back_to_env(self, monkeypatch):
+        """When api_key=None, poll headers must resolve key from HUNYUAN_API_KEY env var."""
+        monkeypatch.setenv("HUNYUAN_API_KEY", "sk-edit-from-env")
+        submit_response = self._make_submit_response("job-env-xyz")
+        job_id, poll_headers, query_url = self.handler._extract_poll_context(
+            submit_response=submit_response,
+            api_key=None,
+            litellm_params={},
+        )
+        assert job_id == "job-env-xyz"
+        assert poll_headers["Authorization"] == "sk-edit-from-env"
+
     def test_extract_poll_context_missing_job_id(self):
         r = MagicMock(spec=httpx.Response)
         r.status_code = 200

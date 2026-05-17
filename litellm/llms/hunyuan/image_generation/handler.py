@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
 
@@ -30,7 +31,7 @@ from .transformation import (
 )
 
 HUNYUAN_POLLING_INTERVAL = 1.5  # seconds
-HUNYUAN_MAX_POLLING_TIME = 300  # seconds
+HUNYUAN_MAX_POLLING_TIME = 600  # seconds
 
 
 class HunyuanImageGeneration:
@@ -277,8 +278,9 @@ class HunyuanImageGeneration:
         if not job_id:
             raise ValueError(f"Hunyuan submit response missing job_id: {submit_data}")
 
+        resolved_key = api_key or get_secret_str("HUNYUAN_API_KEY") or ""
         poll_headers = {
-            "Authorization": api_key or "",
+            "Authorization": resolved_key,
             "Content-Type": "application/json",
         }
 
