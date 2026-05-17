@@ -24,6 +24,7 @@ from typing import (
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
@@ -475,6 +476,18 @@ class PrometheusLogger(CustomLogger):
                 "litellm_teams_count",
                 "Total number of teams in LiteLLM",
                 labelnames=[],
+            )
+
+            self.litellm_team_total_users_metric = self._gauge_factory(
+                "litellm_team_total_users",
+                "Total number of provisioned users per team in LiteLLM",
+                labelnames=self.get_labels_for_metric("litellm_team_total_users"),
+            )
+
+            self.litellm_team_active_users_metric = self._gauge_factory(
+                "litellm_team_active_users",
+                "Total number of users with at least one request per team in the current metrics refresh period",
+                labelnames=self.get_labels_for_metric("litellm_team_active_users"),
             )
 
             ########################################
@@ -1389,6 +1402,7 @@ class PrometheusLogger(CustomLogger):
             ),
             self._set_user_budget_metrics_after_api_request(
                 user_id=user_id,
+                user_email=_metadata.get("user_api_key_user_email"),
                 user_spend=_user_spend,
                 user_max_budget=_user_max_budget,
                 response_cost=response_cost,
@@ -3108,10 +3122,114 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug(
                 f"Prometheus: set litellm_teams_count to {total_teams}"
             )
+
+            teams = await prisma_client.db.litellm_teamtable.find_many(
+                select={
+                    "team_id": True,
+                    "team_alias": True,
+                    "members": True,
+                }
+            )
+            team_memberships = await prisma_client.db.litellm_teammembership.find_many(
+                select={
+                    "team_id": True,
+                    "user_id": True,
+                }
+            )
+
+            team_to_provisioned_users = self._get_provisioned_users_by_team(
+                teams=teams,
+                team_memberships=team_memberships,
+            )
+            active_user_rows = await self._get_active_user_rows_by_team(prisma_client)
+            team_to_active_users = self._get_active_users_by_team(
+                active_user_rows=active_user_rows
+            )
+
+            for team in teams:
+                team_id = self._get_prisma_field(team, "team_id") or ""
+                team_alias = self._get_prisma_field(team, "team_alias")
+                label_values = UserAPIKeyLabelValues(
+                    team=team_id,
+                    team_alias=team_alias,
+                )
+                total_labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        "litellm_team_total_users"
+                    ),
+                    enum_values=label_values,
+                )
+                active_labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        "litellm_team_active_users"
+                    ),
+                    enum_values=label_values,
+                )
+                self.litellm_team_total_users_metric.labels(**total_labels).set(
+                    len(team_to_provisioned_users.get(team_id, set()))
+                )
+                self.litellm_team_active_users_metric.labels(**active_labels).set(
+                    len(team_to_active_users.get(team_id, set()))
+                )
         except Exception as e:
             verbose_logger.exception(
                 f"Error initializing user/team count metrics: {str(e)}"
             )
+
+    @staticmethod
+    def _get_prisma_field(row: Any, field_name: str) -> Any:
+        if isinstance(row, dict):
+            return row.get(field_name)
+        return getattr(row, field_name, None)
+
+    def _get_provisioned_users_by_team(
+        self,
+        teams: Sequence[Any],
+        team_memberships: Sequence[Any],
+    ) -> Dict[str, set]:
+        team_to_users: Dict[str, set] = {}
+        for team in teams:
+            team_id = self._get_prisma_field(team, "team_id")
+            if team_id is None:
+                continue
+            members = self._get_prisma_field(team, "members") or []
+            team_to_users.setdefault(team_id, set()).update(
+                member for member in members if member
+            )
+
+        for membership in team_memberships:
+            team_id = self._get_prisma_field(membership, "team_id")
+            user_id = self._get_prisma_field(membership, "user_id")
+            if team_id is None or user_id is None:
+                continue
+            team_to_users.setdefault(team_id, set()).add(user_id)
+        return team_to_users
+
+    async def _get_active_user_rows_by_team(self, prisma_client: Any) -> Sequence[Any]:
+        active_since = datetime.now() - timedelta(
+            minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+        )
+        return await prisma_client.db.litellm_spendlogs.group_by(
+            by=["team_id", "user"],
+            where={
+                "team_id": {"not": None},
+                "user": {"not": None},
+                "startTime": {"gte": active_since},
+            },
+        )
+
+    def _get_active_users_by_team(
+        self,
+        active_user_rows: Sequence[Any],
+    ) -> Dict[str, set]:
+        team_to_users: Dict[str, set] = {}
+        for row in active_user_rows:
+            team_id = self._get_prisma_field(row, "team_id")
+            user_id = self._get_prisma_field(row, "user")
+            if team_id is None or user_id is None:
+                continue
+            team_to_users.setdefault(team_id, set()).add(user_id)
+        return team_to_users
 
     async def _set_key_list_budget_metrics(
         self, keys: List[Union[str, UserAPIKeyAuth]]
@@ -3476,6 +3594,7 @@ class PrometheusLogger(CustomLogger):
     async def _set_user_budget_metrics_after_api_request(
         self,
         user_id: Optional[str],
+        user_email: Optional[str],
         user_spend: Optional[float],
         user_max_budget: Optional[float],
         response_cost: float,
@@ -3488,8 +3607,20 @@ class PrometheusLogger(CustomLogger):
         - Set user budget metrics
         """
         if user_id:
+            if user_spend is not None and user_max_budget is not None:
+                self._set_user_budget_metrics(
+                    LiteLLM_UserTable(
+                        user_id=user_id,
+                        user_email=user_email,
+                        spend=user_spend + response_cost,
+                        max_budget=user_max_budget,
+                    )
+                )
+                return
+
             user_object = await self._assemble_user_object(
                 user_id=user_id,
+                user_email=user_email,
                 spend=user_spend,
                 max_budget=user_max_budget,
                 response_cost=response_cost,
@@ -3500,6 +3631,7 @@ class PrometheusLogger(CustomLogger):
     async def _assemble_user_object(
         self,
         user_id: str,
+        user_email: Optional[str],
         spend: Optional[float],
         max_budget: Optional[float],
         response_cost: float,
@@ -3517,6 +3649,7 @@ class PrometheusLogger(CustomLogger):
         _total_user_spend = (spend or 0) + response_cost
         user_object = LiteLLM_UserTable(
             user_id=user_id,
+            user_email=user_email,
             spend=_total_user_spend,
             max_budget=max_budget,
         )
@@ -3556,6 +3689,7 @@ class PrometheusLogger(CustomLogger):
         """
         enum_values = UserAPIKeyLabelValues(
             user=user.user_id,
+            user_email=user.user_email,
         )
 
         _labels = prometheus_label_factory(
