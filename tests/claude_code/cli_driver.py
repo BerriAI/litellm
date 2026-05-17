@@ -121,6 +121,8 @@ def run_claude(
     """
     if prompt is None and stdin_input is None:
         raise ValueError("must supply either `prompt` or `stdin_input`")
+    if prompt is not None and stdin_input is not None:
+        raise ValueError("must supply only one of `prompt` or `stdin_input`, not both")
     if prompt is not None and not prompt:
         raise ValueError("prompt must be a non-empty string when provided")
     if not model:
