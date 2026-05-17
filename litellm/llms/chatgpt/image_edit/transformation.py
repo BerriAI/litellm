@@ -30,7 +30,10 @@ class ChatGPTImageEditConfig(BaseImageEditConfig):
         self.image_generation_config = ChatGPTImageGenerationConfig()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return ["size"]
+        return [
+            str(param)
+            for param in self.image_generation_config.get_supported_openai_params(model)
+        ]
 
     def map_openai_params(
         self,
@@ -39,11 +42,19 @@ class ChatGPTImageEditConfig(BaseImageEditConfig):
         drop_params: bool,
     ) -> Dict[str, Any]:
         supported_params = self.get_supported_openai_params(model)
-        return {
-            key: value
-            for key, value in image_edit_optional_params.items()
-            if key in supported_params
-        }
+        mapped_params: Dict[str, Any] = {}
+        for key, value in image_edit_optional_params.items():
+            if key in supported_params:
+                mapped_params[key] = value
+            elif drop_params:
+                continue
+            else:
+                raise ValueError(
+                    f"Parameter {key} is not supported for model {model}. "
+                    f"Supported parameters are {supported_params}. "
+                    "Set drop_params=True to drop unsupported parameters."
+                )
+        return mapped_params
 
     def validate_environment(
         self,

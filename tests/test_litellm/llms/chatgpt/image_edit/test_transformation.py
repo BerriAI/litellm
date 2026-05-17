@@ -100,12 +100,6 @@ def test_chatgpt_image_edit_delegates_environment_and_url():
 
     config.image_generation_config = cast(Any, FakeImageGenerationConfig())
 
-    assert config.get_supported_openai_params("gpt-image-2") == ["size"]
-    assert config.map_openai_params(
-        image_edit_optional_params={"size": "1024x1024", "quality": "high"},
-        model="gpt-image-2",
-        drop_params=False,
-    ) == {"size": "1024x1024"}
     assert config.validate_environment(
         headers={},
         model="gpt-image-2",
@@ -121,6 +115,56 @@ def test_chatgpt_image_edit_delegates_environment_and_url():
         )
         == "https://chatgpt.com/backend-api/codex/responses"
     )
+
+
+def test_chatgpt_image_edit_supports_image_generation_params():
+    config = ChatGPTImageEditConfig()
+
+    assert config.get_supported_openai_params("gpt-image-2") == [
+        "output_format",
+        "size",
+    ]
+    assert config.map_openai_params(
+        image_edit_optional_params={
+            "output_format": "png",
+            "size": "1024x1024",
+        },
+        model="gpt-image-2",
+        drop_params=False,
+    ) == {
+        "output_format": "png",
+        "size": "1024x1024",
+    }
+
+
+def test_chatgpt_image_edit_drops_unsupported_params_when_requested():
+    config = ChatGPTImageEditConfig()
+
+    assert config.map_openai_params(
+        image_edit_optional_params={
+            "output_format": "png",
+            "size": "1024x1024",
+            "quality": "high",
+            "n": 2,
+        },
+        model="gpt-image-2",
+        drop_params=True,
+    ) == {
+        "output_format": "png",
+        "size": "1024x1024",
+    }
+
+
+@pytest.mark.parametrize("param", ["quality", "n"])
+def test_chatgpt_image_edit_rejects_unsupported_params_by_default(param):
+    config = ChatGPTImageEditConfig()
+
+    with pytest.raises(ValueError, match=f"Parameter {param} is not supported"):
+        config.map_openai_params(
+            image_edit_optional_params={param: "unsupported"},
+            model="gpt-image-2",
+            drop_params=False,
+        )
 
 
 def test_chatgpt_image_edit_transform_response_and_error_class():
