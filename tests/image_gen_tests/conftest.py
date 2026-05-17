@@ -38,15 +38,6 @@ def event_loop():
 
 @pytest.fixture(scope="session", autouse=True)
 def _pin_multipart_boundary():
-    """Pin httpx's random multipart boundary to a constant for the
-    entire image-gen test session. Without this, async multipart bodies
-    contain a fresh ``boundary=<random hex>`` on every run; the
-    ``safe_body`` matcher misses, and ``record_mode="new_episodes"``
-    grows each cassette by one entry per run until it crosses the
-    50-episode persister cap and stops being saved — leaving the test
-    to hit the real provider on every CI run. See
-    ``pin_httpx_multipart_boundary`` for the full rationale.
-    """
     monkeypatch = pytest.MonkeyPatch()
     pin_httpx_multipart_boundary(monkeypatch)
     yield
@@ -78,11 +69,6 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
-    # Clear any leftover per-PID diagnostic logs from a previous local
-    # run so the controller's terminal summary at session end only
-    # surfaces this session's data. Worker processes inherit the same
-    # directory and append by PID, so the controller doing the cleanup
-    # once is sufficient.
     if not os.environ.get("PYTEST_XDIST_WORKER"):
         directory = _vcr_diag_dir()
         if os.path.isdir(directory):

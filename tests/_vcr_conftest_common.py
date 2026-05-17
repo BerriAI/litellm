@@ -36,16 +36,8 @@ SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
-# Directory for per-process VCR diagnostic logs that bypass pytest's
-# stdout/stderr capture. ``sys.stderr.write`` from inside vcrpy
-# machinery is swallowed by xdist for any test that ultimately passes,
-# so a diagnostic that fires on a body-matcher miss but the test still
-# records and passes will never reach the CI log. Each xdist worker
-# (or the main process) writes line-buffered to a per-PID file under
-# this directory, and the controller's ``pytest_terminal_summary``
-# concatenates them into the terminal at session end. ``test-results/``
-# is already collected by ``store_test_results`` in CI, so the raw
-# files survive as build artifacts too.
+# Per-PID files bypass pytest/xdist stdout capture, which swallows
+# stderr from passing tests.
 VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
 VCR_DIAG_DIR_DEFAULT = "test-results/vcr-diagnostics"
 
@@ -55,12 +47,6 @@ def _vcr_diag_dir() -> str:
 
 
 def vcr_diag_write_line(msg: str) -> None:
-    """Append a single diagnostic line to the current process's
-    per-PID file. Atomic against other workers in the same xdist
-    session because each PID owns its own file.
-
-    Errors are swallowed -- diagnostic logging must never fail a test.
-    """
     try:
         directory = _vcr_diag_dir()
         os.makedirs(directory, exist_ok=True)
@@ -72,11 +58,6 @@ def vcr_diag_write_line(msg: str) -> None:
 
 
 def emit_vcr_diagnostic_log(terminalreporter) -> None:
-    """Concatenate every per-PID diagnostic file into the controller's
-    terminal at session end. Each file is dumped under a header that
-    names the originating worker PID so cross-process events can still
-    be ordered if needed.
-    """
     directory = _vcr_diag_dir()
     if not os.path.isdir(directory):
         return
@@ -164,37 +145,8 @@ VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
 
 
 def pin_httpx_multipart_boundary(monkeypatch) -> None:
-    """Force every httpx multipart request to use a constant boundary.
-
-    httpx's ``MultipartStream`` generates a fresh ``boundary=<random hex>``
-    via ``os.urandom(16)`` whenever the caller does not supply one
-    (see ``httpx._multipart.MultipartStream.__init__``). That random
-    boundary appears both in the ``Content-Type`` header and verbatim in
-    the request body between each part.
-
-    ``_normalize_multipart_boundary`` rewrites the header reliably, but
-    on the async transport path the body is not always handed to
-    ``before_record_request`` as a contiguous ``bytes`` object — so the
-    body replacement silently no-ops and the recorded cassette retains
-    the random boundary string. Subsequent runs generate a *different*
-    random boundary, the ``safe_body`` matcher misses, and
-    ``record_mode="new_episodes"`` appends a fresh episode until the
-    cassette crosses ``MAX_EPISODES_PER_CASSETTE`` and the persister
-    refuses to save — re-billing live providers on every CI run.
-
-    Pinning the boundary at the source removes the variance entirely:
-    every run emits byte-identical multipart bodies, the existing
-    ``safe_body`` matcher succeeds on the first request, and one
-    recorded episode per unique call satisfies replays for the cassette
-    TTL.
-
-    This wraps ``MultipartStream.__init__`` instead of patching the
-    boundary-generation helper directly because httpx inlines
-    ``os.urandom(16).hex().encode("ascii")`` in the constructor body
-    rather than calling a named function. We preserve the caller's
-    boundary when one is explicitly supplied so production-style code
-    that pins its own boundary keeps working.
-    """
+    """Force every httpx multipart request to use a constant boundary so
+    request bodies are byte-stable across runs (vcrpy match-on-body)."""
     try:
         import httpx._multipart as _httpx_multipart
     except ImportError:  # pragma: no cover - httpx is a hard test dep
@@ -315,19 +267,7 @@ def _safe_body_matcher(r1, r2) -> None:
     (e.g. the Bedrock batch S3 PUT) before it can return "no match".
     This matcher is strictly more conservative — the only equivalence
     it gives up vs. the default is "JSON key order doesn't matter".
-
-    On mismatch, emits a structured diagnostic to stderr (type of each
-    body, length, SHA-256, first divergent offset, ±100-byte window).
-    Without this, vcrpy returns "request bodies differ" with zero
-    context, and bugs where the live request body is an unbytes-like
-    object (e.g. an httpx ``MultipartStream`` for async requests) look
-    indistinguishable from genuine content drift.
     """
-    # Defense in depth: ``_before_record_request`` already coalesces
-    # iterable bodies, but if vcrpy invokes the matcher on a request
-    # that did not flow through that hook (or if a future code path
-    # bypasses it), do it again here so iterator==iterator never
-    # silently fails.
     _materialize_iterable_body(r1)
     _materialize_iterable_body(r2)
     body1 = getattr(r1, "body", None)
@@ -353,15 +293,6 @@ def _safe_body_matcher(r1, r2) -> None:
 
 
 def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
-    """Dump enough info to a single stderr block to root-cause why two
-    requests that look semantically identical failed the body matcher.
-
-    Always-on (matcher mismatches are signal, not noise): the volume
-    is bounded by the number of stored episodes a live request is
-    compared against, and we already log a per-test verdict line for
-    every test.
-    """
-
     def _describe(label, raw, asbytes):
         t = type(raw).__name__
         if asbytes is None:
@@ -369,12 +300,10 @@ def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
                 f"  {label}: type={t!r} length=unknown sha256=N/A "
                 f"(body could not be coerced to bytes)"
             )
-        length = len(asbytes)
-        digest = hashlib.sha256(asbytes).hexdigest()
-        preview = asbytes[:120]
         return (
-            f"  {label}: type={t!r} length={length} sha256={digest} "
-            f"preview={preview!r}"
+            f"  {label}: type={t!r} length={len(asbytes)} "
+            f"sha256={hashlib.sha256(asbytes).hexdigest()} "
+            f"preview={asbytes[:120]!r}"
         )
 
     method_a = getattr(r1, "method", "?")
@@ -389,10 +318,6 @@ def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, n1, n2) -> None:
         _describe("body[b]", body2, n2),
     ]
     if n1 is not None and n2 is not None and n1 != n2:
-        # Find the first divergent byte offset and dump a ±100 window
-        # around it so the human reading the CI log can see at a glance
-        # whether the variance is a UUID, a timestamp, a random multipart
-        # boundary, or something else.
         offset = next(
             (i for i in range(min(len(n1), len(n2))) if n1[i] != n2[i]),
             min(len(n1), len(n2)),
@@ -550,13 +475,6 @@ def _normalize_multipart_boundary(request) -> None:
     elif isinstance(body, str):
         new_body = body.replace(current_boundary, VCR_FIXED_MULTIPART_BOUNDARY)
     else:
-        # The body is something other than bytes/bytearray/str -- most
-        # likely an httpx ``MultipartStream`` or an aiter chunked stream
-        # we cannot rewrite in place. Log it so a body-matcher miss on a
-        # multipart request can be correlated with "normalizer skipped
-        # because body type was X". The header was still rewritten
-        # above, so the recorded Content-Type stays stable; only the
-        # body bytes carry the random boundary verbatim.
         vcr_diag_write_line(
             f"[vcr-multipart-normalize] body normalization SKIPPED: "
             f"body type {type(body).__name__!r} is not bytes/bytearray/str. "
@@ -606,28 +524,16 @@ def _before_record_request(request):
 
 
 def _materialize_iterable_body(request) -> None:
-    """Coalesce an iterable / generator request body into ``bytes`` in-place.
+    """Coalesce an iterable / generator request body to ``bytes`` in-place
+    so the body matcher and boundary normalizer see a contiguous buffer.
 
-    httpx's async transport hands vcrpy a ``request.body`` that is a
-    ``list_iterator`` (or generator) over the multipart chunks rather
-    than a contiguous ``bytes`` object. Two consequences fall out:
-
-    1. ``_safe_body_matcher`` compares the two iterator objects with
-       ``==``, which is identity comparison for arbitrary iterators -
-       so two semantically identical bodies never match and
-       ``record_mode="new_episodes"`` appends a fresh episode every
-       run until the cassette hits ``MAX_EPISODES_PER_CASSETTE`` and
-       the persister refuses to save.
-    2. ``_normalize_multipart_boundary`` falls through its
-       ``else: return`` branch because the body is not bytes/str, so
-       the random multipart boundary in the body is never rewritten.
-
-    Materializing the iterator once - and writing the result back to
-    ``request.body`` so downstream uses see bytes - fixes both bugs.
-    The vcrpy ``Request`` is a wrapper that vcrpy uses for matching
-    and recording; the underlying httpx transport sends its own
-    request body separately, so replacing the iterator here does not
-    starve the live HTTP send.
+    Once ``list(body)`` runs the original iterator is exhausted, so this
+    function must always write some bytes value back -- leaving the body
+    as a dead iterator silently makes the next HTTP send transmit an
+    empty payload. Also clears vcrpy's sticky ``_was_iter`` / ``_was_file``
+    flags, which otherwise make the ``body`` getter re-wrap the stored
+    bytes in ``iter()`` on every access (so a freshly-materialized body
+    would look like ``bytes_iterator`` to the next reader).
     """
     body = getattr(request, "body", None)
     if body is None or isinstance(body, (bytes, bytearray, str)):
@@ -639,24 +545,10 @@ def _materialize_iterable_body(request) -> None:
     except TypeError:
         return
 
-    # IMPORTANT: ``list(body)`` has already exhausted the original
-    # iterator. From this point we MUST write something bytes-shaped
-    # back to ``request.body`` -- bailing out and leaving the body as
-    # an exhausted iterator makes the next access (cassette
-    # serialization, retry replay, or the actual httpx send) see an
-    # empty stream. In a previous attempt at this fix the bail path
-    # was taken for ``bytes_iterator`` bodies (chunks were ints) and
-    # the live send ended up with an empty multipart upload, which
-    # the SDK retried until the cassette ballooned to ~10 episodes
-    # per test. Fall through to ``out = b""`` rather than ``return``
-    # so an unrecognized chunk shape still leaves a stable body.
     out = b""
     if chunks:
         first = chunks[0]
         if isinstance(first, int):
-            # ``iter(b"...")`` yields integer byte values (its type
-            # name is ``bytes_iterator``). ``bytes(list_of_ints)`` is
-            # the inverse and reconstructs the original buffer.
             try:
                 out = bytes(chunks)
             except (TypeError, ValueError):
@@ -677,21 +569,6 @@ def _materialize_iterable_body(request) -> None:
     except (AttributeError, TypeError):
         pass
 
-    # vcrpy's ``Request`` keeps two internal flags - ``_was_iter`` and
-    # ``_was_file`` - that are set in ``__init__`` based on the type
-    # of the original body and never cleared by the setter. Their job
-    # is to make the ``body`` *getter* re-wrap the stored value in
-    # ``iter()`` or ``BytesIO()`` on every access, so callers that
-    # expect a stream still get one even after the body has been
-    # consumed once. The side effect is that even after we write
-    # plain ``bytes`` back via ``request.body = out``, the next
-    # access still returns ``iter(self._body)`` - which gives every
-    # matcher comparison a fresh ``bytes_iterator`` and makes
-    # ``body_a == body_b`` an object-identity check that can never
-    # succeed. Touching the private flags is the only escape hatch;
-    # vcrpy exposes no public API for resetting them. After this
-    # point the body really is ``bytes`` from the getter's
-    # perspective.
     for attr in ("_was_iter", "_was_file"):
         try:
             setattr(request, attr, False)

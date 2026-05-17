@@ -103,16 +103,9 @@ class BaseLLMImageEditTest(ABC):
 pwd = os.path.dirname(os.path.realpath(__file__))
 
 
-# Image fixtures are returned as raw ``bytes`` (not file handles or
-# ``BytesIO`` streams) so that every SDK / Router retry sees the same
-# payload. A ``BytesIO`` whose file pointer is left at EOF by the first
-# multipart upload silently encodes an empty image on the second
-# attempt, producing a different request body — VCR records that
-# divergent body as a fresh episode, the cassette eventually crosses
-# ``MAX_EPISODES_PER_CASSETTE`` in ``tests/_vcr_redis_persister.py``,
-# the persister refuses to save, and every subsequent CI run re-bills
-# the live image-edit endpoint. Raw bytes are immutable, position-less,
-# and re-encoded identically on every retry attempt.
+# Fixtures must be raw ``bytes``, not ``BytesIO``: an SDK retry that
+# reads a BytesIO twice gets an empty second body, which records as a
+# divergent VCR episode and eventually trips MAX_EPISODES_PER_CASSETTE.
 def _read_image_bytes(filename: str) -> bytes:
     with open(os.path.join(pwd, filename), "rb") as f:
         return f.read()
@@ -123,14 +116,6 @@ _LITELLM_SITE_BYTES = _read_image_bytes("litellm_site.png")
 
 
 def _make_test_images() -> list:
-    """Return the pair of fixture images as raw ``bytes`` payloads.
-
-    ``httpx`` accepts a ``bytes`` value anywhere a file-like upload is
-    expected and re-encodes it identically on every multipart attempt
-    — so SDK-level retries can never produce a divergent empty-body
-    episode (the root cause of the cassette-overflow leak that bills
-    ``gpt-image-1`` on every CI run).
-    """
     return [_ISHAAN_GITHUB_BYTES, _LITELLM_SITE_BYTES]
 
 
@@ -139,14 +124,6 @@ def _make_single_test_image() -> bytes:
 
 
 def get_test_images_as_bytesio():
-    """Return the fixture images as fresh ``BytesIO`` streams.
-
-    Kept distinct from ``_make_test_images`` so the BytesIO-specific
-    smoke tests (``test_openai_image_edit_with_bytesio``,
-    ``test_multiple_image_edit_with_different_formats``) still exercise
-    the file-like upload path. Each call yields brand new streams so
-    the file pointer always starts at 0 for that test invocation.
-    """
     return [
         BytesIO(_ISHAAN_GITHUB_BYTES),
         BytesIO(_LITELLM_SITE_BYTES),
@@ -718,10 +695,9 @@ async def test_multiple_image_edit_with_different_formats():
     try:
         prompt = "Create a cohesive artistic style across all images"
 
-        # Test with mixed raw-bytes and BytesIO inputs
         mixed_images = [
-            _make_single_test_image(),  # raw ``bytes`` payload
-            get_test_images_as_bytesio()[1],  # BytesIO object
+            _make_single_test_image(),
+            get_test_images_as_bytesio()[1],
         ]
 
         result = await aimage_edit(
