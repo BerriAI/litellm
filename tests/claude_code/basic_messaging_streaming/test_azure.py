@@ -36,4 +36,5 @@ def test_basic_messaging_streaming_azure(compat_result):
         compat_result=compat_result,
         models=AZURE_MODELS,
         prompt="Count from 1 to 5, one number per line.",
+        verify_streaming=True,
     )
