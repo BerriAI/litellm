@@ -173,10 +173,11 @@ pair differs:
 | `acme`   | `prod`  | `acme-litellm-prod-master-key`     |
 | `globex` | `dev`   | `globex-litellm-dev-license`       |
 
-For a per-tenant instance, the only inputs that change are the tenant
-slug, env, and the two pre-issued secrets:
+For a per-tenant instance via the example root, the only inputs that
+change are the tenant slug, env, and the two pre-issued secrets:
 
 ```bash
+cd terraform/litellm/gcp/examples/default
 export TF_VAR_litellm_master_key="sk-..."   # the tenant's master key
 export TF_VAR_litellm_license="lic-..."     # their LITELLM_LICENSE
 
@@ -186,6 +187,10 @@ terraform apply \
   -var "tenant=acme" \
   -var "env=stage"
 ```
+
+To run *many* tenants from a single config, call the module with
+`for_each` instead of one root per tenant — only possible because the
+module declares no provider block (see "Using as a module").
 
 Both `litellm_master_key` and `litellm_license` are optional:
 - Omit `litellm_master_key` → the stack auto-generates a random `sk-…`
@@ -200,13 +205,21 @@ example files.
 ## Quick start
 
 ```bash
-cd terraform/litellm/gcp
+cd terraform/litellm/gcp/examples/default
 cp terraform.tfvars.example terraform.tfvars
-# Edit: project, region, tenant, env, *_image, proxy_config, gateway_extra_secrets.
+# Edit: project, region, tenant, env, image_registry, proxy_config, gateway_extra_secrets.
 
 terraform init
 terraform apply
 ```
+
+`examples/default/` is a thin root that configures the `google` /
+`google-beta` providers and calls the module (`../../`). It exposes a
+curated variable surface; for advanced knobs (per-component
+CPU/memory/instances, Cloud SQL tier/edition, Memorystore tier,
+per-component image pins) set them on the `module "litellm"` block in
+`examples/default/main.tf`, or call the module from your own config — see
+"Using as a module" below.
 
 That single apply provisions everything, runs the prisma schema migration via
 the Cloud Run job (auto-triggered by `bootstrap.tf`), and only then starts the
@@ -251,6 +264,38 @@ Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
 flag, plan fails with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
 
+## Using as a module
+
+The directory itself is a module with **no `provider` block** — the caller
+owns provider config. You can call it directly with `for_each` (many
+tenants from one config), `count`, `depends_on`, or providers configured
+to impersonate a service account / target a different project:
+
+```hcl
+provider "google" {
+  project = "my-gcp-project"
+  region  = "us-central1"
+}
+provider "google-beta" {
+  project = "my-gcp-project"
+  region  = "us-central1"
+}
+
+module "litellm" {
+  source = "github.com/BerriAI/litellm//terraform/litellm/gcp?ref=<tag>"
+
+  project = "my-gcp-project"
+  region  = "us-central1"
+  tenant  = "acme"
+  env     = "prod"
+  # ...any of the inputs in variables.tf...
+}
+```
+
+Both the default `google` and `google-beta` configs are inherited by the
+module automatically through the call — declare both in the caller.
+Resource labels are controlled by the module's `labels` input.
+
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on
@@ -281,8 +326,8 @@ or point them at your own CA.
 
 | File              | What's in it                                                         |
 | ----------------- | -------------------------------------------------------------------- |
-| `versions.tf`     | Terraform + provider version constraints                             |
-| `providers.tf`    | Google + Google-Beta providers                                       |
+| `versions.tf`     | Terraform + `required_providers` constraints (module declares no provider config) |
+| `examples/default/` | Thin root: `google` / `google-beta` providers + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                  |
 | `locals.tf`       | Path-prefix lists (mirror of `helm/.../ingress.yaml`) + proxy_config helpers |
 | `network.tf`      | VPC, subnet, PSA range, Serverless VPC connector                     |

@@ -1,18 +1,34 @@
 # LiteLLM Terraform stacks
 
-Two self-contained Terraform root modules that deploy the **componentized**
-LiteLLM proxy — the gateway, backend, and UI as three independent containers
-(see `helm/litellm/` for the canonical chart with the same split).
+Two self-contained, reusable Terraform **modules** that deploy the
+**componentized** LiteLLM proxy — the gateway, backend, and UI as three
+independent containers (see `helm/litellm/` for the canonical chart with the
+same split).
+
+Each module declares **no `provider` block of its own**, so it can be called
+with `count` / `for_each` / `depends_on` and the caller controls region,
+assume-role / impersonation, aliases, and `default_tags`. A ready-to-run root
+that wires the provider lives at `<stack>/examples/default/` — that's the
+one-command deploy path. To embed a stack in your own config, call the module
+by source:
+
+```hcl
+module "litellm" {
+  source = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
+  # ... inputs ...
+}
+```
 
 | Stack  | Compute     | Database (writer + reader)         | Cache       | Object store | Public entrypoint  |
 | ------ | ----------- | ---------------------------------- | ----------- | ------------ | ------------------ |
 | `aws/` | ECS Fargate | Aurora Postgres (IAM auth)         | ElastiCache | S3           | Application LB     |
 | `gcp/` | Cloud Run   | Cloud SQL Postgres (password auth) | Memorystore | GCS          | External HTTPS LB  |
 
-Each stack creates its own VPC and managed data stores — drop in a tfvars
-file and run `terraform apply`. Both stacks support a typed `proxy_config`
-input (mirrors `helm/litellm`'s `gateway.config.proxy_config`) and per-component
-extra env vars / secret-manager refs.
+Each stack creates its own VPC and managed data stores — from
+`<stack>/examples/default/`, drop in a tfvars file and run `terraform apply`.
+Both stacks support a typed `proxy_config` input (mirrors `helm/litellm`'s
+`gateway.config.proxy_config`) and per-component extra env vars /
+secret-manager refs.
 
 ## Components
 

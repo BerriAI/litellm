@@ -132,10 +132,11 @@ pair differs:
 | `acme`   | `prod`  | `acme-litellm-prod-master-key`     |
 | `globex` | `dev`   | `globex-litellm-dev-license`       |
 
-For a per-tenant instance, the only inputs that change are the tenant
-slug, env, and the two pre-issued secrets:
+For a per-tenant instance via the example root, the only inputs that
+change are the tenant slug, env, and the two pre-issued secrets:
 
 ```bash
+cd terraform/litellm/aws/examples/default
 export TF_VAR_litellm_master_key="sk-..."   # the tenant's master key
 export TF_VAR_litellm_license="lic-..."     # their LITELLM_LICENSE
 
@@ -145,6 +146,22 @@ terraform apply \
   -var "tenant=acme" \
   -var "env=stage"
 ```
+
+To run *many* tenants from a single config, call the module with
+`for_each` instead of one root per tenant (see "Using as a module"):
+
+```hcl
+module "litellm" {
+  for_each = toset(["acme", "globex"])
+  source   = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
+  tenant   = each.key
+  env      = "prod"
+  region   = "us-west-2"
+  azs      = ["us-west-2a", "us-west-2b"]
+}
+```
+(This `for_each` form is only possible because the module declares no
+provider block — the original root-with-provider layout forbade it.)
 
 Both `litellm_master_key` and `litellm_license` are optional:
 - Omit `litellm_master_key` → the stack auto-generates a random `sk-…`
@@ -159,13 +176,20 @@ example files.
 ## Quick start
 
 ```bash
-cd terraform/litellm/aws
+cd terraform/litellm/aws/examples/default
 cp terraform.tfvars.example terraform.tfvars
-# Edit: region, tenant, env, azs, *_image, proxy_config, gateway_extra_secrets.
+# Edit: region, tenant, env, azs, proxy_config, gateway_extra_secrets.
 
 terraform init
 terraform apply
 ```
+
+`examples/default/` is a thin root that configures the `aws` provider and
+calls the module (`../../`). It exposes a curated variable surface; for
+advanced knobs (per-component CPU/memory/workers, autoscaling, RDS/Redis
+sizing, per-component image pins) set them on the `module "litellm"` block
+in `examples/default/main.tf`, or call the module from your own config —
+see "Using as a module" below.
 
 That single apply provisions everything, runs the DB user bootstrap, runs the
 schema migration, and only then starts the gateway/backend services. When it
@@ -178,6 +202,34 @@ aws secretsmanager get-secret-value \
   --secret-id "$(terraform output -raw master_key_secret_arn)" \
   --query SecretString --output text
 ```
+
+## Using as a module
+
+The directory itself is a module with **no `provider` block** — the caller
+owns provider config. That means you can call it directly with `for_each`
+(many tenants from one config), `count` (conditional stacks), `depends_on`,
+an assume-role / aliased provider, etc.:
+
+```hcl
+provider "aws" {
+  region = "us-west-2"
+  assume_role { role_arn = "arn:aws:iam::111122223333:role/deployer" }
+}
+
+module "litellm" {
+  source = "github.com/BerriAI/litellm//terraform/litellm/aws?ref=<tag>"
+
+  region = "us-west-2"
+  tenant = "acme"
+  env    = "prod"
+  azs    = ["us-west-2a", "us-west-2b"]
+  # ...any of the inputs in variables.tf...
+}
+```
+
+Tags: the module threads its own `litellm:stack` / `managed-by` / `var.tags`
+onto every taggable resource. Any `default_tags` on your provider merge on
+top — set org-wide tags there, per-deployment tags via the `tags` input.
 
 ## Image pulls
 
@@ -238,8 +290,8 @@ losing the contents.
 
 | File              | What's in it                                                          |
 | ----------------- | --------------------------------------------------------------------- |
-| `versions.tf`     | Terraform + provider version constraints                              |
-| `providers.tf`    | AWS provider (region + default tags)                                  |
+| `versions.tf`     | Terraform + `required_providers` constraints (module declares no provider config) |
+| `examples/default/` | Thin root: `aws` provider + `default_tags` + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |
 | `network.tf`      | VPC, subnets, IGW, NAT, route tables, security groups                 |
