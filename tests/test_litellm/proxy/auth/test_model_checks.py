@@ -249,3 +249,100 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+# ---------------------------------------------------------------------------
+# resolve_team_db_access_group_models — force_empty contract
+#
+# These two tests pin the privilege-escalation guard of the public sibling
+# helper of get_team_models in isolation. The end-to-end coverage lives in
+# tests/test_litellm/proxy/test_get_available_models_for_user.py; what this
+# file owns is the direct contract: under what (team_models, key_models,
+# access-group-contribution) tuple does the helper return force_empty=True?
+# ---------------------------------------------------------------------------
+
+
+def _make_team_obj(*, models, access_group_ids, team_id="team-iso"):
+    """Minimal stand-in for LiteLLM_TeamTableCachedObj — only the two
+    attributes resolve_team_db_access_group_models reads at runtime."""
+
+    class _T:
+        pass
+
+    obj = _T()
+    obj.team_id = team_id
+    obj.models = list(models)
+    obj.access_group_ids = list(access_group_ids)
+    return obj
+
+
+def _make_user_api_key_dict(*, team_id=None):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="hashed",
+        user_id="u",
+        team_id=team_id,
+        team_models=[],
+        models=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_db_access_group_models_force_empty_when_sentinel_only_team_has_no_resolved_models():
+    """
+    The sentinel-only team with no real access-group contribution must
+    surface force_empty=True so the /v1/models caller can return [] before
+    get_complete_model_list falls back to the full proxy_model_list
+    (privilege escalation).
+    """
+    from litellm.proxy.auth.model_checks import resolve_team_db_access_group_models
+
+    team = _make_team_obj(models=["no-default-models"], access_group_ids=["ag-deleted"])
+
+    prisma = AsyncMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[])
+
+    resolved, force_empty = await resolve_team_db_access_group_models(
+        team_models=["no-default-models"],
+        key_models=[],
+        pre_loaded_team_object=team,
+        user_api_key_dict=_make_user_api_key_dict(team_id=team.team_id),
+        prisma_client=prisma,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
+    )
+
+    assert resolved == []
+    assert force_empty is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_db_access_group_models_no_force_empty_when_access_groups_contribute():
+    """
+    Same sentinel-only team, but the access-group resolution returns a real
+    model. force_empty must be False — the team legitimately has access to
+    the resolved models and the caller should not short-circuit to [].
+    """
+    from litellm.proxy.auth.model_checks import resolve_team_db_access_group_models
+
+    team = _make_team_obj(models=["no-default-models"], access_group_ids=["ag-1"])
+
+    ag_row = AsyncMock()
+    ag_row.access_group_id = "ag-1"
+    ag_row.access_model_names = ["gpt-4o"]
+    prisma = AsyncMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[ag_row])
+
+    resolved, force_empty = await resolve_team_db_access_group_models(
+        team_models=["no-default-models"],
+        key_models=[],
+        pre_loaded_team_object=team,
+        user_api_key_dict=_make_user_api_key_dict(team_id=team.team_id),
+        prisma_client=prisma,
+        user_api_key_cache=None,
+        proxy_logging_obj=None,
+    )
+
+    assert resolved == ["gpt-4o"]
+    assert force_empty is False

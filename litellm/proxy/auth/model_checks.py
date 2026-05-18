@@ -1,6 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -9,6 +9,10 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
+
+if TYPE_CHECKING:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -165,6 +169,172 @@ def get_team_models(
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
+
+
+async def _resolve_team_access_group_model_names(
+    team_objects: List[Any],
+    prisma_client: "PrismaClient",
+) -> List[str]:
+    """
+    Resolve model names reachable via ``team.access_group_ids[]`` against the
+    DB-backed ``LiteLLM_AccessGroupTable``.
+
+    Sibling of ``_add_access_group_models_to_team_models`` in ``proxy_server.py``:
+    the admin helper returns deployment ids (for ``/team/info`` / ``/v2/team/list``),
+    while this helper returns model names (for the OpenAI-compatible
+    ``/v1/models`` path).
+
+    Skip rules mirror the admin helper:
+    - teams with no ``access_group_ids`` contribute nothing.
+    - teams whose ``models`` is empty or contains ``all-proxy-models`` already
+      see every model on the proxy; access-group resolution is skipped to avoid
+      double-counting.
+
+    Returns deduped model names in encounter order. The
+    ``no-default-models`` sentinel is never emitted (callers are still
+    responsible for stripping it from any caller-supplied list — see the
+    sentinel filter in ``resolve_team_db_access_group_models``).
+    """
+    eligible_teams: List[Any] = []
+    all_access_group_ids: set = set()
+    for team in team_objects:
+        if not getattr(team, "access_group_ids", None):
+            continue
+        team_models_raw = getattr(team, "models", None) or []
+        if (
+            not team_models_raw
+            or SpecialModelNames.all_proxy_models.value in team_models_raw
+        ):
+            continue
+        eligible_teams.append(team)
+        all_access_group_ids.update(team.access_group_ids)
+
+    if not eligible_teams:
+        return []
+
+    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(all_access_group_ids)}}
+    )
+    ag_to_model_names: Dict[str, List[str]] = {
+        row.access_group_id: row.access_model_names or [] for row in access_group_rows
+    }
+
+    seen: set = set()
+    resolved: List[str] = []
+    for team in eligible_teams:
+        for ag_id in team.access_group_ids or []:
+            for model_name in ag_to_model_names.get(ag_id, []):
+                if model_name in seen:
+                    continue
+                seen.add(model_name)
+                resolved.append(model_name)
+    return resolved
+
+
+async def resolve_team_db_access_group_models(
+    *,
+    team_models: List[str],
+    key_models: List[str],
+    pre_loaded_team_object: Optional[Any],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> Tuple[List[str], bool]:
+    """
+    Expand ``team_models`` with DB-backed access-group resolution and apply
+    the ``no-default-models`` sentinel rules. Returns
+    ``(resolved_team_models, force_empty_response)``.
+
+    Lives next to ``get_team_models`` because "what models can this team
+    see, including DB-backed access groups" is the same conceptual class
+    of authorization logic. The legacy ``get_team_models`` handles
+    in-config access groups (via ``router.get_model_access_groups()``);
+    this sibling handles the DB-backed Unified Access Groups stored in
+    ``LiteLLM_AccessGroupTable``.
+
+    Responsibilities (kept here so the ``/v1/models`` call site in
+    ``get_available_models_for_user`` stays small):
+
+    1. Best-effort load of the team object on the fallback path — when
+       the caller didn't pass an explicit ``team_id`` kwarg but the
+       authenticated key has a ``team_id``, look the team up via
+       ``get_team_object`` (cache-aware). Transient DB errors are logged
+       and treated as "no team object".
+    2. Resolve every model name reachable via ``team.access_group_ids[]``
+       and merge the result into ``team_models``. Resolver failures are
+       logged and treated as "no access-group contribution" so a Prisma
+       hiccup never 500s ``/v1/models``.
+    3. Snapshot whether the ``no-default-models`` sentinel was present,
+       then strip it. If the sentinel was the only thing the team had
+       and neither the key nor access-group resolution contributed any
+       real models, signal ``force_empty_response=True`` so the caller
+       returns an empty list directly — otherwise
+       ``get_complete_model_list`` would interpret the empty
+       ``team_models`` as "no preference" and silently fall back to the
+       full ``proxy_model_list`` (privilege escalation).
+    """
+    # Function-local import to mirror the pattern in
+    # ``get_available_models_for_user``: ``model_checks.py`` is a light
+    # utility module today, and pulling ``auth_checks`` (which
+    # transitively imports ``proxy/utils.py``) at module level would
+    # bloat the import surface for every legacy caller of
+    # ``get_team_models``.
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    team_object = pre_loaded_team_object
+
+    if (
+        team_object is None
+        and user_api_key_dict.team_id
+        and prisma_client is not None
+        and user_api_key_cache is not None
+        and proxy_logging_obj is not None
+    ):
+        try:
+            team_object = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "resolve_team_db_access_group_models: failed to fetch team "
+                "object for team_id=%s, skipping access-group resolution. "
+                "Error: %s",
+                user_api_key_dict.team_id,
+                str(e),
+            )
+            team_object = None
+
+    if team_object is not None and prisma_client is not None:
+        try:
+            access_group_model_names = await _resolve_team_access_group_model_names(
+                team_objects=[team_object],
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "resolve_team_db_access_group_models: access-group resolution "
+                "failed for team_id=%s, returning team.models[] only. "
+                "Error: %s",
+                getattr(team_object, "team_id", None),
+                str(e),
+            )
+            access_group_model_names = []
+        for model_name in access_group_model_names:
+            if model_name not in team_models:
+                team_models.append(model_name)
+
+    sentinel_value = SpecialModelNames.no_default_models.value
+    had_no_default_models_sentinel = sentinel_value in team_models
+    team_models = [m for m in team_models if m != sentinel_value]
+
+    force_empty_response = (
+        had_no_default_models_sentinel and not team_models and not key_models
+    )
+    return team_models, force_empty_response
 
 
 def get_complete_model_list(

@@ -26,10 +26,8 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import (
-    _resolve_team_access_group_model_names,
-    get_available_models_for_user,
-)
+from litellm.proxy.auth.model_checks import _resolve_team_access_group_model_names
+from litellm.proxy.utils import get_available_models_for_user
 
 
 def _make_team_cached_obj(
