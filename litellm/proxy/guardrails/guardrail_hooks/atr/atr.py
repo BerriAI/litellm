@@ -304,7 +304,9 @@ class ATRGuardrail(CustomGuardrail):
 
             # Treat None or unrecognised severity conservatively (rank 0 = critical)
             raw_severity = getattr(m, "severity", None)
-            severity_str = (raw_severity or "").lower() if raw_severity is not None else ""
+            severity_str = (
+                (raw_severity or "").lower() if raw_severity is not None else ""
+            )
             rank = _SEVERITY_RANK.get(severity_str, 0)
             if rank <= threshold_rank:
                 result.append(m)

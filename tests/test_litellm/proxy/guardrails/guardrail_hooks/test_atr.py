@@ -428,7 +428,9 @@ def test_scan_none_severity_treated_conservatively(fake_pyatr, tmp_path):
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir()
 
-    none_severity_match = MagicMock(rule_id="ATR-600", title="Unknown sev", severity=None)
+    none_severity_match = MagicMock(
+        rule_id="ATR-600", title="Unknown sev", severity=None
+    )
     engine.evaluate.return_value = [none_severity_match]
 
     guard = ATRGuardrail(
@@ -450,7 +452,9 @@ def test_scan_unknown_severity_treated_conservatively(fake_pyatr, tmp_path):
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir()
 
-    unknown_match = MagicMock(rule_id="ATR-601", title="Future sev", severity="informational")
+    unknown_match = MagicMock(
+        rule_id="ATR-601", title="Future sev", severity="informational"
+    )
     engine.evaluate.return_value = [unknown_match]
 
     guard = ATRGuardrail(
