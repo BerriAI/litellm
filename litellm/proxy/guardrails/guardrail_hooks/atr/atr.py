@@ -223,9 +223,10 @@ class ATRGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     def _extract_request_content(self, data: dict) -> str:
-        messages = data.get("messages") or []
         parts: List[str] = []
-        for msg in messages:
+
+        # Chat completions: messages[].content (str or content-part list)
+        for msg in data.get("messages") or []:
             if not isinstance(msg, dict):
                 continue
             content = msg.get("content")
@@ -237,6 +238,16 @@ class ATRGuardrail(CustomGuardrail):
                         text = chunk.get("text")
                         if isinstance(text, str):
                             parts.append(text)
+
+        # Text completions (/v1/completions): prompt is str or list[str]
+        prompt = data.get("prompt")
+        if isinstance(prompt, str):
+            parts.append(prompt)
+        elif isinstance(prompt, list):
+            for p in prompt:
+                if isinstance(p, str):
+                    parts.append(p)
+
         return "\n".join(p for p in parts if p)
 
     def _extract_response_content(self, response: Any) -> str:
@@ -245,16 +256,25 @@ class ATRGuardrail(CustomGuardrail):
             choices = response.get("choices", [])
         parts: List[str] = []
         for choice in choices or []:
+            # Chat completions: choice.message.content
             message = getattr(choice, "message", None)
             if message is None and isinstance(choice, dict):
                 message = choice.get("message", {})
-            content: Optional[str] = None
             if message is not None:
-                content = getattr(message, "content", None)
+                content: Optional[str] = getattr(message, "content", None)
                 if content is None and isinstance(message, dict):
                     content = message.get("content")
-            if isinstance(content, str) and content:
-                parts.append(content)
+                if isinstance(content, str) and content:
+                    parts.append(content)
+                    continue
+
+            # Text completions (/v1/completions): choice.text
+            text = getattr(choice, "text", None)
+            if text is None and isinstance(choice, dict):
+                text = choice.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+
         return "\n".join(parts)
 
     def _scan(self, content: str, event_type: str) -> List[Any]:
