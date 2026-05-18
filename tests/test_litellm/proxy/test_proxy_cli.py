@@ -131,6 +131,40 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+
+    def test_run_server_prefers_litellm_prefixed_envvars(self):
+        from litellm.proxy.proxy_cli import run_server
+
+        expected_envvars = {
+            "host": ["LITELLM_HOST", "HOST"],
+            "port": ["LITELLM_PORT", "PORT"],
+            "num_workers": ["LITELLM_NUM_WORKERS", "NUM_WORKERS"],
+            "debug": ["LITELLM_DEBUG", "DEBUG"],
+            "detailed_debug": ["LITELLM_DETAILED_DEBUG", "DETAILED_DEBUG"],
+            "ssl_keyfile_path": ["LITELLM_SSL_KEYFILE_PATH", "SSL_KEYFILE_PATH"],
+            "ssl_certfile_path": ["LITELLM_SSL_CERTFILE_PATH", "SSL_CERTFILE_PATH"],
+            "keepalive_timeout": ["LITELLM_KEEPALIVE_TIMEOUT", "KEEPALIVE_TIMEOUT"],
+            "timeout_worker_healthcheck": [
+                "LITELLM_TIMEOUT_WORKER_HEALTHCHECK",
+                "TIMEOUT_WORKER_HEALTHCHECK",
+            ],
+            "max_requests_before_restart": [
+                "LITELLM_MAX_REQUESTS_BEFORE_RESTART",
+                "MAX_REQUESTS_BEFORE_RESTART",
+            ],
+            "enforce_prisma_migration_check": [
+                "LITELLM_ENFORCE_PRISMA_MIGRATION_CHECK",
+                "ENFORCE_PRISMA_MIGRATION_CHECK",
+            ],
+        }
+
+        envvars_by_option = {
+            param.name: param.envvar for param in run_server.params if param.name
+        }
+
+        for option_name, envvars in expected_envvars.items():
+            assert envvars_by_option[option_name] == envvars
+
     def test_get_reload_options_no_config(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
         assert opts == {"reload": True}
