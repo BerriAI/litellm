@@ -9,14 +9,23 @@ Covers credential leak prevention changes:
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
+    LiteLLMResponsesInteractionsStreamingIterator,
+)
 from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
+)
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponsePartAddedEvent,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -111,6 +120,76 @@ class TestGetCompleteUrl:
                     model="gemini-2.5-flash",
                     litellm_params={"api_key": None},
                 )
+
+
+class TestStreamingIterator:
+    def _make_iterator(self) -> LiteLLMResponsesInteractionsStreamingIterator:
+        return LiteLLMResponsesInteractionsStreamingIterator(
+            model="gpt-5.4",
+            litellm_custom_stream_wrapper=MagicMock(),
+            request_input="hi",
+            optional_params={},
+        )
+
+    def _make_text_delta(self, text: str, item_id: str = "item_1") -> OutputTextDeltaEvent:
+        event = MagicMock(spec=OutputTextDeltaEvent)
+        event.delta = text
+        event.item_id = item_id
+        return event
+
+    def _make_part_added(self, item_id: str = "item_1") -> ResponsePartAddedEvent:
+        event = MagicMock(spec=ResponsePartAddedEvent)
+        event.item_id = item_id
+        return event
+
+    def _make_response_created(self) -> ResponseCreatedEvent:
+        event = MagicMock(spec=ResponseCreatedEvent)
+        event.response = MagicMock(id="resp_123")
+        return event
+
+    def test_content_delta_includes_type_field(self):
+        """content.delta events must carry delta.type='text' so the UI can display them."""
+        it = self._make_iterator()
+        it.sent_interaction_start = True
+        it.sent_content_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "content.delta"
+        assert chunk.delta == {"type": "text", "text": "Hello"}
+
+    def test_response_part_added_emits_content_start(self):
+        """ResponsePartAddedEvent (arrives before text deltas) should emit content.start
+        so the first OutputTextDeltaEvent immediately emits content.delta without dropping text."""
+        it = self._make_iterator()
+        it.sent_interaction_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_part_added()
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "content.start"
+        assert it.sent_content_start is True
+
+    def test_first_text_delta_not_dropped_when_part_added_seen(self):
+        """After ResponsePartAddedEvent, the first text delta must yield content.delta
+        (not content.start), preserving the token text."""
+        it = self._make_iterator()
+        it.sent_interaction_start = True
+        it._transform_responses_chunk_to_interactions_chunk(self._make_part_added())
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "content.delta"
+        assert chunk.delta is not None
+        assert chunk.delta.get("text") == "Hello"
 
 
 class TestTransformRequest:

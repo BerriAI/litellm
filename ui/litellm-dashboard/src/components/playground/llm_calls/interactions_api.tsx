@@ -116,9 +116,11 @@ export async function makeInteractionsRequest(
           if (interaction?.model) {
             responseModel = interaction.model as string;
           }
-        } else if (eventType === "content.delta") {
+        } else if (eventType === "content.delta" || eventType === "content.start") {
           const delta = event.delta as Record<string, unknown> | undefined;
-          if (delta?.type === "text" && typeof delta.text === "string" && delta.text) {
+          // Accept both native Gemini format {"type":"text","text":"..."} and bridge
+          // format {"text":"..."} (no type discriminator)
+          if (typeof delta?.text === "string" && delta.text) {
             updateUI(delta.text, responseModel ?? selectedModel);
           }
         }
