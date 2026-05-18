@@ -78,6 +78,12 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+# `gh pr list --limit` caps at 1000 (the CLI's documented hard ceiling).
+# Surface a warning if we ever hit that cap so the silent truncation is
+# visible in workflow logs instead of just being a missed close.
+GH_PR_LIST_LIMIT = 1000
+
+
 def fetch_open_prs(repo: str | None) -> list[dict]:
     """Fetch all open PRs (number, createdAt, isDraft, labels, author).
 
@@ -94,12 +100,22 @@ def fetch_open_prs(repo: str | None) -> list[dict]:
         "--state",
         "open",
         "--limit",
-        "1000",
+        str(GH_PR_LIST_LIMIT),
         "--json",
         fields,
         *repo_args,
     )
-    return json.loads(raw)
+    prs = json.loads(raw)
+    if len(prs) >= GH_PR_LIST_LIMIT:
+        # `gh pr list --limit N` returns at most N rows even if more exist;
+        # log a GitHub Actions warning so the truncation isn't silent.
+        message = (
+            f"fetch_open_prs hit the gh CLI cap ({GH_PR_LIST_LIMIT}); "
+            "the open-PR list is likely truncated. Switch to paginated "
+            "`gh api` calls if the repo regularly exceeds this cap."
+        )
+        print(f"::warning::{message}", file=sys.stderr)
+    return prs
 
 
 def fetch_pr_author_association(pr_number: int, repo: str | None) -> str:

@@ -422,6 +422,41 @@ class TestMainOptoutLabelDefault:
             assert default not in captured["optout_labels"], default
 
 
+class TestFetchOpenPrsLimitWarning:
+    """`fetch_open_prs` must surface a warning when the gh CLI cap is hit."""
+
+    def test_should_warn_when_at_cap(self, closer_module, monkeypatch, capsys):
+        # Pretend `gh pr list --limit 1000` returned exactly 1000 PRs —
+        # this is the silent-truncation case the warning is meant to catch.
+        cap = closer_module.GH_PR_LIST_LIMIT
+        synthetic = [{"number": i} for i in range(cap)]
+        import json as _json
+
+        monkeypatch.setattr(
+            closer_module, "gh", lambda *a, **kw: _json.dumps(synthetic)
+        )
+        result = closer_module.fetch_open_prs(None)
+        assert len(result) == cap
+        captured = capsys.readouterr()
+        # GitHub Actions `::warning::` annotations go to stderr by
+        # convention; just check the marker appears somewhere visible.
+        combined = captured.out + captured.err
+        assert "::warning::" in combined
+        assert str(cap) in combined
+
+    def test_should_not_warn_when_under_cap(self, closer_module, monkeypatch, capsys):
+        synthetic = [{"number": i} for i in range(5)]
+        import json as _json
+
+        monkeypatch.setattr(
+            closer_module, "gh", lambda *a, **kw: _json.dumps(synthetic)
+        )
+        result = closer_module.fetch_open_prs(None)
+        assert len(result) == 5
+        captured = capsys.readouterr()
+        assert "::warning::" not in (captured.out + captured.err)
+
+
 class TestHasOptoutLabel:
     def test_should_match_label_case_insensitively(self, closer_module):
         pr = {"labels": [{"name": "Do Not Close"}, {"name": "bug"}]}
