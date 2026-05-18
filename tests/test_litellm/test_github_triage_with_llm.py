@@ -200,6 +200,55 @@ class TestBuildPrompts:
         assert "Bug" in prompt
         assert "repro here" in prompt
 
+    def test_should_not_crash_when_pr_body_contains_curly_braces(self, triage_module):
+        """User-supplied content with `{` / `}` must NOT be re-parsed by
+        `str.format()`. `format` only scans the template literal for
+        replacement fields; values being substituted in are inserted as
+        plain strings, so a body like `{"foo": "bar"}` or `{unmatched`
+        cannot blow up the script. Pinning this here so a future
+        "improvement" to the templating doesn't reintroduce a crash on
+        every PR that quotes JSON.
+        """
+        for body in (
+            'Here is some JSON: {"foo": "bar", "n": 1}',
+            "Half a brace { left dangling, and a stray }",
+            "Format-spec-looking thing: {0}, {name:>10}, {!r}",
+            "Nested {a: {b: c}} braces",
+        ):
+            pr_prompt = triage_module.build_pr_prompt(title="t", body=body)
+            issue_prompt = triage_module.build_issue_prompt(title="t", body=body)
+            assert body in pr_prompt
+            assert body in issue_prompt
+
+    def test_should_not_crash_when_pr_title_contains_curly_braces(self, triage_module):
+        title = "Fix bug in {0:>10} format-spec handling"
+        pr_prompt = triage_module.build_pr_prompt(title=title, body="x")
+        issue_prompt = triage_module.build_issue_prompt(title=title, body="x")
+        assert title in pr_prompt
+        assert title in issue_prompt
+
+    def test_should_preserve_template_indentation_with_multiline_body(
+        self, triage_module
+    ):
+        """`textwrap.dedent` runs on the static template *before* user
+        content is interpolated, so a multi-line body (whose 2nd+ lines
+        start at column 0) cannot defeat the common-indent computation
+        and leave 8-space indentation on every template line. Pin the
+        dedented shape so the rendered prompt stays consistent for the
+        LLM judge.
+        """
+        body = "first line\nsecond line at column 0\nthird line at column 0"
+        for builder in (
+            triage_module.build_pr_prompt,
+            triage_module.build_issue_prompt,
+        ):
+            prompt = builder(title="t", body=body)
+            # Template lines should NOT carry the 8 leading spaces from
+            # the source-file indentation of the triple-quoted string.
+            assert "        You are " not in prompt
+            assert 'You are "Agent Shin"' in prompt
+            assert body in prompt
+
 
 class TestMainModelDefault:
     """`--model` falls back to DEFAULT_MODEL even when TRIAGE_MODEL is empty."""
