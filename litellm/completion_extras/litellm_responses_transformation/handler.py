@@ -38,6 +38,15 @@ class ResponsesToCompletionBridgeHandler:
         return bool(stream)
 
     @staticmethod
+    def _is_preformatted_cached_chat_stream(result: Any) -> bool:
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+        return (
+            isinstance(result, CustomStreamWrapper)
+            and result.custom_llm_provider == "cached_response"
+        )
+
+    @staticmethod
     def _coerce_response_object(
         response_obj: Any,
         hidden_params: Optional[dict],
@@ -208,6 +217,10 @@ class ResponsesToCompletionBridgeHandler:
                 json_mode=kwargs.get("json_mode"),
             )
         else:
+            if self._is_preformatted_cached_chat_stream(result):
+                return self._apply_post_stream_processing(
+                    result, model, custom_llm_provider
+                )
             completion_stream = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,  # type: ignore
                 sync_stream=True,
@@ -289,6 +302,10 @@ class ResponsesToCompletionBridgeHandler:
                 json_mode=kwargs.get("json_mode"),
             )
         else:
+            if self._is_preformatted_cached_chat_stream(result):
+                return self._apply_post_stream_processing(
+                    result, model, custom_llm_provider
+                )
             completion_stream = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,  # type: ignore
                 sync_stream=False,
