@@ -845,10 +845,10 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             except Exception as e:
                                 raise litellm.BadRequestError(
                                     message=(
-                                        "Unable to determine mime type for file: "
+                                        f"Unable to determine mime type for file: "
                                         f"{file_id or 'provided data'}, set this explicitly "
-                                        f"using message[{msg_i}].content[{element_idx}]."
-                                        "file.format (or file.mime_type/content_type). "
+                                        f"using message[{msg_i}].content[{element_idx}].file.format "
+                                        f"(or file.mime_type/content_type). "
                                         f"Original error: {str(e)}"
                                     ),
                                     model=model,
