@@ -44,10 +44,11 @@ INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 # Marker phrase Agent Shin always includes in its auto-close comments
 # (see `format_pr_close_comment` / `format_issue_close_comment`). The
-# provenance check for reconsider uses this string + a bot-author filter
-# to confirm a PR/issue was actually auto-closed by Agent Shin before
-# letting a reconsider trigger reopen it. Keep the marker in sync with
-# the literal text in those formatter functions.
+# provenance check for reconsider matches this marker against a comment
+# authored by the same bot login that performed the most recent `closed`
+# event, so a contributor cannot reopen a PR/issue that a maintainer
+# closed after a prior Agent Shin auto-close. Keep the marker in sync
+# with the literal text in those formatter functions.
 AGENT_SHIN_AUTO_CLOSE_MARKER = "I'm **Agent Shin**"
 
 # Model families that require `reasoning_effort` to be set, and that reject
@@ -199,26 +200,67 @@ def fetch_issue_comments(repo: str, number: int) -> list[dict]:
     return comments
 
 
-def was_auto_closed_by_agent_shin(repo: str, number: int) -> bool:
-    """Return True iff this PR/issue carries an Agent Shin auto-close comment.
+def fetch_issue_events(repo: str, number: int) -> list[dict]:
+    """Fetch all issue events for a PR/issue (paginated, ascending order).
 
-    Provenance check for the `@agent-shin reconsider` flow. We require:
-
-      1. A comment authored by a bot account (login ends with "[bot]") —
-         the auto-close workflow uses GH_TOKEN which posts as
-         `github-actions[bot]`. Filtering by bot author makes it impossible
-         for a contributor to spoof an Agent Shin close by pasting the
-         marker text into a manual comment.
-      2. The comment body contains the Agent Shin auto-close marker
-         (`AGENT_SHIN_AUTO_CLOSE_MARKER`).
-
-    Without this check, a maintainer who closes a PR as a duplicate or
-    out-of-scope could be silently overridden by the original author
-    commenting `@agent-shin reconsider` and polishing the description.
+    Used by the reconsider provenance check to identify the actor of the
+    most recent `closed` event. Returns [] on error so the reconsider
+    path fails safe (no proof of Agent Shin close -> refuse to reopen).
     """
+    try:
+        raw = gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/issues/{number}/events?per_page=100",
+        )
+    except subprocess.CalledProcessError:
+        return []
+    events: list[dict] = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            events.extend(parsed)
+        else:
+            events.append(parsed)
+    return events
+
+
+def was_auto_closed_by_agent_shin(repo: str, number: int) -> bool:
+    """Return True iff Agent Shin is responsible for the *current* closure.
+
+    Provenance check for the `@agent-shin reconsider` flow. We require ALL of:
+
+      1. The most recent `closed` event on the PR/issue was performed by
+         a bot account (actor login ends with "[bot]"). Agent Shin's
+         auto-close workflow uses GH_TOKEN, which posts as
+         `github-actions[bot]`. Anchoring on the most recent close — not
+         just any historical close — prevents a contributor from
+         overriding a *later* maintainer-initiated closure (e.g.
+         duplicate, out-of-scope) by polishing the description and
+         commenting `@agent-shin reconsider`.
+      2. A comment authored by the same bot login that performed the
+         close contains the Agent Shin auto-close marker
+         (`AGENT_SHIN_AUTO_CLOSE_MARKER`). Matching the comment author
+         to the closer rules out closures by unrelated bots (stale,
+         cla-assistant, etc.) and spoofing via marker text pasted by
+         non-bot accounts.
+    """
+    events = fetch_issue_events(repo, number)
+    last_closer: str | None = None
+    for event in events:
+        if (event.get("event") or "").lower() == "closed":
+            last_closer = ((event.get("actor") or {}).get("login") or "").lower()
+    if not last_closer or not last_closer.endswith("[bot]"):
+        return False
     for comment in fetch_issue_comments(repo, number):
         login = ((comment.get("user") or {}).get("login") or "").lower()
-        if not login.endswith("[bot]"):
+        if login != last_closer:
             continue
         body = comment.get("body") or ""
         if AGENT_SHIN_AUTO_CLOSE_MARKER in body:

@@ -301,9 +301,17 @@ class TestMainModelDefault:
 class TestWasAutoClosedByAgentShin:
     """Provenance check that gates reconsider's reopen path."""
 
-    def test_should_return_true_when_bot_comment_has_marker(
+    @staticmethod
+    def _install(monkeypatch, triage_module, events, comments):
+        monkeypatch.setattr(triage_module, "fetch_issue_events", lambda repo, n: events)
+        monkeypatch.setattr(
+            triage_module, "fetch_issue_comments", lambda repo, n: comments
+        )
+
+    def test_should_return_true_when_latest_close_was_bot_with_marker(
         self, triage_module, monkeypatch
     ):
+        events = [{"event": "closed", "actor": {"login": "github-actions[bot]"}}]
         comments = [
             {
                 "user": {"login": "github-actions[bot]"},
@@ -313,33 +321,32 @@ class TestWasAutoClosedByAgentShin:
                 ),
             }
         ]
-        monkeypatch.setattr(
-            triage_module, "fetch_issue_comments", lambda repo, n: comments
-        )
+        self._install(monkeypatch, triage_module, events, comments)
         assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is True
 
-    def test_should_return_false_when_no_comments(self, triage_module, monkeypatch):
-        monkeypatch.setattr(triage_module, "fetch_issue_comments", lambda repo, n: [])
+    def test_should_return_false_when_no_close_event(self, triage_module, monkeypatch):
+        self._install(monkeypatch, triage_module, [], [])
         assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_ignore_non_bot_author_with_marker(self, triage_module, monkeypatch):
         # A contributor pasting the marker into a manual comment must NOT
-        # be treated as proof Agent Shin closed the PR. Only bot accounts
-        # (login ends with "[bot]") count — they can't be spoofed.
+        # be treated as proof Agent Shin closed the PR. Even if a bot did
+        # the most recent close, the marker comment must be authored by
+        # that same bot login — not by the human.
+        events = [{"event": "closed", "actor": {"login": "github-actions[bot]"}}]
         comments = [
             {
                 "user": {"login": "outside-dev"},
                 "body": "I'm **Agent Shin**, just kidding — please reconsider this.",
             }
         ]
-        monkeypatch.setattr(
-            triage_module, "fetch_issue_comments", lambda repo, n: comments
-        )
+        self._install(monkeypatch, triage_module, events, comments)
         assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
 
     def test_should_ignore_bot_comment_without_marker(self, triage_module, monkeypatch):
         # Other bots (codecov, cla-assistant, etc.) post on every PR; their
         # presence must not satisfy the provenance check.
+        events = [{"event": "closed", "actor": {"login": "github-actions[bot]"}}]
         comments = [
             {
                 "user": {"login": "codecov[bot]"},
@@ -350,15 +357,16 @@ class TestWasAutoClosedByAgentShin:
                 "body": "Confidence Score: 2/5",
             },
         ]
-        monkeypatch.setattr(
-            triage_module, "fetch_issue_comments", lambda repo, n: comments
-        )
+        self._install(monkeypatch, triage_module, events, comments)
         assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
 
-    def test_should_find_marker_in_any_bot_comment(self, triage_module, monkeypatch):
-        # The auto-close comment may not be the most recent (e.g. the
-        # contributor commented after Agent Shin closed it). Any matching
-        # bot comment counts.
+    def test_should_anchor_on_most_recent_close_event(self, triage_module, monkeypatch):
+        # Agent Shin auto-closed first, contributor commented after; the
+        # bot-authored marker comment is anywhere in the timeline.
+        events = [
+            {"event": "labeled", "actor": {"login": "krrishdholakia"}},
+            {"event": "closed", "actor": {"login": "github-actions[bot]"}},
+        ]
         comments = [
             {
                 "user": {"login": "codecov[bot]"},
@@ -373,10 +381,50 @@ class TestWasAutoClosedByAgentShin:
                 "body": "Replying after auto-close ...",
             },
         ]
-        monkeypatch.setattr(
-            triage_module, "fetch_issue_comments", lambda repo, n: comments
-        )
+        self._install(monkeypatch, triage_module, events, comments)
         assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is True
+
+    def test_should_refuse_when_maintainer_re_closed_after_agent_shin(
+        self, triage_module, monkeypatch
+    ):
+        # Agent Shin auto-closed, the PR was reopened, then a maintainer
+        # closed it again (e.g. as a duplicate). `@agent-shin reconsider`
+        # must NOT override the maintainer's later closure even though the
+        # historical Agent Shin marker comment still exists.
+        events = [
+            {"event": "closed", "actor": {"login": "github-actions[bot]"}},
+            {"event": "reopened", "actor": {"login": "github-actions[bot]"}},
+            {"event": "closed", "actor": {"login": "krrishdholakia"}},
+        ]
+        comments = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": "I'm **Agent Shin**, the automated triage bot ...",
+            }
+        ]
+        self._install(monkeypatch, triage_module, events, comments)
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_refuse_when_unrelated_bot_re_closed_after_agent_shin(
+        self, triage_module, monkeypatch
+    ):
+        # Agent Shin closed, the PR was reopened, then a different bot
+        # (stale, etc.) closed it. The marker comment is from
+        # `github-actions[bot]` but the most recent closer is
+        # `stale[bot]`, so the logins don't match -> refuse to reopen.
+        events = [
+            {"event": "closed", "actor": {"login": "github-actions[bot]"}},
+            {"event": "reopened", "actor": {"login": "github-actions[bot]"}},
+            {"event": "closed", "actor": {"login": "stale[bot]"}},
+        ]
+        comments = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": "I'm **Agent Shin**, the automated triage bot ...",
+            }
+        ]
+        self._install(monkeypatch, triage_module, events, comments)
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
 
 
 class TestCallLlmJudge:
