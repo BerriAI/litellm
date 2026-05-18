@@ -38610,6 +38610,11 @@
     "hunyuan/gpt-image-2": {
         "litellm_provider": "hunyuan",
         "mode": "image_generation",
+        "input_cost_per_image": 0.0083,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
         "source": "https://cloud.tencent.com/document/product/1668"
     }
 }
