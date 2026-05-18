@@ -2,7 +2,7 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -100,3 +100,68 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             pass
 
         return base_params + additional_params
+
+    @staticmethod
+    def _normalize_custom_tools_to_function(tools: Any) -> Any:
+        """
+        MiniMax's OpenAI-compatible endpoint rejects tools with type="custom".
+        Convert OpenAI Responses style custom tools into function tools.
+        """
+        if not isinstance(tools, list):
+            return tools
+
+        normalized_tools: List[Any] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                normalized_tools.append(tool)
+                continue
+
+            if tool.get("type") != "custom":
+                normalized_tools.append(tool)
+                continue
+
+            tool_name = tool.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                normalized_tools.append(tool)
+                continue
+
+            parameters = tool.get("input_schema")
+            if not isinstance(parameters, dict):
+                parameters = {"type": "object", "properties": {}}
+            elif parameters.get("type") != "object":
+                parameters = dict(parameters)
+                parameters["type"] = "object"
+                parameters.setdefault("properties", {})
+
+            function_tool: Dict[str, Any] = {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "parameters": parameters,
+                },
+            }
+            description = tool.get("description")
+            if isinstance(description, str) and description:
+                function_tool["function"]["description"] = description
+            normalized_tools.append(function_tool)
+
+        return normalized_tools
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        updated_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+        if "tools" in updated_params:
+            updated_params["tools"] = self._normalize_custom_tools_to_function(
+                updated_params["tools"]
+            )
+        return updated_params
