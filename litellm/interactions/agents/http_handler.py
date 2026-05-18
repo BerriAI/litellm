@@ -19,12 +19,17 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.agents import AgentCreateResponse
+from litellm.types.agents import (
+    AgentCreateResponse,
+    GeminiAgentDeleteResult,
+    GeminiAgentListResponse,
+    GeminiAgentVersionsResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
 class AgentsHTTPHandler:
-    """HTTP handler for Agents API requests."""
+    """HTTP handler for Agents API CRUD requests."""
 
     def _handle_error(
         self,
@@ -32,18 +37,32 @@ class AgentsHTTPHandler:
         provider_config: BaseAgentsAPIConfig,
     ) -> Exception:
         if isinstance(e, httpx.HTTPStatusError):
-            error_message = e.response.text
-            status_code = e.response.status_code
-            headers = dict(e.response.headers)
             return provider_config.get_error_class(
-                error_message=error_message,
-                status_code=status_code,
-                headers=headers,
+                error_message=e.response.text,
+                status_code=e.response.status_code,
+                headers=dict(e.response.headers),
             )
         return e
 
+    def _sync_client(
+        self, litellm_params: GenericLiteLLMParams, client: Optional[HTTPHandler]
+    ) -> HTTPHandler:
+        return client or _get_httpx_client(
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+        )
+
+    def _async_client(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[AsyncHTTPHandler],
+    ) -> AsyncHTTPHandler:
+        return client or get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.GEMINI,
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+        )
+
     # ------------------------------------------------------------------ #
-    # CREATE AGENT                                                         #
+    # CREATE                                                               #
     # ------------------------------------------------------------------ #
 
     def create_agent(
@@ -58,11 +77,6 @@ class AgentsHTTPHandler:
         client: Optional[HTTPHandler] = None,
         _is_async: bool = False,
     ) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
-        """
-        Create an agent — sync or async depending on _is_async.
-
-        Follows the same dispatch pattern as InteractionsHTTPHandler.create_interaction.
-        """
         if _is_async:
             return self.async_create_agent(
                 agents_api_config=agents_api_config,
@@ -74,21 +88,16 @@ class AgentsHTTPHandler:
                 timeout=timeout,
             )
 
-        sync_httpx_client = client or _get_httpx_client(
-            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-        )
-
+        sync_httpx_client = self._sync_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
-            headers=extra_headers or {},
-            litellm_params=dict(litellm_params),
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url = agents_api_config.get_complete_url(
             api_base=litellm_params.get("api_base"),
             litellm_params=dict(litellm_params),
         )
         data = agents_api_config.transform_create_request(
-            name=name,
-            litellm_params=dict(litellm_params),
+            name=name, litellm_params=dict(litellm_params)
         )
         if extra_body:
             data.update(extra_body)
@@ -96,19 +105,11 @@ class AgentsHTTPHandler:
         logging_obj.pre_call(
             input=name,
             api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
+            additional_args={"complete_input_dict": data, "api_base": url, "headers": headers},
         )
-
         try:
             response = sync_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout or request_timeout,
+                url=url, headers=headers, json=data, timeout=timeout or request_timeout
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
@@ -117,11 +118,7 @@ class AgentsHTTPHandler:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-
-        return agents_api_config.transform_create_response(
-            raw_response=response,
-            name=name,
-        )
+        return agents_api_config.transform_create_response(raw_response=response, name=name)
 
     async def async_create_agent(
         self,
@@ -134,23 +131,16 @@ class AgentsHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> AgentCreateResponse:
-        """Async version of create_agent."""
-        async_httpx_client = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.GEMINI,
-            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-        )
-
+        async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
-            headers=extra_headers or {},
-            litellm_params=dict(litellm_params),
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url = agents_api_config.get_complete_url(
             api_base=litellm_params.get("api_base"),
             litellm_params=dict(litellm_params),
         )
         data = agents_api_config.transform_create_request(
-            name=name,
-            litellm_params=dict(litellm_params),
+            name=name, litellm_params=dict(litellm_params)
         )
         if extra_body:
             data.update(extra_body)
@@ -158,19 +148,11 @@ class AgentsHTTPHandler:
         logging_obj.pre_call(
             input=name,
             api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
+            additional_args={"complete_input_dict": data, "api_base": url, "headers": headers},
         )
-
         try:
             response = await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout or request_timeout,
+                url=url, headers=headers, json=data, timeout=timeout or request_timeout
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
@@ -179,10 +161,345 @@ class AgentsHTTPHandler:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
+        return agents_api_config.transform_create_response(raw_response=response, name=name)
 
-        return agents_api_config.transform_create_response(
-            raw_response=response,
+    # ------------------------------------------------------------------ #
+    # LIST                                                                 #
+    # ------------------------------------------------------------------ #
+
+    def list_agents(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+        _is_async: bool = False,
+    ) -> Union[GeminiAgentListResponse, Coroutine[Any, Any, GeminiAgentListResponse]]:
+        if _is_async:
+            return self.async_list_agents(
+                agents_api_config=agents_api_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+            )
+
+        sync_httpx_client = self._sync_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_list_request(
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input="list_agents",
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_list_response(raw_response=response)
+
+    async def async_list_agents(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> GeminiAgentListResponse:
+        async_httpx_client = self._async_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_list_request(
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input="list_agents",
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_list_response(raw_response=response)
+
+    # ------------------------------------------------------------------ #
+    # GET                                                                  #
+    # ------------------------------------------------------------------ #
+
+    def get_agent(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+        _is_async: bool = False,
+    ) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
+        if _is_async:
+            return self.async_get_agent(
+                agents_api_config=agents_api_config,
+                name=name,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+            )
+
+        sync_httpx_client = self._sync_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_get_request(
             name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_get_response(raw_response=response, name=name)
+
+    async def async_get_agent(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> AgentCreateResponse:
+        async_httpx_client = self._async_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_get_request(
+            name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = await async_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_get_response(raw_response=response, name=name)
+
+    # ------------------------------------------------------------------ #
+    # DELETE                                                               #
+    # ------------------------------------------------------------------ #
+
+    def delete_agent(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+        _is_async: bool = False,
+    ) -> Union[GeminiAgentDeleteResult, Coroutine[Any, Any, GeminiAgentDeleteResult]]:
+        if _is_async:
+            return self.async_delete_agent(
+                agents_api_config=agents_api_config,
+                name=name,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+            )
+
+        sync_httpx_client = self._sync_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url = agents_api_config.transform_delete_request(
+            name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = sync_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout or request_timeout
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_delete_response(raw_response=response, name=name)
+
+    async def async_delete_agent(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> GeminiAgentDeleteResult:
+        async_httpx_client = self._async_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url = agents_api_config.transform_delete_request(
+            name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout or request_timeout
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_delete_response(raw_response=response, name=name)
+
+    # ------------------------------------------------------------------ #
+    # LIST VERSIONS                                                        #
+    # ------------------------------------------------------------------ #
+
+    def list_agent_versions(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+        _is_async: bool = False,
+    ) -> Union[GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]]:
+        if _is_async:
+            return self.async_list_agent_versions(
+                agents_api_config=agents_api_config,
+                name=name,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+            )
+
+        sync_httpx_client = self._sync_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_list_versions_request(
+            name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_list_versions_response(
+            raw_response=response, name=name
+        )
+
+    async def async_list_agent_versions(
+        self,
+        agents_api_config: BaseAgentsAPIConfig,
+        name: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> GeminiAgentVersionsResponse:
+        async_httpx_client = self._async_client(litellm_params, client)
+        headers = agents_api_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=dict(litellm_params)
+        )
+        url, params = agents_api_config.transform_list_versions_request(
+            name=name,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=dict(litellm_params),
+        )
+        logging_obj.pre_call(
+            input=name,
+            api_key="",
+            additional_args={"api_base": url, "headers": headers},
+        )
+        try:
+            response = await async_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=agents_api_config)
+
+        logging_obj.post_call(
+            original_response=response.text, additional_args={}
+        )
+        return agents_api_config.transform_list_versions_response(
+            raw_response=response, name=name
         )
 
 

@@ -1,36 +1,35 @@
 """
 Base transformation class for provider-side Agents API.
 
-Providers that have a native "create agent" API (e.g. Gemini v1beta/agents)
+Providers that have a native agents CRUD API (e.g. Gemini v1beta/agents)
 subclass BaseAgentsAPIConfig and implement the abstract methods.
 
 The HTTP calls are handled by AgentsHTTPHandler — this class is pure
 transform logic (same separation as BaseInteractionsAPIConfig /
 InteractionsHTTPHandler).
-
-If get_provider_agents_api_config() returns None for a given provider,
-the create_agent endpoint falls through to the plain DB-storage path so
-all existing providers (Vertex AI, LangGraph, A2A, etc.) are unaffected.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.agents import AgentCreateResponse
+from litellm.types.agents import (
+    AgentCreateResponse,
+    GeminiAgentDeleteResult,
+    GeminiAgentListResponse,
+    GeminiAgentVersionsResponse,
+)
 
 
 class BaseAgentsAPIConfig(ABC):
     """
-    Minimal interface for providers that expose a native agent-creation API.
-
-    Implementations are responsible for:
-    - Building the correct endpoint URL
-    - Adding authentication headers
-    - Serialising the create-agent request into the provider's body format
-    - Deserialising the raw HTTP response into an AgentCreateResponse
+    Minimal interface for providers that expose a native agents CRUD API.
     """
+
+    # ------------------------------------------------------------------ #
+    # CREATE                                                               #
+    # ------------------------------------------------------------------ #
 
     @abstractmethod
     def get_complete_url(
@@ -38,7 +37,7 @@ class BaseAgentsAPIConfig(ABC):
         api_base: Optional[str],
         litellm_params: Dict[str, Any],
     ) -> str:
-        """Return the full URL for the create-agent endpoint."""
+        """Return the full URL for POST /agents (create)."""
 
     @abstractmethod
     def validate_environment(
@@ -46,10 +45,7 @@ class BaseAgentsAPIConfig(ABC):
         headers: Dict[str, str],
         litellm_params: Dict[str, Any],
     ) -> Dict[str, str]:
-        """
-        Validate credentials and return the headers dict to use for the
-        HTTP request (must include auth headers).
-        """
+        """Validate credentials and return auth headers."""
 
     @abstractmethod
     def transform_create_request(
@@ -57,10 +53,7 @@ class BaseAgentsAPIConfig(ABC):
         name: str,
         litellm_params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Map the agent name + litellm_params to the provider's
-        create-agent request body.
-        """
+        """Map name + litellm_params to the provider's create-agent body."""
 
     @abstractmethod
     def transform_create_response(
@@ -68,10 +61,93 @@ class BaseAgentsAPIConfig(ABC):
         raw_response: httpx.Response,
         name: str,
     ) -> AgentCreateResponse:
-        """
-        Parse the raw HTTP response into an AgentCreateResponse.
-        Raise an appropriate exception on non-2xx status.
-        """
+        """Parse create response. Raise on non-2xx."""
+
+    # ------------------------------------------------------------------ #
+    # LIST                                                                 #
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def transform_list_request(
+        self,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Return (url, query_params) for GET /agents."""
+
+    @abstractmethod
+    def transform_list_response(
+        self,
+        raw_response: httpx.Response,
+    ) -> GeminiAgentListResponse:
+        """Parse list-agents response. Raise on non-2xx."""
+
+    # ------------------------------------------------------------------ #
+    # GET                                                                  #
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def transform_get_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Return (url, query_params) for GET /agents/{name}."""
+
+    @abstractmethod
+    def transform_get_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentCreateResponse:
+        """Parse get-agent response. Raise on non-2xx."""
+
+    # ------------------------------------------------------------------ #
+    # DELETE                                                               #
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def transform_delete_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> str:
+        """Return the URL for DELETE /agents/{name}."""
+
+    @abstractmethod
+    def transform_delete_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> GeminiAgentDeleteResult:
+        """Parse delete-agent response. Raise on non-2xx."""
+
+    # ------------------------------------------------------------------ #
+    # LIST VERSIONS                                                        #
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def transform_list_versions_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Return (url, query_params) for GET /agents/{name}/versions."""
+
+    @abstractmethod
+    def transform_list_versions_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> GeminiAgentVersionsResponse:
+        """Parse list-versions response. Raise on non-2xx."""
+
+    # ------------------------------------------------------------------ #
+    # ERROR HANDLING                                                       #
+    # ------------------------------------------------------------------ #
 
     def get_error_class(
         self,

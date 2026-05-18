@@ -230,7 +230,7 @@ class ListAgentsResponse(BaseModel):
 
 class AgentCreateResponse(LiteLLMPydanticObjectBase):
     """
-    Response from a provider-side agent creation call (e.g. Gemini v1beta/agents).
+    Response from a provider-side agent creation or get call (e.g. Gemini v1beta/agents).
 
     The exact schema varies by provider; all returned fields are preserved via
     extra="allow".  The only field guaranteed to be present is ``name``, which
@@ -238,6 +238,45 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
     """
 
     name: str
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class GeminiAgentDeleteResult(LiteLLMPydanticObjectBase):
+    """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name})."""
+
+    name: str
+    deleted: bool = True
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class GeminiAgentListResponse(LiteLLMPydanticObjectBase):
+    """Response from listing agents on the provider side (e.g. Gemini GET /v1beta/agents)."""
+
+    agents: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class GeminiAgentVersion(LiteLLMPydanticObjectBase):
+    """A single agent version entry."""
+
+    name: str
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class GeminiAgentVersionsResponse(LiteLLMPydanticObjectBase):
+    """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions)."""
+
+    versions: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
     model_config = {"extra": "allow"}
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)

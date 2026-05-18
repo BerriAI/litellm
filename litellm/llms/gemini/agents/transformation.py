@@ -2,30 +2,33 @@
 Google AI Studio Agents API configuration.
 
 Proxies the Gemini v1beta Agents API:
-  POST   https://generativelanguage.googleapis.com/v1beta/agents
-  GET    https://generativelanguage.googleapis.com/v1beta/agents/{name}
-  DELETE https://generativelanguage.googleapis.com/v1beta/agents/{name}
-
-The exact response schema is not publicly documented; we accept whatever
-fields the server returns and surface them verbatim under
-litellm_params["provider_agent_response"].
+  POST   /v1beta/agents                         create
+  GET    /v1beta/agents                         list
+  GET    /v1beta/agents/{name}                  get
+  DELETE /v1beta/agents/{name}                  delete
+  GET    /v1beta/agents/{name}/versions         list versions
 """
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
-from litellm.types.agents import AgentCreateResponse
+from litellm.types.agents import (
+    AgentCreateResponse,
+    GeminiAgentDeleteResult,
+    GeminiAgentListResponse,
+    GeminiAgentVersionsResponse,
+)
 
 
-# Keys inside litellm_params that are Gemini-specific agent fields and should
-# be forwarded to the provider create-agent body verbatim.
+# Keys inside litellm_params that should be forwarded to the Gemini
+# create-agent body verbatim.
 _GEMINI_AGENT_BODY_KEYS = ("base_agent", "instructions", "base_environment")
 
-# Keys that are LiteLLM internal and must never be forwarded to Gemini.
+# LiteLLM-internal keys that must never be forwarded to Gemini.
 _LITELLM_INTERNAL_KEYS = frozenset(
     {
         "custom_llm_provider",
@@ -63,8 +66,11 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def api_version(self) -> str:
         return "v1beta"
 
+    def _base_url(self, api_base: Optional[str]) -> str:
+        return f"{GeminiModelInfo.get_api_base(api_base)}/{self.api_version}"
+
     # ------------------------------------------------------------------ #
-    # BaseAgentsAPIConfig interface                                        #
+    # Shared helpers                                                       #
     # ------------------------------------------------------------------ #
 
     def get_error_class(
@@ -84,8 +90,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_base: Optional[str],
         litellm_params: Dict[str, Any],
     ) -> str:
-        resolved = GeminiModelInfo.get_api_base(api_base)
-        return f"{resolved}/{self.api_version}/agents"
+        return f"{self._base_url(api_base)}/agents"
 
     def validate_environment(
         self,
@@ -97,35 +102,34 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
         if not api_key:
             raise ValueError(
-                "Google API key is required to create a Gemini agent. "
-                "Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key in litellm_params."
+                "Google API key is required. "
+                "Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key."
             )
         headers["x-goog-api-key"] = api_key
         return headers
+
+    def _raise_for_status(self, raw_response: httpx.Response) -> None:
+        if not (200 <= raw_response.status_code < 300):
+            raise GeminiError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
+
+    # ------------------------------------------------------------------ #
+    # CREATE                                                               #
+    # ------------------------------------------------------------------ #
 
     def transform_create_request(
         self,
         name: str,
         litellm_params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Map LiteLLM fields to the Gemini create-agent body.
-
-        Required:
-          name        ← name
-
-        Optional (from litellm_params):
-          base_agent        ← litellm_params["base_agent"]
-          instructions      ← litellm_params["instructions"]
-          base_environment  ← litellm_params["base_environment"]
-        """
         body: Dict[str, Any] = {"name": name}
-
         for key in _GEMINI_AGENT_BODY_KEYS:
             value = litellm_params.get(key)
             if value is not None:
                 body[key] = value
-
         verbose_logger.debug("GeminiAgentsConfig create body: %s", body)
         return body
 
@@ -134,31 +138,135 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
         name: str,
     ) -> AgentCreateResponse:
-        """
-        Parse Gemini's create-agent response.
-
-        The exact schema is not published; all returned fields are preserved
-        via AgentCreateResponse's extra="allow" config.  On non-2xx we raise
-        GeminiError so the outer handler can surface a clean HTTP error.
-        """
-        if not (200 <= raw_response.status_code < 300):
-            raise GeminiError(
-                message=raw_response.text,
-                status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),
-            )
-
+        self._raise_for_status(raw_response)
         try:
             data: Dict[str, Any] = raw_response.json()
         except Exception:
             verbose_logger.warning(
-                "GeminiAgentsConfig: could not parse JSON from create-agent response "
-                "(status=%d). Using name as fallback.",
+                "GeminiAgentsConfig: non-JSON create response (status=%d).",
                 raw_response.status_code,
             )
             data = {"name": name}
-
         data.setdefault("name", name)
-
         verbose_logger.debug("GeminiAgentsConfig create response: %s", data)
         return AgentCreateResponse(**data)
+
+    # ------------------------------------------------------------------ #
+    # LIST                                                                 #
+    # ------------------------------------------------------------------ #
+
+    def transform_list_request(
+        self,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        url = f"{self._base_url(api_base)}/agents"
+        params: Dict[str, Any] = {}
+        if litellm_params.get("page_size"):
+            params["pageSize"] = litellm_params["page_size"]
+        if litellm_params.get("page_token"):
+            params["pageToken"] = litellm_params["page_token"]
+        return url, params
+
+    def transform_list_response(
+        self,
+        raw_response: httpx.Response,
+    ) -> GeminiAgentListResponse:
+        self._raise_for_status(raw_response)
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {}
+        verbose_logger.debug("GeminiAgentsConfig list response: %s", data)
+        return GeminiAgentListResponse(
+            agents=data.get("agents", []),
+            next_page_token=data.get("nextPageToken"),
+        )
+
+    # ------------------------------------------------------------------ #
+    # GET                                                                  #
+    # ------------------------------------------------------------------ #
+
+    def transform_get_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        url = f"{self._base_url(api_base)}/agents/{name}"
+        return url, {}
+
+    def transform_get_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentCreateResponse:
+        self._raise_for_status(raw_response)
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {"name": name}
+        data.setdefault("name", name)
+        verbose_logger.debug("GeminiAgentsConfig get response: %s", data)
+        return AgentCreateResponse(**data)
+
+    # ------------------------------------------------------------------ #
+    # DELETE                                                               #
+    # ------------------------------------------------------------------ #
+
+    def transform_delete_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> str:
+        return f"{self._base_url(api_base)}/agents/{name}"
+
+    def transform_delete_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> GeminiAgentDeleteResult:
+        self._raise_for_status(raw_response)
+        verbose_logger.debug(
+            "GeminiAgentsConfig delete response (status=%d): %s",
+            raw_response.status_code,
+            raw_response.text,
+        )
+        return GeminiAgentDeleteResult(name=name, deleted=True)
+
+    # ------------------------------------------------------------------ #
+    # LIST VERSIONS                                                        #
+    # ------------------------------------------------------------------ #
+
+    def transform_list_versions_request(
+        self,
+        name: str,
+        api_base: Optional[str],
+        litellm_params: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        url = f"{self._base_url(api_base)}/agents/{name}/versions"
+        params: Dict[str, Any] = {}
+        if litellm_params.get("page_size"):
+            params["pageSize"] = litellm_params["page_size"]
+        if litellm_params.get("page_token"):
+            params["pageToken"] = litellm_params["page_token"]
+        return url, params
+
+    def transform_list_versions_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> GeminiAgentVersionsResponse:
+        self._raise_for_status(raw_response)
+        try:
+            data = raw_response.json()
+        except Exception:
+            data = {}
+        verbose_logger.debug(
+            "GeminiAgentsConfig list_versions response for '%s': %s", name, data
+        )
+        return GeminiAgentVersionsResponse(
+            versions=data.get("versions", []),
+            next_page_token=data.get("nextPageToken"),
+        )
