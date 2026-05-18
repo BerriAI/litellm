@@ -279,9 +279,15 @@ class _S3Backend:
 
     name = "s3"
 
-    def __init__(self, client: Any, bucket: str) -> None:
+    def __init__(
+        self,
+        client: Any,
+        bucket: str,
+        ttl_seconds: int = CASSETTE_TTL_SECONDS,
+    ) -> None:
         self._client = client
         self._bucket = bucket
+        self._ttl = ttl_seconds
         try:
             from botocore.exceptions import ClientError
         except ImportError:  # pragma: no cover - boto3 is a dev dep
@@ -303,7 +309,7 @@ class _S3Backend:
                 age = time.time() - last_modified.timestamp()
             except (AttributeError, TypeError):  # pragma: no cover - defensive
                 age = 0.0
-            if age > CASSETTE_TTL_SECONDS:
+            if age > self._ttl:
                 return None
         body = obj["Body"].read()
         return body if isinstance(body, (bytes, bytearray)) else bytes(body)
@@ -323,7 +329,9 @@ class _S3Backend:
         return ""
 
 
-def _maybe_build_s3_backend() -> Optional[_S3Backend]:
+def _maybe_build_s3_backend(
+    ttl_seconds: int = CASSETTE_TTL_SECONDS,
+) -> Optional[_S3Backend]:
     bucket = _s3_bucket_from_env()
     if not bucket:
         return None
@@ -352,7 +360,7 @@ def _maybe_build_s3_backend() -> Optional[_S3Backend]:
         region_name=region,
         config=config,
     )
-    return _S3Backend(client=client, bucket=bucket)
+    return _S3Backend(client=client, bucket=bucket, ttl_seconds=ttl_seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -457,11 +465,13 @@ class _LocalDiskL1Cache:
             _log.debug("L1 write-through failed for %s: %s", path, exc)
 
 
-def _select_remote_backend() -> CassetteBackend:
+def _select_remote_backend(
+    ttl_seconds: int = CASSETTE_TTL_SECONDS,
+) -> CassetteBackend:
     """Pick a remote backend based on env vars. S3 takes precedence
     because it's the cheaper option once configured.
     """
-    s3_backend = _maybe_build_s3_backend()
+    s3_backend = _maybe_build_s3_backend(ttl_seconds=ttl_seconds)
     if s3_backend is not None:
         return s3_backend
     redis_client = _maybe_build_redis_client()
@@ -475,12 +485,15 @@ def _select_remote_backend() -> CassetteBackend:
     )
 
 
-def _maybe_layer_l1(backend: CassetteBackend) -> CassetteBackend:
+def _maybe_layer_l1(
+    backend: CassetteBackend,
+    ttl_seconds: int = CASSETTE_TTL_SECONDS,
+) -> CassetteBackend:
     cache_dir = _local_cache_dir_from_env()
     if not cache_dir:
         return backend
     try:
-        return _LocalDiskL1Cache(cache_dir, backend)
+        return _LocalDiskL1Cache(cache_dir, backend, ttl_seconds=ttl_seconds)
     except OSError as exc:
         warnings.warn(
             f"Failed to initialize VCR L1 cache at {cache_dir!r}: {exc}",
@@ -510,8 +523,8 @@ def make_persister(
        cache in front of the chosen backend.
     """
     if backend is None:
-        backend = _select_remote_backend()
-    backend = _maybe_layer_l1(backend)
+        backend = _select_remote_backend(ttl_seconds=ttl_seconds)
+    backend = _maybe_layer_l1(backend, ttl_seconds=ttl_seconds)
     save_error_types = tuple(getattr(backend, "save_error_types", (Exception,)))
 
     class _Persister:
