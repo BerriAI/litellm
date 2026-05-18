@@ -108,7 +108,27 @@ return results
 """
 
 # Lua script for atomic increment of max_parallel_requests
-# This does NOT use sliding window - it's a simple counter with TTL safety net
+# This does NOT use sliding window - it's a simple counter with TTL safety net.
+#
+# TTL policy: set TTL only when the counter key did NOT exist before this INCR
+# (i.e., first creation, or after a prior expiration). We deliberately do NOT
+# refresh TTL on subsequent INCRs.
+#
+# Why: refreshing on every INCR keeps a leaked counter alive forever under
+# continuous traffic — any missed DECR (silent skip, callback exception,
+# logging-worker drop, etc.) inflates the in-memory counter permanently
+# because the key's TTL gets renewed by every subsequent request. Anchoring
+# TTL to creation time bounds leak lifetime to MAX_PARALLEL_REQUESTS_TTL_SECONDS.
+#
+# Trade-off: a real counter for requests that stay in-flight longer than
+# MAX_PARALLEL_REQUESTS_TTL_SECONDS will also expire mid-flight. After expiration
+# the next INCR resets the counter to 1 (losing visibility into still-running
+# requests), and the eventual DECRs for those old requests hit the fresh key
+# and over-decrement. This is acceptable because:
+#   (a) most LLM requests complete in seconds, not minutes;
+#   (b) the over-decrement floors at 0 via the existence check in the DECR
+#       script (no decrement if key doesn't exist); and
+#   (c) the alternative — permanent leak under continuous traffic — is worse.
 MAX_PARALLEL_REQUESTS_SCRIPT = """
 local counter_key = KEYS[1]
 local ttl_seconds = tonumber(ARGV[1])
@@ -116,23 +136,39 @@ local ttl_seconds = tonumber(ARGV[1])
 -- Get current counter value
 local current = redis.call('GET', counter_key)
 local current_count = 0
+local key_existed = false
 if current then
     current_count = tonumber(current)
+    key_existed = true
 end
 
 -- Always increment atomically
 local new_count = redis.call('INCR', counter_key)
--- Always refresh TTL after increment (key now exists)
-redis.call('EXPIRE', counter_key, ttl_seconds)
+
+-- Only set TTL on first creation (or after prior expiration). Anchoring TTL to
+-- creation bounds leaked-counter lifetime; subsequent INCRs do not extend it.
+if not key_existed then
+    redis.call('EXPIRE', counter_key, ttl_seconds)
+end
 
 -- Return: previous_count, new_count
 return {current_count, new_count}
 """
 
 # Lua script for atomic decrement of max_parallel_requests
-# Note: TTL is NOT refreshed on decrement to avoid counter drift.
-# The TTL set on INCR is the authority; DECR should not extend key lifetime.
-# Only decrements if the key exists (has not expired).
+#
+# Skip rules (no-op cases, both return previous_count == new_count):
+#   1. Key does not exist (expired or never created) → return {-1, -1}.
+#   2. Current counter is already <= 0                → return {current, current}.
+#      This floors the counter at 0 so a leaked / duplicated DECR can never
+#      drive it negative. Negative counters were previously possible after
+#      the INCR-script TTL change (TTL anchored to creation time): if the key
+#      expires mid-flight while real requests are still in flight, the next
+#      INCR creates a fresh key at 1 and the eventual DECRs from those old
+#      requests would otherwise pull the new counter below 0.
+#
+# TTL: we deliberately do NOT refresh TTL here. The INCR script anchors TTL
+# to counter creation time; DECR should not extend it.
 MAX_PARALLEL_REQUESTS_DECREMENT_SCRIPT = """
 local counter_key = KEYS[1]
 
@@ -146,13 +182,13 @@ end
 
 local current_count = tonumber(current)
 
--- Decrement atomically only if key exists
-local new_count = redis.call('DECR', counter_key)
+-- Floor at 0: skip decrement if it would drive the counter negative.
+if current_count <= 0 then
+    return {current_count, current_count}
+end
 
--- Note: We intentionally do NOT refresh TTL here.
--- Refreshing TTL on decrement causes counter drift - each completed request
--- extends the key's lifetime, potentially keeping a positive counter alive
--- indefinitely even when no requests are active.
+-- Decrement atomically
+local new_count = redis.call('DECR', counter_key)
 
 -- Return: previous_count, new_count
 return {current_count, new_count}
@@ -1600,6 +1636,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             return result
         except Exception as e:
+            print(
+                f"[EXCEPTION] _execute_max_parallel_requests_increment failed: "
+                f"key={descriptor_key}:{descriptor_value}, "
+                f"counter_key={counter_key}, "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}"
+            )
             verbose_proxy_logger.warning(
                 f"Max parallel requests increment script failed: {str(e)}"
             )
@@ -1678,6 +1721,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             return result
         except Exception as e:
+            print(
+                f"[EXCEPTION] _execute_max_parallel_requests_decrement failed: "
+                f"key={descriptor_key}:{descriptor_value}, "
+                f"counter_key={counter_key}, "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}"
+            )
             verbose_proxy_logger.warning(
                 f"Max parallel requests decrement script failed: {str(e)}"
             )
@@ -1918,6 +1968,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
         except Exception as e:
+            import traceback as _tb
+            print(
+                f"[EXCEPTION] async_log_success_event (DECR success path) failed: "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}\n"
+                f"{_tb.format_exc()}"
+            )
             verbose_proxy_logger.exception(
                 f"Error in rate limit success event: {str(e)}"
             )
@@ -1944,7 +2001,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     token=user_api_key_dict.api_key,
                     key_alias=user_api_key_dict.key_alias,
                 )
+            else:
+                print(
+                    f"[EXCEPTION] async_post_call_failure_hook: DECR skipped — "
+                    f"user_api_key_dict missing or api_key empty "
+                    f"(user_api_key_dict={user_api_key_dict!r})"
+                )
         except Exception as e:
+            import traceback as _tb
+            print(
+                f"[EXCEPTION] async_post_call_failure_hook (DECR failure path) failed: "
+                f"api_key={getattr(user_api_key_dict, 'api_key', None)!r}, "
+                f"error_type={type(e).__name__}, "
+                f"error={str(e)}\n"
+                f"{_tb.format_exc()}"
+            )
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure hook: {str(e)}"
             )

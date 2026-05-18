@@ -5933,21 +5933,15 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except asyncio.CancelledError as _cce:
-        # Shield the failure hook so the Redis DECR completes even though
-        # the parent request task is being torn down. Without this, the
-        # inner await raises CancelledError before the DECR Lua round-trip
-        # lands in Redis, leaking the parallel-request counter.
-        _failure_hook_task = asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
+        # post_call_failure_hook is internally shielded — DECR completes even
+        # though this task is being torn down.
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=_cce,
                 request_data=request_data,
             )
-        )
-        try:
-            await asyncio.shield(_failure_hook_task)
         except asyncio.CancelledError:
-            # Caller cancelled; shielded task continues in background.
             pass
         except Exception:
             verbose_proxy_logger.exception(
@@ -5960,19 +5954,15 @@ async def async_data_generator(
                 str(e)
             )
         )
-        # Shield the failure hook so the Redis DECR completes even if the
-        # client disconnects during cleanup (regular-exception path race).
-        _failure_hook_task = asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
+        # post_call_failure_hook is internally shielded — DECR completes even
+        # if the client disconnects mid-await here.
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
-        )
-        try:
-            await asyncio.shield(_failure_hook_task)
         except asyncio.CancelledError:
-            # Caller cancelled mid-cleanup; shielded task continues in background.
             pass
         except Exception:
             verbose_proxy_logger.exception(
@@ -7230,21 +7220,15 @@ async def chat_completion(  # noqa: PLR0915
         else:
             return result
     except asyncio.CancelledError as _ce:
-        # Shield the failure hook so the Redis DECR completes even though
-        # the parent request task is being torn down. Without this, the
-        # await raises CancelledError before the DECR Lua round-trip lands
-        # in Redis, leaking the parallel-request counter.
-        _failure_hook_task = asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
+        # post_call_failure_hook is internally shielded — DECR completes even
+        # though this task is being torn down.
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=_ce,
                 request_data=data,
             )
-        )
-        try:
-            await asyncio.shield(_failure_hook_task)
         except asyncio.CancelledError:
-            # Caller cancelled; shielded task continues in background.
             pass
         except Exception:
             verbose_proxy_logger.exception(
@@ -7254,6 +7238,8 @@ async def chat_completion(  # noqa: PLR0915
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
+        # post_call_failure_hook is internally shielded — DECR completes even
+        # if the client disconnects mid-await here.
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -7290,6 +7276,8 @@ async def chat_completion(  # noqa: PLR0915
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
+        # post_call_failure_hook is internally shielded — DECR completes even
+        # if the client disconnects mid-await here.
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,

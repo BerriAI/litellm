@@ -1695,6 +1695,18 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
 
+        Cancellation safety:
+            The hook body is run inside an `asyncio.shield`-ed task so cleanup
+            inside the registered callbacks (notably the parallel-request DECR
+            Lua round-trip in Redis) completes even when the caller's task is
+            being torn down (client disconnect, server timeout, explicit
+            cancellation). Without this, the outer await would raise
+            CancelledError before the DECR landed in Redis, leaking the
+            parallel-request counter — and because INCR refreshes the key's
+            TTL on every call, that leak never self-heals under continuous
+            traffic. A cancelled caller still observes CancelledError; the
+            inner work just continues to completion in the background.
+
         Args:
             - request_data: dict - The request data.
             - original_exception: Exception - The original exception.
@@ -1706,6 +1718,33 @@ class ProxyLogging:
         Returns:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
                                       Otherwise, returns None and the original exception is used.
+        """
+        return await asyncio.shield(
+            asyncio.create_task(
+                self._post_call_failure_hook_impl(
+                    request_data=request_data,
+                    original_exception=original_exception,
+                    user_api_key_dict=user_api_key_dict,
+                    error_type=error_type,
+                    route=route,
+                    traceback_str=traceback_str,
+                )
+            )
+        )
+
+    async def _post_call_failure_hook_impl(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        error_type: Optional[ProxyErrorTypes] = None,
+        route: Optional[str] = None,
+        traceback_str: Optional[str] = None,
+    ) -> Optional[HTTPException]:
+        """
+        Internal implementation of post_call_failure_hook. Do not call
+        directly — use post_call_failure_hook so the body runs under
+        asyncio.shield and cleanup completes under caller cancellation.
         """
 
         ### ALERTING ###

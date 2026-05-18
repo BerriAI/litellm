@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import json
@@ -2456,11 +2457,59 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
-    async def async_success_handler(  # noqa: PLR0915
+    async def async_success_handler(
+        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+    ):
+        """
+        Public entry point for the async success-callback dispatch.
+
+        Cancellation safety:
+            The body runs inside an `asyncio.shield`-ed task so cleanup that
+            lives in success callbacks — notably the parallel-request DECR
+            inside parallel_request_limiter_v3.async_log_success_event —
+            completes even when the caller is cancelled mid-await.
+
+            Two callsites motivate this:
+              1. `GLOBAL_LOGGING_WORKER` wraps each queued coroutine in
+                 `asyncio.wait_for(..., timeout=LOGGING_WORKER_MAX_TIME_PER_COROUTINE)`
+                 and cancels the task on timeout. Without the shield, a slow
+                 Redis round-trip aborts the DECR mid-Lua-call.
+              2. Streaming iterators (e.g.
+                 litellm/interactions/streaming_iterator.py,
+                 litellm/responses/streaming_iterator.py,
+                 litellm/proxy/pass_through_endpoints/streaming_handler.py,
+                 litellm/proxy/_experimental/mcp_server/server.py) `await`
+                 this handler on the request task. A client disconnect during
+                 finalisation would otherwise cancel the DECR.
+
+            Because INCR refreshes the parallel-request key's TTL on every
+            call but DECR does not, a single missed DECR never self-heals
+            under continuous traffic — hence the shield.
+
+            A cancelled caller still observes CancelledError; the inner work
+            just continues to completion in the background.
+        """
+        return await asyncio.shield(
+            asyncio.create_task(
+                self._async_success_handler_impl(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    **kwargs,
+                )
+            )
+        )
+
+    async def _async_success_handler_impl(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
+
+        Internal implementation of async_success_handler. Do not call directly —
+        use async_success_handler so the body runs under asyncio.shield and
+        cleanup completes under caller cancellation.
         """
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
