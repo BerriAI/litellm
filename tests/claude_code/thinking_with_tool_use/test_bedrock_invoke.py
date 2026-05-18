@@ -46,12 +46,19 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 THINKING_ARGS = ["--effort", "max"]
+# Prompt + Bash restriction pin the executed command to `echo pong`;
+# see `tool_use/test_anthropic.py` for the security rationale.
 THINKING_TOOL_PROMPT = (
-    "Think step by step about which shell command would print just the word "
-    "'pong'. Then use the Bash tool to run that exact command and report what "
-    "it printed."
+    "Think step by step about why the command `echo pong` prints just the "
+    "word 'pong'. Then use the Bash tool to run exactly the command "
+    "`echo pong` and report what it printed."
 )
-TOOL_USE_ARGS = ["--allowed-tools", "Bash"]
+TOOL_USE_ARGS = [
+    "--allowed-tools",
+    "Bash(echo pong)",
+    "--permission-mode",
+    "dontAsk",
+]
 
 
 def _has_block_type(

