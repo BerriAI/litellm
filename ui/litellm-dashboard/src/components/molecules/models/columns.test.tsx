@@ -1014,5 +1014,38 @@ describe("columns", () => {
       const toggle = screen.getByRole("switch", { name: /pause model/i });
       expect(toggle).toBeDisabled();
     });
+
+    it("disables the toggle while a PATCH for the same row is in-flight", () => {
+      // Regression for Greptile P1 on PR #28151 — antd's `loading` prop is
+      // visual only and does not prevent click events, so the row needs to
+      // be explicitly disabled while its PATCH is pending to avoid
+      // racing/conflicting PATCH calls on double-click.
+      const handler = vi.fn();
+      const model = createMockModel({
+        model_info: {
+          ...createMockModel().model_info,
+          db_model: true,
+          blocked: false,
+        },
+      });
+      const cols = columns(
+        "Admin",
+        defaultProps.userID,
+        defaultProps.premiumUser,
+        defaultProps.setSelectedModelId,
+        defaultProps.setSelectedTeamId,
+        defaultProps.getDisplayModelName,
+        defaultProps.handleEditClick,
+        defaultProps.handleRefreshClick,
+        defaultProps.expandedRows,
+        defaultProps.setExpandedRows,
+        vi.fn(),
+        handler,
+        model.model_info.id, // pausingModelId matches this row
+      );
+      render(<TestTable data={[model]} columns={cols} />);
+      const toggle = screen.getByRole("switch", { name: /pause model/i });
+      expect(toggle).toBeDisabled();
+    });
   });
 });

@@ -228,8 +228,9 @@ const AllModelsTab = ({
       setPausingModelId(modelId);
       await modelPatchUpdateCall(accessToken, { blocked }, modelId);
       NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+      // invalidateQueries already schedules a refetch for active observers
+      // on this key — no need to also call refetchModels() (would double-fetch).
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
-      refetchModels();
     } catch (error) {
       console.error("Error toggling model pause state:", error);
       NotificationsManager.fromBackend(error);

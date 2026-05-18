@@ -417,14 +417,15 @@ export const columns = (
             : isBlocked
               ? "Resume model — restore normal routing."
               : "Pause model — stop routing requests until resumed.";
+        const isPausing = pausingModelId === model.model_info.id;
         return (
           <div className="flex items-center justify-end gap-2 pr-4">
             <Tooltip title={pauseTooltip}>
               <Switch
                 size="small"
                 checked={!isBlocked}
-                disabled={!isPauseToggleable}
-                loading={pausingModelId === model.model_info.id}
+                disabled={!isPauseToggleable || isPausing}
+                loading={isPausing}
                 aria-label={isBlocked ? "Resume model" : "Pause model"}
                 onClick={(_, e) => {
                   e.stopPropagation();
