@@ -194,6 +194,50 @@ class TestStreamingIterator:
         assert chunk.delta is not None
         assert chunk.delta.get("text") == "Hello"
 
+    def test_part_added_emits_interaction_start_fallback_when_not_sent(self):
+        """If ContentPartAddedEvent arrives before any ResponseCreatedEvent,
+        the iterator must emit interaction.start before content.start to honor
+        the documented event ordering contract."""
+        it = self._make_iterator()
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_part_added(item_id="item_42")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "interaction.start"
+        assert chunk.id == "item_42"
+        assert chunk.status == "in_progress"
+        assert chunk.model == "gpt-5.4"
+        assert it.sent_interaction_start is True
+        assert it.sent_content_start is False
+
+    def test_part_added_returns_none_when_already_started(self):
+        """A second ContentPartAddedEvent (after content.start was already emitted)
+        should be a no-op so we don't re-emit content.start."""
+        it = self._make_iterator()
+        it.sent_interaction_start = True
+        it.sent_content_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_part_added()
+        )
+
+        assert chunk is None
+
+    def test_part_added_without_item_id_falls_back_to_self_id(self):
+        """When ContentPartAddedEvent has no item_id and we emit the interaction.start
+        fallback, the id must default to an interaction_<id(self)> string."""
+        it = self._make_iterator()
+        event = MagicMock(spec=ContentPartAddedEvent)
+        event.item_id = None
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(event)
+
+        assert chunk is not None
+        assert chunk.event_type == "interaction.start"
+        assert chunk.id == f"interaction_{id(it)}"
+
 
 class TestTransformRequest:
     def test_stream_param_included_in_request_body(self, config):
