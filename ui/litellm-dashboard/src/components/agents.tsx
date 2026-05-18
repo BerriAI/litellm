@@ -11,8 +11,8 @@ import {
   Badge,
   Text,
 } from "@tremor/react";
-import { Modal, Alert, Tooltip, Skeleton, Switch } from "antd";
-import { CheckCircleOutlined } from "@ant-design/icons";
+import { Modal, Alert, Tooltip, Skeleton, Switch, Tabs } from "antd";
+import { CheckCircleOutlined, AppstoreOutlined, DatabaseOutlined } from "@ant-design/icons";
 import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";
 import { isAdminRole } from "@/utils/roles";
@@ -22,6 +22,7 @@ import { Agent, AgentKeyInfo } from "./agents/types";
 import { Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import XCTAgentMarketplace from "./agents/xct_agent_marketplace";
 
 interface AgentsPanelProps {
   accessToken: string | null;
@@ -162,33 +163,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-gray-600">List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
-        <Alert
-          message="Why do agents need keys?"
-          description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
-          type="info"
-          showIcon
-          className="mb-3"
-        />
-        <div className="mt-2 flex items-center gap-4">
-          {isAdmin && (
-            <Button onClick={handleAddAgent} disabled={!accessToken}>
-              + Add New Agent
-            </Button>
-          )}
-          <Tooltip title="When enabled, only agents with reachable URLs are shown">
-            <div className="flex items-center gap-2">
-              <CheckCircleOutlined className={healthCheckEnabled ? "text-green-500" : "text-gray-400"} />
-              <span className="text-sm text-gray-600">Health Check</span>
-              <Switch
-                size="small"
-                checked={healthCheckEnabled}
-                onChange={handleHealthCheckToggle}
-                loading={isLoading && healthCheckEnabled}
-              />
-            </div>
-          </Tooltip>
-        </div>
+        <p className="text-sm text-gray-600">
+          Manage A2A-spec agents in your organization and discover new agents from XCT Agent Gateway.
+        </p>
       </div>
 
       {selectedAgentId ? (
@@ -199,84 +176,148 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           isAdmin={isAdmin}
         />
       ) : (
-        <Card>
-          {isLoading ? (
-            <Skeleton active paragraph={{ rows: 3 }} />
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Agent Name</TableHeaderCell>
-                  <TableHeaderCell>Agent ID</TableHeaderCell>
-                  <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Created</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {sortedAgents.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={columnCount}>
-                      <Text className="text-center">No agents found. Click &quot;+ Add New Agent&quot; to create one.</Text>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedAgents.map((agent) => (
-                    <TableRow key={agent.agent_id}>
-                      <TableCell>
-                        <Text>{agent.agent_name}</Text>
-                      </TableCell>
-                      <TableCell>
-                        <Tooltip title={agent.agent_id}>
-                          <Button
-                            size="xs"
-                            variant="light"
-                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                            onClick={() => setSelectedAgentId(agent.agent_id)}
-                          >
-                            {agent.agent_id.slice(0, 7)}...
-                          </Button>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell>
-                        <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
-                      </TableCell>
-                      <TableCell>
-                        <Badge size="xs" color="blue">
-                          {agent.litellm_params?.model || "N/A"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Text>
-                          {agent.created_at
-                            ? new Date(agent.created_at).toLocaleDateString()
-                            : "N/A"}
-                        </Text>
-                      </TableCell>
-                      <TableCell>
-                        {keyInfoMap[agent.agent_id]?.has_key ? (
-                          <Badge color="green">Active</Badge>
-                        ) : (
-                          <Badge color="yellow">Needs Setup</Badge>
-                        )}
-                      </TableCell>
-                      {isAdmin && (
-                        <TableCell>
-                          <TableIconActionButton
-                            variant="Delete"
-                            onClick={() => handleDeleteClick(agent.agent_id, agent.agent_name)}
-                          />
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </Card>
+        <Tabs
+          defaultActiveKey="my-agents"
+          items={[
+            {
+              key: "my-agents",
+              label: (
+                <span>
+                  <DatabaseOutlined /> My Agents
+                </span>
+              ),
+              children: (
+                <div>
+                  <Alert
+                    message="Why do agents need keys?"
+                    description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
+                    type="info"
+                    showIcon
+                    className="mb-4"
+                  />
+                  <div className="mt-2 mb-4 flex items-center gap-4">
+                    {isAdmin && (
+                      <Button onClick={handleAddAgent} disabled={!accessToken}>
+                        + Add New Agent
+                      </Button>
+                    )}
+                    <Tooltip title="When enabled, only agents with reachable URLs are shown">
+                      <div className="flex items-center gap-2">
+                        <CheckCircleOutlined
+                          className={healthCheckEnabled ? "text-green-500" : "text-gray-400"}
+                        />
+                        <span className="text-sm text-gray-600">Health Check</span>
+                        <Switch
+                          size="small"
+                          checked={healthCheckEnabled}
+                          onChange={handleHealthCheckToggle}
+                          loading={isLoading && healthCheckEnabled}
+                        />
+                      </div>
+                    </Tooltip>
+                  </div>
+                  <Card>
+                    {isLoading ? (
+                      <Skeleton active paragraph={{ rows: 3 }} />
+                    ) : (
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Agent Name</TableHeaderCell>
+                            <TableHeaderCell>Agent ID</TableHeaderCell>
+                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
+                            <TableHeaderCell>Model</TableHeaderCell>
+                            <TableHeaderCell>Created</TableHeaderCell>
+                            <TableHeaderCell>Status</TableHeaderCell>
+                            {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {sortedAgents.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={columnCount}>
+                                <Text className="text-center">
+                                  No agents found. Click &quot;+ Add New Agent&quot; to create one.
+                                </Text>
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            sortedAgents.map((agent) => (
+                              <TableRow key={agent.agent_id}>
+                                <TableCell>
+                                  <Text>{agent.agent_name}</Text>
+                                </TableCell>
+                                <TableCell>
+                                  <Tooltip title={agent.agent_id}>
+                                    <Button
+                                      size="xs"
+                                      variant="light"
+                                      className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                      onClick={() => setSelectedAgentId(agent.agent_id)}
+                                    >
+                                      {agent.agent_id.slice(0, 7)}...
+                                    </Button>
+                                  </Tooltip>
+                                </TableCell>
+                                <TableCell>
+                                  <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge size="xs" color="blue">
+                                    {agent.litellm_params?.model || "N/A"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Text>
+                                    {agent.created_at
+                                      ? new Date(agent.created_at).toLocaleDateString()
+                                      : "N/A"}
+                                  </Text>
+                                </TableCell>
+                                <TableCell>
+                                  {keyInfoMap[agent.agent_id]?.has_key ? (
+                                    <Badge color="green">Active</Badge>
+                                  ) : (
+                                    <Badge color="yellow">Needs Setup</Badge>
+                                  )}
+                                </TableCell>
+                                {isAdmin && (
+                                  <TableCell>
+                                    <TableIconActionButton
+                                      variant="Delete"
+                                      onClick={() =>
+                                        handleDeleteClick(agent.agent_id, agent.agent_name)
+                                      }
+                                    />
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </Card>
+                </div>
+              ),
+            },
+            {
+              key: "xct-agents",
+              label: (
+                <span>
+                  <AppstoreOutlined /> XCT Agents
+                </span>
+              ),
+              children: (
+                <XCTAgentMarketplace
+                  accessToken={accessToken}
+                  isAdmin={isAdmin}
+                  onAgentAdded={handleSuccess}
+                />
+              ),
+            },
+          ]}
+        />
       )}
 
       <AddAgentForm
