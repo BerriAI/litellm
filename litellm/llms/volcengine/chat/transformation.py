@@ -66,6 +66,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             "max_retries",
             "extra_headers",
             "thinking",
+            "reasoning_effort",
         ]  # works across all models
 
     def map_openai_params(
@@ -83,6 +84,26 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             drop_params,
             replace_max_completion_tokens_with_max_tokens,
         )
+
+        # Translate OpenAI-spec `reasoning_effort` -> Volcengine native `thinking.type`.
+        # Explicit `thinking=` always wins over `reasoning_effort=` (precedence rule).
+        # Mapping rationale:
+        #   - "none" / "minimal" -> disabled (no chain-of-thought; matches GPT-5 minimal semantics)
+        #   - "low" / "medium" / "high" / "xhigh" -> enabled (model self-decides depth)
+        #   - "auto" -> auto (let the model choose)
+        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        if (
+            reasoning_effort is not None
+            and "thinking" not in optional_params
+            and "thinking" not in non_default_params
+        ):
+            if reasoning_effort in ("none", "minimal"):
+                optional_params["thinking"] = {"type": "disabled"}
+            elif reasoning_effort in ("low", "medium", "high", "xhigh"):
+                optional_params["thinking"] = {"type": "enabled"}
+            elif reasoning_effort == "auto":
+                optional_params["thinking"] = {"type": "auto"}
+            # Unknown values: silently drop (super() already handles drop_params semantics)
 
         if "thinking" in optional_params:
             """
