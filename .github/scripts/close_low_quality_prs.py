@@ -233,7 +233,8 @@ def close_pr(
         return
 
     comment_body = (
-        f"Closing as part of automated PR triage.\n\n"
+        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage "
+        "bot for this repository. Closing as part of automated PR triage.\n\n"
         f"Greptile's most recent review scored this PR **{score}/5**, below "
         f"our merge bar of **{threshold}/5**.\n\n"
         "We close low-confidence PRs aggressively to keep the review queue "
