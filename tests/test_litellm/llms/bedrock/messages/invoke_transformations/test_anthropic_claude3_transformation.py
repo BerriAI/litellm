@@ -523,6 +523,72 @@ def test_bedrock_invoke_messages_transform_bm25_only_no_tool_search_beta():
     )
 
 
+def test_bedrock_invoke_messages_transform_bm25_alongside_function_tool_no_beta():
+    """
+    Mixed BM25 + regular function tool edge case: when a request supplies a
+    regular Anthropic-style function tool *and* ``tool_search_tool_bm25_20251119``,
+    ``normalize_bedrock_invoke_tool_search_tools`` drops the BM25 entry but the
+    function tool survives. The post-normalization request body therefore has
+    a non-empty tools list but **zero tool-search entries** — the
+    ``tool-search-tool-2025-10-19`` beta header must NOT be injected.
+
+    The earlier empty-tools-only guard was insufficient: a surviving function
+    tool kept the list non-empty, so the guard stayed put and the beta header
+    was still added against a request with no tool-search tools.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "stream": False,
+        "tools": [
+            {
+                "name": "lookup",
+                "description": "look something up",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                    "required": ["q"],
+                },
+            },
+            {"type": "tool_search_tool_bm25_20251119"},
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        # Tool-search-supported Bedrock Claude alias — would otherwise add
+        # the beta header for any tool_search_used == True path.
+        model="anthropic.claude-sonnet-4-6-v1:0",
+        messages=[{"role": "user", "content": "search please"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    result_tools = result.get("tools") or []
+    tool_types = [t.get("type") for t in result_tools if isinstance(t, dict)]
+    tool_names = [t.get("name") for t in result_tools if isinstance(t, dict)]
+
+    assert (
+        "tool_search_tool_bm25_20251119" not in tool_types
+    ), "BM25 variant must be dropped by `normalize_bedrock_invoke_tool_search_tools`."
+    assert "lookup" in tool_names, "Regular function tool must survive normalization."
+    tool_search_remaining = [
+        t.get("type")
+        for t in result_tools
+        if isinstance(t, dict) and t.get("type", "").startswith("tool_search_")
+    ]
+    assert (
+        tool_search_remaining == []
+    ), "No tool-search tools should remain after dropping BM25."
+    assert "tool-search-tool-2025-10-19" not in result.get("anthropic_beta", []), (
+        "Tool-search beta header must not be injected when the "
+        "post-normalization request body has no tool-search tools — "
+        "even if other (non-tool-search) tools survive."
+    )
+
+
 def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     """Bedrock requires tools.0.custom.name when the payload is schema-only."""
     from litellm.types.router import GenericLiteLLMParams
