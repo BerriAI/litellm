@@ -920,17 +920,109 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             initial_tool["authorization_token"] = authorization_token
         return initial_tool
 
+    def _is_glm_5_1_family_model(self, model: Optional[str]) -> bool:
+        if not isinstance(model, str):
+            return False
+        normalized = model.lower()
+        return "glm-5.1" in normalized or "glm_5_1" in normalized
+
+    def _is_non_empty_text_content(self, content: Any) -> bool:
+        return isinstance(content, str) and bool(content.strip())
+
+    def _sanitize_request_messages(
+        self, messages: Optional[List[AllMessageValues]]
+    ) -> List[AllMessageValues]:
+        """
+        Drop obviously invalid / empty messages before Anthropic conversion.
+        This prevents upstream 400 errors such as "request body doesn't contain valid prompts".
+        """
+        if not isinstance(messages, list):
+            return [{"role": "user", "content": "Please continue."}]
+
+        sanitized: List[AllMessageValues] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role not in {"system", "user", "assistant", "tool", "developer"}:
+                continue
+
+            content = message.get("content")
+            if self._is_non_empty_text_content(content):
+                sanitized.append(cast(AllMessageValues, message))
+                continue
+
+            if isinstance(content, list):
+                filtered_content: List[Any] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        text_value = block.get("text")
+                        if self._is_non_empty_text_content(text_value):
+                            filtered_content.append(block)
+                    else:
+                        filtered_content.append(block)
+
+                if filtered_content:
+                    copied_message = dict(message)
+                    copied_message["content"] = filtered_content
+                    sanitized.append(cast(AllMessageValues, copied_message))
+
+        has_user_or_assistant = any(
+            isinstance(m, dict) and m.get("role") in {"user", "assistant"}
+            for m in sanitized
+        )
+        if not has_user_or_assistant:
+            sanitized.append({"role": "user", "content": "Please continue."})
+            litellm.verbose_logger.warning(
+                "Anthropic sanitize: no valid user/assistant messages; injected fallback user prompt."
+            )
+        elif len(sanitized) < len(messages):
+            litellm.verbose_logger.warning(
+                "Anthropic sanitize: dropped %s invalid/empty message(s).",
+                len(messages) - len(sanitized),
+            )
+        return sanitized
+
     def _map_tools(
         self,
         tools: List,
+        strict_sanitize: bool = False,
     ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
         anthropic_tools = []
         mcp_servers = []
         for tool in tools:
+            if not isinstance(tool, dict):
+                if strict_sanitize:
+                    litellm.verbose_logger.warning(
+                        "Anthropic tool sanitize: dropping non-dict tool: %r", tool
+                    )
+                    continue
+                raise ValueError(f"Invalid tool payload (expected dict): {tool}")
+            if "type" not in tool:
+                if strict_sanitize:
+                    litellm.verbose_logger.warning(
+                        "Anthropic tool sanitize: dropping tool missing type: %r", tool
+                    )
+                    continue
+                raise ValueError(f"Missing required tool field: type ({tool})")
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
-                new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                if strict_sanitize:
+                    try:
+                        new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                    except Exception:
+                        litellm.verbose_logger.warning(
+                            "Anthropic tool sanitize: dropping invalid tool: %r",
+                            tool,
+                            exc_info=True,
+                        )
+                        continue
+                else:
+                    new_tool, mcp_server_tool = self._map_tool_helper(tool)
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)
@@ -1453,7 +1545,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     value if isinstance(value, int) else max(1, int(round(value)))
                 )
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(
+                    value,
+                    strict_sanitize=self._is_glm_5_1_family_model(model),
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
@@ -1841,6 +1936,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+        strict_sanitize = self._is_glm_5_1_family_model(model)
+        if strict_sanitize:
+            messages = self._sanitize_request_messages(messages)
 
         if (
             "tools" not in optional_params
@@ -1849,7 +1947,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             if litellm.modify_params:
                 optional_params["tools"], _ = self._map_tools(
-                    add_dummy_tool(custom_llm_provider="anthropic")
+                    add_dummy_tool(custom_llm_provider="anthropic"),
+                    strict_sanitize=strict_sanitize,
                 )
             else:
                 raise litellm.UnsupportedParamsError(
