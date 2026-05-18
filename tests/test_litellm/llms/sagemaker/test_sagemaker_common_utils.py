@@ -68,6 +68,7 @@ def test_sagemaker_no_warning_when_botocore_missing():
 
     assert shape is None
     mock_logger.warning.assert_not_called()
+    mock_logger.debug.assert_called_once()
 
 
 def test_sagemaker_warning_emitted_on_unexpected_load_failure():
