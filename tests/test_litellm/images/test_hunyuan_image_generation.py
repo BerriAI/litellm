@@ -231,9 +231,35 @@ class TestHunyuanImageGenerationHandler:
             def json(self):
                 return {"request_id": "abc"}
 
-        with pytest.raises(ValueError, match="missing job_id"):
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        with pytest.raises(BaseLLMException, match="missing job_id"):
             self.handler._extract_poll_context(
                 MockSubmitResponse(),
+                api_key="sk-test",
+                litellm_params={},
+            )
+
+    def test_extract_poll_context_api_error_in_body(self):
+        """API errors returned in the response body are surfaced as BaseLLMException."""
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        class MockErrorResponse:
+            status_code = 200
+            headers = {}
+
+            def json(self):
+                return {
+                    "job_id": "",
+                    "error": {
+                        "message": "URL格式不合法。",
+                        "code": "InvalidParameterValue.UrlIllegal",
+                    },
+                }
+
+        with pytest.raises(BaseLLMException, match="URL格式不合法"):
+            self.handler._extract_poll_context(
+                MockErrorResponse(),
                 api_key="sk-test",
                 litellm_params={},
             )

@@ -243,9 +243,20 @@ class HunyuanImageEdit:
                 message=f"Error parsing Hunyuan submit response: {e}",
             )
 
+        api_error = submit_data.get("error")
+        if api_error:
+            error_msg = api_error.get("message") or str(api_error)
+            raise BaseLLMException(
+                status_code=400,
+                message=f"Hunyuan API error: {error_msg}",
+            )
+
         job_id = submit_data.get("job_id")
         if not job_id:
-            raise ValueError(f"Hunyuan submit response missing job_id: {submit_data}")
+            raise BaseLLMException(
+                status_code=500,
+                message=f"Hunyuan submit response missing job_id: {submit_data}",
+            )
 
         resolved_key = api_key or get_secret_str("HUNYUAN_API_KEY") or ""
         poll_headers = {

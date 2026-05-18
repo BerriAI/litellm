@@ -274,9 +274,22 @@ class HunyuanImageGeneration:
                 headers=submit_response.headers,
             )
 
+        api_error = submit_data.get("error")
+        if api_error:
+            error_msg = api_error.get("message") or str(api_error)
+            raise self.config.get_error_class(
+                error_message=f"Hunyuan API error: {error_msg}",
+                status_code=400,
+                headers=submit_response.headers,
+            )
+
         job_id = submit_data.get("job_id")
         if not job_id:
-            raise ValueError(f"Hunyuan submit response missing job_id: {submit_data}")
+            raise self.config.get_error_class(
+                error_message=f"Hunyuan submit response missing job_id: {submit_data}",
+                status_code=500,
+                headers=submit_response.headers,
+            )
 
         resolved_key = api_key or get_secret_str("HUNYUAN_API_KEY") or ""
         poll_headers = {
