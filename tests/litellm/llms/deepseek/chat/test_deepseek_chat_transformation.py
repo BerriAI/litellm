@@ -4,6 +4,13 @@ Unit tests for DeepSeek chat transformation.
 Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 """
 
+import os
+
+# Use the bundled model_prices_and_context_window_backup.json instead of
+# fetching from the live URL.  Required so the V4 capability flags added
+# in this PR are visible to _supports_factory during tests.
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
 import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
@@ -52,7 +59,8 @@ class TestDeepSeekThinkingParams:
         assert result["thinking"] == {"type": "enabled"}
         assert "budget_tokens" not in result.get("thinking", {})
 
-    # --- reasoning_effort on non-V4 models (backward compat) ---
+    # --- reasoning_effort on models without native reasoning_effort support
+    # (e.g. deepseek-reasoner) ---
 
     def test_map_reasoning_effort_medium_non_v4(self):
         """Non-V4: reasoning_effort='medium' enables thinking but does NOT forward effort."""
@@ -99,7 +107,7 @@ class TestDeepSeekThinkingParams:
         assert result["thinking"] == {"type": "enabled"}
         assert "reasoning_effort" not in result
 
-    # --- reasoning_effort on V4 models (native support) ---
+    # --- reasoning_effort on V4 models (native support per model_prices) ---
 
     def test_map_reasoning_effort_high_v4(self):
         """V4: reasoning_effort='high' enables thinking AND forwards effort."""
@@ -275,16 +283,80 @@ class TestDeepSeekThinkingParams:
 
         assert "thinking" not in result
 
-    # --- V4 model detection ---
+    # --- Capability gating via model_prices_and_context_window.json ---
 
-    def test_is_v4_model_positive(self):
-        """Test V4 model detection for various V4 model names."""
-        assert DeepSeekChatConfig._is_v4_model("deepseek-v4-pro") is True
-        assert DeepSeekChatConfig._is_v4_model("deepseek-v4-flash") is True
-        assert DeepSeekChatConfig._is_v4_model("deepseek/deepseek-v4-pro") is True
+    def test_supports_reasoning_effort_level_v4_pro(self):
+        """V4-Pro has supports_high_reasoning_effort and supports_max_reasoning_effort."""
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-v4-pro", "high"
+            )
+            is True
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-v4-pro", "max"
+            )
+            is True
+        )
 
-    def test_is_v4_model_negative(self):
-        """Test V4 model detection rejects non-V4 models."""
-        assert DeepSeekChatConfig._is_v4_model("deepseek-reasoner") is False
-        assert DeepSeekChatConfig._is_v4_model("deepseek-chat") is False
-        assert DeepSeekChatConfig._is_v4_model("deepseek-coder") is False
+    def test_supports_reasoning_effort_level_v4_flash(self):
+        """V4-Flash has the same reasoning_effort capabilities as V4-Pro."""
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-v4-flash", "high"
+            )
+            is True
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-v4-flash", "max"
+            )
+            is True
+        )
+
+    def test_supports_reasoning_effort_level_v4_with_provider_prefix(self):
+        """Provider-prefixed model names resolve to the same capability flags."""
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek/deepseek-v4-pro", "high"
+            )
+            is True
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek/deepseek-v4-flash", "max"
+            )
+            is True
+        )
+
+    def test_supports_reasoning_effort_level_legacy_models_return_false(self):
+        """Legacy DeepSeek models do NOT have supports_*_reasoning_effort
+        flags in model_prices_and_context_window.json."""
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-reasoner", "high"
+            )
+            is False
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-reasoner", "max"
+            )
+            is False
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-chat", "high"
+            )
+            is False
+        )
+
+    def test_supports_reasoning_effort_level_unknown_model_returns_false(self):
+        """Unknown models return False (safe fallback)."""
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-future-model", "high"
+            )
+            is False
+        )
