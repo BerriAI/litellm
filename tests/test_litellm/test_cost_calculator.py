@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import litellm
 from litellm.cost_calculator import (
     completion_cost,
+    cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
@@ -2057,3 +2058,26 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["output_cost_per_token"] == 1.5e-06
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_cost_per_token_returns_zero_for_unknown_model():
+    """
+    cost_per_token() must return (0.0, 0.0) for a model that is not in the
+    cost map instead of raising an exception (GitHub issue #27581).
+    """
+    result = cost_per_token(model="fake-model-xyz-123")
+    assert result == (0.0, 0.0)
+
+
+def test_cost_per_token_returns_zero_with_explicit_provider():
+    """
+    cost_per_token() must return (0.0, 0.0) when a known provider is supplied
+    but the model is not in the cost map (GitHub issue #27581).
+    """
+    result = litellm.cost_per_token(
+        model="fake-model-xyz-123",
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    assert result == (0.0, 0.0)

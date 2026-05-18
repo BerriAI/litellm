@@ -350,7 +350,14 @@ def cost_per_token(  # noqa: PLR0915
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
     else:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        except litellm.exceptions.BadRequestError:
+            verbose_logger.debug(
+                "cost_per_token: unknown model=%s, no provider inferred. Returning 0.0, 0.0",
+                model,
+            )
+            return 0.0, 0.0
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
@@ -476,126 +483,138 @@ def cost_per_token(  # noqa: PLR0915
                 else None
             ),
         )
-    elif custom_llm_provider == "vertex_ai":
-        cost_router = google_cost_router(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            call_type=call_type,
-        )
-        if cost_router == "cost_per_character":
-            return google_cost_per_character(
+    # All call-type branches above return explicitly. Execution reaches here only
+    # for standard completion calls. Wrap the provider dispatch in a single
+    # ValueError guard so that any "model not in cost map" error from any
+    # provider's cost function returns (0.0, 0.0) instead of raising.
+    try:
+        if custom_llm_provider == "vertex_ai":
+            cost_router = google_cost_router(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
-                prompt_characters=prompt_characters,
-                completion_characters=completion_characters,
-                usage=usage_block,
+                call_type=call_type,
             )
-        elif cost_router == "cost_per_token":
-            return google_cost_per_token(
-                model=model_without_prefix,
-                custom_llm_provider=custom_llm_provider,
-                usage=usage_block,
-                service_tier=service_tier,
+            if cost_router == "cost_per_character":
+                return google_cost_per_character(
+                    model=model_without_prefix,
+                    custom_llm_provider=custom_llm_provider,
+                    prompt_characters=prompt_characters,
+                    completion_characters=completion_characters,
+                    usage=usage_block,
+                )
+            elif cost_router == "cost_per_token":
+                return google_cost_per_token(
+                    model=model_without_prefix,
+                    custom_llm_provider=custom_llm_provider,
+                    usage=usage_block,
+                    service_tier=service_tier,
+                )
+        elif custom_llm_provider == "anthropic":
+            return anthropic_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "bedrock":
+            return bedrock_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier
             )
-    elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "bedrock":
-        return bedrock_cost_per_token(
-            model=model, usage=usage_block, service_tier=service_tier
-        )
-    elif custom_llm_provider == "openai":
-        return openai_cost_per_token(
-            model=model, usage=usage_block, service_tier=service_tier
-        )
-    elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "fireworks_ai":
-        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "azure":
-        return azure_openai_cost_per_token(
-            model=model,
-            usage=usage_block,
-            response_time_ms=response_time_ms,
-            service_tier=service_tier,
-        )
-    elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(
-            model=model, usage=usage_block, service_tier=service_tier
-        )
-    elif custom_llm_provider == "deepseek":
-        return deepseek_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "xai":
-        return xai_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "lemonade":
-        return lemonade_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "dashscope":
-        from litellm.llms.dashscope.cost_calculator import (
-            cost_per_token as dashscope_cost_per_token,
-        )
-
-        return dashscope_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "azure_ai":
-        return azure_ai_cost_per_token(
-            model=model,
-            usage=usage_block,
-            response_time_ms=response_time_ms,
-            request_model=request_model,
-            service_tier=service_tier,
-        )
-    else:
-        model_info = _cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
-            model_info.get("output_cost_per_token") or 0.0
-        ) > 0:
-            return generic_cost_per_token(
+        elif custom_llm_provider == "openai":
+            return openai_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier
+            )
+        elif custom_llm_provider == "databricks":
+            return databricks_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "fireworks_ai":
+            return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "azure":
+            return azure_openai_cost_per_token(
                 model=model,
                 usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
+                response_time_ms=response_time_ms,
                 service_tier=service_tier,
             )
+        elif custom_llm_provider == "gemini":
+            return gemini_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier
+            )
+        elif custom_llm_provider == "deepseek":
+            return deepseek_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "perplexity":
+            return perplexity_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "xai":
+            return xai_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "lemonade":
+            return lemonade_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "dashscope":
+            from litellm.llms.dashscope.cost_calculator import (
+                cost_per_token as dashscope_cost_per_token,
+            )
 
-        if (
-            model_info.get("input_cost_per_second", None) is not None
-            and response_time_ms is not None
-        ):
+            return dashscope_cost_per_token(model=model, usage=usage_block)
+        elif custom_llm_provider == "azure_ai":
+            return azure_ai_cost_per_token(
+                model=model,
+                usage=usage_block,
+                response_time_ms=response_time_ms,
+                request_model=request_model,
+                service_tier=service_tier,
+            )
+        else:
+            model_info = _cached_get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+
+            if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
+                model_info.get("output_cost_per_token") or 0.0
+            ) > 0:
+                return generic_cost_per_token(
+                    model=model,
+                    usage=usage_block,
+                    custom_llm_provider=custom_llm_provider,
+                    service_tier=service_tier,
+                )
+
+            if (
+                model_info.get("input_cost_per_second", None) is not None
+                and response_time_ms is not None
+            ):
+                verbose_logger.debug(
+                    "For model=%s - input_cost_per_second: %s; response time: %s",
+                    model,
+                    model_info.get("input_cost_per_second", None),
+                    response_time_ms,
+                )
+                ## COST PER SECOND ##
+                prompt_tokens_cost_usd_dollar = (
+                    model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
+                )
+
+            if (
+                model_info.get("output_cost_per_second", None) is not None
+                and response_time_ms is not None
+            ):
+                verbose_logger.debug(
+                    "For model=%s - output_cost_per_second: %s; response time: %s",
+                    model,
+                    model_info.get("output_cost_per_second", None),
+                    response_time_ms,
+                )
+                ## COST PER SECOND ##
+                completion_tokens_cost_usd_dollar = (
+                    model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
+                )
+
             verbose_logger.debug(
-                "For model=%s - input_cost_per_second: %s; response time: %s",
+                "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
                 model,
-                model_info.get("input_cost_per_second", None),
-                response_time_ms,
+                prompt_tokens_cost_usd_dollar,
+                completion_tokens_cost_usd_dollar,
             )
-            ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = (
-                model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
-
-        if (
-            model_info.get("output_cost_per_second", None) is not None
-            and response_time_ms is not None
-        ):
-            verbose_logger.debug(
-                "For model=%s - output_cost_per_second: %s; response time: %s",
-                model,
-                model_info.get("output_cost_per_second", None),
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = (
-                model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
-            )
-
+            return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    except (ValueError, Exception):
         verbose_logger.debug(
-            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
+            "cost_per_token: model=%s not in cost map for provider=%s. Returning 0.0, 0.0",
             model,
-            prompt_tokens_cost_usd_dollar,
-            completion_tokens_cost_usd_dollar,
+            custom_llm_provider,
         )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        return 0.0, 0.0
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
