@@ -99,6 +99,7 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_VerificationTokenView,
     Member,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -5843,10 +5844,10 @@ async def get_available_models_for_user(
     """
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
+        _resolve_team_access_group_model_names_by_id,
         get_complete_model_list,
         get_key_models,
         get_team_models,
-        resolve_team_db_access_group_models,
     )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
@@ -5883,24 +5884,59 @@ async def get_available_models_for_user(
             user_api_key_dict=user_api_key_dict, team_table=team_object
         )
         team_models = team_object.models
+    elif (
+        user_api_key_dict.team_id
+        and prisma_client is not None
+        and user_api_key_cache is not None
+        and proxy_logging_obj is not None
+    ):
+        try:
+            team_object = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "access-group resolution: get_team_object failed for team_id=%s: %s",
+                user_api_key_dict.team_id,
+                e,
+            )
+            team_object = None
+
+    # Merge DB-backed access groups so get_team_models can expand team.access_group_ids
+    if team_object is not None and prisma_client is not None:
+        try:
+            db_access_groups = await _resolve_team_access_group_model_names_by_id(
+                team_objects=[team_object],
+                prisma_client=prisma_client,
+            )
+            for ag_id, model_names in db_access_groups.items():
+                if ag_id not in model_access_groups:
+                    model_access_groups[ag_id] = model_names
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "access-group resolution: find_many failed for team_id=%s: %s",
+                getattr(team_object, "team_id", None),
+                e,
+            )
+
+    sentinel = SpecialModelNames.no_default_models.value
+    had_sentinel = sentinel in team_models
 
     team_models = get_team_models(
         team_models=team_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
+        team_access_group_ids=(
+            team_object.access_group_ids if team_object is not None else None
+        ),
     )
 
-    team_models, force_empty = await resolve_team_db_access_group_models(
-        team_models=team_models,
-        key_models=key_models,
-        pre_loaded_team_object=team_object,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    if force_empty:
+    team_models = [m for m in team_models if m != sentinel]
+    if had_sentinel and not team_models and not key_models:
         return []
 
     # Get complete model list

@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -262,62 +262,78 @@ def _make_team_obj(*, models, access_group_ids, team_id="team-iso"):
     return obj
 
 
-def _make_user_api_key_dict(*, team_id=None):
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    return UserAPIKeyAuth(
-        api_key="hashed",
-        user_id="u",
-        team_id=team_id,
-        team_models=[],
-        models=[],
-    )
+def _make_ag_row(ag_id, model_names):
+    row = MagicMock()
+    row.access_group_id = ag_id
+    row.access_model_names = list(model_names)
+    return row
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_db_access_group_models_force_empty_when_sentinel_only_team_has_no_resolved_models():
-    from litellm.proxy.auth.model_checks import resolve_team_db_access_group_models
-
-    team = _make_team_obj(models=["no-default-models"], access_group_ids=["ag-deleted"])
-
-    prisma = AsyncMock()
-    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[])
-
-    resolved, force_empty = await resolve_team_db_access_group_models(
-        team_models=["no-default-models"],
-        key_models=[],
-        pre_loaded_team_object=team,
-        user_api_key_dict=_make_user_api_key_dict(team_id=team.team_id),
-        prisma_client=prisma,
-        user_api_key_cache=None,
-        proxy_logging_obj=None,
+async def test_resolve_team_access_group_model_names_by_id_returns_mapping():
+    from litellm.proxy.auth.model_checks import (
+        _resolve_team_access_group_model_names_by_id,
     )
 
-    assert resolved == []
-    assert force_empty is True
+    team = _make_team_obj(
+        models=["no-default-models"], access_group_ids=["ag-1", "ag-2"]
+    )
+    prisma = AsyncMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[
+            _make_ag_row("ag-1", ["gpt-4o"]),
+            _make_ag_row("ag-2", ["claude-opus-4-5"]),
+        ]
+    )
+
+    result = await _resolve_team_access_group_model_names_by_id(
+        team_objects=[team], prisma_client=prisma
+    )
+
+    assert result == {"ag-1": ["gpt-4o"], "ag-2": ["claude-opus-4-5"]}
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_db_access_group_models_no_force_empty_when_access_groups_contribute():
-    from litellm.proxy.auth.model_checks import resolve_team_db_access_group_models
-
-    team = _make_team_obj(models=["no-default-models"], access_group_ids=["ag-1"])
-
-    ag_row = AsyncMock()
-    ag_row.access_group_id = "ag-1"
-    ag_row.access_model_names = ["gpt-4o"]
-    prisma = AsyncMock()
-    prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[ag_row])
-
-    resolved, force_empty = await resolve_team_db_access_group_models(
-        team_models=["no-default-models"],
-        key_models=[],
-        pre_loaded_team_object=team,
-        user_api_key_dict=_make_user_api_key_dict(team_id=team.team_id),
-        prisma_client=prisma,
-        user_api_key_cache=None,
-        proxy_logging_obj=None,
+async def test_resolve_team_access_group_model_names_by_id_skips_empty_models_team():
+    from litellm.proxy.auth.model_checks import (
+        _resolve_team_access_group_model_names_by_id,
     )
 
-    assert resolved == ["gpt-4o"]
-    assert force_empty is False
+    team = _make_team_obj(models=[], access_group_ids=["ag-1"])
+    prisma = AsyncMock()
+    prisma.db.litellm_accessgrouptable.find_many = AsyncMock()
+
+    result = await _resolve_team_access_group_model_names_by_id(
+        team_objects=[team], prisma_client=prisma
+    )
+
+    assert result == {}
+    prisma.db.litellm_accessgrouptable.find_many.assert_not_called()
+
+
+def test_get_team_models_injects_team_access_group_ids():
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["gpt-3.5-turbo"],
+        proxy_model_list=["gpt-3.5-turbo", "gpt-4o", "claude-opus-4-5"],
+        model_access_groups={"ag-1": ["gpt-4o", "claude-opus-4-5"]},
+        team_access_group_ids=["ag-1"],
+    )
+
+    assert set(result) == {"gpt-3.5-turbo", "gpt-4o", "claude-opus-4-5"}
+
+
+def test_get_team_models_ignores_team_access_group_ids_not_in_dict():
+    # An access group id that the caller didn't pre-merge into model_access_groups
+    # contributes nothing — get_team_models is pure data manipulation.
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["gpt-3.5-turbo"],
+        proxy_model_list=["gpt-3.5-turbo", "gpt-4o"],
+        model_access_groups={"ag-known": ["gpt-4o"]},
+        team_access_group_ids=["ag-unknown"],
+    )
+
+    assert result == ["gpt-3.5-turbo"]

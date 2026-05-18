@@ -14,7 +14,9 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.model_checks import _resolve_team_access_group_model_names
+from litellm.proxy.auth.model_checks import (
+    _resolve_team_access_group_model_names_by_id,
+)
 from litellm.proxy.utils import get_available_models_for_user
 
 
@@ -67,24 +69,30 @@ def _patched_get_team_object(team_obj):
 
 
 # ---------------------------------------------------------------------------
-# _resolve_team_access_group_model_names — pure helper
+# _resolve_team_access_group_model_names_by_id — pure helper
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_resolver_returns_access_group_model_names():
+async def test_resolver_returns_access_group_id_to_model_names_mapping():
     team = _make_team_cached_obj(
-        models=["no-default-models"], access_group_ids=["ag-1"]
+        models=["no-default-models"], access_group_ids=["ag-1", "ag-2"]
     )
     prisma = _make_prisma_client_with_ag_rows(
-        [_make_access_group_row("ag-1", ["gpt-4o", "claude-opus-4-5"])]
+        [
+            _make_access_group_row("ag-1", ["gpt-4o", "claude-opus-4-5"]),
+            _make_access_group_row("ag-2", ["mistral-large"]),
+        ]
     )
 
-    result = await _resolve_team_access_group_model_names(
+    result = await _resolve_team_access_group_model_names_by_id(
         team_objects=[team], prisma_client=prisma
     )
 
-    assert result == ["gpt-4o", "claude-opus-4-5"]
+    assert result == {
+        "ag-1": ["gpt-4o", "claude-opus-4-5"],
+        "ag-2": ["mistral-large"],
+    }
 
 
 @pytest.mark.asyncio
@@ -94,11 +102,11 @@ async def test_resolver_skips_teams_with_empty_models():
         [_make_access_group_row("ag-1", ["gpt-4o"])]
     )
 
-    result = await _resolve_team_access_group_model_names(
+    result = await _resolve_team_access_group_model_names_by_id(
         team_objects=[team], prisma_client=prisma
     )
 
-    assert result == []
+    assert result == {}
     prisma.db.litellm_accessgrouptable.find_many.assert_not_called()
 
 
@@ -112,35 +120,16 @@ async def test_resolver_skips_teams_with_all_proxy_models_sentinel():
         [_make_access_group_row("ag-1", ["gpt-4o"])]
     )
 
-    result = await _resolve_team_access_group_model_names(
+    result = await _resolve_team_access_group_model_names_by_id(
         team_objects=[team], prisma_client=prisma
     )
 
-    assert result == []
+    assert result == {}
     prisma.db.litellm_accessgrouptable.find_many.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_resolver_deduplicates_across_access_groups():
-    team = _make_team_cached_obj(
-        models=["no-default-models"], access_group_ids=["ag-1", "ag-2"]
-    )
-    prisma = _make_prisma_client_with_ag_rows(
-        [
-            _make_access_group_row("ag-1", ["gpt-4o", "claude-opus-4-5"]),
-            _make_access_group_row("ag-2", ["claude-opus-4-5", "mistral-large"]),
-        ]
-    )
-
-    result = await _resolve_team_access_group_model_names(
-        team_objects=[team], prisma_client=prisma
-    )
-
-    assert result == ["gpt-4o", "claude-opus-4-5", "mistral-large"]
-
-
-@pytest.mark.asyncio
-async def test_resolver_handles_deleted_access_group():
+async def test_resolver_omits_missing_rows_for_deleted_access_group():
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1", "ag-deleted"]
     )
@@ -148,11 +137,11 @@ async def test_resolver_handles_deleted_access_group():
         [_make_access_group_row("ag-1", ["gpt-4o"])]
     )
 
-    result = await _resolve_team_access_group_model_names(
+    result = await _resolve_team_access_group_model_names_by_id(
         team_objects=[team], prisma_client=prisma
     )
 
-    assert result == ["gpt-4o"]
+    assert result == {"ag-1": ["gpt-4o"]}
 
 
 # ---------------------------------------------------------------------------

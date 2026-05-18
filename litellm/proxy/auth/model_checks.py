@@ -1,6 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -11,8 +11,7 @@ from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
 
 if TYPE_CHECKING:
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.proxy.utils import PrismaClient
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -141,13 +140,23 @@ def get_team_models(
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
     include_model_access_groups: Optional[bool] = False,
+    team_access_group_ids: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Returns:
     - List of model name strings
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
+    - If team_access_group_ids is provided, IDs found in model_access_groups are
+      injected into team_models so the existing access-group expansion picks them up.
     """
+    if team_access_group_ids:
+        team_models = list(team_models) + [
+            ag_id
+            for ag_id in team_access_group_ids
+            if ag_id in model_access_groups and ag_id not in team_models
+        ]
+
     all_models_set: Set[str] = set()
     if len(team_models) > 0:
         all_models_set.update(team_models)
@@ -171,12 +180,11 @@ def get_team_models(
     return all_models
 
 
-async def _resolve_team_access_group_model_names(
+async def _resolve_team_access_group_model_names_by_id(
     team_objects: List[Any],
     prisma_client: "PrismaClient",
-) -> List[str]:
-    eligible_teams: List[Any] = []
-    all_access_group_ids: set = set()
+) -> Dict[str, List[str]]:
+    eligible_ids: Set[str] = set()
     for team in team_objects:
         if not getattr(team, "access_group_ids", None):
             continue
@@ -186,92 +194,15 @@ async def _resolve_team_access_group_model_names(
             or SpecialModelNames.all_proxy_models.value in team_models_raw
         ):
             continue
-        eligible_teams.append(team)
-        all_access_group_ids.update(team.access_group_ids)
+        eligible_ids.update(team.access_group_ids)
 
-    if not eligible_teams:
-        return []
+    if not eligible_ids:
+        return {}
 
-    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
-        where={"access_group_id": {"in": list(all_access_group_ids)}}
+    rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(eligible_ids)}}
     )
-    ag_to_model_names: Dict[str, List[str]] = {
-        row.access_group_id: row.access_model_names or [] for row in access_group_rows
-    }
-
-    seen: set = set()
-    resolved: List[str] = []
-    for team in eligible_teams:
-        for ag_id in team.access_group_ids or []:
-            for model_name in ag_to_model_names.get(ag_id, []):
-                if model_name in seen:
-                    continue
-                seen.add(model_name)
-                resolved.append(model_name)
-    return resolved
-
-
-async def resolve_team_db_access_group_models(
-    *,
-    team_models: List[str],
-    key_models: List[str],
-    pre_loaded_team_object: Optional[Any],
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional["PrismaClient"],
-    user_api_key_cache: Optional["UserApiKeyCache"],
-    proxy_logging_obj: Optional["ProxyLogging"],
-) -> Tuple[List[str], bool]:
-    from litellm.proxy.auth.auth_checks import get_team_object
-
-    team_object = pre_loaded_team_object
-
-    if (
-        team_object is None
-        and user_api_key_dict.team_id
-        and prisma_client is not None
-        and user_api_key_cache is not None
-        and proxy_logging_obj is not None
-    ):
-        try:
-            team_object = await get_team_object(
-                team_id=user_api_key_dict.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "access-group resolution: get_team_object failed for team_id=%s: %s",
-                user_api_key_dict.team_id,
-                e,
-            )
-            team_object = None
-
-    if team_object is not None and prisma_client is not None:
-        try:
-            access_group_model_names = await _resolve_team_access_group_model_names(
-                team_objects=[team_object],
-                prisma_client=prisma_client,
-            )
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "access-group resolution: find_many failed for team_id=%s: %s",
-                getattr(team_object, "team_id", None),
-                e,
-            )
-            access_group_model_names = []
-        for model_name in access_group_model_names:
-            if model_name not in team_models:
-                team_models.append(model_name)
-
-    sentinel_value = SpecialModelNames.no_default_models.value
-    had_no_default_models_sentinel = sentinel_value in team_models
-    team_models = [m for m in team_models if m != sentinel_value]
-
-    force_empty_response = (
-        had_no_default_models_sentinel and not team_models and not key_models
-    )
-    return team_models, force_empty_response
+    return {row.access_group_id: row.access_model_names or [] for row in rows}
 
 
 def get_complete_model_list(
