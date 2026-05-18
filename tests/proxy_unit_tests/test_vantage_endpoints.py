@@ -10,6 +10,29 @@ from litellm.proxy.spend_tracking import vantage_endpoints
 from litellm.types.proxy.vantage_endpoints import VantageExportRequest
 
 
+@pytest.mark.parametrize(
+    ("exception", "expected_status_code"),
+    [
+        (type("StatusCodeError", (Exception,), {"status_code": 422})(), 422),
+        (
+            type(
+                "ResponseStatusCodeError",
+                (Exception,),
+                {"response": httpx.Response(409)},
+            )(),
+            409,
+        ),
+        (Exception("unexpected failure"), 500),
+    ],
+)
+def test_get_upstream_status_code_uses_upstream_status_when_available(
+    exception, expected_status_code
+):
+    assert (
+        vantage_endpoints._get_upstream_status_code(exception) == expected_status_code
+    )
+
+
 @pytest.mark.asyncio
 async def test_vantage_export_preserves_upstream_http_status(monkeypatch):
     request = httpx.Request(
