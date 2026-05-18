@@ -164,6 +164,14 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.1.1",
     "pytest-recording==0.13.4",
+    # Compresses the VCR cassette payloads stored in the test cache
+    # backends. Default-on, with magic-byte sniffing on read so legacy
+    # uncompressed cassettes still load.
+    "zstandard==0.25.0",
+    # Optional cassette backend (S3 / Cloudflare R2). The persister
+    # imports this lazily so it is only required when CASSETTE_S3_BUCKET
+    # is set; pinning it in dev keeps test environments reproducible.
+    "boto3==1.43.1",
 ]
 proxy-dev = [
     "prisma==0.11.0",

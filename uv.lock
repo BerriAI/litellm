@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-05-15T19:02:43.743226148Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3325,6 +3325,7 @@ ci = [
 ]
 dev = [
     { name = "black" },
+    { name = "boto3" },
     { name = "diff-cover" },
     { name = "fakeredis" },
     { name = "fastapi-offline" },
@@ -3356,6 +3357,7 @@ dev = [
     { name = "types-requests" },
     { name = "types-setuptools" },
     { name = "vcrpy" },
+    { name = "zstandard" },
 ]
 healthcheck = [
     { name = "httpx" },
@@ -3485,6 +3487,7 @@ ci = [
 ]
 dev = [
     { name = "black", specifier = "==24.10.0" },
+    { name = "boto3", specifier = "==1.43.1" },
     { name = "diff-cover", specifier = "==9.7.2" },
     { name = "fakeredis", specifier = "==2.34.1" },
     { name = "fastapi-offline", specifier = "==1.7.6" },
@@ -3516,6 +3519,7 @@ dev = [
     { name = "types-requests", specifier = "==2.32.4.20260107" },
     { name = "types-setuptools", specifier = "==75.8.0.20250225" },
     { name = "vcrpy", specifier = "==8.1.1" },
+    { name = "zstandard", specifier = "==0.25.0" },
 ]
 healthcheck = [
     { name = "httpx", specifier = "==0.28.1" },
