@@ -286,10 +286,15 @@ class TestDeepSeekThinkingParams:
     # --- Capability gating via model_prices_and_context_window.json ---
 
     def test_supports_reasoning_effort_level_v4_pro(self):
-        """V4-Pro has supports_high_reasoning_effort and supports_max_reasoning_effort."""
+        """V4-Pro has supports_xhigh_reasoning_effort and supports_max_reasoning_effort.
+
+        (``high`` and ``medium`` are baseline OpenAI levels that aren't
+        tracked per-model in the schema; only divergent levels — xhigh,
+        max — get explicit flags.)
+        """
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek-v4-pro", "high"
+                "deepseek-v4-pro", "xhigh"
             )
             is True
         )
@@ -304,7 +309,7 @@ class TestDeepSeekThinkingParams:
         """V4-Flash has the same reasoning_effort capabilities as V4-Pro."""
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek-v4-flash", "high"
+                "deepseek-v4-flash", "xhigh"
             )
             is True
         )
@@ -319,7 +324,7 @@ class TestDeepSeekThinkingParams:
         """Provider-prefixed model names resolve to the same capability flags."""
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek/deepseek-v4-pro", "high"
+                "deepseek/deepseek-v4-pro", "xhigh"
             )
             is True
         )
@@ -335,19 +340,19 @@ class TestDeepSeekThinkingParams:
         flags in model_prices_and_context_window.json."""
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek-reasoner", "high"
-            )
-            is False
-        )
-        assert (
-            DeepSeekChatConfig._supports_reasoning_effort_level(
                 "deepseek-reasoner", "max"
             )
             is False
         )
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek-chat", "high"
+                "deepseek-reasoner", "xhigh"
+            )
+            is False
+        )
+        assert (
+            DeepSeekChatConfig._supports_reasoning_effort_level(
+                "deepseek-chat", "max"
             )
             is False
         )
@@ -356,7 +361,7 @@ class TestDeepSeekThinkingParams:
         """Unknown models return False (safe fallback)."""
         assert (
             DeepSeekChatConfig._supports_reasoning_effort_level(
-                "deepseek-future-model", "high"
+                "deepseek-future-model", "max"
             )
             is False
         )

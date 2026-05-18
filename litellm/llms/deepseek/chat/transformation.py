@@ -27,7 +27,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def _supports_reasoning_effort_level(model: str, level: str) -> bool:
         """Check whether the DeepSeek model supports a specific reasoning_effort
         level natively, per ``supports_{level}_reasoning_effort`` in
-        ``model_prices_and_context_window.json``.
+        ``model_prices_and_context_window.json``.  Only level-specific flags
+        for divergent levels (``minimal``, ``low``, ``none``, ``xhigh``,
+        ``max``) are tracked in the schema — baseline ``high``/``medium``
+        always work for models that accept the parameter natively.
 
         Returns False for unknown models (safe fallback) — the caller will
         still emit ``thinking: {"type": "enabled"}`` so the model thinks,
@@ -80,18 +83,21 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             ):
                 optional_params["thinking"] = {"type": "enabled"}
                 # Forward reasoning_effort natively only if the model declares
-                # support for this specific level in model_prices_and_context_window.json.
+                # support for the explicit "max" level — used as a proxy for
+                # "model accepts reasoning_effort as a wire param" because the
+                # schema only tracks divergent levels (xhigh, max) and the V4
+                # family is the only DeepSeek line with native support.
                 if (
                     reasoning_effort is not None
                     and reasoning_effort != "none"
-                    and self._supports_reasoning_effort_level(model, reasoning_effort)
+                    and self._supports_reasoning_effort_level(model, "max")
                 ):
                     optional_params["reasoning_effort"] = reasoning_effort
 
         # Handle reasoning_effort alone (without explicit thinking dict)
         elif reasoning_effort is not None and reasoning_effort != "none":
             optional_params["thinking"] = {"type": "enabled"}
-            if self._supports_reasoning_effort_level(model, reasoning_effort):
+            if self._supports_reasoning_effort_level(model, "max"):
                 optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
