@@ -5720,6 +5720,33 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 headers=headers,
             )
+        elif custom_llm_provider == "dashscope":
+            dashscope_key = (
+                api_key or litellm.api_key or get_secret_str("DASHSCOPE_API_KEY")
+            )
+            if dashscope_key is None:
+                raise ValueError(
+                    "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
+                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
+            else:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=dashscope_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
+            )
         elif custom_llm_provider == "ovhcloud":
             api_key = api_key or litellm.api_key or get_secret_str("OVHCLOUD_API_KEY")
             api_base = (

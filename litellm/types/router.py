@@ -133,6 +133,9 @@ class ModelInfo(BaseModel):
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: Optional[str] = None
 
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
+    blocked: Optional[bool] = None
+
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -323,6 +326,7 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
+    blocked: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 

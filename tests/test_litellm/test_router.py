@@ -3697,3 +3697,173 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
         default_router.default_deployment["litellm_params"]["model"]
         == "openai/will-be-overridden"
     )
+
+
+def _router_with_two_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": f"openai/gpt-4o-{idx}"},
+                "model_info": {"id": f"dep-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_fully_blocked_model_names_marks_name_when_all_deployments_blocked():
+    router = _router_with_two_deployments([True, True])
+    assert router.get_fully_blocked_model_names() == {"gpt-4o"}
+
+
+def test_get_fully_blocked_model_names_keeps_name_when_partial_blocked():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_fully_blocked_model_names() == set()
+
+
+def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "dep-0"},
+            }
+        ]
+    )
+    assert router.get_fully_blocked_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_healthy_deployments_skips_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    healthy, all_dep = await router._async_get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" not in healthy_ids
+    assert "dep-1" in healthy_ids
+    assert len(all_dep) == 2
+
+
+def test_get_healthy_deployments_sync_skips_blocked_deployment():
+    router = _router_with_two_deployments([False, True])
+    healthy, all_dep = router._get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" in healthy_ids
+    assert "dep-1" not in healthy_ids
+    assert len(all_dep) == 2
+
+
+def test_filter_blocked_deployments_drops_blocked_keeps_unblocked():
+    router = _router_with_two_deployments([True, False])
+    filtered = router._filter_blocked_deployments(router.get_model_list() or [])
+    ids = [d["model_info"]["id"] for d in filtered]
+    assert ids == ["dep-1"]
+
+
+@pytest.mark.asyncio
+async def test_public_async_get_healthy_deployments_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployments = await router.async_get_healthy_deployments(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert isinstance(deployments, list)
+    ids = [d["model_info"]["id"] for d in deployments]
+    assert "dep-0" not in ids
+    assert "dep-1" in ids
+
+
+def test_public_get_available_deployment_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployment = router.get_available_deployment(model="gpt-4o", request_kwargs={})
+    assert deployment["model_info"]["id"] == "dep-1"
+
+
+def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
+    import litellm
+
+    router = _router_with_two_deployments([True, True])
+    with pytest.raises(litellm.ServiceUnavailableError):
+        router.get_available_deployment(model="dep-0", request_kwargs={})
+
+
+def _router_with_two_pass_through_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": f"openai/gpt-4o-{idx}",
+                    "api_key": "sk-fake-for-tests",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": f"pt-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_available_deployment_for_pass_through_skips_blocked():
+    router = _router_with_two_pass_through_deployments([True, False])
+    deployment = router.get_available_deployment_for_pass_through(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert deployment["model_info"]["id"] == "pt-1"
+
+
+def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
+    import litellm
+
+    router = _router_with_two_pass_through_deployments([True, True])
+    with pytest.raises(litellm.ServiceUnavailableError):
+        router.get_available_deployment_for_pass_through(
+            model="pt-0", request_kwargs={}
+        )
+
+
+def test_get_deployment_credentials_returns_none_for_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_deployment_credentials(model_id="dep-0") is None
+    assert router.get_deployment_credentials(model_id="dep-1") is not None
+
+
+def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_deployment_credentials_with_provider(model_id="dep-0") is None
+    assert router.get_deployment_credentials_with_provider(model_id="dep-1") is not None
+
+
+def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
+    """
+    Exercises Router._is_deployment_blocked so router_code_coverage.py (AST call graph)
+    marks the helper as covered by router-named tests.
+    """
+    import types
+
+    import litellm
+
+    router = _router_with_two_deployments([True, False])
+    blocked_dep = router.get_deployment("dep-0")
+    unblocked_dep = router.get_deployment("dep-1")
+    assert blocked_dep is not None and unblocked_dep is not None
+    assert litellm.Router._is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router._is_deployment_blocked(unblocked_dep) is False
+
+    # No model_info on deployment object → treated as not blocked
+    assert litellm.Router._is_deployment_blocked(object()) is False
+    missing_blocked = types.SimpleNamespace()
+    assert litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
+    assert litellm.Router._is_deployment_blocked(
+        types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
+    ) is True
