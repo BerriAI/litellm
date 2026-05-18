@@ -532,8 +532,6 @@ class PrometheusMetricLabels:
 
     litellm_remaining_user_budget_metric = [
         UserAPIKeyLabelNames.USER.value,
-        UserAPIKeyLabelNames.USER_EMAIL.value,
-        UserAPIKeyLabelNames.USER_ALIAS.value,
     ]
 
     litellm_user_max_budget_metric = litellm_remaining_user_budget_metric
@@ -724,6 +722,22 @@ class PrometheusMetricLabels:
             and UserAPIKeyLabelNames.STREAM.value not in default_labels
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
+        _user_budget_metrics = {
+            "litellm_remaining_user_budget_metric",
+            "litellm_user_max_budget_metric",
+            "litellm_user_budget_remaining_hours_metric",
+        }
+        if (
+            label_name in _user_budget_metrics
+            and litellm.prometheus_user_budget_label_include_email_alias is True
+        ):
+            for label in [
+                UserAPIKeyLabelNames.USER_EMAIL.value,
+                UserAPIKeyLabelNames.USER_ALIAS.value,
+            ]:
+                if label not in default_labels and label not in custom_labels:
+                    custom_labels.append(label)
 
         if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in [
