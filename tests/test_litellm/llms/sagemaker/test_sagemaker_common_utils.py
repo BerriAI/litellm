@@ -44,6 +44,62 @@ def test_sagemaker_response_stream_shape_load_failure_returns_none():
         assert shape is None
 
 
+def test_sagemaker_no_warning_when_botocore_missing():
+    """
+    When botocore is not installed, _load_sagemaker_response_stream_shape must return
+    None silently — no WARNING log. Non-SageMaker users should not see noisy warnings
+    on every litellm import. Regression test for GitHub issue #28175.
+    """
+    import builtins
+    from unittest.mock import patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    original_import = builtins.__import__
+
+    def _no_botocore(name, *args, **kwargs):
+        if name.startswith("botocore"):
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=_no_botocore):
+        with patch.object(mod, "verbose_logger") as mock_logger:
+            shape = mod._load_sagemaker_response_stream_shape()
+
+    assert shape is None
+    mock_logger.warning.assert_not_called()
+
+
+def test_sagemaker_warning_emitted_on_unexpected_load_failure():
+    """
+    When botocore IS installed but loading fails for an unexpected reason,
+    a WARNING must still be emitted so the operator knows decoding is broken.
+    Uses a fake botocore module so the test runs even without botocore installed.
+    """
+    import sys
+    from types import ModuleType
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    fake_botocore = ModuleType("botocore")
+    fake_loaders = ModuleType("botocore.loaders")
+    fake_model = ModuleType("botocore.model")
+    mock_loader_instance = MagicMock()
+    mock_loader_instance.load_service_model.side_effect = RuntimeError("schema corrupted")
+    fake_loaders.Loader = MagicMock(return_value=mock_loader_instance)
+    fake_model.ServiceModel = MagicMock()
+    fake_botocore.loaders = fake_loaders
+    fake_botocore.model = fake_model
+
+    with patch.dict(sys.modules, {"botocore": fake_botocore, "botocore.loaders": fake_loaders, "botocore.model": fake_model}):
+        with patch.object(mod, "verbose_logger") as mock_logger:
+            shape = mod._load_sagemaker_response_stream_shape()
+
+    assert shape is None
+    mock_logger.warning.assert_called_once()
+
+
 def test_sagemaker_response_stream_shape_is_structure_shape():
     """
     The loaded shape should be the botocore StructureShape for

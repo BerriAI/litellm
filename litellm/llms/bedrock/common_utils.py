@@ -975,6 +975,8 @@ def _load_bedrock_response_stream_shape():
         loader = Loader()
         service_dict = loader.load_service_model("bedrock-runtime", "service-2")
         return ServiceModel(service_dict).shape_for("ResponseStream")
+    except ModuleNotFoundError:
+        return None  # botocore not installed — expected for non-Bedrock users
     except Exception as e:
         verbose_logger.warning(
             "litellm: could not pre-load bedrock-runtime response stream shape "

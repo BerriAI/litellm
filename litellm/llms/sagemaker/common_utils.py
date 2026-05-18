@@ -20,6 +20,8 @@ def _load_sagemaker_response_stream_shape():
         return ServiceModel(service_dict).shape_for(
             "InvokeEndpointWithResponseStreamOutput"
         )
+    except ModuleNotFoundError:
+        return None  # botocore not installed — expected for non-SageMaker users
     except Exception as e:
         verbose_logger.warning(
             "litellm: could not pre-load sagemaker-runtime response stream shape "
