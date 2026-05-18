@@ -262,3 +262,32 @@ class TestNvidiaNim(BaseLLMRerankTest):
     def get_expected_cost(self) -> float:
         """Nvidia NIM rerank models are free (cost = 0.0)"""
         return 0.0
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    async def test_basic_rerank(self, sync_mode, monkeypatch):
+        monkeypatch.setenv("NVIDIA_NIM_API_KEY", "fake-api-key")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.text = ""
+        mock_response.json.return_value = {
+            "rankings": [
+                {"index": 0, "logit": 0.95},
+                {"index": 1, "logit": 0.75},
+            ],
+            "usage": {"total_tokens": 7},
+        }
+
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                return_value=mock_response,
+            ),
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ),
+        ):
+            await super().test_basic_rerank(sync_mode=sync_mode)

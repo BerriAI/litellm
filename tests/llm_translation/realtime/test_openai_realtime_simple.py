@@ -21,7 +21,7 @@ class TestOpenAIRealtime(BaseRealtimeTest):
     """
 
     def get_model(self) -> str:
-        return "gpt-4o-realtime-preview"
+        return "gpt-realtime"
 
     def get_api_key_env_var(self) -> str:
         return "OPENAI_API_KEY"
