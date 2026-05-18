@@ -24,7 +24,7 @@ from tests._vcr_redis_persister import (
     cassette_cache_capacity_snapshot,
     cassette_cache_health,
     filter_non_2xx_response,
-    make_redis_persister,
+    make_persister,
     mark_test_outcome_for_cassette,
     patch_vcrpy_aiohttp_record_path,
 )
@@ -122,7 +122,11 @@ FILTERED_REQUEST_HEADERS = (
     "authorization",
     "x-api-key",
     "anthropic-api-key",
-    "anthropic-version",
+    # ``anthropic-version`` is intentionally NOT filtered: it isn't a
+    # secret, it's tiny (~30 bytes), and a few tests parametrize over
+    # different beta versions — keeping it in the cassette lets the
+    # safe_body matcher distinguish those parametrizations rather than
+    # collapsing them onto one shared episode.
     "openai-api-key",
     "azure-api-key",
     "api-key",
@@ -136,16 +140,60 @@ FILTERED_REQUEST_HEADERS = (
     "x-goog-user-project",
 )
 
+# Explicit names always stripped from cassette responses. Provider-specific
+# noise (request ids, server-side trace ids, etc.) which no test asserts on.
 FILTERED_RESPONSE_HEADERS = (
     "set-cookie",
     "x-request-id",
     "request-id",
     "cf-ray",
+    "cf-cache-status",
+    "cf-mitigated",
     "anthropic-organization-id",
     "openai-organization",
+    "openai-processing-ms",
+    "openai-version",
     "x-amzn-requestid",
     "x-amzn-trace-id",
+    "x-amzn-remapped-content-length",
+    "x-amzn-remapped-host",
     "date",
+    "expires",
+    "age",
+    "via",
+    "server",
+    "alt-svc",
+    "strict-transport-security",
+    "nel",
+    "report-to",
+    "reporting-endpoints",
+    "vary",
+    "x-content-type-options",
+    "x-frame-options",
+    "x-xss-protection",
+    "referrer-policy",
+    "permissions-policy",
+)
+
+# Prefix-based blocklist for whole header families that show up in 10+
+# variants per response and that no test asserts on. Trims significantly
+# more bytes per cassette than the explicit list could without an
+# unmaintainable enumeration. Each prefix is matched case-insensitively.
+FILTERED_RESPONSE_HEADER_PREFIXES = (
+    "x-amz-",  # AWS/Bedrock metadata: x-amz-id-2, x-amz-server-side-encryption, etc.
+    "x-amzn-",
+    "x-google-",
+    "x-vertex-",
+    "x-goog-",
+    "x-envoy-",
+    "x-cloud-trace-",
+    "x-firefox-",
+    "x-ms-",  # Azure response metadata.
+    "anthropic-ratelimit-",  # 7+ verbose rate-limit headers per response.
+    "openai-ratelimit-",
+    "x-ratelimit-",
+    "x-stainless-",
+    "cf-",
 )
 
 # Tiny placeholder used to replace base64 image payloads in cassettes.
@@ -192,7 +240,10 @@ def _scrub_response(response):
     headers = response.get("headers") or {}
     if isinstance(headers, dict):
         for header in list(headers):
-            if header.lower() in FILTERED_RESPONSE_HEADERS:
+            lower = header.lower()
+            if lower in FILTERED_RESPONSE_HEADERS or any(
+                lower.startswith(prefix) for prefix in FILTERED_RESPONSE_HEADER_PREFIXES
+            ):
                 headers.pop(header, None)
     return response
 
@@ -672,7 +723,9 @@ def vcr_config_dict() -> dict:
 def vcr_disabled() -> bool:
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
-    return not os.environ.get("CASSETTE_REDIS_URL")
+    return not (
+        os.environ.get("CASSETTE_REDIS_URL") or os.environ.get("CASSETTE_S3_BUCKET")
+    )
 
 
 _atexit_banner_registered = False
@@ -722,7 +775,7 @@ def register_persister_if_enabled(vcr) -> None:
     """Call from ``pytest_recording_configure(config, vcr)`` in each conftest."""
     if vcr_disabled():
         return
-    vcr.register_persister(make_redis_persister())
+    vcr.register_persister(make_persister())
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
     patch_vcrpy_aiohttp_record_path()

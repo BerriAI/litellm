@@ -19,9 +19,13 @@ from vcr.request import Request
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from tests._vcr_conftest_common import (  # noqa: E402
+    FILTERED_REQUEST_HEADERS,
+    FILTERED_RESPONSE_HEADER_PREFIXES,
+    FILTERED_RESPONSE_HEADERS,
     VCR_FIXED_MULTIPART_BOUNDARY,
     VCR_IMAGE_B64_PLACEHOLDER,
     _normalize_multipart_boundary,
+    _scrub_response,
     _strip_image_b64_payloads,
 )
 
@@ -218,3 +222,120 @@ def test_normalize_multipart_handles_quoted_boundary():
     _normalize_multipart_boundary(req)
     assert b"quoted-boundary" not in req.body
     assert VCR_FIXED_MULTIPART_BOUNDARY.encode("utf-8") in req.body
+
+
+# ---------------------------------------------------------------------------
+# Response header scrubbing (explicit list + prefix-based blocklist)
+# ---------------------------------------------------------------------------
+
+
+def _response_with_headers(headers: dict) -> dict:
+    return {
+        "status": {"code": 200, "message": "OK"},
+        "headers": headers,
+        "body": {"string": b"{}"},
+    }
+
+
+def test_scrub_response_strips_explicit_filtered_headers():
+    response = _response_with_headers(
+        {
+            "Content-Type": ["application/json"],
+            "X-Request-Id": ["req-abc"],
+            "Set-Cookie": ["session=xyz"],
+            "Date": ["Mon, 18 May 2026 18:00:00 GMT"],
+        }
+    )
+    out = _scrub_response(response)
+    headers = out["headers"]
+    assert "X-Request-Id" not in headers
+    assert "Set-Cookie" not in headers
+    assert "Date" not in headers
+    assert headers["Content-Type"] == ["application/json"]
+
+
+def test_scrub_response_strips_x_amz_metadata_via_prefix():
+    """AWS Bedrock responses come with 10+ ``x-amz-*`` headers per
+    request — none of them are asserted on by tests, and none of them
+    are tiny. Trim them via the prefix blocklist."""
+    response = _response_with_headers(
+        {
+            "Content-Type": ["application/json"],
+            "x-amz-id-2": ["very-long-aws-trace-token=="],
+            "x-amz-server-side-encryption": ["AES256"],
+            "x-amzn-RequestId": ["req-123"],
+            "x-amzn-Trace-Id": ["root=1-abc"],
+        }
+    )
+    out = _scrub_response(response)
+    for header in (
+        "x-amz-id-2",
+        "x-amz-server-side-encryption",
+        "x-amzn-RequestId",
+        "x-amzn-Trace-Id",
+    ):
+        assert header not in out["headers"]
+    assert out["headers"]["Content-Type"] == ["application/json"]
+
+
+def test_scrub_response_strips_anthropic_ratelimit_family():
+    """Anthropic responses ship 7+ verbose ``anthropic-ratelimit-*``
+    headers. They're tiny individually but compound across cassettes.
+    """
+    response = _response_with_headers(
+        {
+            "Content-Type": ["application/json"],
+            "anthropic-ratelimit-requests-limit": ["50"],
+            "anthropic-ratelimit-requests-remaining": ["49"],
+            "anthropic-ratelimit-requests-reset": ["2026-05-18T18:00:00Z"],
+            "anthropic-ratelimit-tokens-limit": ["100000"],
+            "anthropic-ratelimit-tokens-remaining": ["95000"],
+        }
+    )
+    out = _scrub_response(response)
+    assert all(not h.lower().startswith("anthropic-ratelimit-") for h in out["headers"])
+
+
+def test_scrub_response_keeps_content_headers_untouched():
+    """Content-Type / Content-Length / Content-Encoding are required
+    for vcrpy to replay bodies correctly. Make sure no overzealous
+    prefix sweeps them out."""
+    response = _response_with_headers(
+        {
+            "content-type": ["application/json; charset=utf-8"],
+            "content-length": ["42"],
+            "content-encoding": ["gzip"],
+            "transfer-encoding": ["chunked"],
+        }
+    )
+    out = _scrub_response(response)
+    for keep in (
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+    ):
+        assert keep in out["headers"]
+
+
+def test_anthropic_version_is_no_longer_filtered_from_request_headers():
+    """Documented behavior change. ``anthropic-version`` is not a
+    secret, is tiny, and parametrized tests rely on it for matching.
+    Filtering it caused two parametrizations to share one cassette
+    episode and produce false replay hits."""
+    assert "anthropic-version" not in (h.lower() for h in FILTERED_REQUEST_HEADERS)
+
+
+def test_explicit_list_and_prefix_list_are_disjoint_with_keep_set():
+    """No header in the ``content-*`` family should be on either list."""
+    must_keep = {
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+    }
+    for name in FILTERED_RESPONSE_HEADERS:
+        assert name.lower() not in must_keep
+    for prefix in FILTERED_RESPONSE_HEADER_PREFIXES:
+        for keep in must_keep:
+            assert not keep.startswith(prefix.lower())
