@@ -1,10 +1,5 @@
-"""
-Tests for Tensormesh chat transformation and provider routing.
-"""
-
 import json
 import os
-import sys
 from typing import Any
 from unittest.mock import patch
 
@@ -14,8 +9,6 @@ from . import (
     _make_fake_openai_streaming_chat_client,
     _openai_stream_chunk,
 )
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 
 def test_tensormesh_provider_configured(monkeypatch):

@@ -1,17 +1,7 @@
-"""
-Tests for Tensormesh Responses API transformation.
-"""
-
 import json
-import os
-import sys
 from typing import Any
 
 import httpx
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
 
 
 class _FakeLogging:
@@ -35,10 +25,7 @@ def test_tensormesh_responses_config():
 
     assert config is not None
     assert config.custom_llm_provider == "tensormesh"
-    assert (
-        config.get_complete_url(api_base=None, litellm_params={})
-        == "https://serverless.tensormesh.ai/v1/responses"
-    )
+    assert config.get_complete_url(api_base=None, litellm_params={}) == "https://serverless.tensormesh.ai/v1/responses"
     assert config.supports_native_websocket() is False
 
 
