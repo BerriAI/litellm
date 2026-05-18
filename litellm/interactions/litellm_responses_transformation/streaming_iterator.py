@@ -244,10 +244,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                         stop_kwargs: Dict[str, Any] = {
                             "event_type": stop_event_type,
                             "index": 0,
-                            "id": transformed.id,
-                            "object": "content",
                         }
                         if self._use_legacy:
+                            stop_kwargs["id"] = transformed.id
+                            stop_kwargs["object"] = "content"
                             stop_kwargs["delta"] = {
                                 "type": "text",
                                 "text": self.collected_text,
@@ -270,9 +270,9 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     stop_kwargs = {
                         "event_type": stop_event_type,
                         "index": 0,
-                        "object": "content",
                     }
                     if self._use_legacy:
+                        stop_kwargs["object"] = "content"
                         stop_kwargs["delta"] = {
                             "type": "text",
                             "text": self.collected_text,
@@ -330,10 +330,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                         stop_kwargs_async: Dict[str, Any] = {
                             "event_type": stop_event_type,
                             "index": 0,
-                            "id": transformed.id,
-                            "object": "content",
                         }
                         if self._use_legacy:
+                            stop_kwargs_async["id"] = transformed.id
+                            stop_kwargs_async["object"] = "content"
                             stop_kwargs_async["delta"] = {
                                 "type": "text",
                                 "text": self.collected_text,
@@ -358,9 +358,9 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     stop_kwargs_async = {
                         "event_type": stop_event_type,
                         "index": 0,
-                        "object": "content",
                     }
                     if self._use_legacy:
+                        stop_kwargs_async["object"] = "content"
                         stop_kwargs_async["delta"] = {
                             "type": "text",
                             "text": self.collected_text,
