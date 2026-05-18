@@ -2560,7 +2560,15 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
     )
 
 
-def test_reasoning_effort_unparseable_dict_is_dropped():
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        {"summary": "concise"},  # missing effort
+        {"effort": None},  # explicit None effort
+        {"effort": 123},  # non-string effort
+    ],
+)
+def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
     """
     A dict shape that doesn't carry a usable ``effort`` key (e.g. only
     ``summary`` is set, or the value is some other unexpected type) should be
@@ -2568,23 +2576,18 @@ def test_reasoning_effort_unparseable_dict_is_dropped():
     """
     config = AnthropicConfig()
 
-    for bad_value in [
-        {"summary": "concise"},  # missing effort
-        {"effort": None},  # explicit None effort
-        {"effort": 123},  # non-string effort
-    ]:
-        result = config.map_openai_params(
-            non_default_params={"reasoning_effort": bad_value},
-            optional_params={},
-            model="claude-sonnet-4-6-20260219",
-            drop_params=False,
-        )
-        assert "thinking" not in result, (
-            f"thinking should not be set for bad value {bad_value!r}"
-        )
-        assert "output_config" not in result, (
-            f"output_config should not be set for bad value {bad_value!r}"
-        )
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": bad_value},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+    assert "thinking" not in result, (
+        f"thinking should not be set for bad value {bad_value!r}"
+    )
+    assert "output_config" not in result, (
+        f"output_config should not be set for bad value {bad_value!r}"
+    )
 
 
 @pytest.mark.parametrize(
