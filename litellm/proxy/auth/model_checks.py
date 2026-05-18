@@ -241,11 +241,9 @@ async def resolve_team_db_access_group_models(
             )
         except Exception as e:
             verbose_proxy_logger.debug(
-                "resolve_team_db_access_group_models: failed to fetch team "
-                "object for team_id=%s, skipping access-group resolution. "
-                "Error: %s",
+                "access-group resolution: get_team_object failed for team_id=%s: %s",
                 user_api_key_dict.team_id,
-                str(e),
+                e,
             )
             team_object = None
 
@@ -257,11 +255,9 @@ async def resolve_team_db_access_group_models(
             )
         except Exception as e:
             verbose_proxy_logger.debug(
-                "resolve_team_db_access_group_models: access-group resolution "
-                "failed for team_id=%s, returning team.models[] only. "
-                "Error: %s",
+                "access-group resolution: find_many failed for team_id=%s: %s",
                 getattr(team_object, "team_id", None),
-                str(e),
+                e,
             )
             access_group_model_names = []
         for model_name in access_group_model_names:

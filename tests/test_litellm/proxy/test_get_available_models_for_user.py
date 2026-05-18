@@ -1,16 +1,4 @@
-"""
-Tests for ``get_available_models_for_user`` resolving DB-backed Unified
-Access Groups and stripping the ``no-default-models`` sentinel.
-
-Regression coverage for the bug where a team configured as
-``models=["no-default-models"]`` plus one or more
-``team.access_group_ids[]`` returned only the sentinel from ``/v1/models``
-(OpenWebUI then rendered an empty model dropdown), even though
-``LiteLLM_AccessGroupTable`` resolution was correct on the admin-side
-``/team/info`` / ``/v2/team/list`` endpoints.
-
-See ``access-group-models-v1-models-fix.md`` for the full incident write-up.
-"""
+"""Tests for get_available_models_for_user UAG resolution and sentinel strip."""
 
 import os
 import sys
@@ -85,7 +73,6 @@ def _patched_get_team_object(team_obj):
 
 @pytest.mark.asyncio
 async def test_resolver_returns_access_group_model_names():
-    """Happy path: team has access groups, helper returns their model names."""
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1"]
     )
@@ -102,10 +89,6 @@ async def test_resolver_returns_access_group_model_names():
 
 @pytest.mark.asyncio
 async def test_resolver_skips_teams_with_empty_models():
-    """
-    A team with ``models=[]`` already sees every proxy model; resolving its
-    access groups would double-count. Mirror ``_add_access_group_models_to_team_models``.
-    """
     team = _make_team_cached_obj(models=[], access_group_ids=["ag-1"])
     prisma = _make_prisma_client_with_ag_rows(
         [_make_access_group_row("ag-1", ["gpt-4o"])]
@@ -121,7 +104,6 @@ async def test_resolver_skips_teams_with_empty_models():
 
 @pytest.mark.asyncio
 async def test_resolver_skips_teams_with_all_proxy_models_sentinel():
-    """Same skip rule for the explicit ``all-proxy-models`` marker."""
     team = _make_team_cached_obj(
         models=[SpecialModelNames.all_proxy_models.value],
         access_group_ids=["ag-1"],
@@ -140,7 +122,6 @@ async def test_resolver_skips_teams_with_all_proxy_models_sentinel():
 
 @pytest.mark.asyncio
 async def test_resolver_deduplicates_across_access_groups():
-    """Two access groups that share a model are deduped, order preserved."""
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1", "ag-2"]
     )
@@ -160,7 +141,6 @@ async def test_resolver_deduplicates_across_access_groups():
 
 @pytest.mark.asyncio
 async def test_resolver_handles_deleted_access_group():
-    """Missing rows contribute nothing; no error."""
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1", "ag-deleted"]
     )
@@ -182,11 +162,6 @@ async def test_resolver_handles_deleted_access_group():
 
 @pytest.mark.asyncio
 async def test_no_default_models_team_resolves_access_group_models():
-    """
-    The original bug: ``models=["no-default-models"]`` plus an access group
-    returned just the sentinel. Now it returns the access-group models with
-    the sentinel stripped.
-    """
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1"]
     )
@@ -219,7 +194,6 @@ async def test_no_default_models_team_resolves_access_group_models():
 
 @pytest.mark.asyncio
 async def test_direct_and_access_group_models_are_merged_and_deduped():
-    """Direct ``team.models[]`` and access-group-resolved names union together."""
     team = _make_team_cached_obj(models=["gpt-4o"], access_group_ids=["ag-1"])
     prisma = _make_prisma_client_with_ag_rows(
         [_make_access_group_row("ag-1", ["claude-opus-4-5", "gpt-4o"])]
@@ -250,18 +224,8 @@ async def test_direct_and_access_group_models_are_merged_and_deduped():
 
 @pytest.mark.asyncio
 async def test_sentinel_only_team_without_access_groups_returns_empty():
-    """
-    A team with ``models=["no-default-models"]`` and no access groups must
-    return an empty list — never the literal sentinel string, which OpenWebUI
-    would otherwise render as a selectable model id.
-
-    Regression guard: this test now configures a populated ``llm_router``.
-    Without the sentinel-aware short-circuit in
-    ``get_available_models_for_user``, stripping the sentinel would leave
-    ``team_models=[]`` and ``get_complete_model_list`` would fall through to
-    ``proxy_model_list``, silently granting every proxy model to a team
-    that explicitly opted out.
-    """
+    # Privilege-escalation guard: configures a populated llm_router so that
+    # stripping the sentinel without force_empty would leak every proxy model.
     team = _make_team_cached_obj(models=["no-default-models"], access_group_ids=None)
     prisma = _make_prisma_client_with_ag_rows([])
 
@@ -301,13 +265,8 @@ async def test_sentinel_only_team_without_access_groups_returns_empty():
 
 @pytest.mark.asyncio
 async def test_db_failure_in_access_group_resolution_does_not_crash():
-    """
-    ``/v1/models`` must not 500 on a transient Prisma failure. If
-    ``litellm_accessgrouptable.find_many`` raises, we degrade to "no
-    access-group contribution" — same behavior as the pre-fix state — and
-    still honor the sentinel short-circuit so a no-default-models team
-    doesn't accidentally get full access.
-    """
+    # On transient Prisma failure, degrade to "no access-group contribution"
+    # and still honor the sentinel short-circuit.
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1"]
     )
@@ -346,11 +305,6 @@ async def test_db_failure_in_access_group_resolution_does_not_crash():
 
 @pytest.mark.asyncio
 async def test_team_with_direct_models_unaffected_by_resolver_failure():
-    """
-    If ``team.models[]`` contains real model names and access-group
-    resolution fails, the team's direct models still come through. Only the
-    access-group contribution is dropped on resolver failure.
-    """
     team = _make_team_cached_obj(models=["gpt-4o"], access_group_ids=["ag-1"])
 
     prisma = MagicMock()
@@ -382,10 +336,6 @@ async def test_team_with_direct_models_unaffected_by_resolver_failure():
 
 @pytest.mark.asyncio
 async def test_explicit_team_id_param_resolves_access_groups():
-    """
-    The ``team_id`` kwarg path (used by admin/UI flows that pin a team
-    explicitly) must resolve access groups too.
-    """
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-1"]
     )
@@ -425,12 +375,6 @@ async def test_explicit_team_id_param_resolves_access_groups():
 
 @pytest.mark.asyncio
 async def test_deleted_access_group_does_not_leak_sentinel():
-    """
-    Edge case from the field: a team references an access group that has been
-    deleted from ``LiteLLM_AccessGroupTable``. Resolution returns no rows; the
-    sentinel must still be stripped so /v1/models returns an empty list, not
-    ``["no-default-models"]``.
-    """
     team = _make_team_cached_obj(
         models=["no-default-models"], access_group_ids=["ag-deleted"]
     )
@@ -460,11 +404,6 @@ async def test_deleted_access_group_does_not_leak_sentinel():
 
 @pytest.mark.asyncio
 async def test_user_with_no_team_skips_access_group_resolution():
-    """
-    Callers without any team (no ``team_id`` kwarg, no
-    ``user_api_key_dict.team_id``) skip the DB resolution entirely — they have
-    no team-scoped access groups to look up.
-    """
     user_api_key_dict = _make_user_api_key_dict(team_id=None, team_models=[])
     prisma = _make_prisma_client_with_ag_rows([])
 
