@@ -60,6 +60,19 @@ def _bash_cells() -> Iterable[Path]:
             yield path
 
 
+def _has_bare_bash_token(text: str) -> bool:
+    """Return True if `text` contains a `"Bash"` token outside the
+    `"Bash(echo pong)"` allow rule.
+
+    Extracted as a pure helper so the negative path can be unit-tested
+    directly. Without it, the previous structure of this assertion was
+    `'"Bash"' not in text or '"Bash(echo pong)"' in text`, which
+    short-circuits to True any time the allow rule is present and lets
+    a stray bare `"Bash"` slip through the security pin undetected.
+    """
+    return '"Bash"' in text.replace('"Bash(echo pong)"', "")
+
+
 @pytest.mark.parametrize(
     "cell", list(_bash_cells()), ids=lambda p: str(p.relative_to(REPO_ROOT))
 )
@@ -74,10 +87,46 @@ def test_bash_allow_rule_is_pinned_to_exact_echo_pong(cell: Path) -> None:
         f"tool_use blocks, which can read `docker inspect compat-proxy` "
         f"to exfiltrate provider credentials from the proxy container."
     )
-    assert '"Bash"' not in text or '"Bash(echo pong)"' in text, (
+    # The only place `"Bash"` (the bare token, surrounded by quotes
+    # exactly as it would appear in `--allowed-tools` lists) is allowed
+    # to appear is *inside* the exact-match `"Bash(echo pong)"` rule.
+    # `_has_bare_bash_token` keeps that scan independent of the first
+    # assertion — otherwise `'"Bash"' not in text or '"Bash(echo pong)"'
+    # in text` short-circuits to True and lets a stray bare `"Bash"`
+    # slip through silently.
+    assert not _has_bare_bash_token(text), (
         f"{cell.relative_to(REPO_ROOT)} still references the unrestricted "
-        f'`"Bash"` value somewhere — sweep it out before merging.'
+        f'`"Bash"` value outside the `"Bash(echo pong)"` allow rule — '
+        f"sweep it out before merging."
     )
+
+
+def test_has_bare_bash_token_flags_unrestricted_value():
+    """A file that allows the bare `"Bash"` token alongside the
+    exact-match rule must be flagged. Without this guard the security
+    pin reverts to the dead-code `or` it had originally, which let
+    arbitrary host commands through under the noise of a passing test.
+    """
+    text = '--allowed-tools "Bash" "Bash(echo pong)"'
+    assert _has_bare_bash_token(text)
+
+
+def test_has_bare_bash_token_accepts_only_exact_match():
+    """The standard pattern — only the exact-match allow rule, no bare
+    `"Bash"` — must be accepted. This is the shape every Bash-using
+    cell in the suite is required to take.
+    """
+    text = '--allowed-tools "Bash(echo pong)" --permission-mode "dontAsk"'
+    assert not _has_bare_bash_token(text)
+
+
+def test_has_bare_bash_token_ignores_unrelated_substrings():
+    """`Bash(echo pong)` is the only allowed shape; substrings like
+    `BashTool` or `Bashing` are unrelated identifiers and must not be
+    confused with the bare `"Bash"` token (i.e. the exact quoted
+    string `"Bash"`)."""
+    text = "BashTool helper used by the bashing harness"
+    assert not _has_bare_bash_token(text)
 
 
 @pytest.mark.parametrize(
