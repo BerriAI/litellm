@@ -113,6 +113,31 @@ class TestExtractGreptileScore:
         assert closer_module.extract_greptile_score([]) is None
 
 
+class TestFetchPrComments:
+    """`fetch_pr_comments` must fail-safe so a transient `gh api` error on
+    one PR doesn't abort the whole daily sweep mid-loop. Pinning the
+    empty-list return matches the fail-safe pattern in
+    `fetch_pr_author_association`.
+    """
+
+    def test_should_return_empty_list_when_gh_api_fails(
+        self, closer_module, monkeypatch
+    ):
+        import subprocess
+
+        def _failing_gh(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, ["gh", *args])
+
+        monkeypatch.setattr(closer_module, "gh", _failing_gh)
+        assert closer_module.fetch_pr_comments(123, repo="x/y") == []
+
+    def test_should_return_empty_list_when_paginated_output_is_malformed(
+        self, closer_module, monkeypatch
+    ):
+        monkeypatch.setattr(closer_module, "gh", lambda *a, **kw: "not json\n")
+        assert closer_module.fetch_pr_comments(123, repo="x/y") == []
+
+
 class TestEvaluatePr:
     @pytest.fixture(autouse=True)
     def _now(self):

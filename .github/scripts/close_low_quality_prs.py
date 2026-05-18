@@ -154,19 +154,31 @@ def is_external_pr_author(pr: dict, repo: str | None) -> bool:
 
 
 def fetch_pr_comments(pr_number: int, repo: str | None) -> list[dict]:
-    """Fetch issue-level comments on a PR (where Greptile posts its summary)."""
+    """Fetch issue-level comments on a PR (where Greptile posts its summary).
+
+    Returns [] on API failure so a transient hiccup on any single PR doesn't
+    abort the whole daily sweep mid-loop. Matches the fail-safe pattern in
+    `fetch_pr_author_association`; downstream the empty list becomes a
+    `skip-no-greptile-score` action and the PR is re-evaluated on the next run.
+    """
     endpoint = (
         f"repos/{repo}/issues/{pr_number}/comments?per_page=100"
         if repo
         else f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments?per_page=100"
     )
-    raw = gh("api", "--paginate", endpoint)
+    try:
+        raw = gh("api", "--paginate", endpoint)
+    except subprocess.CalledProcessError:
+        return []
     comments: list[dict] = []
     for line in raw.strip().splitlines():
         line = line.strip()
         if not line:
             continue
-        parsed = json.loads(line)
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            return []
         if isinstance(parsed, list):
             comments.extend(parsed)
         else:
