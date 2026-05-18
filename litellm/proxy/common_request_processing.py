@@ -2311,25 +2311,17 @@ class ProxyBaseLLMRequestProcessing:
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         _log_llm_api_exception(e)
-        # Shield the failure hook so the Redis DECR completes even if the
-        # client disconnects during cleanup. If the awaiter is cancelled
-        # before the hook returns, we lose access to transformed_exception
-        # and fall back to the original e.
-        _failure_hook_task = asyncio.create_task(
-            proxy_logging_obj.post_call_failure_hook(
+        # post_call_failure_hook is internally shielded — cleanup (including
+        # the parallel-request DECR) completes even if we are cancelled.
+        try:
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=self.data,
             )
-        )
-        try:
-            transformed_exception = await asyncio.shield(_failure_hook_task)
-            # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:
                 e = transformed_exception
         except asyncio.CancelledError:
-            # Caller cancelled mid-cleanup; shielded task continues in
-            # background. Proceed with the original exception.
             pass
         except Exception:
             verbose_proxy_logger.exception(
@@ -2608,24 +2600,17 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(str(e))
             )
-            # Shield the failure hook so the Redis DECR completes even if the
-            # client disconnects during cleanup (regular-exception path race).
-            # If the awaiter is cancelled before the hook returns, we lose
-            # access to transformed_exception and fall back to the original e.
-            _failure_hook_task = asyncio.create_task(
-                proxy_logging_obj.post_call_failure_hook(
+            # post_call_failure_hook is internally shielded — DECR completes
+            # even if the awaiter is cancelled mid-cleanup.
+            try:
+                transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=e,
                     request_data=request_data,
                 )
-            )
-            try:
-                transformed_exception = await asyncio.shield(_failure_hook_task)
                 if transformed_exception is not None:
                     e = transformed_exception
             except asyncio.CancelledError:
-                # Caller cancelled mid-cleanup; shielded task continues in
-                # background. Proceed with the original exception.
                 pass
             except Exception:
                 verbose_proxy_logger.exception(

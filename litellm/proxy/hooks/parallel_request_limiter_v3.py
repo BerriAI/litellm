@@ -284,11 +284,6 @@ else
     current_count = 0
 end
 
--- Note: We intentionally do NOT refresh TTL here.
--- Refreshing TTL on decrement causes counter drift - each completed request
--- extends the key's lifetime, potentially keeping a positive counter alive
--- indefinitely even when no requests are active.
-
 -- Return: previous_count, current_count
 return {previous_count, current_count}
 """
