@@ -4328,6 +4328,11 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            ### INTERACTIONS API SCHEMA ###
+            if general_settings.get("use_legacy_interactions_schema") is not None:
+                litellm.use_legacy_interactions_schema = bool(
+                    general_settings["use_legacy_interactions_schema"]
+                )
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get(
                 "enable_health_check_routing", False

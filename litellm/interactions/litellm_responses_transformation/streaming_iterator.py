@@ -2,7 +2,7 @@
 Streaming iterator for transforming Responses API stream to Interactions API stream.
 """
 
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, cast
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -15,7 +15,6 @@ from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.types.llms.openai import (
-    ContentPartAddedEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
@@ -30,7 +29,13 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
     This class handles both sync and async iteration, transforming Responses API
     streaming events (output.text.delta, response.completed, etc.) to Interactions
-    API streaming events (content.delta, interaction.complete, etc.).
+    API streaming events.
+
+    Schema selection:
+    - New schema (default, use_legacy_interactions_schema=False):
+        interaction.created → step.start → step.delta … → step.stop → interaction.completed
+    - Legacy schema (use_legacy_interactions_schema=True, remove after June 8 2026):
+        interaction.start → content.start → content.delta … → content.stop → interaction.complete
     """
 
     def __init__(
@@ -52,7 +57,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         self.collected_text = ""
         self.sent_interaction_start = False
         self.sent_content_start = False
-        self._pending_events: List[InteractionsAPIStreamingResponse] = []
+
+    @property
+    def _use_legacy(self) -> bool:
+        import litellm
+
+        return litellm.use_legacy_interactions_schema
 
     def _transform_responses_chunk_to_interactions_chunk(
         self,
@@ -61,91 +71,78 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         """
         Transform a Responses API streaming chunk to an Interactions API streaming chunk.
 
-        Responses API events:
-        - output.text.delta -> content.delta
-        - response.completed -> interaction.complete
-
-        Interactions API events:
-        - interaction.start
-        - content.start
-        - content.delta
-        - content.stop
-        - interaction.complete
+        Emits new-schema events by default; falls back to legacy events when
+        ``litellm.use_legacy_interactions_schema`` is True.
+        Remove legacy branch after June 8, 2026.
         """
         if not responses_chunk:
             return None
 
-        # Handle OutputTextDeltaEvent -> content.delta
+        use_legacy = self._use_legacy
+
+        # Handle OutputTextDeltaEvent
         if isinstance(responses_chunk, OutputTextDeltaEvent):
             delta_text = (
                 responses_chunk.delta if isinstance(responses_chunk.delta, str) else ""
             )
             self.collected_text += delta_text
+            item_id = (
+                getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
+            )
 
-            # Fallback: emit interaction.start, and queue content.start carrying this
-            # delta so the first token is preserved in the stream.
+            # Send the "interaction started" event on the first delta
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
-                self.sent_content_start = True
-                self._pending_events.append(
-                    InteractionsAPIStreamingResponse(
-                        event_type="content.start",
-                        id=getattr(responses_chunk, "item_id", None),
-                        object="content",
-                        delta={"type": "text", "text": delta_text},
+                if use_legacy:
+                    return InteractionsAPIStreamingResponse(
+                        event_type="interaction.start",
+                        id=item_id,
+                        object="interaction",
+                        status="in_progress",
+                        model=self.model,
                     )
-                )
-                return InteractionsAPIStreamingResponse(
-                    event_type="interaction.start",
-                    id=getattr(responses_chunk, "item_id", None)
-                    or f"interaction_{id(self)}",
-                    object="interaction",
-                    status="in_progress",
-                    model=self.model,
-                )
+                else:
+                    return InteractionsAPIStreamingResponse(
+                        event_type="interaction.created",
+                        id=item_id,
+                        object="interaction",
+                        status="in_progress",
+                        model=self.model,
+                    )
 
-            # Fallback: emit content.start if ContentPartAddedEvent never arrived
+            # Send the "content/step started" event on the second delta
             if not self.sent_content_start:
                 self.sent_content_start = True
+                if use_legacy:
+                    return InteractionsAPIStreamingResponse(
+                        event_type="content.start",
+                        id=item_id,
+                        object="content",
+                        delta={"type": "text", "text": ""},
+                    )
+                else:
+                    return InteractionsAPIStreamingResponse(
+                        event_type="step.start",
+                        index=0,
+                        step={"type": "model_output", "content": []},
+                    )
+
+            # Emit the delta itself
+            if use_legacy:
                 return InteractionsAPIStreamingResponse(
-                    event_type="content.start",
-                    id=getattr(responses_chunk, "item_id", None),
+                    event_type="content.delta",
+                    id=item_id,
                     object="content",
+                    delta={"text": delta_text},
+                )
+            else:
+                return InteractionsAPIStreamingResponse(
+                    event_type="step.delta",
+                    index=0,
                     delta={"type": "text", "text": delta_text},
                 )
 
-            # Normal path: emit content.delta with type field
-            return InteractionsAPIStreamingResponse(
-                event_type="content.delta",
-                id=getattr(responses_chunk, "item_id", None),
-                object="content",
-                delta={"type": "text", "text": delta_text},
-            )
-
-        # Handle ContentPartAddedEvent -> content.start (arrives before text deltas)
-        if isinstance(responses_chunk, ContentPartAddedEvent):
-            # Fallback: emit interaction.start if ResponseCreatedEvent never arrived
-            if not self.sent_interaction_start:
-                self.sent_interaction_start = True
-                return InteractionsAPIStreamingResponse(
-                    event_type="interaction.start",
-                    id=getattr(responses_chunk, "item_id", None)
-                    or f"interaction_{id(self)}",
-                    object="interaction",
-                    status="in_progress",
-                    model=self.model,
-                )
-            if not self.sent_content_start:
-                self.sent_content_start = True
-                return InteractionsAPIStreamingResponse(
-                    event_type="content.start",
-                    id=getattr(responses_chunk, "item_id", None),
-                    object="content",
-                    delta={"type": "text", "text": ""},
-                )
-            return None
-
-        # Handle ResponseCreatedEvent or ResponseInProgressEvent -> interaction.start
+        # Handle ResponseCreatedEvent or ResponseInProgressEvent
         if isinstance(responses_chunk, (ResponseCreatedEvent, ResponseInProgressEvent)):
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
@@ -153,39 +150,47 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     getattr(responses_chunk.response, "id", None)
                     if hasattr(responses_chunk, "response")
                     else None
+                ) or f"interaction_{id(self)}"
+                event_type = (
+                    "interaction.start" if use_legacy else "interaction.created"
                 )
                 return InteractionsAPIStreamingResponse(
-                    event_type="interaction.start",
-                    id=response_id or f"interaction_{id(self)}",
+                    event_type=event_type,
+                    id=response_id,
                     object="interaction",
                     status="in_progress",
                     model=self.model,
                 )
 
-        # Handle ResponseCompletedEvent -> interaction.complete
+        # Handle ResponseCompletedEvent
         if isinstance(responses_chunk, ResponseCompletedEvent):
             self.finished = True
             response = responses_chunk.response
+            response_id = getattr(response, "id", None) or f"interaction_{id(self)}"
 
-            # Send content.stop first if content was started
-            if self.sent_content_start:
-                # Note: We'll send this in the iterator, not here
-                pass
-
-            # Send interaction.complete
-            return InteractionsAPIStreamingResponse(
-                event_type="interaction.complete",
-                id=getattr(response, "id", None) or f"interaction_{id(self)}",
-                object="interaction",
-                status="completed",
-                model=self.model,
-                outputs=[
-                    {
-                        "type": "text",
-                        "text": self.collected_text,
-                    }
-                ],
-            )
+            if use_legacy:
+                return InteractionsAPIStreamingResponse(
+                    event_type="interaction.complete",
+                    id=response_id,
+                    object="interaction",
+                    status="completed",
+                    model=self.model,
+                    outputs=[{"type": "text", "text": self.collected_text}],
+                )
+            else:
+                return InteractionsAPIStreamingResponse(
+                    event_type="interaction.completed",
+                    id=response_id,
+                    object="interaction",
+                    status="completed",
+                    model=self.model,
+                    steps=[
+                        {
+                            "type": "model_output",
+                            "content": [{"type": "text", "text": self.collected_text}],
+                        }
+                    ],
+                )
 
         # For other event types, return None (skip)
         return None
@@ -207,10 +212,6 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
-        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
-        # the interaction.start fallback for the first OutputTextDeltaEvent).
-        if self._pending_events:
-            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         sync_iterator = cast(
             SyncResponsesAPIStreamingIterator, self.responses_stream_iterator
@@ -226,22 +227,29 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                 )
 
                 if transformed:
-                    # If we finished and content was started, send content.stop before interaction.complete
+                    completion_event_type = (
+                        "interaction.complete"
+                        if self._use_legacy
+                        else "interaction.completed"
+                    )
+                    stop_event_type = (
+                        "content.stop" if self._use_legacy else "step.stop"
+                    )
+                    # If content was started, send the stop event before the completion event.
                     if (
                         self.finished
                         and self.sent_content_start
-                        and transformed.event_type == "interaction.complete"
+                        and transformed.event_type == completion_event_type
                     ):
-                        # Send content.stop first
-                        content_stop = InteractionsAPIStreamingResponse(
-                            event_type="content.stop",
+                        stop_chunk = InteractionsAPIStreamingResponse(
+                            event_type=stop_event_type,
+                            index=0,
                             id=transformed.id,
                             object="content",
                             delta={"type": "text", "text": self.collected_text},
                         )
-                        # Store the interaction.complete to send next
                         self._pending_interaction_complete = transformed
-                        return content_stop
+                        return stop_chunk
                     return transformed
 
                 # If no transformation, continue to next chunk (loop continues)
@@ -249,10 +257,14 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             except StopIteration:
                 self.finished = True
 
-                # Send final events if needed
+                # Send final stop event if content was started
                 if self.sent_content_start:
+                    stop_event_type = (
+                        "content.stop" if self._use_legacy else "step.stop"
+                    )
                     return InteractionsAPIStreamingResponse(
-                        event_type="content.stop",
+                        event_type=stop_event_type,
+                        index=0,
                         object="content",
                         delta={"type": "text", "text": self.collected_text},
                     )
@@ -276,10 +288,6 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
-        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
-        # the interaction.start fallback for the first OutputTextDeltaEvent).
-        if self._pending_events:
-            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         async_iterator = cast(
             ResponsesAPIStreamingIterator, self.responses_stream_iterator
@@ -295,22 +303,29 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                 )
 
                 if transformed:
-                    # If we finished and content was started, send content.stop before interaction.complete
+                    completion_event_type = (
+                        "interaction.complete"
+                        if self._use_legacy
+                        else "interaction.completed"
+                    )
+                    stop_event_type = (
+                        "content.stop" if self._use_legacy else "step.stop"
+                    )
+                    # If content was started, send the stop event before the completion event.
                     if (
                         self.finished
                         and self.sent_content_start
-                        and transformed.event_type == "interaction.complete"
+                        and transformed.event_type == completion_event_type
                     ):
-                        # Send content.stop first
-                        content_stop = InteractionsAPIStreamingResponse(
-                            event_type="content.stop",
+                        stop_chunk = InteractionsAPIStreamingResponse(
+                            event_type=stop_event_type,
+                            index=0,
                             id=transformed.id,
                             object="content",
                             delta={"type": "text", "text": self.collected_text},
                         )
-                        # Store the interaction.complete to send next
                         self._pending_interaction_complete = transformed
-                        return content_stop
+                        return stop_chunk
                     return transformed
 
                 # If no transformation, continue to next chunk (loop continues)
@@ -318,10 +333,14 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             except StopAsyncIteration:
                 self.finished = True
 
-                # Send final events if needed
+                # Send final stop event if content was started
                 if self.sent_content_start:
+                    stop_event_type = (
+                        "content.stop" if self._use_legacy else "step.stop"
+                    )
                     return InteractionsAPIStreamingResponse(
-                        event_type="content.stop",
+                        event_type=stop_event_type,
+                        index=0,
                         object="content",
                         delta={"type": "text", "text": self.collected_text},
                     )
