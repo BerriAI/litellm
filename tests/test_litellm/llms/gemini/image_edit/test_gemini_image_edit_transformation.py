@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
 
 
@@ -73,6 +74,22 @@ class TestGeminiImageEditTransformation:
         )
 
         assert mapped["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "1K"}
+
+    def test_map_openai_params_rejects_malformed_form_image_config_json(
+        self,
+    ) -> None:
+        optional_params: Dict[str, object] = {
+            "imageConfig": "{bad",
+        }
+
+        with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+            self.config.map_openai_params(
+                image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+                model="gemini-3-pro-image-preview",
+                drop_params=False,
+            )
+
+        assert "`imageConfig` must be valid JSON" in str(exc_info.value)
 
     def test_transform_image_edit_request(self) -> None:
         image_bytes = b"fake_image_data"
