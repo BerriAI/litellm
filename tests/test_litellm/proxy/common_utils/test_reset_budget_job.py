@@ -250,8 +250,7 @@ def test_reset_budget_for_key_skips_missing_token(reset_budget_job, mock_prisma_
 
     mock_prisma_client.data["key"] = [missing_token_key, valid_key]
 
-    with pytest.raises(Exception, match="Failed to reset 1 keys"):
-        asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
     calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
     assert len(calls) == 1
