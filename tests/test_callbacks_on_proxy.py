@@ -84,6 +84,51 @@ def _detect_leaks(samples):
     return leaks
 
 
+def _terminal_suspects(samples):
+    """
+    Types whose net growth clears the threshold monotonically but is confined
+    to the *final* interval — `growing_intervals == 1` with that one growing
+    interval being the last. `_detect_leaks`' `>= 2` guard silently passes
+    these, so a real leak that accumulates entirely in the last sampled window
+    is indistinguishable from a one-time terminal step *without one more
+    sample*. Returns the set of such types so the caller can re-confirm.
+    """
+    suspects = set()
+    all_types = set().union(*[set(s) for s in samples]) if samples else set()
+    for t in all_types:
+        series = [s.get(t, 0) for s in samples]
+        deltas = [b - a for a, b in zip(series, series[1:])]
+        if not deltas:
+            continue
+        net = series[-1] - series[0]
+        non_decreasing = all(d >= 0 for d in deltas)
+        growing = [i for i, d in enumerate(deltas) if d > 0]
+        if (
+            non_decreasing
+            and net >= LEAK_MIN_NET_GROWTH
+            and growing == [len(deltas) - 1]
+        ):
+            suspects.add(t)
+    return suspects
+
+
+async def _detect_leaks_confirmed(session, samples):
+    """
+    `_detect_leaks`, plus a single confirmation sample when growth is confined
+    to the final interval (see `_terminal_suspects`). A genuine ongoing leak
+    keeps climbing -> now grows in >= 2 intervals -> flagged; a one-time
+    terminal registration plateaus -> still 1 growing interval -> ignored.
+    Returns `(leaks, samples)` (samples may have one extra entry appended).
+    """
+    leaks = _detect_leaks(samples)
+    if not leaks and _terminal_suspects(samples):
+        await asyncio.sleep(SAMPLE_INTERVAL_SECONDS)
+        _, _, all_cb = await get_active_callbacks(session=session)
+        samples = samples + [_summarize(all_cb)]
+        leaks = _detect_leaks(samples)
+    return leaks, samples
+
+
 def _format_report(samples, leaks) -> str:
     lines = ["Callback count per type across samples (time order):"]
     all_types = sorted(set().union(*[set(s) for s in samples]))
@@ -206,7 +251,6 @@ async def test_check_num_callbacks():
     *sustained, monotonic* per-type growth (a genuine leak), naming the type.
     """
     async with aiohttp.ClientSession() as session:
-        await asyncio.sleep(30)
         # Absorb proxy warmup / in-flight parallel registration before baseline.
         await asyncio.sleep(SETTLE_SECONDS)
 
@@ -216,7 +260,7 @@ async def test_check_num_callbacks():
 
         assert sum(samples[0].values()) > 0, "expected some callbacks registered"
 
-        leaks = _detect_leaks(samples)
+        leaks, samples = await _detect_leaks_confirmed(session, samples)
         report = _format_report(samples, leaks)
         print(report)
         assert not leaks, f"Callback leak detected.\n{report}"
@@ -247,7 +291,7 @@ async def test_check_num_callbacks_on_lowest_latency():
                 session, NUM_SAMPLES, SAMPLE_INTERVAL_SECONDS
             )
 
-            leaks = _detect_leaks(samples)
+            leaks, samples = await _detect_leaks_confirmed(session, samples)
             report = _format_report(samples, leaks)
             print(report)
             assert not leaks, f"Callback leak detected.\n{report}"
