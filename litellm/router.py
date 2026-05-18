@@ -7795,6 +7795,56 @@ class Router:
 
         return credentials
 
+    def _filter_bare_wildcard_deployments_by_known_models(
+        self, model: str, deployments: List[Dict]
+    ) -> List[Dict]:
+        """
+        For bare wildcard routes (`model_name: "*"` / `"*/"`), avoid routing an
+        advertised upstream model to providers that are known not to list it.
+
+        This reuses the existing wildcard discovery path, so it follows the
+        current LiteLLM behavior: static model lists by default, provider
+        `/models` only when `check_provider_endpoint` is enabled, and cached by
+        `get_valid_models`. If no deployment can positively identify the model,
+        fail open to preserve existing catch-all behavior.
+        """
+        if not deployments:
+            return deployments
+
+        from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+        filtered_deployments: List[Dict] = []
+        unknown_deployments: List[Dict] = []
+        has_known_match = False
+
+        for deployment in deployments:
+            if deployment.get("model_name") not in {"*", "*/"}:
+                filtered_deployments.append(deployment)
+                continue
+
+            try:
+                litellm_params = LiteLLM_Params(**deployment["litellm_params"])
+                if "/" in litellm_params.model:
+                    provider, _ = litellm_params.model.split("/", 1)
+                    litellm_params.model = f"{provider}/*"
+                known_models = get_known_models_from_wildcard(
+                    wildcard_model=deployment["model_name"],
+                    litellm_params=litellm_params,
+                )
+            except Exception:
+                known_models = []
+
+            if not known_models:
+                unknown_deployments.append(deployment)
+            elif model in known_models:
+                has_known_match = True
+                filtered_deployments.append(deployment)
+
+        if not has_known_match:
+            return deployments
+
+        return filtered_deployments + unknown_deployments
+
     @overload
     def get_router_model_info(
         self,
@@ -8193,9 +8243,12 @@ class Router:
                     model_info.get("supported_openai_params", None) is not None
                     and model_info["supported_openai_params"] is not None
                 ):
-                    model_group_info.supported_openai_params = model_info[
-                        "supported_openai_params"
-                    ]
+                    model_group_info.supported_openai_params = list(
+                        dict.fromkeys(
+                            (model_group_info.supported_openai_params or [])
+                            + model_info["supported_openai_params"]
+                        )
+                    )
                 if model_info.get("tpm", None) is not None and _deployment_tpm is None:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
@@ -8223,6 +8276,12 @@ class Router:
                 model_group_info.configurable_clientside_auth_params = (
                     configurable_clientside_auth_params
                 )
+
+            if model_group_info.supported_openai_params is not None and any(
+                param in model_group_info.supported_openai_params
+                for param in ("reasoning_effort", "thinking")
+            ):
+                model_group_info.supports_reasoning = True
 
         return model_group_info
 
@@ -8860,12 +8919,26 @@ class Router:
 
         if len(returned_models) == 0:  # check if wildcard route
             potential_wildcard_models = self.pattern_router.route(model_name) or []
+            if model_name is not None:
+                potential_wildcard_models = (
+                    self._filter_bare_wildcard_deployments_by_known_models(
+                        model=model_name,
+                        deployments=potential_wildcard_models,
+                    )
+                )
 
             ## check for team-specific wildcard models
             if team_id is not None and team_id in self.team_pattern_routers:
                 potential_team_only_wildcard_models = (
                     self.team_pattern_routers[team_id].route(model_name) or []
                 )
+                if model_name is not None:
+                    potential_team_only_wildcard_models = (
+                        self._filter_bare_wildcard_deployments_by_known_models(
+                            model=model_name,
+                            deployments=potential_team_only_wildcard_models,
+                        )
+                    )
                 potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:
@@ -9387,6 +9460,12 @@ class Router:
             )
 
             if pattern_deployments:
+                pattern_deployments = (
+                    self._filter_bare_wildcard_deployments_by_known_models(
+                        model=model,
+                        deployments=pattern_deployments,
+                    )
+                )
                 return model, pattern_deployments
 
             if (
@@ -9399,6 +9478,12 @@ class Router:
                     model=model,
                 )
                 if pattern_deployments:
+                    pattern_deployments = (
+                        self._filter_bare_wildcard_deployments_by_known_models(
+                            model=model,
+                            deployments=pattern_deployments,
+                        )
+                    )
                     return model, pattern_deployments
 
             # check if default deployment is set

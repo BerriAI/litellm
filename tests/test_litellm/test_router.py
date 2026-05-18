@@ -3267,3 +3267,110 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+@patch("litellm.proxy.auth.model_checks.get_provider_models")
+def test_bare_wildcard_runtime_filters_known_unsupported_providers(
+    mock_get_provider_models,
+):
+    def mock_provider_models(provider, litellm_params=None):
+        if litellm_params is not None and litellm_params.model == "openai/*":
+            return ["gpt-4o"]
+        if litellm_params is not None and litellm_params.model == "deepseek/*":
+            return ["deepseek-v4-pro"]
+        return []
+
+    mock_get_provider_models.side_effect = mock_provider_models
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "openai/*", "api_key": "openai-key"},
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "deepseek/*", "api_key": "deepseek-key"},
+            },
+        ]
+    )
+
+    matched_deployments = router.get_model_list(model_name="deepseek-v4-pro")
+
+    assert matched_deployments is not None
+    assert len(matched_deployments) == 1
+    assert matched_deployments[0]["litellm_params"]["model"] == (
+        "deepseek/deepseek-v4-pro"
+    )
+    filtered_deployments = router._filter_bare_wildcard_deployments_by_known_models(
+        model="deepseek-v4-pro",
+        deployments=router.pattern_router.route("deepseek-v4-pro") or [],
+    )
+    assert len(filtered_deployments) == 1
+    assert filtered_deployments[0]["litellm_params"]["model"] == (
+        "deepseek/deepseek-v4-pro"
+    )
+
+
+@patch("litellm.proxy.auth.model_checks.get_provider_models")
+def test_bare_wildcard_runtime_filter_fails_open_when_model_is_unknown(
+    mock_get_provider_models,
+):
+    mock_get_provider_models.return_value = []
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "openai/*", "api_key": "openai-key"},
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "deepseek/*", "api_key": "deepseek-key"},
+            },
+        ]
+    )
+
+    matched_deployments = router.get_model_list(model_name="custom-model")
+
+    assert matched_deployments is not None
+    assert len(matched_deployments) == 2
+
+
+def test_model_group_info_unions_supported_openai_params_and_reasoning(monkeypatch):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "combined-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key"},
+            },
+            {
+                "model_name": "combined-model",
+                "litellm_params": {"model": "deepseek/deepseek-chat", "api_key": "key"},
+            },
+        ]
+    )
+
+    def mock_get_deployment_model_info(model_id, model_name):
+        if model_name == "openai/gpt-4o":
+            return {
+                "supported_openai_params": ["tools"],
+                "supports_reasoning": False,
+            }
+        return {
+            "supported_openai_params": ["reasoning_effort"],
+            "supports_reasoning": False,
+        }
+
+    monkeypatch.setattr(
+        router, "get_deployment_model_info", mock_get_deployment_model_info
+    )
+
+    model_group_info = router.get_model_group_info(model_group="combined-model")
+
+    assert model_group_info is not None
+    assert set(model_group_info.supported_openai_params or []) == {
+        "tools",
+        "reasoning_effort",
+    }
+    assert model_group_info.supports_reasoning is True
