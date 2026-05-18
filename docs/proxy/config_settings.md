@@ -259,7 +259,7 @@ router_settings:
 | alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
 | enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
 | enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication on LLM + info routes |
-| use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
+| use_x_forwarded_for | str | If true, uses the `X-Forwarded-For` header to derive the client IP and (for MCP OAuth) the proxy's public origin from `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port`. For MCP OAuth, headers are honored only when `mcp_trusted_proxy_ranges` is also set and the request peer's IP falls inside one of those CIDRs. For ingressed deployments, prefer [`PROXY_BASE_URL`](#environment-variables---reference). See [MCP OAuth — Reverse proxy and ingress configuration](../mcp_oauth#reverse-proxy-and-ingress-configuration). |
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
 | store_model_in_db | boolean | If true, enables storing model + credential information in the DB. |
@@ -320,7 +320,7 @@ router_settings:
 | mcp_client_side_auth_header_name | string | HTTP header name for client-side MCP server credentials |
 | mcp_internal_ip_ranges | list | CIDR ranges considered internal for non-public MCP server access control |
 | mcp_required_fields | list | List of required field names for MCP server submissions |
-| mcp_trusted_proxy_ranges | list | CIDR ranges of proxies trusted to forward X-Forwarded-For headers for MCP |
+| mcp_trusted_proxy_ranges | list | CIDR ranges of proxies trusted to forward `X-Forwarded-*` headers for MCP. Required (in addition to `use_x_forwarded_for: true`) for the MCP OAuth `authorize` endpoint to derive its public origin from those headers. Without this, headers are ignored and the proxy falls back to the request's literal base URL. For ingressed deployments, prefer [`PROXY_BASE_URL`](#environment-variables---reference). See [MCP OAuth — Reverse proxy and ingress configuration](../mcp_oauth#reverse-proxy-and-ingress-configuration). |
 | require_end_user_mcp_access_defined | boolean | If true, requires end users to have explicit MCP access permissions defined |
 | role_permissions | list | List of role-based permission configurations |
 | search_tools | list | List of search tool configurations for enabling web search capabilities |
@@ -642,6 +642,7 @@ router_settings:
 | MCP_PER_USER_TOKEN_DEFAULT_TTL | Default TTL in seconds for per-user MCP OAuth tokens stored in Redis. Default is 43200 (12 hours)
 | MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from per-user MCP OAuth token expiry when computing Redis TTL. Default is 60
 | MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE | Maximum number of entries in the MCP OAuth2 token exchange cache. Default is 500
+| MCP_TRUSTED_REDIRECT_ORIGINS | Comma-separated allowlist of additional `redirect_uri` origins accepted by the MCP OAuth `authorize` endpoint, beyond same-origin and loopback. Each entry is `host` or `host:port`; a `*.suffix` prefix matches any strictly-deeper subdomain. HTTPS only. Use this for first-party OAuth clients on sister domains (e.g. `app.example.com`). For ingressed deployments where the proxy's own origin is wrong, set [`PROXY_BASE_URL`](#environment-variables---reference) instead. See [MCP OAuth — Reverse proxy and ingress configuration](../mcp_oauth#reverse-proxy-and-ingress-configuration).
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
@@ -1035,7 +1036,7 @@ router_settings:
 | PROMETHEUS_URL | URL for Prometheus service
 | PROMPTLAYER_API_KEY | API key for PromptLayer integration
 | PROXY_ADMIN_ID | Admin identifier for proxy server
-| PROXY_BASE_URL | Base URL for proxy service
+| PROXY_BASE_URL | Base URL for proxy service. Also used by the MCP OAuth `authorize` endpoint as the proxy's public origin when validating browser-supplied `redirect_uri` values — set this to the exact origin users see in their address bar (e.g. `https://llm.example.com`) when LiteLLM runs behind a TLS-terminating ingress. Full origin only: scheme + host (+ port if non-default), no trailing slash, no path. When set, it takes precedence over `X-Forwarded-*` headers (which only apply when [`use_x_forwarded_for`](#general_settings---reference) is `true` AND the request peer is in [`mcp_trusted_proxy_ranges`](#general_settings---reference)). See [MCP OAuth — Reverse proxy and ingress configuration](../mcp_oauth#reverse-proxy-and-ingress-configuration).
 | PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 10
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BATCH_POLLING_ENABLED | Set to `false` to disable the `CheckBatchCost` and `CheckResponsesCost` background polling jobs entirely. Useful for emergency mitigation on installs with large numbers of stale managed objects. Default is `true`

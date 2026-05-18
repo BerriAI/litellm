@@ -92,6 +92,52 @@ LiteLLM performs metadata discovery per the MCP spec ([section 2.3](https://mode
 
 For detailed OAuth2 debugging — including debug header reference, common misconfigurations, and example output — see [Debugging OAuth](./mcp_oauth#debugging-oauth).
 
+### MCP OAuth: Connect returns `{"detail":"invalid_request"}` {#mcp-oauth-invalid-request}
+
+**Symptom.** Clicking **Connect** on an MCP OAuth server in the LiteLLM UI returns:
+
+```
+HTTP/1.1 400 Bad Request
+{"detail":"invalid_request"}
+```
+
+The proxy logs (with verbose logging) show a line like `MCP OAuth: rejecting redirect_uri ... as invalid_request. Computed proxy base=...`.
+
+**Cause.** The `/v1/mcp/server/oauth/{server_id}/authorize` endpoint validates that the browser-supplied `redirect_uri` (`https://llm.example.com/ui/mcp/oauth/callback`) shares scheme + host + port with the proxy's own public origin. Behind a TLS-terminating ingress (Kubernetes, ALB, nginx, Cloudflare, etc.) the proxy resolves to its internal address (`http://<pod-ip>:4000`) by default, so the same-origin check rejects.
+
+**Diagnostic.** Compare what the proxy advertises as its origin to what the browser sees:
+
+```bash
+curl -sS https://llm.example.com/.well-known/oauth-authorization-server | jq .issuer
+```
+
+The `issuer` value should equal the origin the user types into their browser (`https://llm.example.com`). If it returns an internal hostname or `http://...`, the proxy's resolved origin is wrong.
+
+**Fixes**, in order of preference:
+
+1. **Set `PROXY_BASE_URL`** (recommended). Operator declares the proxy's true public origin out of band, no header trust required:
+
+   ```bash
+   PROXY_BASE_URL=https://llm.example.com
+   ```
+
+   Full origin only: scheme + host (+ port if non-default), no trailing slash, no path. See [Reverse proxy and ingress configuration](./mcp_oauth#reverse-proxy-and-ingress-configuration).
+
+2. **Trust `X-Forwarded-*` from your ingress.** Set both keys in `general_settings`:
+
+   ```yaml title="config.yaml" showLineNumbers
+   general_settings:
+     use_x_forwarded_for: true
+     mcp_trusted_proxy_ranges:
+       - "10.0.0.0/8"      # your ingress / load-balancer CIDR(s)
+   ```
+
+   `use_x_forwarded_for` alone is not enough — without `mcp_trusted_proxy_ranges`, the proxy refuses to honor `X-Forwarded-*` because it cannot tell a trusted reverse proxy from a direct attacker. Verify that your ingress sends `X-Forwarded-Proto`, `X-Forwarded-Host`, and (when running on a non-default port) `X-Forwarded-Port`.
+
+3. **Fix the ingress.** If the ingress is stripping or rewriting `X-Forwarded-*`, no proxy setting will help — restore the headers at the ingress layer.
+
+If the `redirect_uri` legitimately lives on a sister domain you control (e.g. an internal web app registering as an OAuth client of the MCP proxy), allowlist its origin via `MCP_TRUSTED_REDIRECT_ORIGINS`. See [Allowing additional first-party redirect_uri origins](./mcp_oauth#allowing-additional-first-party-redirect_uri-origins).
+
 ## Verify Connectivity
 
 Run lightweight validations before impacting production traffic.

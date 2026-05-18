@@ -90,6 +90,64 @@ sequenceDiagram
 
 See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
 
+### Reverse proxy and ingress configuration {#reverse-proxy-and-ingress-configuration}
+
+If LiteLLM runs behind a TLS-terminating ingress (Kubernetes, ALB, nginx, Cloudflare, etc.), the proxy needs to know its public origin so the OAuth `authorize` endpoint can compare the browser-supplied `redirect_uri` (e.g. `https://llm.example.com/ui/mcp/oauth/callback`) against its own scheme + host + port. If the proxy resolves to its internal address (`http://<pod-ip>:4000`) the same-origin check fails and the **Connect** button on the MCP server page returns `400 Bad Request` with `{"detail":"invalid_request"}`.
+
+The simplest and recommended fix is to set `PROXY_BASE_URL` to the exact origin users see in the address bar:
+
+```bash
+PROXY_BASE_URL=https://llm.example.com
+```
+
+Rules for the value:
+
+- Full origin only: scheme + host (+ port if non-default).
+- No trailing slash, no path component.
+- Must match the address bar exactly. `https://llm.example.com` and `https://llm.example.com:443` are accepted as the same origin (the default port is normalized away), but `https://llm.example.com` will not match a browser running against `https://llm.example.com:8443`.
+
+When `PROXY_BASE_URL` is set, LiteLLM uses it directly and skips the `X-Forwarded-*` trust path described below.
+
+#### Origin resolution order
+
+For MCP OAuth endpoints, LiteLLM resolves the proxy's public origin in this order:
+
+1. **`PROXY_BASE_URL` env var** — used verbatim if set to a valid `http(s)` URL. Invalid values are ignored with a warning.
+2. **`X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port`** — only honored when **both** [`use_x_forwarded_for`](./proxy/config_settings#general_settings---reference) is `true` **and** the request peer's IP falls inside [`mcp_trusted_proxy_ranges`](./proxy/config_settings#general_settings---reference). If `use_x_forwarded_for` is enabled without `mcp_trusted_proxy_ranges`, the headers are not trusted (there is no way to distinguish a trusted reverse proxy from a direct attacker).
+3. **`request.base_url`** — the literal URL FastAPI sees on the request. For ingressed deployments this is typically `http://<internal-host>:4000` and will not match the browser origin.
+
+If you cannot or do not want to set `PROXY_BASE_URL`, configure the X-Forwarded path explicitly:
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  use_x_forwarded_for: true
+  mcp_trusted_proxy_ranges:
+    - "10.0.0.0/8"      # your ingress / load-balancer CIDR(s)
+```
+
+and verify your ingress sends `X-Forwarded-Proto`, `X-Forwarded-Host`, and (if non-default) `X-Forwarded-Port`. See [MCP OAuth troubleshooting](./mcp_troubleshoot#mcp-oauth-invalid-request) for the diagnostic curl.
+
+#### Allowing additional first-party redirect_uri origins {#allowing-additional-first-party-redirect_uri-origins}
+
+If a first-party OAuth client lives on a sister domain (for example, an internal web app on `app.example.com` registering against the MCP proxy on `llm.example.com`), set `MCP_TRUSTED_REDIRECT_ORIGINS` to allowlist its origin in addition to the proxy's own:
+
+```bash
+MCP_TRUSTED_REDIRECT_ORIGINS=app.example.com,*.tools.example.com
+```
+
+- Comma-separated list of `host` or `host:port` entries.
+- HTTPS only. The allowlist path rejects any non-`https` `redirect_uri`.
+- A `*.suffix` entry matches any strictly-deeper subdomain of `suffix` (`*.tools.example.com` matches `a.tools.example.com` but not `tools.example.com`).
+- Loopback (`localhost`, `127.0.0.0/8`, `::1`) is always accepted regardless of this setting.
+
+This is for first-party OAuth clients you control. For the standard ingress case, prefer `PROXY_BASE_URL`.
+
+#### Why the same-origin check exists
+
+The MCP proxy's `/v1/mcp/server/oauth/<server_id>/authorize` endpoint validates that the caller's `redirect_uri` shares scheme + host + port with the proxy's own public origin (or with one of the loopback / allowlisted entries above). The check exists to stop an attacker from phishing a logged-in admin into a link that bounces an authorization code — for an upstream OAuth-protected MCP server such as GitHub or Slack — through an attacker-controlled host. Same-origin (plus an explicit ops allowlist) is the threat-model-safe equivalent of the loopback-only rule used for native MCP clients.
+
+`PROXY_BASE_URL` is the right escape hatch for ingressed deployments because the operator is declaring the proxy's true public origin out of band, rather than asking the proxy to infer it from headers an attacker might be able to set. The check itself is not relaxed.
+
 ## Machine-to-Machine (M2M) Auth
 
 LiteLLM automatically fetches, caches, and refreshes OAuth2 tokens using the `client_credentials` grant. No manual token management required.
