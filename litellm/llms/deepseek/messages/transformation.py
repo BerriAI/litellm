@@ -32,7 +32,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> str:
-        return api_base or get_secret_str("DEEPSEEK_ANTHROPIC_API_BASE") or "https://api.deepseek.com/anthropic"
+        return (
+            api_base
+            or get_secret_str("DEEPSEEK_ANTHROPIC_API_BASE")
+            or "https://api.deepseek.com/anthropic"
+        )
 
     def validate_anthropic_messages_environment(
         self,
@@ -46,7 +50,11 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         dynamic_api_key = self.get_api_key(api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
+        if (
+            "x-api-key" not in headers
+            and "authorization" not in headers
+            and dynamic_api_key is not None
+        ):
             headers["x-api-key"] = dynamic_api_key
 
         if "anthropic-version" not in headers:
@@ -116,5 +124,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         if "tools" in anthropic_messages_request:
-            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
+            anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(
+                anthropic_messages_request["tools"]
+            )
         return anthropic_messages_request
