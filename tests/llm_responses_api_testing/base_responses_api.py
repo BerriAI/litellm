@@ -363,7 +363,7 @@ class BaseResponsesAPITest(ABC):
         litellm._turn_on_debug()
 
         response = await litellm.aresponses(
-            model="gpt-4o",
+            model="gpt-5.5",
             input="Tell me a three sentence bedtime story about a unicorn.",
         )
         print("Initial response=", json.dumps(response, indent=4, default=str))
@@ -771,7 +771,7 @@ class BaseResponsesAPITest(ABC):
         except litellm.BadRequestError as e:
             if "shell" in str(e).lower() and "not supported" in str(e).lower():
                 pytest.skip(
-                    "Shell tool is not supported for this model (e.g. gpt-4o); use a model that supports shell"
+                    "Shell tool is not supported for this model (e.g. gpt-5.5); use a model that supports shell"
                 )
             raise
         validate_responses_api_response(response, final_chunk=True)
@@ -785,7 +785,7 @@ class BaseResponsesAPITest(ABC):
 
         Calls aresponses(..., tools=[shell], stream=True), then iterates the stream and
         asserts at least one event is shell-related or response output contains shell_call.
-        Skips when model does not support shell (e.g. gpt-4o).
+        Skips when model does not support shell (e.g. gpt-5.5).
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (
