@@ -130,26 +130,40 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     """Aggregate a list of per-model results into a single cell status.
 
     Order of precedence (most informative wins):
-      - Any `fail` → cell is `fail` with the first failure's error.
+      - Any `fail` → cell is `fail` with every failing model's error
+        joined by `"; "` so a multi-tier breakage doesn't silently hide
+        all but the first error from the published matrix.
       - `not_applicable` → cell is `not_applicable` with the reason.
       - `pass` → cell is `pass`.
       - empty / nothing recognized → `not_tested`.
+
+    `not_tested` rows are treated as absent data: they're dropped before
+    aggregation so a mix of (pass, not_tested) — e.g. from a partial
+    crash or a test that explicitly recorded "this tier didn't run" —
+    still surfaces the passing tiers rather than silently demoting the
+    whole cell to `not_tested`. A cell is only `not_tested` when *every*
+    row is `not_tested` (or there are no rows at all).
     """
     if not results:
         return {"status": "not_tested"}
 
-    for r in results:
-        if r.get("status") == "fail":
-            return {"status": "fail", "error": str(r.get("error", "test failed"))}
+    observed = [r for r in results if r.get("status") != "not_tested"]
+    if not observed:
+        return {"status": "not_tested"}
 
-    for r in results:
+    failures = [r for r in observed if r.get("status") == "fail"]
+    if failures:
+        errors = [str(r.get("error", "test failed")) for r in failures]
+        return {"status": "fail", "error": "; ".join(errors)}
+
+    for r in observed:
         if r.get("status") == "not_applicable":
             return {
                 "status": "not_applicable",
                 "reason": str(r.get("reason", "not applicable")),
             }
 
-    if all(r.get("status") == "pass" for r in results):
+    if all(r.get("status") == "pass" for r in observed):
         return {"status": "pass"}
 
     return {"status": "not_tested"}
