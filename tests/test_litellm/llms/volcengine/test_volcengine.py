@@ -176,6 +176,34 @@ class TestVolcEngineConfig:
         )
         assert e2e["extra_body"]["thinking"] == {"type": "disabled"}
 
+    def test_reasoning_effort_unknown_value(self):
+        """Unknown reasoning_effort values must respect drop_params semantics."""
+        import pytest
+
+        from litellm.exceptions import UnsupportedParamsError
+
+        config = VolcEngineConfig()
+
+        # drop_params=False: raise on unknown value (not silently drop)
+        with pytest.raises(UnsupportedParamsError) as exc_info:
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "ultra"},
+                optional_params={},
+                model="doubao-seed-1.6",
+                drop_params=False,
+            )
+        assert "reasoning_effort" in str(exc_info.value)
+        assert "ultra" in str(exc_info.value)
+
+        # drop_params=True: silently drop unknown value, no thinking written
+        out = config.map_openai_params(
+            non_default_params={"reasoning_effort": "ultra"},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=True,
+        )
+        assert out == {}
+
     def test_e2e_completion(self):
         from openai import OpenAI
 

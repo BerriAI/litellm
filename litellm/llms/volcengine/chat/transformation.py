@@ -1,5 +1,7 @@
 from typing import Optional, Union
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -103,7 +105,20 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
                 optional_params["thinking"] = {"type": "enabled"}
             elif reasoning_effort == "auto":
                 optional_params["thinking"] = {"type": "auto"}
-            # Unknown values: silently drop (super() already handles drop_params semantics)
+            else:
+                # Unknown reasoning_effort value: respect drop_params semantics.
+                # When drop_params=True (or litellm.drop_params=True): silently drop.
+                # Otherwise: raise so callers don't silently get default thinking behavior.
+                if not (drop_params or litellm.drop_params):
+                    raise UnsupportedParamsError(
+                        status_code=400,
+                        message=(
+                            f"VolcEngine does not support reasoning_effort="
+                            f"{reasoning_effort!r}. Supported values: 'none', "
+                            f"'minimal', 'low', 'medium', 'high', 'xhigh', 'auto'. "
+                            f"Pass drop_params=True to silently drop unknown values."
+                        ),
+                    )
 
         if "thinking" in optional_params:
             """
