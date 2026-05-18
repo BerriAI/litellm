@@ -255,15 +255,50 @@ class TestNvidiaNim(BaseLLMRerankTest):
         return litellm.LlmProviders.NVIDIA_NIM
 
     def get_base_rerank_call_args(self) -> dict:
-        # nvidia/llama-3_2-nv-rerankqa-1b-v2 reached end-of-life on
-        # 2026-05-18 (returns HTTP 410 Gone from ai.api.nvidia.com).
-        # Use nv-rerankqa-mistral-4b-v3, which is still hosted on the
-        # NVIDIA API catalog and is already listed in
-        # model_prices_and_context_window.json with a 0.0 cost.
         return {
-            "model": "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3",
+            "model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
         }
 
     def get_expected_cost(self) -> float:
         """Nvidia NIM rerank models are free (cost = 0.0)"""
         return 0.0
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    async def test_basic_rerank(self, sync_mode, monkeypatch):
+        """
+        Override the base live rerank test with a mocked HTTP layer.
+
+        NVIDIA reached end-of-life for the hosted
+        nvidia/llama-3.2-nv-rerankqa-1b-v2 rerank API on 2026-05-18 and
+        published no replacement model on the API catalog account used in
+        CI, so a live call now returns HTTP 410 / 404. Mock the transport
+        instead (same pattern as test_nvidia_nim_rerank_ranking_endpoint
+        above) so the request/response transformation and cost calculation
+        stay covered offline.
+        """
+        monkeypatch.setenv("NVIDIA_NIM_API_KEY", "fake-api-key")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.text = ""
+        mock_response.json.return_value = {
+            "rankings": [
+                {"index": 0, "logit": 0.95},
+                {"index": 1, "logit": 0.75},
+            ],
+            "usage": {"total_tokens": 7},
+        }
+
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                return_value=mock_response,
+            ),
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ),
+        ):
+            await super().test_basic_rerank(sync_mode=sync_mode)
