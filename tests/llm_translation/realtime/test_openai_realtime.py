@@ -101,7 +101,10 @@ async def test_openai_realtime_direct_call_no_intent():
 
     try:
         await litellm._arealtime(
-            model="openai/gpt-4o-realtime-preview",
+            # gpt-4o-realtime-preview and its date snapshots were removed by
+            # OpenAI on 2026-05-18 ("model_not_found"). gpt-realtime is the
+            # current GA alias.
+            model="openai/gpt-realtime",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
             timeout=60,
@@ -249,14 +252,16 @@ async def test_openai_realtime_direct_call_with_intent():
     websocket_client = RealTimeWebSocketClient()
     caught_exception = None
 
+    # gpt-4o-realtime-preview and its date snapshots were removed by OpenAI
+    # on 2026-05-18 ("model_not_found"). gpt-realtime is the current GA alias.
     query_params: RealtimeQueryParams = {
-        "model": "openai/gpt-4o-realtime-preview",
+        "model": "openai/gpt-realtime",
         "intent": "chat",
     }
 
     try:
         await litellm._arealtime(
-            model="openai/gpt-4o-realtime-preview",
+            model="openai/gpt-realtime",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
             query_params=query_params,

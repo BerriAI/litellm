@@ -21,7 +21,10 @@ class TestOpenAIRealtime(BaseRealtimeTest):
     """
 
     def get_model(self) -> str:
-        return "gpt-4o-realtime-preview"
+        # gpt-4o-realtime-preview and all its date snapshots were removed by
+        # OpenAI on 2026-05-18 ("model_not_found"). gpt-realtime is the
+        # current GA alias.
+        return "gpt-realtime"
 
     def get_api_key_env_var(self) -> str:
         return "OPENAI_API_KEY"
