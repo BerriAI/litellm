@@ -175,12 +175,6 @@ async def _resolve_team_access_group_model_names(
     team_objects: List[Any],
     prisma_client: "PrismaClient",
 ) -> List[str]:
-    """
-    Resolve model names reachable via ``team.access_group_ids[]`` against
-    ``LiteLLM_AccessGroupTable``. Skips teams with no access groups or whose
-    ``models`` is empty / contains ``all-proxy-models``. Returns deduped
-    names in encounter order; sentinel stripping is the caller's job.
-    """
     eligible_teams: List[Any] = []
     all_access_group_ids: set = set()
     for team in team_objects:
@@ -227,18 +221,6 @@ async def resolve_team_db_access_group_models(
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> Tuple[List[str], bool]:
-    """
-    DB-backed Unified Access Group resolver for ``/v1/models``. Sibling of
-    ``get_team_models``: best-effort loads the team object on the fallback
-    path, merges access-group model names into ``team_models``, then strips
-    the ``no-default-models`` sentinel. Returns
-    ``(resolved_team_models, force_empty_response)`` — ``force_empty`` is
-    True when the sentinel was the only signal and nothing real was
-    contributed, guarding against ``get_complete_model_list`` falling back
-    to the full ``proxy_model_list``.
-    """
-    # Function-local to keep ``model_checks.py``'s import surface narrow;
-    # ``auth_checks`` transitively pulls in ``proxy/utils.py``.
     from litellm.proxy.auth.auth_checks import get_team_object
 
     team_object = pre_loaded_team_object

@@ -5891,9 +5891,6 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
     )
 
-    # DB-backed Unified Access Groups + ``no-default-models`` sentinel
-    # handling. ``force_empty`` guards against ``get_complete_model_list``
-    # widening access when a sentinel-only team has no resolved models.
     team_models, force_empty = await resolve_team_db_access_group_models(
         team_models=team_models,
         key_models=key_models,
