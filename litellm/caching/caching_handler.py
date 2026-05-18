@@ -873,9 +873,14 @@ class LLMCachingHandler:
             ) is True or _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
                 if kwargs.get("stream", False) is True:
+                    bridge_call_type = (
+                        CallTypes.acompletion.value
+                        if call_type == "aresponses"
+                        else CallTypes.completion.value
+                    )
                     cached_result = self._convert_cached_stream_response(
                         cached_result=cached_result,
-                        call_type=CallTypes.acompletion.value,
+                        call_type=bridge_call_type,
                         logging_obj=logging_obj,
                         model=model,
                     )
