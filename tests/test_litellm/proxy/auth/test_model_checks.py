@@ -249,3 +249,93 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_strips_no_default_models_sentinel():
+    """
+    `no-default-models` is an internal sentinel meaning "no standalone model
+    grants - only inherited (team / access group) grants apply". It must never
+    appear in the advertised /v1/models list, regardless of where it was set.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    # Sentinel sitting in team_models alongside real models - the bug scenario
+    # where /v1/models would otherwise leak the literal string to OpenWebUI.
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=["no-default-models", "gpt-4o", "claude-opus-4-5"],
+        proxy_model_list=["gpt-3.5-turbo"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert "no-default-models" not in result
+    assert set(result) == {"gpt-4o", "claude-opus-4-5"}
+
+    # Sentinel alone in key_models -> result must be empty (nothing leaks
+    # through, and team_models is NOT consulted because key_models is truthy).
+    result_key_only = get_complete_model_list(
+        key_models=["no-default-models"],
+        team_models=["gpt-4o"],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert result_key_only == []
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_expands_db_access_group_ids():
+    """
+    Regression: when a team has models=['no-default-models'] and grants model
+    access via team.access_group_ids (LiteLLM_AccessGroupTable), /v1/models
+    must return the expanded access_model_names. Previously it returned only
+    the sentinel because the listing path ignored access_group_ids entirely,
+    even though the enforcement path (can_team_access_model) honored them.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    team_id = "team-123"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed",
+        user_id="u1",
+        team_id=team_id,
+        team_models=["no-default-models"],
+        models=[],
+        access_group_ids=[],
+    )
+
+    fake_team_obj = AsyncMock()
+    fake_team_obj.models = ["no-default-models"]
+    fake_team_obj.access_group_ids = ["ag-premium"]
+
+    async def fake_get_team_object(team_id, **kwargs):
+        return fake_team_obj
+
+    async def fake_expand_db_access_group_ids(access_group_ids, **kwargs):
+        if "ag-premium" in (access_group_ids or []):
+            return ["gpt-4o", "claude-opus-4-5"]
+        return []
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            side_effect=fake_get_team_object,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            side_effect=fake_expand_db_access_group_ids,
+        ),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            general_settings={},
+            user_model=None,
+            prisma_client=AsyncMock(),
+            proxy_logging_obj=AsyncMock(),
+            user_api_key_cache=AsyncMock(),
+        )
+
+    assert "no-default-models" not in result
+    assert set(result) == {"gpt-4o", "claude-opus-4-5"}

@@ -226,6 +226,13 @@ def get_complete_model_list(
 
     complete_model_list = unique_models + all_wildcard_models
 
+    # `no-default-models` is an internal sentinel meaning "this principal has no
+    # standalone model grants — only inherited (team / access group) grants apply".
+    # It must never be advertised as a callable model. Filter at the single
+    # aggregation point so every caller (e.g. /v1/models) is covered.
+    no_default = SpecialModelNames.no_default_models.value
+    complete_model_list = [m for m in complete_model_list if m != no_default]
+
     return complete_model_list
 
 

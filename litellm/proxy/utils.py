@@ -6020,6 +6020,9 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups as expand_db_access_group_ids,
+    )
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
@@ -6046,6 +6049,7 @@ async def get_available_models_for_user(
 
     # Get team models
     team_models: List[str] = user_api_key_dict.team_models
+    team_access_group_ids: List[str] = []
 
     # If specific team_id is provided, validate and get team models
     if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
@@ -6060,6 +6064,26 @@ async def get_available_models_for_user(
             user_api_key_dict=user_api_key_dict, team_table=team_object
         )
         team_models = team_object.models
+        team_access_group_ids = team_object.access_group_ids or []
+    elif (
+        user_api_key_dict.team_id
+        and prisma_client
+        and proxy_logging_obj
+        and user_api_key_cache
+    ):
+        # The combined_view join (used to populate user_api_key_dict.team_models) does
+        # not expose the team's access_group_ids, so look up the team object directly.
+        # Listing must reflect DB access-group grants the same way enforcement does.
+        try:
+            team_object_for_ag = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            team_access_group_ids = team_object_for_ag.access_group_ids or []
+        except Exception:
+            team_access_group_ids = []
 
     team_models = get_team_models(
         team_models=team_models,
@@ -6067,6 +6091,30 @@ async def get_available_models_for_user(
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
+
+    # Expand DB-level access groups (LiteLLM_AccessGroupTable) referenced by key.access_group_ids
+    # and team.access_group_ids into concrete model names. This mirrors the enforcement path
+    # (can_key_call_model / can_team_access_model) so that /v1/models advertises the same
+    # models that /chat/completions will actually allow.
+    key_access_group_ids = user_api_key_dict.access_group_ids or []
+    if key_access_group_ids:
+        key_ag_models = await expand_db_access_group_ids(
+            access_group_ids=key_access_group_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        # Preserve order while extending; dedup later inside get_complete_model_list.
+        key_models = list(dict.fromkeys([*key_models, *key_ag_models]))
+
+    if team_access_group_ids:
+        team_ag_models = await expand_db_access_group_ids(
+            access_group_ids=team_access_group_ids,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        team_models = list(dict.fromkeys([*team_models, *team_ag_models]))
 
     # Get complete model list
     all_models = get_complete_model_list(
