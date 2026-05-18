@@ -113,6 +113,35 @@ class TestGetCompleteUrl:
                 )
 
 
+class TestTransformRequest:
+    def test_stream_param_included_in_request_body(self, config):
+        """When stream=True is in optional_params, the request body must include it
+        so the proxy forwards the SSE streaming flag to Google's backend."""
+        body = config.transform_request(
+            model="gemini-2.5-flash",
+            agent=None,
+            input="Hello",
+            optional_params={"stream": True},
+            litellm_params=GenericLiteLLMParams(api_key="test-key"),
+            headers={},
+        )
+
+        assert body.get("stream") is True
+        assert body.get("input") == "Hello"
+
+    def test_stream_false_not_included_when_absent(self, config):
+        body = config.transform_request(
+            model="gemini-2.5-flash",
+            agent=None,
+            input="Hello",
+            optional_params={},
+            litellm_params=GenericLiteLLMParams(api_key="test-key"),
+            headers={},
+        )
+
+        assert "stream" not in body
+
+
 class TestInteractionOperationUrls:
     """Test that get/delete/cancel interaction URLs exclude API key."""
 
