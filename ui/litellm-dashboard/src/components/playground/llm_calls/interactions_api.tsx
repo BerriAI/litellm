@@ -111,10 +111,13 @@ export async function makeInteractionsRequest(
         const eventType = event.event_type as string | undefined;
 
         if (eventType === "interaction.start" || eventType === "interaction.complete") {
-          // Capture model from the interaction object if present
+          // Capture model from either the native Gemini shape (nested under
+          // `interaction`) or the bridge shape (top-level `model` field).
           const interaction = event.interaction as Record<string, unknown> | undefined;
-          if (interaction?.model) {
-            responseModel = interaction.model as string;
+          if (typeof interaction?.model === "string" && interaction.model) {
+            responseModel = interaction.model;
+          } else if (typeof event.model === "string" && event.model) {
+            responseModel = event.model;
           }
         } else if (eventType === "content.delta" || eventType === "content.start") {
           const delta = event.delta as Record<string, unknown> | undefined;
