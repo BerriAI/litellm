@@ -328,6 +328,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+            supported_params.append("include_thoughts")
         return supported_params
 
     def map_tool_choice_values(
@@ -822,7 +823,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: Optional[str] = None,
+        include_thoughts: Optional[bool] = None,
     ) -> GeminiThinkingConfig:
+        _include_thoughts = True if include_thoughts is None else include_thoughts
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
             # Check for exact matches first, then partial matches
@@ -839,22 +842,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             return {
                 "thinkingBudget": budget,
-                "includeThoughts": True,
+                "includeThoughts": _include_thoughts,
             }
         elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": _include_thoughts,
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": _include_thoughts,
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": True,
+                "includeThoughts": _include_thoughts,
             }
         elif reasoning_effort == "disable":
             return {
@@ -873,16 +876,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_level(
         reasoning_effort: str,
         model: Optional[str] = None,
+        include_thoughts: Optional[bool] = None,
     ) -> GeminiThinkingConfig:
         """
         Map reasoning_effort to thinking_level for Gemini 3+ models.
         Args:
             reasoning_effort: The reasoning effort value
             model: The model name
+            include_thoughts: Override whether thoughts are included in the response.
+                Defaults to True for active effort levels. Has no effect for
+                "disable"/"none" which always set includeThoughts to False.
 
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
+        _include_thoughts = True if include_thoughts is None else include_thoughts
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
         # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
         is_gemini3flash = model and (
@@ -891,18 +899,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         is_gemini31pro = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
-                return {"thinkingLevel": "minimal", "includeThoughts": True}
+                return {
+                    "thinkingLevel": "minimal",
+                    "includeThoughts": _include_thoughts,
+                }
             else:
-                return {"thinkingLevel": "low", "includeThoughts": True}
+                return {"thinkingLevel": "low", "includeThoughts": _include_thoughts}
         elif reasoning_effort == "low":
-            return {"thinkingLevel": "low", "includeThoughts": True}
+            return {"thinkingLevel": "low", "includeThoughts": _include_thoughts}
         elif reasoning_effort == "medium":
             if is_gemini31pro or is_gemini3flash:
-                return {"thinkingLevel": "medium", "includeThoughts": True}
+                return {"thinkingLevel": "medium", "includeThoughts": _include_thoughts}
             else:
-                return {"thinkingLevel": "high", "includeThoughts": True}
+                return {"thinkingLevel": "high", "includeThoughts": _include_thoughts}
         elif reasoning_effort == "high":
-            return {"thinkingLevel": "high", "includeThoughts": True}
+            return {"thinkingLevel": "high", "includeThoughts": _include_thoughts}
         elif reasoning_effort == "disable":
             # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
             if is_gemini3flash:
@@ -1157,6 +1168,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     effort_value = value.get("effort")
 
                 if effort_value is not None:
+                    include_thoughts: Optional[bool] = non_default_params.get(
+                        "include_thoughts"
+                    )
                     # Validate no conflict with thinking_level
                     VertexGeminiConfig._validate_thinking_config_conflicts(
                         optional_params=optional_params,
@@ -1166,13 +1180,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
                         optional_params["thinkingConfig"] = (
                             VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                                effort_value, model
+                                effort_value, model, include_thoughts
                             )
                         )
                     else:
                         optional_params["thinkingConfig"] = (
                             VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                                effort_value, model
+                                effort_value, model, include_thoughts
                             )
                         )
             elif param == "thinking":

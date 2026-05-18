@@ -4288,5 +4288,150 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
             )
 
     msg = str(exc_info.value)
-    assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+    assert "secret content" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Tests for include_thoughts parameter
+# ---------------------------------------------------------------------------
+
+GEMINI_2_5_PRO = "gemini-2.5-pro"
+GEMINI_3_FLASH = "gemini-3-flash-preview"
+GEMINI_3_1_FLASH = "gemini-3.1-flash-lite"
+
+
+class TestIncludeThoughtsThinkingBudget:
+    """Unit tests for _map_reasoning_effort_to_thinking_budget with include_thoughts."""
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_default_includes_thoughts(self, effort):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO
+        )
+        assert result["includeThoughts"] is True
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_include_thoughts_false_suppresses_output(self, effort):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO, include_thoughts=False
+        )
+        assert result["includeThoughts"] is False
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_include_thoughts_true_is_explicit_default(self, effort):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO, include_thoughts=True
+        )
+        assert result["includeThoughts"] is True
+
+    @pytest.mark.parametrize("effort", ["disable", "none"])
+    def test_disable_and_none_always_exclude_thoughts(self, effort):
+        """include_thoughts has no effect when effort disables thinking."""
+        result_default = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO
+        )
+        result_override = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO, include_thoughts=True
+        )
+        assert result_default["includeThoughts"] is False
+        assert result_override["includeThoughts"] is False
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_thinking_budget_unchanged_when_suppressing_thoughts(self, effort):
+        """Suppressing thoughts must not affect the thinking budget."""
+        with_thoughts = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO, include_thoughts=True
+        )
+        without_thoughts = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+            effort, model=GEMINI_2_5_PRO, include_thoughts=False
+        )
+        assert with_thoughts["thinkingBudget"] == without_thoughts["thinkingBudget"]
+
+
+class TestIncludeThoughtsThinkingLevel:
+    """Unit tests for _map_reasoning_effort_to_thinking_level with include_thoughts."""
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_default_includes_thoughts(self, effort):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH
+        )
+        assert result["includeThoughts"] is True
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_include_thoughts_false_suppresses_output(self, effort):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH, include_thoughts=False
+        )
+        assert result["includeThoughts"] is False
+
+    @pytest.mark.parametrize("effort", ["disable", "none"])
+    def test_disable_and_none_always_exclude_thoughts(self, effort):
+        result_default = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH
+        )
+        result_override = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH, include_thoughts=True
+        )
+        assert result_default["includeThoughts"] is False
+        assert result_override["includeThoughts"] is False
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_thinking_level_unchanged_when_suppressing_thoughts(self, effort):
+        with_thoughts = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH, include_thoughts=True
+        )
+        without_thoughts = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            effort, model=GEMINI_3_FLASH, include_thoughts=False
+        )
+        assert with_thoughts["thinkingLevel"] == without_thoughts["thinkingLevel"]
+
+    @pytest.mark.parametrize("model", [GEMINI_3_FLASH, GEMINI_3_1_FLASH])
+    def test_gemini3flash_models_include_thoughts_false(self, model):
+        result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+            "low", model=model, include_thoughts=False
+        )
+        assert result["includeThoughts"] is False
+        assert result["thinkingLevel"] == "low"
+
+
+class TestIncludeThoughtsMapOpenAIParams:
+    """Integration tests: include_thoughts flows through map_openai_params."""
+
+    def test_include_thoughts_false_with_reasoning_effort_budget_model(self):
+        result = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low", "include_thoughts": False},
+            optional_params={},
+            model=GEMINI_2_5_PRO,
+            drop_params=False,
+        )
+        assert result["thinkingConfig"]["includeThoughts"] is False
+
+    def test_include_thoughts_false_with_reasoning_effort_level_model(self):
+        result = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low", "include_thoughts": False},
+            optional_params={},
+            model=GEMINI_3_FLASH,
+            drop_params=False,
+        )
+        assert result["thinkingConfig"]["includeThoughts"] is False
+
+    def test_include_thoughts_not_set_defaults_to_true(self):
+        result = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model=GEMINI_2_5_PRO,
+            drop_params=False,
+        )
+        assert result["thinkingConfig"]["includeThoughts"] is True
+
+    def test_include_thoughts_without_reasoning_effort_is_noop(self):
+        """include_thoughts alone (no reasoning_effort) should not inject thinkingConfig."""
+        result = VertexGeminiConfig().map_openai_params(
+            non_default_params={"include_thoughts": False},
+            optional_params={},
+            model=GEMINI_2_5_PRO,
+            drop_params=False,
+        )
+        assert "thinkingConfig" not in result
