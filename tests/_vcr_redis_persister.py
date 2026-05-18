@@ -289,11 +289,12 @@ class _S3Backend:
         self._bucket = bucket
         self._ttl = ttl_seconds
         try:
-            from botocore.exceptions import ClientError
+            from botocore.exceptions import BotoCoreError, ClientError
         except ImportError:  # pragma: no cover - boto3 is a dev dep
             ClientError = Exception  # type: ignore[assignment,misc]
+            BotoCoreError = Exception  # type: ignore[assignment,misc]
         self._client_error = ClientError
-        self.save_error_types = (ClientError, OSError)
+        self.save_error_types = (ClientError, BotoCoreError, OSError)
 
     def get(self, key: str) -> Optional[bytes]:
         try:
