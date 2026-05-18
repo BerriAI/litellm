@@ -113,6 +113,58 @@ class TestGetCompleteUrl:
                 )
 
 
+class TestTransformRequest:
+    def test_passes_environment_to_request_body(self, config):
+        request_body = config.transform_request(
+            model=None,
+            agent="my-custom-slides-agent",
+            input=[{"type": "text", "text": "Create a 5-slide presentation about AI trends."}],
+            optional_params={
+                "environment": "remote",
+                "stream": False,
+            },
+            litellm_params=GenericLiteLLMParams(api_key="test-api-key"),
+            headers={},
+        )
+
+        assert request_body["agent"] == "my-custom-slides-agent"
+        assert request_body["environment"] == "remote"
+        assert request_body["stream"] is False
+        assert request_body["input"] == [
+            {"type": "text", "text": "Create a 5-slide presentation about AI trends."}
+        ]
+
+    def test_passes_environment_object_to_request_body(self, config):
+        environment_config = {
+            "type": "remote",
+            "sources": [{"type": "gcs", "uri": "gs://bucket/skills.zip"}],
+            "network": {"egress": "allow_all"},
+        }
+        request_body = config.transform_request(
+            model=None,
+            agent="waverunner",
+            input="What is 2 + 2?",
+            optional_params={"environment": environment_config},
+            litellm_params=GenericLiteLLMParams(api_key="test-api-key"),
+            headers={},
+        )
+
+        assert request_body["environment"] == environment_config
+
+    def test_passes_existing_environment_id_to_request_body(self, config):
+        env_id = "env-abc123"
+        request_body = config.transform_request(
+            model=None,
+            agent="my-custom-slides-agent",
+            input="Continue the presentation.",
+            optional_params={"environment": env_id},
+            litellm_params=GenericLiteLLMParams(api_key="test-api-key"),
+            headers={},
+        )
+
+        assert request_body["environment"] == env_id
+
+
 class TestInteractionOperationUrls:
     """Test that get/delete/cancel interaction URLs exclude API key."""
 
