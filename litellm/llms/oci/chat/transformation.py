@@ -97,6 +97,44 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     return name.startswith("openai.gpt-5") or name == "openai.gpt-5"
 
 
+def _iter_sse_events(stream: Iterator[str]) -> Iterator[str]:
+    """Yield one ``data:`` SSE line at a time from a sync text stream.
+
+    The OCI streaming endpoint does not align SSE event boundaries with HTTP
+    read boundaries. A single read may carry multiple events, a single event
+    may straddle two reads, and some events arrive separated by only ``\\n``
+    instead of ``\\n\\n``. This helper buffers across reads and yields each
+    complete ``data:`` line so JSON parsing downstream never sees a partial
+    payload.
+    """
+    buffer = ""
+    for item in stream:
+        buffer += item
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            stripped = line.strip()
+            if stripped.startswith("data:"):
+                yield stripped
+    stripped = buffer.strip()
+    if stripped.startswith("data:"):
+        yield stripped
+
+
+async def _aiter_sse_events(stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    """Async twin of :func:`_iter_sse_events`."""
+    buffer = ""
+    async for item in stream:
+        buffer += item
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            stripped = line.strip()
+            if stripped.startswith("data:"):
+                yield stripped
+    stripped = buffer.strip()
+    if stripped.startswith("data:"):
+        yield stripped
+
+
 def get_vendor_from_model(model: str) -> OCIVendors:
     """Return the OCI vendor enum for a model name.
 
@@ -532,15 +570,8 @@ class OCIChatConfig(BaseConfig):
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
 
-        def split_chunks(stream: Iterator[str]) -> Iterator[str]:
-            for item in stream:
-                for chunk in item.split("\n\n"):
-                    stripped = chunk.strip()
-                    if stripped:
-                        yield stripped
-
         return OCIStreamWrapper(
-            completion_stream=split_chunks(response.iter_text()),
+            completion_stream=_iter_sse_events(response.iter_text()),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
@@ -580,17 +611,8 @@ class OCIChatConfig(BaseConfig):
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.aiter_text()
-
-        async def split_chunks(stream: AsyncIterator[str]) -> AsyncIterator[str]:
-            async for item in stream:
-                for chunk in item.split("\n\n"):
-                    stripped = chunk.strip()
-                    if stripped:
-                        yield stripped
-
         return OCIStreamWrapper(
-            completion_stream=split_chunks(completion_stream),
+            completion_stream=_aiter_sse_events(response.aiter_text()),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
