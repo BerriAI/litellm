@@ -138,6 +138,22 @@ class TestCloseCommentText:
         # appear (they can't reopen a PR closed by a bot/maintainer).
         assert "Reopen the PR" not in body
 
+    def test_reopen_comment_should_carry_reconsider_marker(self, triage_module):
+        # The marker is what the rate-limit guard greps for to detect a
+        # prior reconsider verdict on the same PR. If the marker ever
+        # gets dropped from this comment, the cooldown silently breaks
+        # and a contributor can spam `@agent-shin reconsider` to burn
+        # LLM budget.
+        body = triage_module.format_reopen_comment("pr")
+        assert triage_module.RECONSIDER_COMMENT_MARKER in body
+
+    def test_still_failing_comment_should_carry_reconsider_marker(self, triage_module):
+        body = triage_module.format_reconsider_still_failing_comment(
+            "pr",
+            {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin"},
+        )
+        assert triage_module.RECONSIDER_COMMENT_MARKER in body
+
     def test_pr_close_comment_should_not_promise_automatic_reopen_on_open(
         self, triage_module
     ):
@@ -156,6 +172,158 @@ class TestCloseCommentText:
         )
         assert "@agent-shin reconsider" in body
         assert "Reopen the issue" not in body
+
+
+class TestWasClosedByAgentShin:
+    """Bot-closed guard: only the bot's own closures are reopen candidates."""
+
+    def test_should_return_true_when_last_close_actor_is_bot(
+        self, triage_module, monkeypatch
+    ):
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_last_close_actor",
+            lambda repo, n: "github-actions[bot]",
+        )
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
+
+    def test_should_return_false_when_last_close_actor_is_maintainer(
+        self, triage_module, monkeypatch
+    ):
+        # A maintainer closed it (e.g. duplicate, security, design). The
+        # bot must refuse to reopen on @agent-shin reconsider.
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_last_close_actor",
+            lambda repo, n: "krrishdholakia",
+        )
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_fail_closed_when_no_close_event(self, triage_module, monkeypatch):
+        # If the events API returns nothing (network blip, repo permission
+        # quirk), the guard must fail-closed: refuse to reopen rather than
+        # assume the bot did it.
+        monkeypatch.setattr(
+            triage_module, "fetch_last_close_actor", lambda repo, n: None
+        )
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_respect_bot_login_override_via_env(
+        self, triage_module, monkeypatch
+    ):
+        # Operators wiring Agent Shin to a PAT (instead of GITHUB_TOKEN)
+        # can override the expected bot login via env. The guard must
+        # respect the override so non-default deployments still work.
+        monkeypatch.setenv("AGENT_SHIN_BOT_LOGIN", "my-bot")
+        monkeypatch.setattr(
+            triage_module, "fetch_last_close_actor", lambda repo, n: "my-bot"
+        )
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is True
+        # Default "github-actions[bot]" should NOT match when env is set.
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_last_close_actor",
+            lambda repo, n: "github-actions[bot]",
+        )
+        assert triage_module.was_closed_by_agent_shin("o/r", 1) is False
+
+
+class TestSecondsSinceLastReconsiderVerdict:
+    """Rate-limit guard: detects the bot's own reconsider verdict marker."""
+
+    def _make_comment(
+        self, *, login: str, body: str, created_at: str | None = "2026-05-18T05:00:00Z"
+    ) -> dict:
+        comment: dict = {"user": {"login": login}, "body": body}
+        if created_at is not None:
+            comment["created_at"] = created_at
+        return comment
+
+    def test_should_return_none_when_no_bot_reconsider_comments(
+        self, triage_module, monkeypatch
+    ):
+        # An issue with chatter from other users but no bot reconsider
+        # verdict must not be rate-limited.
+        comments = [
+            self._make_comment(login="outside-dev", body="ping?"),
+            self._make_comment(
+                login="github-actions[bot]", body="some other bot message"
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_reconsider_verdict("o/r", 1) is None
+
+    def test_should_pick_latest_bot_reconsider_marker(self, triage_module, monkeypatch):
+        # When multiple reconsider verdicts exist, return the AGE of the
+        # most recent one. Using a frozen reference helps pin the math.
+        comments = [
+            self._make_comment(
+                login="github-actions[bot]",
+                body="old verdict " + triage_module.RECONSIDER_COMMENT_MARKER,
+                created_at="2026-05-18T04:00:00Z",
+            ),
+            self._make_comment(
+                login="github-actions[bot]",
+                body="newer verdict " + triage_module.RECONSIDER_COMMENT_MARKER,
+                created_at="2026-05-18T04:55:00Z",
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+
+        # Freeze "now" via a tiny shim on the module's `dt` import.
+        import datetime as real_dt
+
+        class FrozenDateTime(real_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return real_dt.datetime(2026, 5, 18, 5, 0, 0, tzinfo=tz)
+
+        frozen_module = type(triage_module.dt)("datetime")
+        frozen_module.datetime = FrozenDateTime
+        frozen_module.timezone = real_dt.timezone
+        monkeypatch.setattr(triage_module, "dt", frozen_module)
+
+        age = triage_module.seconds_since_last_reconsider_verdict("o/r", 1)
+        # newer verdict is 5 minutes (300 seconds) before "now"
+        assert age == 300.0
+
+    def test_should_ignore_non_bot_comments_with_marker(
+        self, triage_module, monkeypatch
+    ):
+        # A user comment that happens to quote the marker (e.g. in
+        # a "what does this hidden marker do?" question) must NOT count.
+        # The rate-limit guard only trusts comments authored by the bot.
+        comments = [
+            self._make_comment(
+                login="curious-user",
+                body=f"Saw this marker: {triage_module.RECONSIDER_COMMENT_MARKER}",
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_reconsider_verdict("o/r", 1) is None
+
+    def test_should_ignore_bot_comments_without_marker(
+        self, triage_module, monkeypatch
+    ):
+        # The bot posts other things too (Agent Shin close comments,
+        # CI status, etc.) — only the reconsider-verdict marker should
+        # arm the cooldown.
+        comments = [
+            self._make_comment(
+                login="github-actions[bot]",
+                body="Agent Shin closed this PR (no marker)",
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_reconsider_verdict("o/r", 1) is None
 
 
 class TestParseVerdict:
@@ -597,13 +765,34 @@ class TestTriageOrchestration:
         )
         assert result["action"] == "skip-not-closed"
 
+    @staticmethod
+    def _stub_reconsider_guards(triage_module, monkeypatch):
+        """Default reconsider-guard stubs: pretend bot closed + no cooldown.
+
+        The new safety guards (`was_closed_by_agent_shin`,
+        `seconds_since_last_reconsider_verdict`) hit the GitHub API in
+        production. Tests that exercise the reconsider happy path stub
+        them to "yes the bot closed it, no recent reconsider comment"
+        so the test stays focused on its actual assertion.
+        """
+        monkeypatch.setattr(
+            triage_module, "was_closed_by_agent_shin", lambda *a, **kw: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_reconsider_verdict",
+            lambda *a, **kw: None,
+        )
+
     def test_should_reopen_on_reconsider_pass(self, triage_module, monkeypatch):
         # Reconsider on a closed PR with a passing verdict -> reopen + post a
-        # friendly "re-evaluated" comment.
+        # friendly "re-evaluated" comment. close=True is the production path
+        # (the workflow only adds --close when AGENT_SHIN_ENABLED=true).
         pr = self._make_pr(
             state="closed", body="Updated body with QA proof + screenshots."
         )
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -627,7 +816,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=42,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(
                 {"verdict": "pass", "missing": [], "explanation": "ok now"}
@@ -639,11 +828,52 @@ class TestTriageOrchestration:
         assert posted["n"] == 42
         assert "reopened" in posted["body"].lower()
 
+    def test_should_dry_run_reconsider_pass_when_close_false(
+        self, triage_module, monkeypatch
+    ):
+        # Reconsider must honor `close=False` (dry-run) just like the
+        # regular triage flow. A local invocation of
+        # `python triage_with_llm.py --reconsider --pr N` (no --close)
+        # must NOT post a comment or reopen the PR — it should return
+        # `would-reopen` so the operator can preview the outcome.
+        pr = self._make_pr(
+            state="closed", body="Updated body with QA proof + screenshots."
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post comment in dry-run reconsider"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen PR in dry-run reconsider"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "ok now"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "would-reopen"
+        # The previewed comment body is still returned so a step-summary
+        # writer can render exactly what would have been posted.
+        assert "reopened" in result["comment"].lower()
+
     def test_should_post_still_failing_on_reconsider_fail(
         self, triage_module, monkeypatch
     ):
         pr = self._make_pr(state="closed", body="still empty")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
         posted = {}
         monkeypatch.setattr(
             triage_module,
@@ -671,7 +901,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=42,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(verdict),
             reconsider=True,
@@ -679,6 +909,39 @@ class TestTriageOrchestration:
         assert result["action"] == "reconsider-still-failing"
         assert posted["n"] == 42
         assert "QA proof" in posted["body"]
+
+    def test_should_dry_run_reconsider_fail_when_close_false(
+        self, triage_module, monkeypatch
+    ):
+        # Mirror dry-run behavior for the FAIL branch — `close=False`
+        # must NOT post the "still failing" comment.
+        pr = self._make_pr(state="closed", body="still empty")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail(
+                "must not post still-failing comment in dry-run"
+            ),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Still no QA proof.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+            reconsider=True,
+        )
+        assert result["action"] == "would-reconsider-still-failing"
+        assert "QA proof" in result["comment"]
 
     def test_should_reopen_on_reconsider_with_linked_issue_short_circuit(
         self, triage_module, monkeypatch
@@ -688,6 +951,7 @@ class TestTriageOrchestration:
         # path should reopen the PR without calling the LLM.
         pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -705,7 +969,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=55,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
             reconsider=True,
@@ -713,6 +977,35 @@ class TestTriageOrchestration:
         assert result["action"] == "reopened"
         assert reopened["n"] == 55
         assert "reopened" in posted["body"].lower()
+
+    def test_should_dry_run_reconsider_with_linked_issue_when_close_false(
+        self, triage_module, monkeypatch
+    ):
+        # Linked-issue short-circuit must ALSO honor dry-run.
+        pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post in dry-run"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen in dry-run"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=55,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
+            reconsider=True,
+        )
+        assert result["action"] == "would-reopen"
 
     def test_should_skip_internal_in_reconsider_mode(self, triage_module, monkeypatch):
         # Internal authors are exempt from triage in both regular and
@@ -740,6 +1033,138 @@ class TestTriageOrchestration:
         )
         assert result["action"] == "skip-internal-author"
 
+    def test_should_skip_reconsider_when_not_bot_closed(
+        self, triage_module, monkeypatch
+    ):
+        # SECURITY: `@agent-shin reconsider` must NOT reopen a PR/issue
+        # that a MAINTAINER closed for non-rubric reasons (e.g. duplicate,
+        # design rejection, security report). Only PRs closed by the bot
+        # itself should ever be candidates for the reconsider reopen path.
+        pr = self._make_pr(state="closed", body="something.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_closed_by_agent_shin", lambda *a, **kw: False
+        )
+        # Even though there's no rate-limit conflict, the bot-closed guard
+        # alone is sufficient to block. The LLM judge must never run on a
+        # maintainer-closed PR.
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_reconsider_verdict",
+            lambda *a, **kw: None,
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not comment on maintainer-closed PR"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen maintainer-closed PR"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run before bot-closed guard"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-not-bot-closed"
+
+    def test_should_rate_limit_repeated_reconsider_triggers(
+        self, triage_module, monkeypatch
+    ):
+        # COST CONTROL: each `@agent-shin reconsider` event burns CI
+        # minutes + an OpenAI API call. If the bot already posted a
+        # reconsider verdict within the cooldown window
+        # (RECONSIDER_RATE_LIMIT_SECONDS), refuse to run again. This
+        # bounds the damage from a contributor spamming the trigger.
+        pr = self._make_pr(state="closed", body="something with new edits.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_closed_by_agent_shin", lambda *a, **kw: True
+        )
+        # Pretend the bot posted a reconsider verdict 1 second ago.
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_reconsider_verdict",
+            lambda *a, **kw: 1.0,
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not comment during cooldown"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen during cooldown"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run during cooldown"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-rate-limited"
+        assert result["rate_limit_age_seconds"] == 1.0
+        assert (
+            result["rate_limit_window_seconds"]
+            == triage_module.RECONSIDER_RATE_LIMIT_SECONDS
+        )
+
+    def test_should_allow_reconsider_after_cooldown_window(
+        self, triage_module, monkeypatch
+    ):
+        # The cooldown is a window, not a one-shot lock — once
+        # RECONSIDER_RATE_LIMIT_SECONDS has elapsed since the last bot
+        # verdict, a fresh `@agent-shin reconsider` is allowed through.
+        pr = self._make_pr(state="closed", body="updated with screenshots now.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_closed_by_agent_shin", lambda *a, **kw: True
+        )
+        # Last reconsider was 1 hour ago — well outside the 10-min window.
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_reconsider_verdict",
+            lambda *a, **kw: 3600.0,
+        )
+        posted = {}
+        reopened = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda repo, n: reopened.update({"n": n}),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "ok"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "reopened"
+        assert reopened["n"] == 1
+
     def test_should_reopen_issue_on_reconsider_pass(self, triage_module, monkeypatch):
         issue = {
             "number": 7,
@@ -750,6 +1175,7 @@ class TestTriageOrchestration:
             "user": {"login": "outside"},
         }
         monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        self._stub_reconsider_guards(triage_module, monkeypatch)
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -767,7 +1193,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="issue",
             number=7,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(
                 {"verdict": "pass", "missing": [], "explanation": "now reproducible"}

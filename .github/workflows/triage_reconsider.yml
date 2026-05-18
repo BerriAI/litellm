@@ -107,20 +107,24 @@ jobs:
           else
             ARGS=(--repo "${{ github.repository }}" --issue "${NUMBER}" --reconsider)
           fi
-          # Reconsider IS the destructive path here (it can post comments
-          # and reopen) — there's no separate `--close` flag because the
-          # script's reconsider mode handles both pass (reopen) and fail
-          # (still-failing comment) outcomes itself.
+          # Reconsider's destructive actions (post comment + reopen) are
+          # gated on `--close`, mirroring the regular triage workflows.
+          # When AGENT_SHIN_ENABLED is not the EXACT string "true", we
+          # still run the script so its verdict + would-X action lands in
+          # the step summary for QA — but without `--close`, the script
+          # returns `would-reopen` / `would-reconsider-still-failing`
+          # instead of touching GitHub state.
           #
-          # Use the positive `= "true"` gate (instead of `!= "true" -> exit`)
-          # so the workflow guardrails in
+          # Use the positive `= "true"` gate (not `!= "true" -> exit`) so
+          # the workflow guardrails in
           # tests/test_litellm/test_github_triage_workflows.py see the
-          # canonical fail-safe enable pattern. Unknown values like "True",
-          # "yes", "1", or typos will fall through to the dry-run else
+          # canonical fail-safe enable pattern. Unknown values like
+          # "True", "yes", "1", or typos fall through to the dry-run
           # branch, which is the safe default.
           if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
-            echo "::notice::Agent Shin reconsider ENABLED — running real triage."
-            python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
+            ARGS+=(--close)
+            echo "::notice::Agent Shin reconsider ENABLED — running real triage (close=true)."
           else
             echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> reconsider stays in dry-run (no comment, no reopen)."
           fi
+          python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
