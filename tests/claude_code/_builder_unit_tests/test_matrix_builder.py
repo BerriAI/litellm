@@ -90,6 +90,105 @@ def test_build_matrix_any_fail_makes_cell_fail():
     assert cell["error"] == "[claude-opus-4-7] timeout"
 
 
+def test_build_matrix_joins_all_failure_errors_in_one_cell():
+    """When multiple tiers fail for different reasons within the same cell,
+    every failure's error must appear in the published cell so triage
+    isn't reduced to a single tier's diagnostic.
+    """
+    manifest = {
+        "schema_version": "1",
+        "providers": ["anthropic"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    results = [
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "fail", "error": "[claude-haiku-4-5] 429"},
+        },
+        {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "fail", "error": "[claude-opus-4-7] timeout"},
+        },
+    ]
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    cell = matrix["features"][0]["providers"]["anthropic"]
+    assert cell["status"] == "fail"
+    assert "[claude-haiku-4-5] 429" in cell["error"]
+    assert "[claude-opus-4-7] timeout" in cell["error"]
+
+
+def test_build_matrix_mixed_pass_and_not_tested_surfaces_pass():
+    """A `not_tested` row mixed with `pass` rows must not silently demote
+    the cell to `not_tested` — `not_tested` is "absent data", not a
+    negative signal. Otherwise a partial crash mid-test, or a test that
+    explicitly recorded "tier didn't run", would discard real passing
+    results from the published cell.
+    """
+    manifest = {
+        "schema_version": "1",
+        "providers": ["anthropic"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    results = [
+        {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "not_tested"},
+        },
+        {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
+    ]
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    assert matrix["features"][0]["providers"]["anthropic"] == {"status": "pass"}
+
+
+def test_build_matrix_all_not_tested_stays_not_tested():
+    """A cell whose every row is `not_tested` (or empty) must remain
+    `not_tested` — the absent-data rule only drops `not_tested` rows
+    when there's other signal to surface.
+    """
+    manifest = {
+        "schema_version": "1",
+        "providers": ["anthropic"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    results = [
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "not_tested"},
+        },
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "not_tested"},
+        },
+    ]
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    assert matrix["features"][0]["providers"]["anthropic"] == {"status": "not_tested"}
+
+
 def test_build_matrix_fills_not_tested_for_missing_cells():
     manifest = {
         "schema_version": "1",

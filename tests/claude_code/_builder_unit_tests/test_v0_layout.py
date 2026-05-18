@@ -46,6 +46,23 @@ EXPECTED_PROVIDERS = [
 ]
 
 
+def _all_manifest_feature_ids() -> list[str]:
+    """Every feature_id currently declared in `manifest.yaml`.
+
+    Evaluated at import time so the result can drive parametrized
+    structural tests below. Used to catch layout drift on post-v0
+    feature rows added after the matrix shipped — the v0 anchor
+    constants above only validate the original six rows by design.
+    """
+    return [
+        feature["id"]
+        for feature in yaml.safe_load(MANIFEST_PATH.read_text())["features"]
+    ]
+
+
+ALL_FEATURE_IDS = _all_manifest_feature_ids()
+
+
 @pytest.fixture(scope="module")
 def manifest() -> dict:
     return yaml.safe_load(MANIFEST_PATH.read_text())
@@ -91,6 +108,37 @@ def test_feature_directory_has_init_file(feature_id):
     established by `basic_messaging_non_streaming/`."""
     init_file = REPO_ROOT / feature_id / "__init__.py"
     assert init_file.is_file(), f"missing __init__.py: {init_file}"
+
+
+# Manifest-driven structural tests: every feature in `manifest.yaml`
+# (v0 and post-v0 alike) must have the expected on-disk layout. The
+# v0-only tests above pin the position of the original six rows; these
+# extend the same structural guarantees to any row added afterward so
+# a broken post-v0 directory still fails CI.
+@pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
+def test_every_manifest_feature_has_directory(feature_id):
+    feature_dir = REPO_ROOT / feature_id
+    assert feature_dir.is_dir(), (
+        f"manifest declares {feature_id!r} but {feature_dir} is missing — "
+        "feature_id MUST match its on-disk directory (see manifest.yaml header)."
+    )
+
+
+@pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
+def test_every_manifest_feature_has_init_file(feature_id):
+    init_file = REPO_ROOT / feature_id / "__init__.py"
+    assert init_file.is_file(), f"missing __init__.py: {init_file}"
+
+
+@pytest.mark.parametrize("feature_id", ALL_FEATURE_IDS)
+@pytest.mark.parametrize("provider", EXPECTED_PROVIDERS)
+def test_every_manifest_feature_has_per_provider_test_file(feature_id, provider):
+    """Every (feature, provider) cell in the rendered matrix must be
+    backed by a per-provider test file. Without this check, a missing
+    file silently becomes a `not_tested` cell in the published matrix
+    rather than a CI failure surfacing the layout drift."""
+    test_file = REPO_ROOT / feature_id / f"test_{provider}.py"
+    assert test_file.is_file(), f"missing per-provider test file: {test_file}"
 
 
 @pytest.mark.parametrize("feature_id", EXPECTED_FEATURE_IDS)
