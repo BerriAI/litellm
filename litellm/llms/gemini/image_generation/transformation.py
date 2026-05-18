@@ -1,9 +1,13 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import httpx
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
+)
+from litellm.llms.gemini.common_utils import (
+    map_openai_size_to_gemini_image_config,
+    supports_gemini_image_size,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import GeminiImageGenerationRequest
@@ -36,7 +40,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Google AI Imagen API supported parameters
         https://ai.google.dev/gemini-api/docs/imagen
         """
-        return ["n", "size"]
+        supported_params = ["n", "size"]
+        if "gemini" in model:
+            supported_params.append("imageConfig")
+        return supported_params  # type: ignore[return-value]
 
     def map_openai_params(
         self,
@@ -48,32 +55,33 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         supported_params = self.get_supported_openai_params(model)
         mapped_params = {}
 
+        if "n" in non_default_params and "n" not in optional_params:
+            mapped_params["sampleCount"] = non_default_params["n"]
+
+        if "size" in non_default_params and "size" not in optional_params:
+            image_config = map_openai_size_to_gemini_image_config(
+                non_default_params["size"], model
+            )
+            if image_config is not None:
+                if "gemini" in model:
+                    mapped_params["imageConfig"] = image_config
+                else:
+                    mapped_params["aspectRatio"] = image_config["aspectRatio"]
+
+        if (
+            "imageConfig" in supported_params
+            and isinstance(non_default_params.get("imageConfig"), dict)
+        ):
+            mapped_params["imageConfig"] = non_default_params["imageConfig"]
+
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    # Map OpenAI parameters to Google format
-                    if k == "n":
-                        mapped_params["sampleCount"] = v
-                    elif k == "size":
-                        # Map OpenAI size format to Google aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
-                    else:
-                        mapped_params[k] = v
+            if (
+                k not in ("n", "size", "imageConfig")
+                and k not in optional_params
+                and k in supported_params
+            ):
+                mapped_params[k] = v
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        https://ai.google.dev/gemini-api/docs/image-generation
-
-        """
-        aspect_ratio_map = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _transform_image_usage(self, usage_metadata: dict) -> ImageUsage:
         """
@@ -180,9 +188,23 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
         if "gemini" in model:
+            generation_config: Dict[str, Any] = {
+                "response_modalities": ["IMAGE", "TEXT"]
+            }
+            image_config: Dict[str, Any] = {}
+
+            if isinstance(optional_params.get("imageConfig"), dict):
+                image_config.update(optional_params["imageConfig"])
+
+            if not supports_gemini_image_size(model):
+                image_config.pop("imageSize", None)
+
+            if image_config:
+                generation_config["imageConfig"] = image_config
+
             request_body: dict = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"response_modalities": ["IMAGE", "TEXT"]},
+                "generationConfig": generation_config,
             }
             return request_body
         else:

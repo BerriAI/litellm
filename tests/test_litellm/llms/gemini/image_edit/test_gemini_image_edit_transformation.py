@@ -30,20 +30,60 @@ class TestGeminiImageEditTransformation:
             drop_params=False,
         )
 
-        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9"}
         assert "response_format" not in mapped
         assert "quality" not in mapped
+
+    def test_map_openai_params_with_image_size_for_gemini_3(self) -> None:
+        optional_params: Dict[str, object] = {
+            "size": "768x1376",
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "1K"}
+
+    def test_map_openai_params_forwards_image_config_as_is(self) -> None:
+        optional_params: Dict[str, object] = {
+            "size": "1024x1024",
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "512px"},
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "512px"}
+
+    def test_map_openai_params_parses_form_image_config_json(self) -> None:
+        optional_params: Dict[str, object] = {
+            "imageConfig": '{"aspectRatio":"16:9","imageSize":"1K"}',
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "1K"}
 
     def test_transform_image_edit_request(self) -> None:
         image_bytes = b"fake_image_data"
         image = BytesIO(image_bytes)
         optional_params = {
             "sampleCount": 2,
-            "aspectRatio": "16:9",
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"},
         }
 
         request_body, files = self.config.transform_image_edit_request(
-            model=self.model,
+            model="gemini-3-pro-image-preview",
             prompt=self.prompt,
             image=[image],  # Gemini pipeline passes list of images
             image_edit_optional_request_params=optional_params,
@@ -62,6 +102,26 @@ class TestGeminiImageEditTransformation:
 
         generation_config = request_body["generationConfig"]
         assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
+        assert generation_config["imageConfig"]["imageSize"] == "2K"
+
+    def test_transform_image_edit_request_omits_image_size_for_gemini_25(self) -> None:
+        image = BytesIO(b"fake_image_data")
+        optional_params = {
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"},
+        }
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[image],
+            image_edit_optional_request_params=optional_params,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert request_body["generationConfig"]["imageConfig"] == {
+            "aspectRatio": "16:9"
+        }
 
     def test_transform_image_edit_request_multiple_images(self) -> None:
         image_one = BytesIO(b"image_one")
