@@ -21,6 +21,9 @@ class TestOpenAIRealtime(BaseRealtimeTest):
     """
 
     def get_model(self) -> str:
+        # OpenAI shut down the entire gpt-4o-realtime-preview family
+        # (including the undated alias) on 2026-05-07. gpt-realtime is the
+        # current GA realtime model.
         return "gpt-realtime"
 
     def get_api_key_env_var(self) -> str:

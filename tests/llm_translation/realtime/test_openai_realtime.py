@@ -101,6 +101,8 @@ async def test_openai_realtime_direct_call_no_intent():
 
     try:
         await litellm._arealtime(
+            # OpenAI shut down the gpt-4o-realtime-preview family (incl. the
+            # undated alias) on 2026-05-07; gpt-realtime is the GA successor.
             model="openai/gpt-realtime",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
@@ -249,6 +251,8 @@ async def test_openai_realtime_direct_call_with_intent():
     websocket_client = RealTimeWebSocketClient()
     caught_exception = None
 
+    # OpenAI shut down the gpt-4o-realtime-preview family (incl. the undated
+    # alias) on 2026-05-07; gpt-realtime is the GA successor.
     query_params: RealtimeQueryParams = {
         "model": "openai/gpt-realtime",
         "intent": "chat",

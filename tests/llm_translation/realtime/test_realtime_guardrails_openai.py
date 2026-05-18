@@ -190,6 +190,21 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             len(transcript_deltas) >= 1
         ), f"Expected guardrail message in transcript delta, got: {event_types}"
 
+        # 3. No *real* AI response to the blocked content should have been
+        #    generated. The original user message is blocked BEFORE it is
+        #    forwarded to OpenAI, so the only thing the model ever sees is the
+        #    guardrail's "say exactly: <block message>" prompt
+        #    (see realtime_streaming.py). Two safe outcomes are possible:
+        #      - the model voices the block message verbatim (older realtime
+        #        snapshots did this -> text contains "blocked"), or
+        #      - the model declines to repeat it (gpt-realtime tends to refuse
+        #        verbatim-repeat instructions, e.g. "I'm sorry, but I can't
+        #        repeat that message.").
+        #    Both mean the blocked prompt itself was never answered, so we
+        #    accept either. The hard invariant is that the blocked phrase must
+        #    never leak into AI output, and the model must not have produced a
+        #    normal answer to the user (which would have neither a block nor a
+        #    refusal marker).
         safe_markers = (
             "block",
             "guardrail",
