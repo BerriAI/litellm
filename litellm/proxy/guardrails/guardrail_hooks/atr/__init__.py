@@ -17,6 +17,7 @@ def initialize_guardrail(
     _cb = ATRGuardrail(
         rules_path=litellm_params.rules_path,
         severity_threshold=litellm_params.severity_threshold,
+        include_tags=getattr(litellm_params, "include_tags", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

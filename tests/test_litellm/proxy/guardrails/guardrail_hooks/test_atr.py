@@ -383,3 +383,82 @@ async def test_post_call_scans_text_completion_response(fake_pyatr, tmp_path):
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail["matched_rules"][0]["rule_id"] == "ATR-400"
+
+
+def test_scan_include_tags_filters_rules(fake_pyatr, tmp_path):
+    """include_tags restricts scanning to rules with matching tag values."""
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    injection_match = MagicMock(
+        rule_id="ATR-500",
+        title="Injection",
+        severity="high",
+        tags={"category": "prompt_injection"},
+    )
+    exfil_match = MagicMock(
+        rule_id="ATR-501",
+        title="Exfil",
+        severity="high",
+        tags={"category": "context_exfiltration"},
+    )
+    engine.evaluate.return_value = [injection_match, exfil_match]
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="high",
+        include_tags=["prompt_injection"],
+        guardrail_name="atr-test",
+    )
+
+    matches = guard._scan("hello world", event_type="llm_input")
+    rule_ids = [m.rule_id for m in matches]
+    assert rule_ids == ["ATR-500"]
+    assert "ATR-501" not in rule_ids
+
+
+def test_scan_none_severity_treated_conservatively(fake_pyatr, tmp_path):
+    """A match with severity=None is treated as critical (always included)."""
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    none_severity_match = MagicMock(rule_id="ATR-600", title="Unknown sev", severity=None)
+    engine.evaluate.return_value = [none_severity_match]
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="low",
+        guardrail_name="atr-test",
+    )
+
+    matches = guard._scan("some content", event_type="llm_input")
+    assert len(matches) == 1
+    assert matches[0].rule_id == "ATR-600"
+
+
+def test_scan_unknown_severity_treated_conservatively(fake_pyatr, tmp_path):
+    """A match with an unrecognised severity string is treated as critical."""
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    unknown_match = MagicMock(rule_id="ATR-601", title="Future sev", severity="informational")
+    engine.evaluate.return_value = [unknown_match]
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="low",
+        guardrail_name="atr-test",
+    )
+
+    matches = guard._scan("some content", event_type="llm_input")
+    assert len(matches) == 1
+    assert matches[0].rule_id == "ATR-601"

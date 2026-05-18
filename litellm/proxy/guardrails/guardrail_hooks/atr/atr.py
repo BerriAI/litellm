@@ -75,6 +75,7 @@ class ATRGuardrail(CustomGuardrail):
         self,
         rules_path: Optional[str] = None,
         severity_threshold: Optional[str] = None,
+        include_tags: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> None:
         try:
@@ -97,6 +98,7 @@ class ATRGuardrail(CustomGuardrail):
                 f"Must be one of: {sorted(_SEVERITY_RANK)}"
             )
         self.severity_threshold = threshold
+        self.include_tags: Optional[List[str]] = include_tags or None
 
         self.engine = ATREngine()
         resolved_path = rules_path or os.environ.get("ATR_RULES_PATH")
@@ -288,14 +290,26 @@ class ATRGuardrail(CustomGuardrail):
         )
         matches = self.engine.evaluate(event)
         threshold_rank = _SEVERITY_RANK[self.severity_threshold]
-        return [
-            m
-            for m in matches
-            if _SEVERITY_RANK.get(
-                getattr(m, "severity", "low").lower(), len(_SEVERITY_RANK)
-            )
-            <= threshold_rank
-        ]
+
+        result = []
+        for m in matches:
+            # include_tags filter: skip rules whose tags don't intersect the allow-list
+            if self.include_tags is not None:
+                tags = getattr(m, "tags", {}) or {}
+                tag_values: set = (
+                    set(tags.values()) if isinstance(tags, dict) else set()
+                )
+                if not tag_values.intersection(self.include_tags):
+                    continue
+
+            # Treat None or unrecognised severity conservatively (rank 0 = critical)
+            raw_severity = getattr(m, "severity", None)
+            severity_str = (raw_severity or "").lower() if raw_severity is not None else ""
+            rank = _SEVERITY_RANK.get(severity_str, 0)
+            if rank <= threshold_rank:
+                result.append(m)
+
+        return result
 
     @staticmethod
     def _summarize_match(match: Any) -> dict:
