@@ -2595,6 +2595,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: Optional[float] = None
     team_soft_budget: Optional[float] = None
     team_models: List = []
+    team_access_group_ids: List = []
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None

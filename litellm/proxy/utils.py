@@ -3454,6 +3454,7 @@ class PrismaClient:
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,
+                            t.access_group_ids AS team_access_group_ids,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,
                             t.team_alias AS team_alias,
@@ -3520,6 +3521,8 @@ class PrismaClient:
                     if response is not None:
                         if response["team_models"] is None:
                             response["team_models"] = []
+                        if response.get("team_access_group_ids") is None:
+                            response["team_access_group_ids"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
 
@@ -6049,7 +6052,12 @@ async def get_available_models_for_user(
 
     # Get team models
     team_models: List[str] = user_api_key_dict.team_models
-    team_access_group_ids: List[str] = []
+    # team_access_group_ids is denormalised onto the verification-token row via
+    # combined_view (SELECT t.access_group_ids AS team_access_group_ids), so the
+    # listing path can read it without an extra DB / cache round-trip per request.
+    team_access_group_ids: List[str] = list(
+        user_api_key_dict.team_access_group_ids or []
+    )
 
     # If specific team_id is provided, validate and get team models
     if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
@@ -6065,25 +6073,6 @@ async def get_available_models_for_user(
         )
         team_models = team_object.models
         team_access_group_ids = team_object.access_group_ids or []
-    elif (
-        user_api_key_dict.team_id
-        and prisma_client
-        and proxy_logging_obj
-        and user_api_key_cache
-    ):
-        # The combined_view join (used to populate user_api_key_dict.team_models) does
-        # not expose the team's access_group_ids, so look up the team object directly.
-        # Listing must reflect DB access-group grants the same way enforcement does.
-        try:
-            team_object_for_ag = await get_team_object(
-                team_id=user_api_key_dict.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            team_access_group_ids = team_object_for_ag.access_group_ids or []
-        except Exception:
-            team_access_group_ids = []
 
     team_models = get_team_models(
         team_models=team_models,

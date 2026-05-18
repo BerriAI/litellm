@@ -291,41 +291,37 @@ async def test_get_available_models_for_user_expands_db_access_group_ids():
     must return the expanded access_model_names. Previously it returned only
     the sentinel because the listing path ignored access_group_ids entirely,
     even though the enforcement path (can_team_access_model) honored them.
+
+    team_access_group_ids is denormalised onto the verification-token row via
+    combined_view, so we put it directly on UserAPIKeyAuth here (mirroring the
+    runtime data flow) instead of patching a separate DB lookup.
     """
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import get_available_models_for_user
 
-    team_id = "team-123"
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed",
         user_id="u1",
-        team_id=team_id,
+        team_id="team-123",
         team_models=["no-default-models"],
+        team_access_group_ids=["ag-premium"],
         models=[],
         access_group_ids=[],
     )
-
-    fake_team_obj = AsyncMock()
-    fake_team_obj.models = ["no-default-models"]
-    fake_team_obj.access_group_ids = ["ag-premium"]
-
-    async def fake_get_team_object(team_id, **kwargs):
-        return fake_team_obj
 
     async def fake_expand_db_access_group_ids(access_group_ids, **kwargs):
         if "ag-premium" in (access_group_ids or []):
             return ["gpt-4o", "claude-opus-4-5"]
         return []
 
-    with (
-        patch(
-            "litellm.proxy.auth.auth_checks.get_team_object",
-            side_effect=fake_get_team_object,
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
-            side_effect=fake_expand_db_access_group_ids,
-        ),
+    # Patch target is the source module (litellm.proxy.auth.auth_checks). This
+    # works because get_available_models_for_user imports the helper inside its
+    # function body, so the name is resolved against the source module at call
+    # time. If those imports are ever hoisted to module level in utils.py, this
+    # patch must change to target litellm.proxy.utils.expand_db_access_group_ids.
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        side_effect=fake_expand_db_access_group_ids,
     ):
         result = await get_available_models_for_user(
             user_api_key_dict=user_api_key_dict,
