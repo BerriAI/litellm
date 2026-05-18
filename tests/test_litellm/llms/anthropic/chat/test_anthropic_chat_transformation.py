@@ -2492,17 +2492,16 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         {"effort": "low", "summary": "detailed"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_from_responses_bridge(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort_value):
     """
-    Regression test for the dict-shape `reasoning_effort` produced by the
-    Responses->Chat parser when `summary` is set on the request's `reasoning`
-    field (see ``transform_responses_api_request_to_chat_completion_request``).
+    Adaptive-thinking (Claude 4.6+) branch: dict-shape reasoning_effort must
+    map to ``thinking.type='adaptive'`` + ``output_config.effort``.
 
-    Before this fix, the Anthropic transformation guarded on
-    ``isinstance(value, str)`` and silently dropped the param when it arrived
-    as a dict — disabling extended thinking entirely. This test pins the
-    shape-tolerant behavior matching OpenAI's
-    ``_normalize_reasoning_effort_for_chat_completion``.
+    Regression test for the dict-shape ``reasoning_effort`` produced by the
+    Responses->Chat parser when ``summary`` is set on the request's
+    ``reasoning`` field. Before this fix, the Anthropic transformation guarded
+    on ``isinstance(value, str)`` and silently dropped the param — disabling
+    extended thinking entirely.
     """
     config = AnthropicConfig()
 
@@ -2523,6 +2522,42 @@ def test_reasoning_effort_accepts_dict_shape_from_responses_bridge(reasoning_eff
         f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     )
     assert result["output_config"]["effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort_value",
+    [
+        "low",
+        {"effort": "low"},
+        {"effort": "low", "summary": "concise"},
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+    """
+    Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
+    to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
+    NOT be set on these models.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort_value},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert "thinking" in result, (
+        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
+    )
+    assert result["thinking"]["type"] == "enabled"
+    assert "budget_tokens" in result["thinking"]
+    assert result["thinking"]["budget_tokens"] > 0
+    # Older models must not get adaptive-thinking output_config
+    assert "output_config" not in result, (
+        f"output_config should not be set for non-adaptive model "
+        f"(reasoning_effort={reasoning_effort_value!r})"
+    )
 
 
 def test_reasoning_effort_unparseable_dict_is_dropped():
