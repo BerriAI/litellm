@@ -335,3 +335,112 @@ async def test_get_available_models_for_user_expands_db_access_group_ids():
 
     assert "no-default-models" not in result
     assert set(result) == {"gpt-4o", "claude-opus-4-5"}
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_expands_key_access_group_ids():
+    """
+    Key-level (not team-level) access_group_ids must also expand into the
+    advertised model list. Covers the key_models branch alongside the
+    existing team_models test.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed",
+        user_id="u1",
+        team_id=None,
+        team_models=[],
+        team_access_group_ids=[],
+        models=["no-default-models"],
+        access_group_ids=["ag-key-direct"],
+    )
+
+    async def fake_expand_db_access_group_ids(access_group_ids, **kwargs):
+        if "ag-key-direct" in (access_group_ids or []):
+            return ["gpt-4o"]
+        return []
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        side_effect=fake_expand_db_access_group_ids,
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            general_settings={},
+            user_model=None,
+            prisma_client=AsyncMock(),
+            proxy_logging_obj=AsyncMock(),
+            user_api_key_cache=AsyncMock(),
+        )
+
+    assert "no-default-models" not in result
+    assert result == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_explicit_team_id_query_param():
+    """
+    Covers the explicit `?team_id=` query-param branch in /v1/models, which
+    calls get_team_object and captures team.access_group_ids from the
+    returned team object (instead of relying on the verification-token
+    denormalisation that the default path uses).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed",
+        user_id="u1",
+        team_id="team-456",
+        team_models=[],
+        team_access_group_ids=[],
+        models=[],
+        access_group_ids=[],
+    )
+
+    fake_team_obj = AsyncMock()
+    fake_team_obj.team_id = "team-456"
+    fake_team_obj.models = ["no-default-models"]
+    fake_team_obj.access_group_ids = ["ag-team-explicit"]
+
+    async def fake_get_team_object(team_id, **kwargs):
+        return fake_team_obj
+
+    async def fake_validate_membership(*args, **kwargs):
+        return None
+
+    async def fake_expand_db_access_group_ids(access_group_ids, **kwargs):
+        if "ag-team-explicit" in (access_group_ids or []):
+            return ["claude-opus-4-5"]
+        return []
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            side_effect=fake_get_team_object,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.validate_membership",
+            side_effect=fake_validate_membership,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            side_effect=fake_expand_db_access_group_ids,
+        ),
+    ):
+        result = await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            general_settings={},
+            user_model=None,
+            prisma_client=AsyncMock(),
+            proxy_logging_obj=AsyncMock(),
+            team_id="team-456",
+            user_api_key_cache=AsyncMock(),
+        )
+
+    assert "no-default-models" not in result
+    assert result == ["claude-opus-4-5"]
