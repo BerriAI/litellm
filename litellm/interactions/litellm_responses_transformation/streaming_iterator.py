@@ -15,11 +15,11 @@ from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.types.llms.openai import (
+    ContentPartAddedEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
-    ResponsePartAddedEvent,
     ResponsesAPIStreamingResponse,
 )
 
@@ -93,7 +93,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     model=self.model,
                 )
 
-            # Fallback: emit content.start if ResponsePartAddedEvent never arrived
+            # Fallback: emit content.start if ContentPartAddedEvent never arrived
             if not self.sent_content_start:
                 self.sent_content_start = True
                 return InteractionsAPIStreamingResponse(
@@ -111,8 +111,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                 delta={"type": "text", "text": delta_text},
             )
 
-        # Handle ResponsePartAddedEvent -> content.start (arrives before text deltas)
-        if isinstance(responses_chunk, ResponsePartAddedEvent):
+        # Handle ContentPartAddedEvent -> content.start (arrives before text deltas)
+        if isinstance(responses_chunk, ContentPartAddedEvent):
+            # Fallback: emit interaction.start if ResponseCreatedEvent never arrived
+            if not self.sent_interaction_start:
+                self.sent_interaction_start = True
+                return InteractionsAPIStreamingResponse(
+                    event_type="interaction.start",
+                    id=getattr(responses_chunk, "item_id", None)
+                    or f"interaction_{id(self)}",
+                    object="interaction",
+                    status="in_progress",
+                    model=self.model,
+                )
             if not self.sent_content_start:
                 self.sent_content_start = True
                 return InteractionsAPIStreamingResponse(
