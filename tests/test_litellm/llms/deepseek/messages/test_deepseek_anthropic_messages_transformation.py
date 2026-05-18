@@ -79,6 +79,26 @@ def test_deepseek_anthropic_messages_url_defaults_to_anthropic_endpoint():
         )
         == "https://api.deepseek.com/anthropic/v1/messages"
     )
+    assert (
+        config.get_complete_url(
+            api_base="https://api.deepseek.com/v1",
+            api_key=None,
+            model="deepseek-v4-pro",
+            optional_params={},
+            litellm_params={},
+        )
+        == "https://api.deepseek.com/anthropic/v1/messages"
+    )
+    assert (
+        config.get_complete_url(
+            api_base="https://api.deepseek.com/v1/messages",
+            api_key=None,
+            model="deepseek-v4-pro",
+            optional_params={},
+            litellm_params={},
+        )
+        == "https://api.deepseek.com/anthropic/v1/messages"
+    )
 
 
 def test_deepseek_anthropic_messages_headers_use_deepseek_key():
