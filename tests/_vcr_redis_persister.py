@@ -201,7 +201,7 @@ class CassetteBackend(Protocol):
     """Pluggable cassette store. Implementations only deal in raw bytes."""
 
     name: str
-    save_error_types: tuple
+    transient_error_types: tuple
 
     def get(self, key: str) -> Optional[bytes]: ...
 
@@ -251,7 +251,7 @@ class _RedisBackend:
             from redis.exceptions import RedisError
         except ImportError:  # pragma: no cover - redis is a hard test dep
             RedisError = Exception  # type: ignore[assignment,misc]
-        self.save_error_types = (RedisError,)
+        self.transient_error_types = (RedisError,)
 
     def get(self, key: str) -> Optional[bytes]:
         return self._client.get(key)
@@ -294,7 +294,7 @@ class _S3Backend:
             ClientError = Exception  # type: ignore[assignment,misc]
             BotoCoreError = Exception  # type: ignore[assignment,misc]
         self._client_error = ClientError
-        self.save_error_types = (ClientError, BotoCoreError, OSError)
+        self.transient_error_types = (ClientError, BotoCoreError, OSError)
 
     def get(self, key: str) -> Optional[bytes]:
         try:
@@ -387,8 +387,8 @@ class _LocalDiskL1Cache:
         # Inherit the inner backend's exception classification so the
         # persister's best-effort ``except`` block still catches remote
         # failures even when L1 is in front.
-        self.save_error_types = tuple(
-            set(getattr(inner, "save_error_types", (Exception,))) | {OSError}
+        self.transient_error_types = tuple(
+            set(getattr(inner, "transient_error_types", (Exception,))) | {OSError}
         )
 
     def _path_for(self, key: str) -> str:
@@ -526,7 +526,9 @@ def make_persister(
     if backend is None:
         backend = _select_remote_backend(ttl_seconds=ttl_seconds)
     backend = _maybe_layer_l1(backend, ttl_seconds=ttl_seconds)
-    save_error_types = tuple(getattr(backend, "save_error_types", (Exception,)))
+    transient_error_types = tuple(
+        getattr(backend, "transient_error_types", (Exception,))
+    )
 
     class _Persister:
         @staticmethod
@@ -534,7 +536,7 @@ def make_persister(
             key = redis_key_for(cassette_path)
             try:
                 data = backend.get(key)
-            except save_error_types as exc:
+            except transient_error_types as exc:
                 _record_cache_failure("load", exc)
                 msg = (
                     f"VCR cache load failed for {cassette_path}; treating "
@@ -589,7 +591,7 @@ def make_persister(
             payload = _compress(payload)
             try:
                 backend.set(key, payload, ttl_seconds)
-            except save_error_types as exc:
+            except transient_error_types as exc:
                 # Cassette persistence is strictly best-effort: connection
                 # blips, timeouts, OOM at the maxmemory cap, READONLY
                 # replicas, S3 5xx, etc. should all degrade gracefully to

@@ -34,7 +34,7 @@ class _RecordingBackend:
     """
 
     name = "test"
-    save_error_types = (RuntimeError,)
+    transient_error_types = (RuntimeError,)
 
     def __init__(self) -> None:
         self.store: dict[str, bytes] = {}
@@ -145,11 +145,11 @@ def test_l1_writes_local_copy_even_when_remote_set_fails(tmp_path):
     assert l1.get("k") == b"payload"
 
 
-def test_l1_inherits_inner_save_error_types(tmp_path):
+def test_l1_inherits_inner_transient_error_types(tmp_path):
     inner = _RecordingBackend()
     l1 = _LocalDiskL1Cache(str(tmp_path), inner)
-    assert RuntimeError in l1.save_error_types
-    assert OSError in l1.save_error_types
+    assert RuntimeError in l1.transient_error_types
+    assert OSError in l1.transient_error_types
 
 
 def test_l1_path_layout_is_sharded(tmp_path):
