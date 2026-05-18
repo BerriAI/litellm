@@ -53,12 +53,22 @@ THINKING_ARGS = ["--effort", "max"]
 # what command to run before *invoking* the Bash tool. Using a fixed
 # expected output keeps the assertion focused on the wire shape rather
 # than on answer quality.
+# Prompt fixes the exact bash command to `echo pong`. The thinking
+# block is preserved (the model reasons about why `echo pong` works),
+# but the executed command is pinned so the cell can run under the
+# tight `Bash(echo pong) + dontAsk` permission below — see
+# `tool_use/test_anthropic.py` for the full security rationale.
 THINKING_TOOL_PROMPT = (
-    "Think step by step about which shell command would print just the word "
-    "'pong'. Then use the Bash tool to run that exact command and report what "
-    "it printed."
+    "Think step by step about why the command `echo pong` prints just the "
+    "word 'pong'. Then use the Bash tool to run exactly the command "
+    "`echo pong` and report what it printed."
 )
-TOOL_USE_ARGS = ["--allowed-tools", "Bash"]
+TOOL_USE_ARGS = [
+    "--allowed-tools",
+    "Bash(echo pong)",
+    "--permission-mode",
+    "dontAsk",
+]
 
 
 def _has_block_type(

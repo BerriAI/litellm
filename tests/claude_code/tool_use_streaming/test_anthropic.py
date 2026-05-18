@@ -53,7 +53,15 @@ ANTHROPIC_MODELS = [
 TOOL_USE_PROMPT = (
     "Use the Bash tool to run the command `echo pong` and report what it printed."
 )
-TOOL_USE_ARGS = ["--allowed-tools", "Bash"]
+# Bash is restricted to the exact command `echo pong` + `dontAsk`
+# permission mode; see `tool_use/test_anthropic.py` for the security
+# rationale.
+TOOL_USE_ARGS = [
+    "--allowed-tools",
+    "Bash(echo pong)",
+    "--permission-mode",
+    "dontAsk",
+]
 
 # Floor on the number of stream-json records we expect to see for a
 # tool-use turn. A buffered (non-streamed) wire collapses to one

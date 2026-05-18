@@ -2579,24 +2579,46 @@ jobs:
       - run:
           name: Run Claude Code compatibility test suite
           command: |
-            export LITELLM_PROXY_BASE_URL="http://localhost:4000"
-            export LITELLM_PROXY_API_KEY="sk-1234"
             mkdir -p test-results compat-artifacts
-            # Point the conftest's tagged-union artifacts at a directory
-            # we explicitly persist below via store_artifacts. Without
-            # this override, the conftest defaults to compat-results.json
-            # / compat-rate-limit-summary.json in the working directory,
-            # which no CI step collects -- so reviewers can't pull the
-            # per-cell pass/fail breakdown when a red gate needs triage.
-            export COMPAT_RESULTS_PATH="$(pwd)/compat-artifacts/compat-results.json"
-            export COMPAT_RATE_LIMIT_SUMMARY_PATH="$(pwd)/compat-artifacts/compat-rate-limit-summary.json"
-            uv run --no-sync python -m pytest -vv tests/claude_code/ \
-              --ignore=tests/claude_code/_driver_unit_tests \
-              --ignore=tests/claude_code/_builder_unit_tests \
-              --ignore=tests/claude_code/_publisher_unit_tests \
-              --ignore=tests/claude_code/_pr_gate_unit_tests \
-              --junitxml=test-results/junit.xml \
-              --durations=10
+            # The proxy already runs in its own container with the
+            # provider credentials passed via `docker -e`. Pytest only
+            # needs to talk to the proxy at localhost:4000 — it has no
+            # legitimate reason to see ANTHROPIC_API_KEY / AWS_* /
+            # VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN in its own
+            # env. Wrap the pytest invocation in `env -i` so PR-
+            # controlled test code under tests/claude_code/ cannot
+            # read provider creds out of `os.environ` and exfiltrate
+            # them via an outbound call from inside a test or
+            # conftest hook (a sibling vector to the model-controlled
+            # Bash concern handled separately by the per-cell
+            # `Bash(echo pong) + dontAsk` restriction).
+            #
+            # COMPAT_RESULTS_PATH / COMPAT_RATE_LIMIT_SUMMARY_PATH
+            # point the conftest's tagged-union artifacts at a
+            # directory we explicitly persist below via
+            # store_artifacts; without these overrides the conftest
+            # writes to the working directory and no CI step collects
+            # them, so reviewers can't pull the per-cell pass/fail
+            # breakdown when a red gate needs triage.
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              LITELLM_PROXY_BASE_URL="http://localhost:4000" \
+              LITELLM_PROXY_API_KEY="sk-1234" \
+              COMPAT_RESULTS_PATH="$(pwd)/compat-artifacts/compat-results.json" \
+              COMPAT_RATE_LIMIT_SUMMARY_PATH="$(pwd)/compat-artifacts/compat-rate-limit-summary.json" \
+              uv run --no-sync python -m pytest -vv tests/claude_code/ \
+                --ignore=tests/claude_code/_driver_unit_tests \
+                --ignore=tests/claude_code/_builder_unit_tests \
+                --ignore=tests/claude_code/_publisher_unit_tests \
+                --ignore=tests/claude_code/_pr_gate_unit_tests \
+                --junitxml=test-results/junit.xml \
+                --durations=10
           no_output_timeout: 30m
 
       # Store test results (JUnit) for CircleCI's test-summary view.

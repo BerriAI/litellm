@@ -41,7 +41,20 @@ ANTHROPIC_MODELS = [
 TOOL_USE_PROMPT = (
     "Use the Bash tool to run the command `echo pong` and report what it printed."
 )
-TOOL_USE_ARGS = ["--allowed-tools", "Bash"]
+# Restrict the Bash tool to the exact command `echo pong` and put the
+# CLI in `dontAsk` mode so anything else the model returns is auto-
+# denied instead of executed. `dontAsk` mode in headless `--print` mode
+# only runs tools matching an explicit `allow` rule (plus the built-in
+# read-only set), so a compromised provider response cannot turn the
+# `Bash` allowlist into arbitrary host execution (which would expose
+# `docker inspect compat-proxy` / `/proc/<proxy_pid>/environ` and
+# thereby provider credentials living in the proxy container).
+TOOL_USE_ARGS = [
+    "--allowed-tools",
+    "Bash(echo pong)",
+    "--permission-mode",
+    "dontAsk",
+]
 
 
 def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
