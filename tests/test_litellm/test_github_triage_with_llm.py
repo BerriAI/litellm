@@ -123,6 +123,41 @@ class TestStripHtmlComments:
         assert triage_module.strip_html_comments(None) == ""
 
 
+class TestCloseCommentText:
+    """Pin the user-facing language in close comments so changes are intentional."""
+
+    def test_pr_close_comment_should_recommend_new_pr_primarily(self, triage_module):
+        body = triage_module.format_pr_close_comment(
+            {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin"}
+        )
+        # Primary path: open a new PR (because OSS authors can't reopen a
+        # bot-closed PR). Secondary path: `@agent-shin reconsider`.
+        assert "Open a new PR" in body
+        assert "@agent-shin reconsider" in body
+        # Old advice that no longer works for OSS contributors must NOT
+        # appear (they can't reopen a PR closed by a bot/maintainer).
+        assert "Reopen the PR" not in body
+
+    def test_pr_close_comment_should_not_promise_automatic_reopen_on_open(
+        self, triage_module
+    ):
+        # The previous comment said "I'll re-evaluate automatically" — that
+        # only worked because the author could reopen, which they often
+        # can't. The new wording must point them at the comment trigger or
+        # a new PR instead.
+        body = triage_module.format_pr_close_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "I'll re-evaluate automatically" not in body
+
+    def test_issue_close_comment_should_use_reconsider_trigger(self, triage_module):
+        body = triage_module.format_issue_close_comment(
+            {"verdict": "fail", "missing": ["repro"], "explanation": "thin"}
+        )
+        assert "@agent-shin reconsider" in body
+        assert "Reopen the issue" not in body
+
+
 class TestParseVerdict:
     def test_should_parse_plain_json(self, triage_module):
         raw = '{"verdict": "pass", "missing": []}'
@@ -496,6 +531,203 @@ class TestTriageOrchestration:
         )
         assert result["action"] == "skip-llm-error"
         assert "upstream 500" in result["error"]
+
+    def test_should_skip_open_pr_in_reconsider_mode(self, triage_module, monkeypatch):
+        # Reconsider only makes sense on a CLOSED PR — running it on an open
+        # one is a no-op (the regular triage flow already evaluated it).
+        pr = self._make_pr(state="open")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("should not run on open PR in reconsider"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-not-closed"
+
+    def test_should_reopen_on_reconsider_pass(self, triage_module, monkeypatch):
+        # Reconsider on a closed PR with a passing verdict -> reopen + post a
+        # friendly "re-evaluated" comment.
+        pr = self._make_pr(
+            state="closed", body="Updated body with QA proof + screenshots."
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        posted = {}
+        reopened = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda repo, n: reopened.update({"n": n}),
+        )
+        # close_pr / close_issue MUST NOT fire in reconsider mode.
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close on reconsider pass"),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "ok now"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "reopened"
+        assert reopened["n"] == 42
+        assert posted["n"] == 42
+        assert "reopened" in posted["body"].lower()
+
+    def test_should_post_still_failing_on_reconsider_fail(
+        self, triage_module, monkeypatch
+    ):
+        pr = self._make_pr(state="closed", body="still empty")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        # Neither reopen nor close should fire when reconsider verdict is fail.
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen on fail"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close again on reconsider fail"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Still no QA proof.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+            reconsider=True,
+        )
+        assert result["action"] == "reconsider-still-failing"
+        assert posted["n"] == 42
+        assert "QA proof" in posted["body"]
+
+    def test_should_reopen_on_reconsider_with_linked_issue_short_circuit(
+        self, triage_module, monkeypatch
+    ):
+        # The linked-issue short-circuit also has to honor reconsider mode:
+        # if the contributor edited the body to add `Fixes #1234`, the regex
+        # path should reopen the PR without calling the LLM.
+        pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        posted = {}
+        reopened = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda repo, n: reopened.update({"n": n}),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=55,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
+            reconsider=True,
+        )
+        assert result["action"] == "reopened"
+        assert reopened["n"] == 55
+        assert "reopened" in posted["body"].lower()
+
+    def test_should_skip_internal_in_reconsider_mode(self, triage_module, monkeypatch):
+        # Internal authors are exempt from triage in both regular and
+        # reconsider mode — Agent Shin should never reopen one of their PRs
+        # automatically, in case a maintainer closed it intentionally.
+        pr = self._make_pr(
+            state="closed",
+            author_association="MEMBER",
+            user={"login": "krrishdholakia"},
+        )
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen for internal author"),
+        )
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run for internal author"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-internal-author"
+
+    def test_should_reopen_issue_on_reconsider_pass(self, triage_module, monkeypatch):
+        issue = {
+            "number": 7,
+            "title": "Bug: now with repro",
+            "body": "## Repro\n```bash\ncurl ...\n```\n\nExpected X, got Y.",
+            "state": "closed",
+            "author_association": "NONE",
+            "user": {"login": "outside"},
+        }
+        monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        posted = {}
+        reopened = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_issue",
+            lambda repo, n: reopened.update({"n": n}),
+        )
+
+        result = triage_module.triage(
+            repo="o/r",
+            kind="issue",
+            number=7,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "now reproducible"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "reopened"
+        assert reopened["n"] == 7
+        assert "reopened" in posted["body"].lower()
 
     def test_should_triage_issues_kind(self, triage_module, monkeypatch):
         issue = {

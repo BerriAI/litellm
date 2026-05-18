@@ -146,22 +146,47 @@ class TestEvaluatePr:
             closer_module, "is_external_pr_author", lambda pr, repo: True
         )
 
-    def test_should_skip_drafts(self, closer_module, _now, monkeypatch):
+    def test_should_close_drafts_when_score_low(self, closer_module, _now, monkeypatch):
+        # Drafts are NOT a free pass — the open-PR queue should reflect any
+        # PR that needs human attention regardless of draft status. Authors
+        # who need a long-lived draft can use the `wip` opt-out label.
         monkeypatch.setattr(
             closer_module,
             "fetch_pr_comments",
-            lambda *a, **kw: pytest.fail("should not fetch comments for drafts"),
+            lambda *a, **kw: [_greptile_comment("Confidence Score: 2/5")],
         )
         action, score, age = closer_module.evaluate_pr(
-            self._make_pr(is_draft=True),
+            self._make_pr(is_draft=True, created_days_ago=0),
             now=_now,
-            min_age_days=7,
+            min_age_days=0,
             min_score=4,
             repo=None,
             optout_labels=set(),
         )
-        assert action == "skip-draft"
-        assert score is None and age is None
+        assert action == "close"
+        assert score == 2 and age == 0
+
+    def test_should_close_brand_new_pr_when_min_age_zero(
+        self, closer_module, _now, monkeypatch
+    ):
+        # `min_age_days=0` means no age filter — a freshly-opened PR is
+        # eligible the moment Greptile scores it below threshold. This is
+        # the new default behavior.
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: [_greptile_comment("Confidence Score: 1/5")],
+        )
+        action, score, age = closer_module.evaluate_pr(
+            self._make_pr(created_days_ago=0),
+            now=_now,
+            min_age_days=0,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+        )
+        assert action == "close"
+        assert score == 1 and age == 0
 
     def test_should_skip_optout_label_case_insensitive(
         self, closer_module, _now, monkeypatch
@@ -181,7 +206,12 @@ class TestEvaluatePr:
         )
         assert action == "skip-optout-label"
 
-    def test_should_skip_too_young(self, closer_module, _now, monkeypatch):
+    def test_should_skip_too_young_when_min_age_set(
+        self, closer_module, _now, monkeypatch
+    ):
+        # The min-age-days flag is now opt-in (default 0). When a maintainer
+        # explicitly passes a positive value (e.g. for a backfill run that
+        # wants to spare brand-new PRs), the skip-too-young path still works.
         monkeypatch.setattr(
             closer_module,
             "fetch_pr_comments",
@@ -197,6 +227,28 @@ class TestEvaluatePr:
         )
         assert action == "skip-too-young"
         assert age == 2
+
+    def test_should_not_skip_when_min_age_is_zero(
+        self, closer_module, _now, monkeypatch
+    ):
+        # With the new default min_age_days=0, even a 0-day-old PR is
+        # evaluated. This test pins that behavior so future refactors don't
+        # silently restore an age filter.
+        monkeypatch.setattr(
+            closer_module,
+            "fetch_pr_comments",
+            lambda *a, **kw: [_greptile_comment("Confidence Score: 5/5")],
+        )
+        action, score, age = closer_module.evaluate_pr(
+            self._make_pr(created_days_ago=0),
+            now=_now,
+            min_age_days=0,
+            min_score=4,
+            repo=None,
+            optout_labels=set(),
+        )
+        assert action == "skip-score-ok"
+        assert score == 5 and age == 0
 
     def test_should_skip_when_greptile_has_not_reviewed(
         self, closer_module, _now, monkeypatch
@@ -303,7 +355,7 @@ class TestMainOptoutLabelDefault:
 
         def fake_evaluate(pr, now, min_age_days, min_score, repo, optout_labels):
             captured["optout_labels"] = set(optout_labels)
-            return ("skip-draft", None, None)
+            return ("skip-internal", None, None)
 
         monkeypatch.setattr(closer_module, "evaluate_pr", fake_evaluate)
         return captured

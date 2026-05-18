@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
-Auto-close stale, low-quality pull requests.
+Auto-close low-quality pull requests.
 
-Closes open PRs that satisfy ALL of the following:
-  1. Are at least N days old (default: 7) since creation.
-  2. Have a Greptile (`greptile-apps`) review comment whose latest
+Closes open PRs (including drafts, regardless of age) that satisfy ALL of:
+  1. Have a Greptile (`greptile-apps`) review comment whose latest
      "Confidence Score: X/5" is below the configured threshold (default: 4).
-  3. Are not drafts.
-  4. Do not carry an opt-out label (default: "do not close").
+  2. Are authored by an external OSS contributor (internal BerriAI
+     contributors are exempt).
+  3. Do not carry an opt-out label (default: "do not close").
+
+`--min-age-days` is retained as an opt-in safety net for one-off backfill
+runs (default: 0). The team's intent is that the count of open PRs equals
+the count of PRs internal collaborators need to action on, so neither age
+nor draft status acts as a free pass.
 
 For each match, the script posts an explanatory comment and closes the PR.
-Contributors are invited to rebase and request a new Greptile review; if
-Greptile then scores 4/5 or higher the PR can be reopened by anyone with
-push access.
+Because OSS contributors *cannot* reopen a PR closed by the bot/maintainer
+(GitHub limitation), the close-comment instructs them to push their fixes
+and **open a fresh PR**, or to comment `@agent-shin reconsider` on the
+closed PR to have the LLM judge re-evaluate (and reopen on pass).
 
 Requires the `gh` CLI to be authenticated.
 
@@ -23,7 +29,7 @@ Usage examples:
     # Actually close matching PRs
     python3 close_low_quality_prs.py --close
 
-    # Tweak thresholds
+    # Restrict to PRs at least N days old (one-off backfill safety net)
     python3 close_low_quality_prs.py --min-age-days 7 --min-score 4 --close
 """
 
@@ -73,7 +79,13 @@ def gh(*args: str) -> str:
 
 
 def fetch_open_prs(repo: str | None) -> list[dict]:
-    """Fetch all open PRs (number, createdAt, isDraft, labels, author)."""
+    """Fetch all open PRs (number, createdAt, isDraft, labels, author).
+
+    Includes drafts: `gh pr list --state open` returns both ready-for-review
+    and draft PRs by default. This is the desired behavior — drafts are not
+    a free pass; the internal-collaborator open-PR queue should reflect every
+    PR that needs human attention regardless of draft status.
+    """
     repo_args = ["--repo", repo] if repo else []
     fields = "number,title,createdAt,isDraft,labels,author,url"
     raw = gh(
@@ -206,16 +218,22 @@ def close_pr(
 
     comment_body = (
         f"Closing as part of automated PR triage.\n\n"
-        f"This PR has been open for **{age_days} day(s)** and Greptile's most "
-        f"recent review scored it **{score}/5**, below our merge bar of "
-        f"**{threshold}/5**.\n\n"
+        f"Greptile's most recent review scored this PR **{score}/5**, below "
+        f"our merge bar of **{threshold}/5**.\n\n"
         "We close low-confidence PRs aggressively to keep the review queue "
         "manageable for maintainers and contributors alike. **This is not a "
         "rejection of the idea** — to bring this back:\n\n"
-        "1. Rebase on the latest `main` and address the points Greptile raised.\n"
-        f"2. Re-request a review from `@greptileai` once you've pushed the fixes.\n"
-        f"3. If Greptile returns a score of **{threshold}/5 or higher**, reopen "
-        "this PR (or open a new one) — a maintainer will take another look.\n\n"
+        "1. Push the fixes that address Greptile's feedback (continue using "
+        "your existing branch is fine).\n"
+        "2. **Open a new PR** with the updated branch. Greptile will review "
+        "it again, and if it scores "
+        f"**{threshold}/5 or higher** a maintainer will take another look.\n\n"
+        "_Why open a new PR instead of reopening this one?_ GitHub does not "
+        "let external contributors reopen a PR that was closed by a bot or "
+        "maintainer, so a fresh PR is the most reliable path forward. If you "
+        "would prefer this exact PR re-evaluated, comment "
+        "`@agent-shin reconsider` once you've pushed the fixes — Agent Shin "
+        "will re-run triage and reopen this PR if it now meets the bar.\n\n"
         "Thanks for contributing to LiteLLM. We know auto-closures can sting; "
         "the goal is to keep the project healthy, not to dismiss your work."
     )
@@ -243,18 +261,23 @@ def evaluate_pr(
     """Decide whether to close `pr`.
 
     Returns (action, score_or_none, age_days_or_none) where action is one of:
-        "skip-draft", "skip-too-young", "skip-optout-label", "skip-internal",
+        "skip-too-young", "skip-optout-label", "skip-internal",
         "skip-no-greptile-score", "skip-score-ok", or "close".
-    """
-    if pr.get("isDraft"):
-        return ("skip-draft", None, None)
 
+    Drafts are NOT skipped — the goal is "open PR count == PRs internal
+    collaborators need to action on", and a draft that Greptile scored <4/5
+    is still in that queue. Authors can opt out via the `wip` label (see
+    `DEFAULT_OPTOUT_LABELS`) if they need to keep a long-lived draft open.
+    """
     if has_optout_label(pr, optout_labels):
         return ("skip-optout-label", None, None)
 
     created = parse_iso8601(pr["createdAt"])
     age_days = (now - created).days
-    if age_days < min_age_days:
+    # `min_age_days` defaults to 0 (close as soon as Greptile scores low).
+    # Set a positive value via --min-age-days for one-off backfill runs that
+    # want to skip very-young PRs.
+    if min_age_days > 0 and age_days < min_age_days:
         return ("skip-too-young", None, age_days)
 
     # Only auto-close external OSS contributors. Internal contributors
@@ -285,8 +308,12 @@ def main() -> int:
     parser.add_argument(
         "--min-age-days",
         type=int,
-        default=7,
-        help="Minimum age (in days) before a PR is eligible (default: 7).",
+        default=0,
+        help=(
+            "Minimum age (in days) before a PR is eligible. Default 0 = "
+            "close as soon as Greptile flags it. Set a positive value for "
+            "one-off backfill runs that want to spare very-young PRs."
+        ),
     )
     parser.add_argument(
         "--min-score",
@@ -343,7 +370,6 @@ def main() -> int:
     closed = 0
     summary = {
         "close": 0,
-        "skip-draft": 0,
         "skip-too-young": 0,
         "skip-optout-label": 0,
         "skip-internal": 0,

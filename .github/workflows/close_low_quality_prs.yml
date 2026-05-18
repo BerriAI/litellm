@@ -1,15 +1,17 @@
-name: Close Low-Quality Stale PRs
+name: Close Low-Quality PRs
 
-# Auto-close PRs that have been open for a week or more and that Greptile has
-# reviewed with a confidence score below 4/5. Closures are explained in a
-# comment so contributors know how to bring the PR back (rebase, request a new
-# Greptile review, reopen on a 4+/5).
+# Auto-close any open PR (including drafts, regardless of age) authored by an
+# external OSS contributor that Greptile reviewed with a confidence score
+# below 4/5. Closures are explained in a comment that tells the contributor
+# to push fixes and open a fresh PR (since OSS authors cannot reopen a PR
+# closed by a bot/maintainer) or comment `@agent-shin reconsider` to have
+# Agent Shin re-evaluate.
 #
 # Manual one-off run:
-#   gh workflow run "Close Low-Quality Stale PRs" -f close=true
+#   gh workflow run "Close Low-Quality PRs" -f close=true
 #
 # Dry-run preview (no PRs are touched):
-#   gh workflow run "Close Low-Quality Stale PRs" -f close=false
+#   gh workflow run "Close Low-Quality PRs" -f close=false
 
 on:
   schedule:
@@ -26,9 +28,9 @@ on:
           - "true"
           - "false"
       min_age_days:
-        description: "Minimum PR age in days before it is eligible."
+        description: "Minimum PR age in days (default 0 = no age filter)."
         required: false
-        default: "7"
+        default: "0"
       min_score:
         description: "Greptile score below which a PR is closed (1-5)."
         required: false
@@ -68,7 +70,7 @@ jobs:
           # on manual workflow_dispatch with close=true (and the variable set).
           CLOSE_FLAG: ${{ github.event.inputs.close || 'false' }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
-          MIN_AGE_DAYS: ${{ github.event.inputs.min_age_days || '7' }}
+          MIN_AGE_DAYS: ${{ github.event.inputs.min_age_days || '0' }}
           MIN_SCORE: ${{ github.event.inputs.min_score || '4' }}
           LIMIT: ${{ github.event.inputs.limit || '25' }}
         run: |

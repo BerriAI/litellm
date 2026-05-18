@@ -114,6 +114,23 @@ def close_pr(repo: str, number: int) -> None:
     )
 
 
+def reopen_pr(repo: str, number: int) -> None:
+    """Reopen a previously-closed pull request (state=open).
+
+    Used by the `@agent-shin reconsider` comment-trigger flow: the bot has
+    write access via GH_TOKEN, so it can reopen on the contributor's behalf
+    even though GitHub doesn't let the OSS author do it themselves.
+    """
+    gh(
+        "api",
+        f"repos/{repo}/pulls/{number}",
+        "-X",
+        "PATCH",
+        "-f",
+        "state=open",
+    )
+
+
 def close_issue(repo: str, number: int, *, not_planned: bool = True) -> None:
     """Close an issue, marking state_reason=not_planned by default."""
     args = [
@@ -127,6 +144,20 @@ def close_issue(repo: str, number: int, *, not_planned: bool = True) -> None:
     if not_planned:
         args.extend(["-f", "state_reason=not_planned"])
     gh(*args)
+
+
+def reopen_issue(repo: str, number: int) -> None:
+    """Reopen a previously-closed issue (state=open, state_reason=reopened)."""
+    gh(
+        "api",
+        f"repos/{repo}/issues/{number}",
+        "-X",
+        "PATCH",
+        "-f",
+        "state=open",
+        "-f",
+        "state_reason=reopened",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +387,17 @@ def format_pr_close_comment(verdict: dict) -> str:
         "   - Link a related GitHub issue (e.g. `Fixes #1234`), OR\n"
         "   - Add a clear **problem description**, **expected vs. actual behavior**, and **visual QA proof** "
         "(before/after screenshots, a short screen recording, or terminal/log output).\n"
-        "2. **Reopen** the PR (or open a fresh one) — I'll re-evaluate automatically.\n"
+        "2. Either:\n"
+        "   - **Open a new PR** with the same fixes — recommended path. GitHub does not let external "
+        "contributors reopen a PR that was closed by a bot/maintainer, so a fresh PR is the most reliable way "
+        "to get back into the review queue.\n"
+        "   - **Or** comment `@agent-shin reconsider` on this closed PR after updating the description. "
+        "I'll re-run the triage; if it now passes, I'll reopen this PR automatically.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
-        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, reopen and ping a maintainer — "
-        "they'll override me.)_"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
+        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_"
     )
 
 
@@ -385,12 +421,15 @@ def format_issue_close_comment(verdict: dict) -> str:
         "and a screenshot / traceback / log showing the bug.\n"
         "   - For **feature requests**: a concrete description of what should change, plus a use case and example "
         "(config / API call / UI flow).\n"
-        "2. **Reopen** the issue — I'll re-evaluate automatically.\n"
+        "2. Comment `@agent-shin reconsider` on this issue once you've updated it. "
+        "I'll re-run triage and reopen the issue if it now meets the bar. "
+        "(GitHub doesn't always let the original reporter reopen a bot-closed issue, "
+        "so the comment-based reconsider is the reliable path.)\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
-        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, reopen and ping a maintainer — "
-        "they'll override me.)_"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
+        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_"
     )
 
 
@@ -416,6 +455,45 @@ def write_step_summary(content: str) -> None:
 # Core orchestration
 
 
+def format_reopen_comment(kind: str) -> str:
+    """Comment posted when Agent Shin reopens after a successful reconsider."""
+    noun = "PR" if kind == "pr" else "issue"
+    return (
+        f"♻️ **Re-evaluated and reopened.** Thanks for updating the {noun}!\n"
+        "\n"
+        "Agent Shin re-ran triage on the latest description and it now meets "
+        "the bar. A maintainer will take another look soon — please don't "
+        f"close this {noun} again unless asked to.\n"
+        "\n"
+        "_(If a maintainer ends up closing this for non-rubric reasons, that "
+        "decision stands; comment `@agent-shin reconsider` again only if you "
+        "have substantively new information.)_"
+    )
+
+
+def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
+    """Comment posted when reconsider re-runs triage but the verdict is still fail."""
+    missing_lines = _format_missing(verdict.get("missing") or [])
+    explanation = verdict.get("explanation") or ""
+    noun = "PR" if kind == "pr" else "issue"
+    return (
+        f"⏸️ **Re-evaluated; this {noun} still doesn't meet the rubric.**\n"
+        "\n"
+        "Agent Shin re-ran triage on the current description but is still "
+        "missing:\n"
+        "\n"
+        f"{missing_lines}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "Update the description with the missing pieces and comment "
+        "`@agent-shin reconsider` again, or ping a maintainer if you think "
+        "I got this wrong.\n"
+        "\n"
+        "_(I'm an LLM and I'm not infallible.)_"
+    )
+
+
 def triage(
     *,
     repo: str,
@@ -425,11 +503,21 @@ def triage(
     model: str,
     judge: Any = None,
     print_prompt: bool = False,
+    reconsider: bool = False,
 ) -> dict:
     """Triage a single PR or issue. Returns a result dict for logging/tests.
 
     `judge` is an optional callable `(prompt) -> str` for tests / dry-run with
     a stub. In production, leave it None and the script uses `call_llm_judge`.
+
+    When `reconsider=True`, the closed-state guard is skipped and a
+    fail-but-no-comment is replaced with a "still failing" comment + leave
+    closed; a pass triggers `reopen_pr`/`reopen_issue` plus a reopen comment.
+    Reconsider mode is intended for the `@agent-shin reconsider` comment
+    trigger. `close` is forced True implicitly when `reconsider` is set
+    because the bot has already decided this is a real (non-dry-run)
+    invocation; it's the caller's responsibility to gate on
+    AGENT_SHIN_ENABLED before calling reconsider mode.
     """
     fetcher = {"pr": fetch_pr, "issue": fetch_issue}[kind]
     item = fetcher(repo, number)
@@ -447,10 +535,18 @@ def triage(
         "author": login,
         "author_association": association,
         "state": state,
+        "reconsider": reconsider,
     }
 
-    if state != "open":
-        return {**base_result, "action": "skip-not-open"}
+    # Reconsider only makes sense on a closed PR/issue. A "reconsider on an
+    # open PR" is a no-op (the regular triage flow already evaluates open
+    # PRs); return a clear skip so the workflow can short-circuit.
+    if reconsider:
+        if state != "closed":
+            return {**base_result, "action": "skip-not-closed"}
+    else:
+        if state != "open":
+            return {**base_result, "action": "skip-not-open"}
 
     if is_internal_contributor(item):
         return {**base_result, "action": "skip-internal-author"}
@@ -459,7 +555,7 @@ def triage(
         prompt = build_pr_prompt(title=title, body=body)
         # Short-circuit: if body very clearly links a related issue, just pass.
         if has_linked_issue(body):
-            return {
+            base = {
                 **base_result,
                 "action": "pass-linked-issue",
                 "verdict": {
@@ -468,6 +564,17 @@ def triage(
                     "explanation": "Linked-issue regex matched; LLM was not called.",
                 },
             }
+            if reconsider:
+                # Pass-on-reconsider -> reopen the PR with a friendly comment.
+                reopen_body = format_reopen_comment(kind)
+                post_comment(repo, number, reopen_body)
+                reopen_pr(repo, number)
+                return {
+                    **base,
+                    "action": "reopened",
+                    "comment": reopen_body,
+                }
+            return base
     else:
         prompt = build_issue_prompt(title=title, body=body)
 
@@ -495,6 +602,33 @@ def triage(
         return {**base_result, "action": "skip-llm-error", "error": str(exc)}
 
     decision = (verdict.get("verdict") or "").lower()
+
+    if reconsider:
+        # Reconsider: pass -> reopen + post reopen comment;
+        # fail -> leave closed + post a "still failing" comment so the
+        # contributor can iterate again.
+        if decision != "fail":
+            reopen_body = format_reopen_comment(kind)
+            post_comment(repo, number, reopen_body)
+            if kind == "pr":
+                reopen_pr(repo, number)
+            else:
+                reopen_issue(repo, number)
+            return {
+                **base_result,
+                "action": "reopened",
+                "verdict": verdict,
+                "comment": reopen_body,
+            }
+        still_failing = format_reconsider_still_failing_comment(kind, verdict)
+        post_comment(repo, number, still_failing)
+        return {
+            **base_result,
+            "action": "reconsider-still-failing",
+            "verdict": verdict,
+            "comment": still_failing,
+        }
+
     if decision != "fail":
         return {**base_result, "action": "pass-llm", "verdict": verdict}
 
@@ -579,6 +713,17 @@ def main() -> int:
         action="store_true",
         help="Print the prompt that would be sent to the judge and exit.",
     )
+    parser.add_argument(
+        "--reconsider",
+        action="store_true",
+        help=(
+            "Re-run triage on a CLOSED PR/issue and reopen it on pass. "
+            "Used by the `@agent-shin reconsider` comment-trigger workflow. "
+            "Only invoke this from a workflow that has already gated on "
+            "AGENT_SHIN_ENABLED=true and verified the commenter is the "
+            "PR/issue author or an internal collaborator."
+        ),
+    )
     args = parser.parse_args()
 
     kind = "pr" if args.pr is not None else "issue"
@@ -591,6 +736,7 @@ def main() -> int:
         close=args.close,
         model=args.model,
         print_prompt=args.print_prompt,
+        reconsider=args.reconsider,
     )
 
     if result.get("action") == "print-prompt":

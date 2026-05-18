@@ -1,10 +1,10 @@
 <!--
 👋 Hi there — please read before submitting.
 
-To keep the review queue healthy for everyone, **external contributions are
-auto-triaged** by an LLM bot ("Agent Shin") on open / reopen. Pull requests that
-do not meet the rubric below are auto-closed with an explanation, and you can
-update + reopen at any time to be re-evaluated.
+To keep the review queue healthy for everyone, **every external PR is
+auto-triaged** by an LLM bot ("Agent Shin") on open / reopen, regardless of
+whether the PR is a draft or marked ready for review. PRs that don't meet
+the rubric below are auto-closed with an explanation.
 
 To pass triage, your PR must satisfy AT LEAST ONE of:
 
@@ -17,9 +17,18 @@ To pass triage, your PR must satisfy AT LEAST ONE of:
       - Visual QA proof (before/after screenshots, screen recording, or
         terminal output demonstrating that the fix/feature works end-to-end)
 
-PRs also receive a Greptile code review. PRs open for ≥7 days with a Greptile
-Confidence Score below 4/5 are auto-closed; re-request a review from
-@greptileai once you've addressed the feedback and reopen to be re-evaluated.
+Every external PR (including drafts, regardless of age) also receives a
+Greptile code review. Any PR with a Greptile Confidence Score below 4/5 is
+auto-closed.
+
+If your PR was auto-closed and you've addressed the feedback, you have two
+options to bring it back:
+
+  - **Open a new PR** with the updated branch (recommended — GitHub does not
+    let external contributors reopen a PR that was closed by a bot or
+    maintainer).
+  - **Or** comment `@agent-shin reconsider` on the closed PR. Agent Shin
+    will re-run triage and reopen the PR if it now meets the bar.
 
 Internal BerriAI contributors are exempt from this auto-triage — fill in the
 Linear ticket section instead.
@@ -60,7 +69,7 @@ For backend changes, terminal output of a passing test or curl command is fine. 
 - [ ] I have Added testing in the [`tests/test_litellm/`](https://github.com/BerriAI/litellm/tree/main/tests/test_litellm) directory, **Adding at least 1 test is a hard requirement** - [see details](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR passes all unit tests on [`make test-unit`](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
-- [ ] I have requested a Greptile review by commenting `@greptileai` and received a **Confidence Score of at least 4/5** before requesting a maintainer review
+- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically on open; comment `@greptileai` to re-trigger after pushing fixes)
 
 ## Delays in PR merge?
 
