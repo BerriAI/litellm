@@ -579,6 +579,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
         tool_search_used = anthropic_model_info.is_tool_search_used(tools)
+        # Suppress tool-search beta injection when ``normalize_bedrock_invoke_
+        # tool_search_tools`` dropped every tool-search entry (BM25-only
+        # inputs collapse to an empty tools list — Bedrock Invoke does not
+        # support the BM25 variant). Without this guard the request would
+        # carry the ``tool-search-tool-2025-10-19`` beta against zero
+        # tool-search tools.
+        if tool_search_used and not anthropic_messages_request.get("tools"):
+            tool_search_used = False
         programmatic_tool_calling_used = (
             anthropic_model_info.is_programmatic_tool_calling_used(tools)
         )

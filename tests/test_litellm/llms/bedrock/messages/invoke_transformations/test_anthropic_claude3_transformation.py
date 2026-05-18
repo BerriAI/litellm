@@ -429,7 +429,11 @@ def test_bedrock_invoke_messages_transform_normalizes_tool_search_regex():
     Regression test for #28083: ``tool_search_tool_regex_20251119`` must be
     rewritten to bare ``tool_search_tool_regex`` on the ``/v1/messages`` path
     so Bedrock Invoke's Pydantic tool-type discriminator does not reject the
-    request client-side.
+    request client-side. Also locks in that the canonical
+    ``tool-search-tool-2025-10-19`` beta header is still injected for
+    tool-search-supported Bedrock Claude models, and that beta detection
+    reads the post-normalization tools (so ``is_tool_search_used`` sees
+    the rewritten regex entry rather than the dropped ``_20251119`` form).
 
     Before this fix the messages handler called every other tool-normalization
     helper but skipped tool-search normalization, so any Anthropic tool-search
@@ -450,7 +454,7 @@ def test_bedrock_invoke_messages_transform_normalizes_tool_search_regex():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="anthropic.claude-sonnet-4-6-v1:0",
         messages=[{"role": "user", "content": "Search for foo"}],
         anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
         litellm_params=GenericLiteLLMParams(),
@@ -467,6 +471,56 @@ def test_bedrock_invoke_messages_transform_normalizes_tool_search_regex():
     ), "Bedrock Invoke does not support the BM25 variant; it must be dropped."
     assert tool_types == ["tool_search_tool_regex"]
     assert result["tools"][0]["name"] == "tool_search_tool_regex"
+    assert "tool-search-tool-2025-10-19" in result.get("anthropic_beta", []), (
+        "Beta-header detection must see the rewritten regex tool in the "
+        "post-normalization request body and inject the Bedrock-side beta."
+    )
+
+
+def test_bedrock_invoke_messages_transform_bm25_only_no_tool_search_beta():
+    """
+    BM25-only edge case: when a request supplies
+    ``tool_search_tool_bm25_20251119`` without any regex tool,
+    ``normalize_bedrock_invoke_tool_search_tools`` drops the BM25 entry
+    (Bedrock Invoke does not support BM25), so the normalized tools list
+    is empty. The ``tool-search-tool-2025-10-19`` beta header must NOT
+    be injected.
+
+    Before this fix, beta detection read the pre-normalization
+    ``optional_params["tools"]`` (still containing BM25) and called
+    ``is_tool_search_used`` on it, so the beta header was added to a
+    request that ultimately carried no tool-search tools. Reading the
+    post-normalization tools instead keeps beta-header injection
+    consistent with what actually reaches Bedrock.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "stream": False,
+        "tools": [
+            {"type": "tool_search_tool_bm25_20251119"},
+        ],
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        # Tool-search-supported Bedrock Claude alias — would otherwise add
+        # the beta header if pre-normalization tools were read.
+        model="anthropic.claude-sonnet-4-6-v1:0",
+        messages=[{"role": "user", "content": "Search for foo"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        result.get("tools", []) == []
+    ), "BM25-only input must be reduced to an empty tools list."
+    assert "tool-search-tool-2025-10-19" not in result.get("anthropic_beta", []), (
+        "Tool-search beta header must not be injected when the normalized "
+        "tools list contains no tool-search entry."
+    )
 
 
 def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
