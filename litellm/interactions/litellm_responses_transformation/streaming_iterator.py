@@ -241,13 +241,18 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                         and self.sent_content_start
                         and transformed.event_type == completion_event_type
                     ):
-                        stop_chunk = InteractionsAPIStreamingResponse(
-                            event_type=stop_event_type,
-                            index=0,
-                            id=transformed.id,
-                            object="content",
-                            delta={"type": "text", "text": self.collected_text},
-                        )
+                        stop_kwargs: Dict[str, Any] = {
+                            "event_type": stop_event_type,
+                            "index": 0,
+                            "id": transformed.id,
+                            "object": "content",
+                        }
+                        if self._use_legacy:
+                            stop_kwargs["delta"] = {
+                                "type": "text",
+                                "text": self.collected_text,
+                            }
+                        stop_chunk = InteractionsAPIStreamingResponse(**stop_kwargs)
                         self._pending_interaction_complete = transformed
                         return stop_chunk
                     return transformed
@@ -262,12 +267,17 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     stop_event_type = (
                         "content.stop" if self._use_legacy else "step.stop"
                     )
-                    return InteractionsAPIStreamingResponse(
-                        event_type=stop_event_type,
-                        index=0,
-                        object="content",
-                        delta={"type": "text", "text": self.collected_text},
-                    )
+                    stop_kwargs = {
+                        "event_type": stop_event_type,
+                        "index": 0,
+                        "object": "content",
+                    }
+                    if self._use_legacy:
+                        stop_kwargs["delta"] = {
+                            "type": "text",
+                            "text": self.collected_text,
+                        }
+                    return InteractionsAPIStreamingResponse(**stop_kwargs)
 
                 raise StopIteration
 
@@ -317,12 +327,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                         and self.sent_content_start
                         and transformed.event_type == completion_event_type
                     ):
+                        stop_kwargs_async: Dict[str, Any] = {
+                            "event_type": stop_event_type,
+                            "index": 0,
+                            "id": transformed.id,
+                            "object": "content",
+                        }
+                        if self._use_legacy:
+                            stop_kwargs_async["delta"] = {
+                                "type": "text",
+                                "text": self.collected_text,
+                            }
                         stop_chunk = InteractionsAPIStreamingResponse(
-                            event_type=stop_event_type,
-                            index=0,
-                            id=transformed.id,
-                            object="content",
-                            delta={"type": "text", "text": self.collected_text},
+                            **stop_kwargs_async
                         )
                         self._pending_interaction_complete = transformed
                         return stop_chunk
@@ -338,11 +355,16 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     stop_event_type = (
                         "content.stop" if self._use_legacy else "step.stop"
                     )
-                    return InteractionsAPIStreamingResponse(
-                        event_type=stop_event_type,
-                        index=0,
-                        object="content",
-                        delta={"type": "text", "text": self.collected_text},
-                    )
+                    stop_kwargs_async = {
+                        "event_type": stop_event_type,
+                        "index": 0,
+                        "object": "content",
+                    }
+                    if self._use_legacy:
+                        stop_kwargs_async["delta"] = {
+                            "type": "text",
+                            "text": self.collected_text,
+                        }
+                    return InteractionsAPIStreamingResponse(**stop_kwargs_async)
 
                 raise StopAsyncIteration

@@ -191,11 +191,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 or "mime_type" not in response_format
             ):
                 # Wrap the legacy schema into the new polymorphic format.
-                response_format = {
+                new_rf: Dict[str, Any] = {
                     "type": "text",
                     "mime_type": response_mime_type,
-                    "schema": response_format,
                 }
+                if response_format is not None:
+                    new_rf["schema"] = response_format
+                response_format = new_rf
 
             if response_format is not None:
                 request_body["response_format"] = response_format
@@ -207,6 +209,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             if generation_config is not None:
                 image_config = None
                 if isinstance(generation_config, dict):
+                    generation_config = dict(
+                        generation_config
+                    )  # avoid mutating the caller's dict
                     image_config = generation_config.pop("image_config", None)
                     if not generation_config:
                         generation_config = None
