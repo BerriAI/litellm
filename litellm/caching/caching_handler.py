@@ -91,6 +91,9 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     cached_id = cached_result.get("id")
     if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
         return True
+    obj = cached_result.get("object")
+    if isinstance(obj, str) and obj.startswith("chat.completion"):
+        return True
     return "choices" in cached_result
 
 

@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from litellm.caching.caching_handler import (
     LLMCachingHandler,
     CachingHandlerResponse,
+    _is_chat_completion_cached_dict,
     _should_defer_streaming_cache_hit_callbacks,
 )
 from litellm.caching.caching import LiteLLMCacheType
@@ -1070,6 +1071,18 @@ def test_convert_cached_streaming_responses_result_to_iterator():
     assert streamed_events[-1].response.id == cached_result["id"]
     assert streamed_events[-1].response.output[0].content[0].text == (
         "Streaming cache replay test."
+    )
+
+
+def test_is_chat_completion_cached_dict():
+    assert _is_chat_completion_cached_dict(
+        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "other", "object": "chat.completion.chunk", "choices": []}
+    )
+    assert not _is_chat_completion_cached_dict(
+        {"id": "resp_abc", "object": "response", "output": []}
     )
 
 
