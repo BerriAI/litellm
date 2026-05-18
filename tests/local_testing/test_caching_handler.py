@@ -1115,7 +1115,6 @@ def test_convert_cached_aresponses_bridge_chat_completion_stream():
         kwargs={
             "model": "gpt-5.4",
             "stream": True,
-            "acompletion": True,
             "messages": [{"role": "user", "content": "hi"}],
         },
         logging_obj=logging_obj,

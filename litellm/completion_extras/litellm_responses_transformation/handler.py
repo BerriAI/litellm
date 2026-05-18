@@ -186,6 +186,8 @@ class ResponsesToCompletionBridgeHandler:
             **request_data,
         )
 
+        from litellm.types.utils import ModelResponse
+
         stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
@@ -201,6 +203,8 @@ class ResponsesToCompletionBridgeHandler:
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
+        elif isinstance(result, ModelResponse):
+            return result
         elif not stream:
             responses_api_response = self._collect_response_from_stream(result)
             return self.transformation_handler.transform_response(
@@ -269,6 +273,8 @@ class ResponsesToCompletionBridgeHandler:
             aresponses=True,
         )
 
+        from litellm.types.utils import ModelResponse
+
         stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
@@ -284,6 +290,8 @@ class ResponsesToCompletionBridgeHandler:
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
+        elif isinstance(result, ModelResponse):
+            return result
         elif not stream:
             responses_api_response = await self._collect_response_from_stream_async(
                 result

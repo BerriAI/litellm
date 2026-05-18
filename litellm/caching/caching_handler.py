@@ -868,9 +868,7 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(
             cached_result, dict
         ):
-            use_chat_completion_cache = kwargs.get(
-                "acompletion"
-            ) is True or _is_chat_completion_cached_dict(cached_result)
+            use_chat_completion_cache = _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
                 if kwargs.get("stream", False) is True:
                     bridge_call_type = (
