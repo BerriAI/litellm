@@ -228,6 +228,21 @@ class ListAgentsResponse(BaseModel):
     agents: List[AgentResponse]
 
 
+class AgentCreateResponse(LiteLLMPydanticObjectBase):
+    """
+    Response from a provider-side agent creation call (e.g. Gemini v1beta/agents).
+
+    The exact schema varies by provider; all returned fields are preserved via
+    extra="allow".  The only field guaranteed to be present is ``name``, which
+    LiteLLM uses as the stable agent identifier for subsequent calls.
+    """
+
+    name: str
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
 class AgentMakePublicResponse(BaseModel):
     message: str
     public_agent_groups: List[str]
