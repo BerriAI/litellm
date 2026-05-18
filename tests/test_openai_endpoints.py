@@ -425,9 +425,14 @@ async def test_completion_streaming_usage_metrics():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(reruns=3, reruns_delay=2)
 async def test_chat_completion_anthropic_structured_output():
     """
-    Ensure nested pydantic output is returned correctly
+    Ensure nested pydantic output is returned correctly.
+
+    Bedrock Claude is non-deterministic and occasionally emits invalid JSON
+    (e.g. unquoted barewords like <UNKNOWN>), which makes the OpenAI client's
+    strict pydantic parse blow up. temperature=0 + reruns absorb that.
     """
     from pydantic import BaseModel
 
@@ -449,6 +454,7 @@ async def test_chat_completion_anthropic_structured_output():
         model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
         messages=messages,
         response_format=EventsList,
+        temperature=0,
         timeout=60,
     )
     message = res.choices[0].message
