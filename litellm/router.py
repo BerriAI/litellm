@@ -10163,7 +10163,11 @@ class Router:
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
-                raise RouterRateLimitErrorBasic(model=model)
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         # Health-check-based filtering (before cooldown)
@@ -10591,7 +10595,11 @@ class Router:
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
-                raise RouterRateLimitErrorBasic(model=model)
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
@@ -10744,7 +10752,11 @@ class Router:
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
-                raise RouterRateLimitErrorBasic(model=model)
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             litellm_params = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
                 return healthy_deployments

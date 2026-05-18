@@ -8090,6 +8090,11 @@ async def model_list(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Compute once — used in both branches below to hide paused models from the listing.
+    blocked_names = (
+        llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -8123,10 +8128,8 @@ async def model_list(
         )
 
         # Hide paused models from the public listing (admins manage them via /model/info)
-        if llm_router is not None:
-            blocked_names = llm_router.get_fully_blocked_model_names()
-            if blocked_names:
-                all_models = [m for m in all_models if m not in blocked_names]
+        if blocked_names:
+            all_models = [m for m in all_models if m not in blocked_names]
 
         # Build response data with all proxy models
         model_data = []
@@ -8162,10 +8165,8 @@ async def model_list(
     )
 
     # Hide paused models from the public listing (admins manage them via /model/info)
-    if llm_router is not None:
-        blocked_names = llm_router.get_fully_blocked_model_names()
-        if blocked_names:
-            all_models = [m for m in all_models if m not in blocked_names]
+    if blocked_names:
+        all_models = [m for m in all_models if m not in blocked_names]
 
     # Build response data
     model_data = []

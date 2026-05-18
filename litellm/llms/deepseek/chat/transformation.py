@@ -90,12 +90,15 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                     cleaned.pop("reasoning_content", None)
                     patched["provider_specific_fields"] = cleaned
                 else:
-                    litellm.verbose_logger.debug(
+                    litellm.verbose_logger.warning(
                         "DeepSeek thinking mode: assistant message is missing "
-                        "`reasoning_content`. Injecting a placeholder to satisfy "
-                        "API validation. For best results, preserve "
-                        "`reasoning_content` from the original assistant response "
-                        "when building multi-turn conversation history."
+                        "`reasoning_content` and none was saved in "
+                        "`provider_specific_fields`. A single-space placeholder "
+                        "is being injected to satisfy API validation, but the "
+                        "model will receive a blank reasoning chain for this turn, "
+                        "which may silently degrade multi-turn response quality. "
+                        "Preserve `reasoning_content` from the original assistant "
+                        "response when building multi-turn conversation history."
                     )
                     patched["reasoning_content"] = " "
                 result.append(cast(AllMessageValues, patched))

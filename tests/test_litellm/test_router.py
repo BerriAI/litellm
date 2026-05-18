@@ -3788,10 +3788,10 @@ def test_public_get_available_deployment_skips_blocked_on_primary_path():
 
 
 def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
-    from litellm.types.router import RouterRateLimitErrorBasic
+    import litellm
 
     router = _router_with_two_deployments([True, True])
-    with pytest.raises(RouterRateLimitErrorBasic):
+    with pytest.raises(litellm.ServiceUnavailableError):
         router.get_available_deployment(model="dep-0", request_kwargs={})
 
 
@@ -3823,10 +3823,10 @@ def test_get_available_deployment_for_pass_through_skips_blocked():
 
 
 def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
-    from litellm.types.router import RouterRateLimitErrorBasic
+    import litellm
 
     router = _router_with_two_pass_through_deployments([True, True])
-    with pytest.raises(RouterRateLimitErrorBasic):
+    with pytest.raises(litellm.ServiceUnavailableError):
         router.get_available_deployment_for_pass_through(
             model="pt-0", request_kwargs={}
         )
