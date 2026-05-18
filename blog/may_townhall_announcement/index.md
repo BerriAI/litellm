@@ -1,18 +1,24 @@
 ---
 slug: may-townhall-announcement
 title: "May Townhall: Product + Roadmap Updates"
-date: 2026-05-18T07:30:00
+date: 2026-05-19T07:30:00
 authors:
   - krrish
   - ishaan-alt
-description: "Join the LiteLLM May townhall on Monday, 18 May at 7:30 AM PST to learn about LiteLLM's product updates and roadmap."
+description: "Join the LiteLLM May townhall on Tuesday, 19 May at 7:30 AM PST to learn about LiteLLM's product updates and roadmap."
 tags: [announcement, townhall]
 hide_table_of_contents: true
 ---
 
 import Image from '@theme/IdealImage';
 
-We are hosting our May townhall on **Monday, 18 May at 7:30 AM PST**.
+:::note Rescheduled
+
+Apologies — due to technical difficulties, the May townhall has been moved from Monday, 18 May to **Tuesday, 19 May at 7:30 AM PST**. Thanks for your patience!
+
+:::
+
+We are hosting our May townhall on **Tuesday, 19 May at 7:30 AM PST**.
 
 <Image
   img={require('../../img/may_townhall_banner.png')}
