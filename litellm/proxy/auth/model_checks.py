@@ -115,7 +115,11 @@ def get_key_models(
                 user_api_key_dict.team_models
             )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_proxy_models.value in all_models:
-            all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
+            # Union team-specific models with proxy-wide list, matching get_team_models()
+            # which uses set.update(). Replacing discards team-specific models.
+            merged = set(all_models) | set(proxy_model_list)
+            merged.discard(SpecialModelNames.all_proxy_models.value)
+            all_models = list(merged)
             if include_model_access_groups:
                 all_models.extend(model_access_groups.keys())
 
