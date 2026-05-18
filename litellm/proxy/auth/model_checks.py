@@ -64,6 +64,91 @@ def _get_models_from_access_groups(
     return all_models
 
 
+def _is_resolvable_dynamic_model(model: str) -> bool:
+    """
+    Return True for model identifiers that LiteLLM can still resolve even when
+    they are not present in the static model list.
+
+    This covers:
+    - provider-qualified routes such as `bedrock/us.amazon.nova-micro-v1:0`
+      or JSON-registry providers such as `publicai/some-new-model`
+    - dynamic model identifiers such as OpenAI fine-tunes
+      (`ft:gpt-4o:my-org:custom:id`, `ft:davinci-002:org:suffix:id`)
+    """
+    # OpenAI fine-tuned model ids are valid dynamic models, including legacy
+    # bases such as `ft:davinci-002:...` and `ft:babbage-002:...`.
+    # Keep them without calling get_llm_provider(), which currently does not
+    # recognize every historical fine-tune base and prints provider-help text
+    # on failure.
+    if model.startswith("ft:"):
+        return True
+
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    try:
+        get_llm_provider(model=model)
+        return True
+    except Exception:
+        return False
+
+
+def _should_include_model_in_complete_list(
+    model: str,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> bool:
+    """
+    Filter out unresolved strings from the final model list returned by
+    /v1/models and related endpoints.
+
+    Keep:
+    - configured proxy model groups
+    - configured access group names
+    - known base model IDs (e.g. gpt-4o-mini)
+    - provider-qualified or other dynamically resolvable model IDs
+      (e.g. openai/gpt-4o-mini, publicai/foo, ft:gpt-4o:org:suffix:id)
+
+    Drop:
+    - arbitrary strings that don't resolve to a proxy model, access group, or
+      a recognized LiteLLM model route.
+    """
+    if model in (
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    ):
+        return False
+
+    if model in proxy_model_list or model in model_access_groups:
+        return True
+
+    if model in litellm.model_list_set:
+        return True
+
+    if model == "*":
+        return True
+
+    if _is_resolvable_dynamic_model(model):
+        return True
+
+    return False
+
+
+def _filter_complete_model_list(
+    models: List[str],
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> List[str]:
+    return [
+        model
+        for model in models
+        if _should_include_model_in_complete_list(
+            model=model,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+    ]
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
@@ -210,6 +295,12 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             append_unique(valid_models)
+
+    unique_models = _filter_complete_model_list(
+        models=unique_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []
