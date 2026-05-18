@@ -107,20 +107,22 @@ jobs:
           else
             ARGS=(--repo "${{ github.repository }}" --issue "${NUMBER}" --reconsider)
           fi
-          # Reconsider IS the destructive path here (it can post comments
-          # and reopen) — there's no separate `--close` flag because the
-          # script's reconsider mode handles both pass (reopen) and fail
-          # (still-failing comment) outcomes itself.
+          # Reconsider is the destructive path here (it can post comments
+          # and reopen). The triage script honors `--close` even in
+          # reconsider mode — without it the script previews actions
+          # (`would-reopen` / `would-leave-closed-still-failing`) without
+          # writing to GitHub. Append `--close` only when AGENT_SHIN_ENABLED
+          # is the literal string "true"; everything else (unset, "false",
+          # "True", "yes", "1", typos) stays in dry-run.
           #
           # Use the positive `= "true"` gate (instead of `!= "true" -> exit`)
           # so the workflow guardrails in
           # tests/test_litellm/test_github_triage_workflows.py see the
-          # canonical fail-safe enable pattern. Unknown values like "True",
-          # "yes", "1", or typos will fall through to the dry-run else
-          # branch, which is the safe default.
+          # canonical fail-safe enable pattern.
           if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
+            ARGS+=(--close)
             echo "::notice::Agent Shin reconsider ENABLED — running real triage."
-            python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"
           else
             echo "::notice::AGENT_SHIN_ENABLED is not 'true' -> reconsider stays in dry-run (no comment, no reopen)."
           fi
+          python3 .github/scripts/triage_with_llm.py "${ARGS[@]}"

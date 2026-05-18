@@ -298,6 +298,87 @@ class TestMainModelDefault:
         assert captured["model"] == "gpt-4o-mini"
 
 
+class TestWasAutoClosedByAgentShin:
+    """Provenance check that gates reconsider's reopen path."""
+
+    def test_should_return_true_when_bot_comment_has_marker(
+        self, triage_module, monkeypatch
+    ):
+        comments = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": (
+                    "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated "
+                    "triage bot for this repository.\n\nThis PR is being **auto-closed**..."
+                ),
+            }
+        ]
+        monkeypatch.setattr(
+            triage_module, "fetch_issue_comments", lambda repo, n: comments
+        )
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is True
+
+    def test_should_return_false_when_no_comments(self, triage_module, monkeypatch):
+        monkeypatch.setattr(triage_module, "fetch_issue_comments", lambda repo, n: [])
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_ignore_non_bot_author_with_marker(self, triage_module, monkeypatch):
+        # A contributor pasting the marker into a manual comment must NOT
+        # be treated as proof Agent Shin closed the PR. Only bot accounts
+        # (login ends with "[bot]") count — they can't be spoofed.
+        comments = [
+            {
+                "user": {"login": "outside-dev"},
+                "body": "I'm **Agent Shin**, just kidding — please reconsider this.",
+            }
+        ]
+        monkeypatch.setattr(
+            triage_module, "fetch_issue_comments", lambda repo, n: comments
+        )
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_ignore_bot_comment_without_marker(self, triage_module, monkeypatch):
+        # Other bots (codecov, cla-assistant, etc.) post on every PR; their
+        # presence must not satisfy the provenance check.
+        comments = [
+            {
+                "user": {"login": "codecov[bot]"},
+                "body": "## Codecov Report ...",
+            },
+            {
+                "user": {"login": "greptile-apps[bot]"},
+                "body": "Confidence Score: 2/5",
+            },
+        ]
+        monkeypatch.setattr(
+            triage_module, "fetch_issue_comments", lambda repo, n: comments
+        )
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is False
+
+    def test_should_find_marker_in_any_bot_comment(self, triage_module, monkeypatch):
+        # The auto-close comment may not be the most recent (e.g. the
+        # contributor commented after Agent Shin closed it). Any matching
+        # bot comment counts.
+        comments = [
+            {
+                "user": {"login": "codecov[bot]"},
+                "body": "## Codecov Report",
+            },
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": "I'm **Agent Shin**, the automated triage bot ...",
+            },
+            {
+                "user": {"login": "outside-dev"},
+                "body": "Replying after auto-close ...",
+            },
+        ]
+        monkeypatch.setattr(
+            triage_module, "fetch_issue_comments", lambda repo, n: comments
+        )
+        assert triage_module.was_auto_closed_by_agent_shin("o/r", 1) is True
+
+
 class TestCallLlmJudge:
     """call_llm_judge sets gpt-5 specific kwargs correctly."""
 
@@ -604,6 +685,11 @@ class TestTriageOrchestration:
             state="closed", body="Updated body with QA proof + screenshots."
         )
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        # Provenance: the PR was auto-closed by Agent Shin (a bot-authored
+        # auto-close comment exists), so reconsider is allowed to reopen.
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -627,7 +713,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=42,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(
                 {"verdict": "pass", "missing": [], "explanation": "ok now"}
@@ -644,6 +730,9 @@ class TestTriageOrchestration:
     ):
         pr = self._make_pr(state="closed", body="still empty")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
         posted = {}
         monkeypatch.setattr(
             triage_module,
@@ -671,7 +760,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=42,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(verdict),
             reconsider=True,
@@ -688,6 +777,9 @@ class TestTriageOrchestration:
         # path should reopen the PR without calling the LLM.
         pr = self._make_pr(state="closed", body="Fixes #1234\n\nAddresses the bug.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -705,7 +797,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="pr",
             number=55,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
             reconsider=True,
@@ -729,16 +821,193 @@ class TestTriageOrchestration:
             "reopen_pr",
             lambda *a, **kw: pytest.fail("must not reopen for internal author"),
         )
+        # Internal check must fire *before* provenance, so the provenance
+        # helper should never be invoked for an internal author.
+        monkeypatch.setattr(
+            triage_module,
+            "was_auto_closed_by_agent_shin",
+            lambda *a, **kw: pytest.fail("must not check provenance for internal"),
+        )
         result = triage_module.triage(
             repo="o/r",
             kind="pr",
             number=1,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: pytest.fail("LLM must not run for internal author"),
             reconsider=True,
         )
         assert result["action"] == "skip-internal-author"
+
+    def test_should_skip_reconsider_when_not_bot_closed(
+        self, triage_module, monkeypatch
+    ):
+        # A maintainer-closed PR (no Agent Shin auto-close comment) must
+        # never be reopened by `@agent-shin reconsider`, regardless of how
+        # good the LLM verdict would be. Otherwise the original author
+        # could polish the description and silently override a maintainer's
+        # "closed as duplicate / out of scope" decision.
+        pr = self._make_pr(state="closed", body="Fixes #1234")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: False
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not comment when not bot-closed"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("must not reopen when not bot-closed"),
+        )
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run when not bot-closed"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-not-bot-closed"
+
+    def test_should_skip_reconsider_issue_when_not_bot_closed(
+        self, triage_module, monkeypatch
+    ):
+        # Same provenance gate for issues: only Agent Shin auto-closed
+        # issues are eligible for reopen-on-reconsider.
+        issue = {
+            "number": 7,
+            "title": "Bug",
+            "body": "Repro: curl ...",
+            "state": "closed",
+            "author_association": "NONE",
+            "user": {"login": "outside"},
+        }
+        monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: False
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_issue",
+            lambda *a, **kw: pytest.fail("must not reopen maintainer-closed issue"),
+        )
+        result = triage_module.triage(
+            repo="o/r",
+            kind="issue",
+            number=7,
+            close=True,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run for non-bot-closed issue"),
+            reconsider=True,
+        )
+        assert result["action"] == "skip-not-bot-closed"
+
+    def test_should_preview_reopen_in_reconsider_dry_run(
+        self, triage_module, monkeypatch
+    ):
+        # When `close=False` and `reconsider=True`, a passing verdict must
+        # produce a `would-reopen` preview WITHOUT posting a comment or
+        # reopening — same dry-run pattern as `would-close` in regular mode.
+        pr = self._make_pr(state="closed", body="Now with screenshots + repro.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("dry-run must not post"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("dry-run must not reopen"),
+        )
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(
+                {"verdict": "pass", "missing": [], "explanation": "ok now"}
+            ),
+            reconsider=True,
+        )
+        assert result["action"] == "would-reopen"
+        # The preview should include the comment body the bot WOULD post
+        # (useful for $GITHUB_STEP_SUMMARY).
+        assert "reopened" in result["comment"].lower()
+
+    def test_should_preview_reopen_in_reconsider_dry_run_linked_issue(
+        self, triage_module, monkeypatch
+    ):
+        # The linked-issue short-circuit also has to honor dry-run in
+        # reconsider mode — no LLM call AND no destructive side effects.
+        pr = self._make_pr(state="closed", body="Fixes #1234\n\nDetails.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("dry-run must not post"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "reopen_pr",
+            lambda *a, **kw: pytest.fail("dry-run must not reopen"),
+        )
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=55,
+            close=False,
+            model="m",
+            judge=lambda p: pytest.fail("LLM must not run when linked-issue matches"),
+            reconsider=True,
+        )
+        assert result["action"] == "would-reopen"
+        assert "reopened" in result["comment"].lower()
+
+    def test_should_preview_still_failing_in_reconsider_dry_run(
+        self, triage_module, monkeypatch
+    ):
+        # When `close=False` and the verdict is fail, the dry-run preview
+        # must say `would-leave-closed-still-failing` and not post the
+        # "still failing" comment.
+        pr = self._make_pr(state="closed", body="still thin")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("dry-run must not post"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Still no QA proof.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+            reconsider=True,
+        )
+        assert result["action"] == "would-leave-closed-still-failing"
+        assert "QA proof" in result["comment"]
 
     def test_should_reopen_issue_on_reconsider_pass(self, triage_module, monkeypatch):
         issue = {
@@ -750,6 +1019,9 @@ class TestTriageOrchestration:
             "user": {"login": "outside"},
         }
         monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
         posted = {}
         reopened = {}
         monkeypatch.setattr(
@@ -767,7 +1039,7 @@ class TestTriageOrchestration:
             repo="o/r",
             kind="issue",
             number=7,
-            close=False,
+            close=True,
             model="m",
             judge=lambda p: json.dumps(
                 {"verdict": "pass", "missing": [], "explanation": "now reproducible"}

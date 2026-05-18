@@ -42,6 +42,14 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 
 INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
+# Marker phrase Agent Shin always includes in its auto-close comments
+# (see `format_pr_close_comment` / `format_issue_close_comment`). The
+# provenance check for reconsider uses this string + a bot-author filter
+# to confirm a PR/issue was actually auto-closed by Agent Shin before
+# letting a reconsider trigger reopen it. Keep the marker in sync with
+# the literal text in those formatter functions.
+AGENT_SHIN_AUTO_CLOSE_MARKER = "I'm **Agent Shin**"
+
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
 # pass `reasoning_effort="none"` so a `temperature=0` deterministic judgment
@@ -158,6 +166,64 @@ def reopen_issue(repo: str, number: int) -> None:
         "-f",
         "state_reason=reopened",
     )
+
+
+def fetch_issue_comments(repo: str, number: int) -> list[dict]:
+    """Fetch all issue-style comments on a PR/issue (paginated).
+
+    `gh api --paginate` returns one JSON array per page; iterate them and
+    flatten. Returns [] on error (the reconsider path treats "no comments
+    found" as "no proof Agent Shin closed this", which fails-safe).
+    """
+    try:
+        raw = gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/issues/{number}/comments?per_page=100",
+        )
+    except subprocess.CalledProcessError:
+        return []
+    comments: list[dict] = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            comments.extend(parsed)
+        else:
+            comments.append(parsed)
+    return comments
+
+
+def was_auto_closed_by_agent_shin(repo: str, number: int) -> bool:
+    """Return True iff this PR/issue carries an Agent Shin auto-close comment.
+
+    Provenance check for the `@agent-shin reconsider` flow. We require:
+
+      1. A comment authored by a bot account (login ends with "[bot]") —
+         the auto-close workflow uses GH_TOKEN which posts as
+         `github-actions[bot]`. Filtering by bot author makes it impossible
+         for a contributor to spoof an Agent Shin close by pasting the
+         marker text into a manual comment.
+      2. The comment body contains the Agent Shin auto-close marker
+         (`AGENT_SHIN_AUTO_CLOSE_MARKER`).
+
+    Without this check, a maintainer who closes a PR as a duplicate or
+    out-of-scope could be silently overridden by the original author
+    commenting `@agent-shin reconsider` and polishing the description.
+    """
+    for comment in fetch_issue_comments(repo, number):
+        login = ((comment.get("user") or {}).get("login") or "").lower()
+        if not login.endswith("[bot]"):
+            continue
+        body = comment.get("body") or ""
+        if AGENT_SHIN_AUTO_CLOSE_MARKER in body:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -514,10 +580,20 @@ def triage(
     fail-but-no-comment is replaced with a "still failing" comment + leave
     closed; a pass triggers `reopen_pr`/`reopen_issue` plus a reopen comment.
     Reconsider mode is intended for the `@agent-shin reconsider` comment
-    trigger. `close` is forced True implicitly when `reconsider` is set
-    because the bot has already decided this is a real (non-dry-run)
-    invocation; it's the caller's responsibility to gate on
-    AGENT_SHIN_ENABLED before calling reconsider mode.
+    trigger.
+
+    `close` still controls whether destructive side effects fire. When
+    `close=False` and `reconsider=True`, the function previews the
+    decision (`would-reopen`, `would-leave-closed-still-failing`, or
+    `skip-not-bot-closed`) without posting comments or reopening — this
+    mirrors the regular `would-close` dry-run behavior so the reconsider
+    workflow can be exercised safely with `AGENT_SHIN_ENABLED != "true"`.
+
+    Provenance: when `reconsider=True`, we additionally check that the
+    PR/issue was actually auto-closed by Agent Shin (via the bot-authored
+    auto-close marker comment). If not, we refuse to reopen so a
+    maintainer-closed PR cannot be silently overridden by the author
+    polishing the description and commenting `@agent-shin reconsider`.
     """
     fetcher = {"pr": fetch_pr, "issue": fetch_issue}[kind]
     item = fetcher(repo, number)
@@ -551,6 +627,15 @@ def triage(
     if is_internal_contributor(item):
         return {**base_result, "action": "skip-internal-author"}
 
+    # Provenance gate for reconsider: only reopen items Agent Shin auto-closed.
+    # Done up-front so a maintainer-closed PR short-circuits before we burn
+    # LLM tokens or touch comments. The check requires a bot-authored
+    # comment containing the auto-close marker (see
+    # `was_auto_closed_by_agent_shin`), so a contributor cannot spoof it by
+    # quoting the close template themselves.
+    if reconsider and not was_auto_closed_by_agent_shin(repo, number):
+        return {**base_result, "action": "skip-not-bot-closed"}
+
     if kind == "pr":
         prompt = build_pr_prompt(title=title, body=body)
         # Short-circuit: if body very clearly links a related issue, just pass.
@@ -565,8 +650,14 @@ def triage(
                 },
             }
             if reconsider:
-                # Pass-on-reconsider -> reopen the PR with a friendly comment.
                 reopen_body = format_reopen_comment(kind)
+                if not close:
+                    return {
+                        **base,
+                        "action": "would-reopen",
+                        "comment": reopen_body,
+                    }
+                # Pass-on-reconsider -> reopen the PR with a friendly comment.
                 post_comment(repo, number, reopen_body)
                 reopen_pr(repo, number)
                 return {
@@ -606,9 +697,17 @@ def triage(
     if reconsider:
         # Reconsider: pass -> reopen + post reopen comment;
         # fail -> leave closed + post a "still failing" comment so the
-        # contributor can iterate again.
+        # contributor can iterate again. When `close=False` we preview
+        # the action instead of actually posting/reopening.
         if decision != "fail":
             reopen_body = format_reopen_comment(kind)
+            if not close:
+                return {
+                    **base_result,
+                    "action": "would-reopen",
+                    "verdict": verdict,
+                    "comment": reopen_body,
+                }
             post_comment(repo, number, reopen_body)
             if kind == "pr":
                 reopen_pr(repo, number)
@@ -621,6 +720,13 @@ def triage(
                 "comment": reopen_body,
             }
         still_failing = format_reconsider_still_failing_comment(kind, verdict)
+        if not close:
+            return {
+                **base_result,
+                "action": "would-leave-closed-still-failing",
+                "verdict": verdict,
+                "comment": still_failing,
+            }
         post_comment(repo, number, still_failing)
         return {
             **base_result,
