@@ -70,9 +70,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     if "imageSize" in image_config:
                         mapped_params["imageSize"] = image_config["imageSize"]
 
-        if (
-            "imageConfig" in supported_params
-            and isinstance(non_default_params.get("imageConfig"), dict)
+        if "imageConfig" in supported_params and isinstance(
+            non_default_params.get("imageConfig"), dict
         ):
             mapped_params["imageConfig"] = non_default_params["imageConfig"]
 
