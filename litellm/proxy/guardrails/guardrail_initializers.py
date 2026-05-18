@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
 
@@ -76,7 +77,27 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    filter_scope = getattr(litellm_params, "presidio_filter_scope", None) or "both"
+    raw_filter_scope = getattr(litellm_params, "presidio_filter_scope", None)
+
+    if litellm_params.output_parse_pii:
+        # output_parse_pii is round-trip masking: pre_call masks PII -> tokens,
+        # post_call unmasker substitutes tokens -> original PII. Registering an
+        # apply_to_output=True callback alongside it re-runs analyze+anonymize on
+        # the already-unmasked stream and clobbers the restored values. Force the
+        # effective scope to "input" so only the input masker + post_call
+        # unmasker are registered.
+        if raw_filter_scope and raw_filter_scope != "input":
+            verbose_proxy_logger.warning(
+                "Presidio: output_parse_pii=True is incompatible with "
+                "presidio_filter_scope=%r; the output masker would re-mask "
+                "the already-unmasked response. Forcing input-only scope "
+                "with post-call unmask.",
+                raw_filter_scope,
+            )
+        filter_scope = "input"
+    else:
+        filter_scope = raw_filter_scope or "both"
+
     run_input = filter_scope in ("input", "both")
     run_output = filter_scope in ("output", "both")
 
