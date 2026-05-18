@@ -176,24 +176,10 @@ async def _resolve_team_access_group_model_names(
     prisma_client: "PrismaClient",
 ) -> List[str]:
     """
-    Resolve model names reachable via ``team.access_group_ids[]`` against the
-    DB-backed ``LiteLLM_AccessGroupTable``.
-
-    Sibling of ``_add_access_group_models_to_team_models`` in ``proxy_server.py``:
-    the admin helper returns deployment ids (for ``/team/info`` / ``/v2/team/list``),
-    while this helper returns model names (for the OpenAI-compatible
-    ``/v1/models`` path).
-
-    Skip rules mirror the admin helper:
-    - teams with no ``access_group_ids`` contribute nothing.
-    - teams whose ``models`` is empty or contains ``all-proxy-models`` already
-      see every model on the proxy; access-group resolution is skipped to avoid
-      double-counting.
-
-    Returns deduped model names in encounter order. The
-    ``no-default-models`` sentinel is never emitted (callers are still
-    responsible for stripping it from any caller-supplied list — see the
-    sentinel filter in ``resolve_team_db_access_group_models``).
+    Resolve model names reachable via ``team.access_group_ids[]`` against
+    ``LiteLLM_AccessGroupTable``. Skips teams with no access groups or whose
+    ``models`` is empty / contains ``all-proxy-models``. Returns deduped
+    names in encounter order; sentinel stripping is the caller's job.
     """
     eligible_teams: List[Any] = []
     all_access_group_ids: set = set()
@@ -242,44 +228,17 @@ async def resolve_team_db_access_group_models(
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> Tuple[List[str], bool]:
     """
-    Expand ``team_models`` with DB-backed access-group resolution and apply
-    the ``no-default-models`` sentinel rules. Returns
-    ``(resolved_team_models, force_empty_response)``.
-
-    Lives next to ``get_team_models`` because "what models can this team
-    see, including DB-backed access groups" is the same conceptual class
-    of authorization logic. The legacy ``get_team_models`` handles
-    in-config access groups (via ``router.get_model_access_groups()``);
-    this sibling handles the DB-backed Unified Access Groups stored in
-    ``LiteLLM_AccessGroupTable``.
-
-    Responsibilities (kept here so the ``/v1/models`` call site in
-    ``get_available_models_for_user`` stays small):
-
-    1. Best-effort load of the team object on the fallback path — when
-       the caller didn't pass an explicit ``team_id`` kwarg but the
-       authenticated key has a ``team_id``, look the team up via
-       ``get_team_object`` (cache-aware). Transient DB errors are logged
-       and treated as "no team object".
-    2. Resolve every model name reachable via ``team.access_group_ids[]``
-       and merge the result into ``team_models``. Resolver failures are
-       logged and treated as "no access-group contribution" so a Prisma
-       hiccup never 500s ``/v1/models``.
-    3. Snapshot whether the ``no-default-models`` sentinel was present,
-       then strip it. If the sentinel was the only thing the team had
-       and neither the key nor access-group resolution contributed any
-       real models, signal ``force_empty_response=True`` so the caller
-       returns an empty list directly — otherwise
-       ``get_complete_model_list`` would interpret the empty
-       ``team_models`` as "no preference" and silently fall back to the
-       full ``proxy_model_list`` (privilege escalation).
+    DB-backed Unified Access Group resolver for ``/v1/models``. Sibling of
+    ``get_team_models``: best-effort loads the team object on the fallback
+    path, merges access-group model names into ``team_models``, then strips
+    the ``no-default-models`` sentinel. Returns
+    ``(resolved_team_models, force_empty_response)`` — ``force_empty`` is
+    True when the sentinel was the only signal and nothing real was
+    contributed, guarding against ``get_complete_model_list`` falling back
+    to the full ``proxy_model_list``.
     """
-    # Function-local import to mirror the pattern in
-    # ``get_available_models_for_user``: ``model_checks.py`` is a light
-    # utility module today, and pulling ``auth_checks`` (which
-    # transitively imports ``proxy/utils.py``) at module level would
-    # bloat the import surface for every legacy caller of
-    # ``get_team_models``.
+    # Function-local to keep ``model_checks.py``'s import surface narrow;
+    # ``auth_checks`` transitively pulls in ``proxy/utils.py``.
     from litellm.proxy.auth.auth_checks import get_team_object
 
     team_object = pre_loaded_team_object

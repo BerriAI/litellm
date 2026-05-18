@@ -5891,13 +5891,9 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
     )
 
-    # Expand team_models with DB-backed Unified Access Group resolution and
-    # apply the ``no-default-models`` sentinel rules. See
-    # ``resolve_team_db_access_group_models`` in ``proxy/auth/model_checks.py``
-    # for the full contract: it loads the team object on the fallback path,
-    # tolerates transient Prisma errors, strips the sentinel, and signals
-    # ``force_empty`` when a sentinel-only team didn't pick up any real
-    # models (privilege-escalation guard for ``get_complete_model_list``).
+    # DB-backed Unified Access Groups + ``no-default-models`` sentinel
+    # handling. ``force_empty`` guards against ``get_complete_model_list``
+    # widening access when a sentinel-only team has no resolved models.
     team_models, force_empty = await resolve_team_db_access_group_models(
         team_models=team_models,
         key_models=key_models,
