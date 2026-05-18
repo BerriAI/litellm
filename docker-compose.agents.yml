@@ -1,0 +1,40 @@
+# docker-compose override for Plan B: XCT Agent Gateway + full agent_list integration.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.agents.yml up -d
+#
+# This overlay:
+#   1. Mounts dev_config_with_agents.yaml into the litellm service so all 168 agents
+#      are pre-registered as A2A agents on startup.
+#   2. Adds xct-agent-gateway — the FastAPI A2A service that loads agent prompts from
+#      the xct-agents repo and proxies completions back through LiteLLM.
+
+services:
+  litellm:
+    volumes:
+      - ./dev_config_with_agents.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+
+  xct-agent-gateway:
+    build:
+      context: ../xct-agents/integrations/litellm/gateway
+    environment:
+      LITELLM_API_BASE: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      DEFAULT_MODEL: ${XCT_AGENT_DEFAULT_MODEL:-deepseek-v3.2}
+      AGENTS_REPO_PATH: /agents-repo
+    volumes:
+      - ../xct-agents:/agents-repo:ro
+    ports:
+      - "9000:9000"
+    depends_on:
+      litellm:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

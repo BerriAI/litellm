@@ -1,0 +1,4188 @@
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: openai/fake-model
+    api_key: fake-key
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+- model_name: deepseek-v3.2
+  litellm_params:
+    model: tencent_cloud/deepseek-v3.2
+    api_key: os.environ/TENCENT_CLOUD_API_KEY
+- model_name: hunyuan-instruct
+  litellm_params:
+    model: tencent_cloud/hunyuan-2.0-instruct-20251111
+    api_key: os.environ/TENCENT_CLOUD_API_KEY
+- model_name: glm-5
+  litellm_params:
+    model: tencent_cloud/glm-5
+    api_key: os.environ/TENCENT_CLOUD_API_KEY
+- model_name: kimi-k2.6
+  litellm_params:
+    model: tencent_cloud/kimi-k2.6
+    api_key: os.environ/TENCENT_CLOUD_API_KEY
+general_settings:
+  master_key: sk-1234
+litellm_settings:
+  drop_params: true
+  telemetry: false
+agent_list:
+- agent_name: xct-anthropologist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌍 Anthropologist
+    description: Expert in cultural systems, rituals, kinship, belief systems, and ethnographic method — builds culturally
+      coherent societies that feel lived-in rather than invented
+    url: http://xct-agent-gateway:9000/agents/anthropologist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: anthropologist
+      name: Anthropologist
+      description: Expert in cultural systems, rituals, kinship, belief systems, and ethnographic method — builds culturally
+        coherent societies that feel lived-in rather than invented
+      tags:
+      - academic
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-geographer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗺️ Geographer
+    description: Expert in physical and human geography, climate systems, cartography, and spatial analysis — builds geographically
+      coherent worlds where terrain, climate, resources, and settlement patterns make scientific sense
+    url: http://xct-agent-gateway:9000/agents/geographer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: geographer
+      name: Geographer
+      description: Expert in physical and human geography, climate systems, cartography, and spatial analysis — builds geographically
+        coherent worlds where terrain, climate, resources, and settlement patterns make scientific sense
+      tags:
+      - academic
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-historian
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📚 Historian
+    description: Expert in historical analysis, periodization, material culture, and historiography — validates historical
+      coherence and enriches settings with authentic period detail grounded in primary and secondary sources
+    url: http://xct-agent-gateway:9000/agents/historian/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: historian
+      name: Historian
+      description: Expert in historical analysis, periodization, material culture, and historiography — validates historical
+        coherence and enriches settings with authentic period detail grounded in primary and secondary sources
+      tags:
+      - academic
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-narratologist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📜 Narratologist
+    description: Expert in narrative theory, story structure, character arcs, and literary analysis — grounds advice in established
+      frameworks from Propp to Campbell to modern narratology
+    url: http://xct-agent-gateway:9000/agents/narratologist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: narratologist
+      name: Narratologist
+      description: Expert in narrative theory, story structure, character arcs, and literary analysis — grounds advice in
+        established frameworks from Propp to Campbell to modern narratology
+      tags:
+      - academic
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-psychologist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧠 Psychologist
+    description: Expert in human behavior, personality theory, motivation, and cognitive patterns — builds psychologically
+      credible characters and interactions grounded in clinical and research frameworks
+    url: http://xct-agent-gateway:9000/agents/psychologist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: psychologist
+      name: Psychologist
+      description: Expert in human behavior, personality theory, motivation, and cognitive patterns — builds psychologically
+        credible characters and interactions grounded in clinical and research frameworks
+      tags:
+      - academic
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-brand-guardian
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎨 Brand Guardian
+    description: Expert brand strategist and guardian specializing in brand identity development, consistency maintenance,
+      and strategic brand positioning
+    url: http://xct-agent-gateway:9000/agents/brand-guardian/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: brand-guardian
+      name: Brand Guardian
+      description: Expert brand strategist and guardian specializing in brand identity development, consistency maintenance,
+        and strategic brand positioning
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-image-prompt-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📷 Image Prompt Engineer
+    description: Expert photography prompt engineer specializing in crafting detailed, evocative prompts for AI image generation.
+      Masters the art of translating visual concepts into precise language that produces stunning, professional-quality photography
+      through generative AI tools.
+    url: http://xct-agent-gateway:9000/agents/image-prompt-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: image-prompt-engineer
+      name: Image Prompt Engineer
+      description: Expert photography prompt engineer specializing in crafting detailed, evocative prompts for AI image generation.
+        Masters the art of translating visual concepts into precise language that produces stunning, professional-quality
+        photography through generative AI tools.
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-inclusive-visuals-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌈 Inclusive Visuals Specialist
+    description: Representation expert who defeats systemic AI biases to generate culturally accurate, affirming, and non-stereotypical
+      images and video.
+    url: http://xct-agent-gateway:9000/agents/inclusive-visuals-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: inclusive-visuals-specialist
+      name: Inclusive Visuals Specialist
+      description: Representation expert who defeats systemic AI biases to generate culturally accurate, affirming, and non-stereotypical
+        images and video.
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ui-designer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎨 UI Designer
+    description: Expert UI designer specializing in visual design systems, component libraries, and pixel-perfect interface
+      creation. Creates beautiful, consistent, accessible user interfaces that enhance UX and reflect brand identity
+    url: http://xct-agent-gateway:9000/agents/ui-designer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ui-designer
+      name: UI Designer
+      description: Expert UI designer specializing in visual design systems, component libraries, and pixel-perfect interface
+        creation. Creates beautiful, consistent, accessible user interfaces that enhance UX and reflect brand identity
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ux-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📐 UX Architect
+    description: Technical architecture and UX specialist who provides developers with solid foundations, CSS systems, and
+      clear implementation guidance
+    url: http://xct-agent-gateway:9000/agents/ux-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ux-architect
+      name: UX Architect
+      description: Technical architecture and UX specialist who provides developers with solid foundations, CSS systems, and
+        clear implementation guidance
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ux-researcher
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔬 UX Researcher
+    description: Expert user experience researcher specializing in user behavior analysis, usability testing, and data-driven
+      design insights. Provides actionable research findings that improve product usability and user satisfaction
+    url: http://xct-agent-gateway:9000/agents/ux-researcher/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ux-researcher
+      name: UX Researcher
+      description: Expert user experience researcher specializing in user behavior analysis, usability testing, and data-driven
+        design insights. Provides actionable research findings that improve product usability and user satisfaction
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-visual-storyteller
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎬 Visual Storyteller
+    description: Expert visual communication specialist focused on creating compelling visual narratives, multimedia content,
+      and brand storytelling through design. Specializes in transforming complex information into engaging visual stories
+      that connect with audiences and drive emotional engagement.
+    url: http://xct-agent-gateway:9000/agents/visual-storyteller/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: visual-storyteller
+      name: Visual Storyteller
+      description: Expert visual communication specialist focused on creating compelling visual narratives, multimedia content,
+        and brand storytelling through design. Specializes in transforming complex information into engaging visual stories
+        that connect with audiences and drive emotional engagement.
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-whimsy-injector
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ✨ Whimsy Injector
+    description: Expert creative specialist focused on adding personality, delight, and playful elements to brand experiences.
+      Creates memorable, joyful interactions that differentiate brands through unexpected moments of whimsy
+    url: http://xct-agent-gateway:9000/agents/whimsy-injector/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: whimsy-injector
+      name: Whimsy Injector
+      description: Expert creative specialist focused on adding personality, delight, and playful elements to brand experiences.
+        Creates memorable, joyful interactions that differentiate brands through unexpected moments of whimsy
+      tags:
+      - design
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ai-data-remediation-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧬 AI Data Remediation Engineer
+    description: 'Specialist in self-healing data pipelines — uses air-gapped local SLMs and semantic clustering to automatically
+      detect, classify, and fix data anomalies at scale. Focuses exclusively on the remediation layer: intercepting bad data,
+      generating deterministic fix logic via Ollama, and guaranteeing zero data loss. Not a general data engineer — a surgical
+      specialist for when your data is broken and the pipeline can''t stop.'
+    url: http://xct-agent-gateway:9000/agents/ai-data-remediation-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ai-data-remediation-engineer
+      name: AI Data Remediation Engineer
+      description: 'Specialist in self-healing data pipelines — uses air-gapped local SLMs and semantic clustering to automatically
+        detect, classify, and fix data anomalies at scale. Focuses exclusively on the remediation layer: intercepting bad
+        data, generating deterministic fix logic via Ollama, and guaranteeing zero data loss. Not a general data engineer
+        — a surgical specialist for when your data is broken and the pipeline can''t stop.'
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ai-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🤖 AI Engineer
+    description: Expert AI/ML engineer specializing in machine learning model development, deployment, and integration into
+      production systems. Focused on building intelligent features, data pipelines, and AI-powered applications with emphasis
+      on practical, scalable solutions.
+    url: http://xct-agent-gateway:9000/agents/ai-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ai-engineer
+      name: AI Engineer
+      description: Expert AI/ML engineer specializing in machine learning model development, deployment, and integration into
+        production systems. Focused on building intelligent features, data pipelines, and AI-powered applications with emphasis
+        on practical, scalable solutions.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-autonomous-optimization-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚡ Autonomous Optimization Architect
+    description: Intelligent system governor that continuously shadow-tests APIs for performance while enforcing strict financial
+      and security guardrails against runaway costs.
+    url: http://xct-agent-gateway:9000/agents/autonomous-optimization-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: autonomous-optimization-architect
+      name: Autonomous Optimization Architect
+      description: Intelligent system governor that continuously shadow-tests APIs for performance while enforcing strict
+        financial and security guardrails against runaway costs.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-backend-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏗️ Backend Architect
+    description: Senior backend architect specializing in scalable system design, database architecture, API development,
+      and cloud infrastructure. Builds robust, secure, performant server-side applications and microservices
+    url: http://xct-agent-gateway:9000/agents/backend-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: backend-architect
+      name: Backend Architect
+      description: Senior backend architect specializing in scalable system design, database architecture, API development,
+        and cloud infrastructure. Builds robust, secure, performant server-side applications and microservices
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-cms-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧱 CMS Developer
+    description: Drupal and WordPress specialist for theme development, custom plugins/modules, content architecture, and
+      code-first CMS implementation
+    url: http://xct-agent-gateway:9000/agents/cms-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: cms-developer
+      name: CMS Developer
+      description: Drupal and WordPress specialist for theme development, custom plugins/modules, content architecture, and
+        code-first CMS implementation
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-code-reviewer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 👁️ Code Reviewer
+    description: Expert code reviewer who provides constructive, actionable feedback focused on correctness, maintainability,
+      security, and performance — not style preferences.
+    url: http://xct-agent-gateway:9000/agents/code-reviewer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: code-reviewer
+      name: Code Reviewer
+      description: Expert code reviewer who provides constructive, actionable feedback focused on correctness, maintainability,
+        security, and performance — not style preferences.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-codebase-onboarding-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧭 Codebase Onboarding Engineer
+    description: Expert developer onboarding specialist who helps new engineers understand unfamiliar codebases fast by reading
+      source code, tracing code paths, and stating only facts grounded in the code.
+    url: http://xct-agent-gateway:9000/agents/codebase-onboarding-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: codebase-onboarding-engineer
+      name: Codebase Onboarding Engineer
+      description: Expert developer onboarding specialist who helps new engineers understand unfamiliar codebases fast by
+        reading source code, tracing code paths, and stating only facts grounded in the code.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-data-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔧 Data Engineer
+    description: Expert data engineer specializing in building reliable data pipelines, lakehouse architectures, and scalable
+      data infrastructure. Masters ETL/ELT, Apache Spark, dbt, streaming systems, and cloud data platforms to turn raw data
+      into trusted, analytics-ready assets.
+    url: http://xct-agent-gateway:9000/agents/data-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: data-engineer
+      name: Data Engineer
+      description: Expert data engineer specializing in building reliable data pipelines, lakehouse architectures, and scalable
+        data infrastructure. Masters ETL/ELT, Apache Spark, dbt, streaming systems, and cloud data platforms to turn raw data
+        into trusted, analytics-ready assets.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-database-optimizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗄️ Database Optimizer
+    description: Expert database specialist focusing on schema design, query optimization, indexing strategies, and performance
+      tuning for PostgreSQL, MySQL, and modern databases like Supabase and PlanetScale.
+    url: http://xct-agent-gateway:9000/agents/database-optimizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: database-optimizer
+      name: Database Optimizer
+      description: Expert database specialist focusing on schema design, query optimization, indexing strategies, and performance
+        tuning for PostgreSQL, MySQL, and modern databases like Supabase and PlanetScale.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-devops-automator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚙️ DevOps Automator
+    description: Expert DevOps engineer specializing in infrastructure automation, CI/CD pipeline development, and cloud operations
+    url: http://xct-agent-gateway:9000/agents/devops-automator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: devops-automator
+      name: DevOps Automator
+      description: Expert DevOps engineer specializing in infrastructure automation, CI/CD pipeline development, and cloud
+        operations
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-email-intelligence-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📧 Email Intelligence Engineer
+    description: Expert in extracting structured, reasoning-ready data from raw email threads for AI agents and automation
+      systems
+    url: http://xct-agent-gateway:9000/agents/email-intelligence-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: email-intelligence-engineer
+      name: Email Intelligence Engineer
+      description: Expert in extracting structured, reasoning-ready data from raw email threads for AI agents and automation
+        systems
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-embedded-firmware-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔩 Embedded Firmware Engineer
+    description: Specialist in bare-metal and RTOS firmware - ESP32/ESP-IDF, PlatformIO, Arduino, ARM Cortex-M, STM32 HAL/LL,
+      Nordic nRF5/nRF Connect SDK, FreeRTOS, Zephyr
+    url: http://xct-agent-gateway:9000/agents/embedded-firmware-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: embedded-firmware-engineer
+      name: Embedded Firmware Engineer
+      description: Specialist in bare-metal and RTOS firmware - ESP32/ESP-IDF, PlatformIO, Arduino, ARM Cortex-M, STM32 HAL/LL,
+        Nordic nRF5/nRF Connect SDK, FreeRTOS, Zephyr
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-feishu-integration-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔗 Feishu Integration Developer
+    description: Full-stack integration expert specializing in the Feishu (Lark) Open Platform — proficient in Feishu bots,
+      mini programs, approval workflows, Bitable (multidimensional spreadsheets), interactive message cards, Webhooks, SSO
+      authentication, and workflow automation, building enterprise-grade collaboration and automation solutions within the
+      Feishu ecosystem.
+    url: http://xct-agent-gateway:9000/agents/feishu-integration-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: feishu-integration-developer
+      name: Feishu Integration Developer
+      description: Full-stack integration expert specializing in the Feishu (Lark) Open Platform — proficient in Feishu bots,
+        mini programs, approval workflows, Bitable (multidimensional spreadsheets), interactive message cards, Webhooks, SSO
+        authentication, and workflow automation, building enterprise-grade collaboration and automation solutions within the
+        Feishu ecosystem.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-filament-optimization-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔧 Filament Optimization Specialist
+    description: Expert in restructuring and optimizing Filament PHP admin interfaces for maximum usability and efficiency.
+      Focuses on impactful structural changes — not just cosmetic tweaks.
+    url: http://xct-agent-gateway:9000/agents/filament-optimization-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: filament-optimization-specialist
+      name: Filament Optimization Specialist
+      description: Expert in restructuring and optimizing Filament PHP admin interfaces for maximum usability and efficiency.
+        Focuses on impactful structural changes — not just cosmetic tweaks.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-frontend-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🖥️ Frontend Developer
+    description: Expert frontend developer specializing in modern web technologies, React/Vue/Angular frameworks, UI implementation,
+      and performance optimization
+    url: http://xct-agent-gateway:9000/agents/frontend-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: frontend-developer
+      name: Frontend Developer
+      description: Expert frontend developer specializing in modern web technologies, React/Vue/Angular frameworks, UI implementation,
+        and performance optimization
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-git-workflow-master
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌿 Git Workflow Master
+    description: Expert in Git workflows, branching strategies, and version control best practices including conventional
+      commits, rebasing, worktrees, and CI-friendly branch management.
+    url: http://xct-agent-gateway:9000/agents/git-workflow-master/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: git-workflow-master
+      name: Git Workflow Master
+      description: Expert in Git workflows, branching strategies, and version control best practices including conventional
+        commits, rebasing, worktrees, and CI-friendly branch management.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-incident-response-commander
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🚨 Incident Response Commander
+    description: Expert incident commander specializing in production incident management, structured response coordination,
+      post-mortem facilitation, SLO/SLI tracking, and on-call process design for reliable engineering organizations.
+    url: http://xct-agent-gateway:9000/agents/incident-response-commander/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: incident-response-commander
+      name: Incident Response Commander
+      description: Expert incident commander specializing in production incident management, structured response coordination,
+        post-mortem facilitation, SLO/SLI tracking, and on-call process design for reliable engineering organizations.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-minimal-change-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🪡 Minimal Change Engineer
+    description: Engineering specialist focused on minimum-viable diffs — fixes only what was asked, refuses scope creep,
+      prefers three similar lines over a premature abstraction. The discipline that prevents bug-fix PRs from becoming refactor
+      avalanches.
+    url: http://xct-agent-gateway:9000/agents/minimal-change-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: minimal-change-engineer
+      name: Minimal Change Engineer
+      description: Engineering specialist focused on minimum-viable diffs — fixes only what was asked, refuses scope creep,
+        prefers three similar lines over a premature abstraction. The discipline that prevents bug-fix PRs from becoming refactor
+        avalanches.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-mobile-app-builder
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📲 Mobile App Builder
+    description: Specialized mobile application developer with expertise in native iOS/Android development and cross-platform
+      frameworks
+    url: http://xct-agent-gateway:9000/agents/mobile-app-builder/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: mobile-app-builder
+      name: Mobile App Builder
+      description: Specialized mobile application developer with expertise in native iOS/Android development and cross-platform
+        frameworks
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-rapid-prototyper
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚡ Rapid Prototyper
+    description: Specialized in ultra-fast proof-of-concept development and MVP creation using efficient tools and frameworks
+    url: http://xct-agent-gateway:9000/agents/rapid-prototyper/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: rapid-prototyper
+      name: Rapid Prototyper
+      description: Specialized in ultra-fast proof-of-concept development and MVP creation using efficient tools and frameworks
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-security-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔒 Security Engineer
+    description: Expert application security engineer specializing in threat modeling, vulnerability assessment, secure code
+      review, security architecture design, and incident response for modern web, API, and cloud-native applications.
+    url: http://xct-agent-gateway:9000/agents/security-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: security-engineer
+      name: Security Engineer
+      description: Expert application security engineer specializing in threat modeling, vulnerability assessment, secure
+        code review, security architecture design, and incident response for modern web, API, and cloud-native applications.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-senior-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💎 Senior Developer
+    description: Premium implementation specialist - Masters Laravel/Livewire/FluxUI, advanced CSS, Three.js integration
+    url: http://xct-agent-gateway:9000/agents/senior-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: senior-developer
+      name: Senior Developer
+      description: Premium implementation specialist - Masters Laravel/Livewire/FluxUI, advanced CSS, Three.js integration
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-software-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏛️ Software Architect
+    description: Expert software architect specializing in system design, domain-driven design, architectural patterns, and
+      technical decision-making for scalable, maintainable systems.
+    url: http://xct-agent-gateway:9000/agents/software-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: software-architect
+      name: Software Architect
+      description: Expert software architect specializing in system design, domain-driven design, architectural patterns,
+        and technical decision-making for scalable, maintainable systems.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-solidity-smart-contract-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⛓️ Solidity Smart Contract Engineer
+    description: Expert Solidity developer specializing in EVM smart contract architecture, gas optimization, upgradeable
+      proxy patterns, DeFi protocol development, and security-first contract design across Ethereum and L2 chains.
+    url: http://xct-agent-gateway:9000/agents/solidity-smart-contract-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: solidity-smart-contract-engineer
+      name: Solidity Smart Contract Engineer
+      description: Expert Solidity developer specializing in EVM smart contract architecture, gas optimization, upgradeable
+        proxy patterns, DeFi protocol development, and security-first contract design across Ethereum and L2 chains.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sre-site-reliability-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🛡️ SRE (Site Reliability Engineer)
+    description: Expert site reliability engineer specializing in SLOs, error budgets, observability, chaos engineering, and
+      toil reduction for production systems at scale.
+    url: http://xct-agent-gateway:9000/agents/sre-site-reliability-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sre-site-reliability-engineer
+      name: SRE (Site Reliability Engineer)
+      description: Expert site reliability engineer specializing in SLOs, error budgets, observability, chaos engineering,
+        and toil reduction for production systems at scale.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-technical-writer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📚 Technical Writer
+    description: Expert technical writer specializing in developer documentation, API references, README files, and tutorials.
+      Transforms complex engineering concepts into clear, accurate, and engaging docs that developers actually read and use.
+    url: http://xct-agent-gateway:9000/agents/technical-writer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: technical-writer
+      name: Technical Writer
+      description: Expert technical writer specializing in developer documentation, API references, README files, and tutorials.
+        Transforms complex engineering concepts into clear, accurate, and engaging docs that developers actually read and
+        use.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-threat-detection-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎯 Threat Detection Engineer
+    description: Expert detection engineer specializing in SIEM rule development, MITRE ATT&CK coverage mapping, threat hunting,
+      alert tuning, and detection-as-code pipelines for security operations teams.
+    url: http://xct-agent-gateway:9000/agents/threat-detection-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: threat-detection-engineer
+      name: Threat Detection Engineer
+      description: Expert detection engineer specializing in SIEM rule development, MITRE ATT&CK coverage mapping, threat
+        hunting, alert tuning, and detection-as-code pipelines for security operations teams.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-voice-ai-integration-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎙️ Voice AI Integration Engineer
+    description: Expert in building end-to-end speech transcription pipelines using Whisper-style models and cloud ASR services
+      — from raw audio ingestion through preprocessing, transcript cleanup, subtitle generation, speaker diarization, and
+      structured downstream integration into apps, APIs, and CMS platforms.
+    url: http://xct-agent-gateway:9000/agents/voice-ai-integration-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: voice-ai-integration-engineer
+      name: Voice AI Integration Engineer
+      description: Expert in building end-to-end speech transcription pipelines using Whisper-style models and cloud ASR services
+        — from raw audio ingestion through preprocessing, transcript cleanup, subtitle generation, speaker diarization, and
+        structured downstream integration into apps, APIs, and CMS platforms.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-wechat-mini-program-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💬 WeChat Mini Program Developer
+    description: Expert WeChat Mini Program developer specializing in 小程序 development with WXML/WXSS/WXS, WeChat API integration,
+      payment systems, subscription messaging, and the full WeChat ecosystem.
+    url: http://xct-agent-gateway:9000/agents/wechat-mini-program-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: wechat-mini-program-developer
+      name: WeChat Mini Program Developer
+      description: Expert WeChat Mini Program developer specializing in 小程序 development with WXML/WXSS/WXS, WeChat API integration,
+        payment systems, subscription messaging, and the full WeChat ecosystem.
+      tags:
+      - engineering
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-bookkeeper-controller
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📒 Bookkeeper & Controller
+    description: Expert bookkeeper and controller specializing in day-to-day accounting operations, financial reconciliations,
+      month-end close processes, and internal controls. Ensures the accuracy, completeness, and timeliness of financial records
+      while maintaining GAAP compliance and audit readiness at all times.
+    url: http://xct-agent-gateway:9000/agents/bookkeeper-controller/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: bookkeeper-controller
+      name: Bookkeeper & Controller
+      description: Expert bookkeeper and controller specializing in day-to-day accounting operations, financial reconciliations,
+        month-end close processes, and internal controls. Ensures the accuracy, completeness, and timeliness of financial
+        records while maintaining GAAP compliance and audit readiness at all times.
+      tags:
+      - finance
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-financial-analyst
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📊 Financial Analyst
+    description: Expert financial analyst specializing in financial modeling, forecasting, scenario analysis, and data-driven
+      decision support. Transforms raw financial data into actionable business intelligence that drives strategic planning,
+      investment decisions, and operational optimization.
+    url: http://xct-agent-gateway:9000/agents/financial-analyst/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: financial-analyst
+      name: Financial Analyst
+      description: Expert financial analyst specializing in financial modeling, forecasting, scenario analysis, and data-driven
+        decision support. Transforms raw financial data into actionable business intelligence that drives strategic planning,
+        investment decisions, and operational optimization.
+      tags:
+      - finance
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-fp-a-analyst
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📈 FP&A Analyst
+    description: Expert Financial Planning & Analysis (FP&A) analyst specializing in budgeting, variance analysis, financial
+      planning, rolling forecasts, and strategic decision support. Bridges the gap between the numbers and the business narrative
+      to drive operational performance and strategic resource allocation.
+    url: http://xct-agent-gateway:9000/agents/fp-a-analyst/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: fp-a-analyst
+      name: FP&A Analyst
+      description: Expert Financial Planning & Analysis (FP&A) analyst specializing in budgeting, variance analysis, financial
+        planning, rolling forecasts, and strategic decision support. Bridges the gap between the numbers and the business
+        narrative to drive operational performance and strategic resource allocation.
+      tags:
+      - finance
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-investment-researcher
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔍 Investment Researcher
+    description: Expert investment researcher specializing in market research, due diligence, portfolio analysis, and asset
+      valuation. Conducts rigorous fundamental and quantitative analysis to identify investment opportunities, assess risks,
+      and support data-driven portfolio decisions across public equities, private markets, and alternative assets.
+    url: http://xct-agent-gateway:9000/agents/investment-researcher/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: investment-researcher
+      name: Investment Researcher
+      description: Expert investment researcher specializing in market research, due diligence, portfolio analysis, and asset
+        valuation. Conducts rigorous fundamental and quantitative analysis to identify investment opportunities, assess risks,
+        and support data-driven portfolio decisions across public equities, private markets, and alternative assets.
+      tags:
+      - finance
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-tax-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏛️ Tax Strategist
+    description: Expert tax strategist specializing in tax optimization, multi-jurisdictional compliance, transfer pricing,
+      and strategic tax planning. Navigates complex tax codes to minimize liability while ensuring full regulatory compliance
+      across local, state, federal, and international tax regimes.
+    url: http://xct-agent-gateway:9000/agents/tax-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: tax-strategist
+      name: Tax Strategist
+      description: Expert tax strategist specializing in tax optimization, multi-jurisdictional compliance, transfer pricing,
+        and strategic tax planning. Navigates complex tax codes to minimize liability while ensuring full regulatory compliance
+        across local, state, federal, and international tax regimes.
+      tags:
+      - finance
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-game-audio-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎵 Game Audio Engineer
+    description: Interactive audio specialist - Masters FMOD/Wwise integration, adaptive music systems, spatial audio, and
+      audio performance budgeting across all game engines
+    url: http://xct-agent-gateway:9000/agents/game-audio-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: game-audio-engineer
+      name: Game Audio Engineer
+      description: Interactive audio specialist - Masters FMOD/Wwise integration, adaptive music systems, spatial audio, and
+        audio performance budgeting across all game engines
+      tags:
+      - game-development
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-game-designer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎮 Game Designer
+    description: Systems and mechanics architect - Masters GDD authorship, player psychology, economy balancing, and gameplay
+      loop design across all engines and genres
+    url: http://xct-agent-gateway:9000/agents/game-designer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: game-designer
+      name: Game Designer
+      description: Systems and mechanics architect - Masters GDD authorship, player psychology, economy balancing, and gameplay
+        loop design across all engines and genres
+      tags:
+      - game-development
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-level-designer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗺️ Level Designer
+    description: Spatial storytelling and flow specialist - Masters layout theory, pacing architecture, encounter design,
+      and environmental narrative across all game engines
+    url: http://xct-agent-gateway:9000/agents/level-designer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: level-designer
+      name: Level Designer
+      description: Spatial storytelling and flow specialist - Masters layout theory, pacing architecture, encounter design,
+        and environmental narrative across all game engines
+      tags:
+      - game-development
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-narrative-designer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📖 Narrative Designer
+    description: Story systems and dialogue architect - Masters GDD-aligned narrative design, branching dialogue, lore architecture,
+      and environmental storytelling across all game engines
+    url: http://xct-agent-gateway:9000/agents/narrative-designer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: narrative-designer
+      name: Narrative Designer
+      description: Story systems and dialogue architect - Masters GDD-aligned narrative design, branching dialogue, lore architecture,
+        and environmental storytelling across all game engines
+      tags:
+      - game-development
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-technical-artist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎨 Technical Artist
+    description: Art-to-engine pipeline specialist - Masters shaders, VFX systems, LOD pipelines, performance budgeting, and
+      cross-engine asset optimization
+    url: http://xct-agent-gateway:9000/agents/technical-artist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: technical-artist
+      name: Technical Artist
+      description: Art-to-engine pipeline specialist - Masters shaders, VFX systems, LOD pipelines, performance budgeting,
+        and cross-engine asset optimization
+      tags:
+      - game-development
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-agentic-search-optimizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🤖 Agentic Search Optimizer
+    description: Expert in WebMCP readiness and agentic task completion — audits whether AI agents can actually accomplish
+      tasks on your site (book, buy, register, subscribe), implements WebMCP declarative and imperative patterns, and measures
+      task completion rates across AI browsing agents
+    url: http://xct-agent-gateway:9000/agents/agentic-search-optimizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: agentic-search-optimizer
+      name: Agentic Search Optimizer
+      description: Expert in WebMCP readiness and agentic task completion — audits whether AI agents can actually accomplish
+        tasks on your site (book, buy, register, subscribe), implements WebMCP declarative and imperative patterns, and measures
+        task completion rates across AI browsing agents
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ai-citation-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔮 AI Citation Strategist
+    description: Expert in AI recommendation engine optimization (AEO/GEO) — audits brand visibility across ChatGPT, Claude,
+      Gemini, and Perplexity, identifies why competitors get cited instead, and delivers content fixes that improve AI citations
+    url: http://xct-agent-gateway:9000/agents/ai-citation-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ai-citation-strategist
+      name: AI Citation Strategist
+      description: Expert in AI recommendation engine optimization (AEO/GEO) — audits brand visibility across ChatGPT, Claude,
+        Gemini, and Perplexity, identifies why competitors get cited instead, and delivers content fixes that improve AI citations
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-app-store-optimizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📱 App Store Optimizer
+    description: Expert app store marketing specialist focused on App Store Optimization (ASO), conversion rate optimization,
+      and app discoverability
+    url: http://xct-agent-gateway:9000/agents/app-store-optimizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: app-store-optimizer
+      name: App Store Optimizer
+      description: Expert app store marketing specialist focused on App Store Optimization (ASO), conversion rate optimization,
+        and app discoverability
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-baidu-seo-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🇨🇳 Baidu SEO Specialist
+    description: Expert Baidu search optimization specialist focused on Chinese search engine ranking, Baidu ecosystem integration,
+      ICP compliance, Chinese keyword research, and mobile-first indexing for the China market.
+    url: http://xct-agent-gateway:9000/agents/baidu-seo-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: baidu-seo-specialist
+      name: Baidu SEO Specialist
+      description: Expert Baidu search optimization specialist focused on Chinese search engine ranking, Baidu ecosystem integration,
+        ICP compliance, Chinese keyword research, and mobile-first indexing for the China market.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-bilibili-content-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎬 Bilibili Content Strategist
+    description: Expert Bilibili marketing specialist focused on UP主 growth, danmaku culture mastery, B站 algorithm optimization,
+      community building, and branded content strategy for China's leading video community platform.
+    url: http://xct-agent-gateway:9000/agents/bilibili-content-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: bilibili-content-strategist
+      name: Bilibili Content Strategist
+      description: Expert Bilibili marketing specialist focused on UP主 growth, danmaku culture mastery, B站 algorithm optimization,
+        community building, and branded content strategy for China's leading video community platform.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-book-co-author
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📘 Book Co-Author
+    description: Strategic thought-leadership book collaborator for founders, experts, and operators turning voice notes,
+      fragments, and positioning into structured first-person chapters.
+    url: http://xct-agent-gateway:9000/agents/book-co-author/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: book-co-author
+      name: Book Co-Author
+      description: Strategic thought-leadership book collaborator for founders, experts, and operators turning voice notes,
+        fragments, and positioning into structured first-person chapters.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-carousel-growth-engine
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎠 Carousel Growth Engine
+    description: Autonomous TikTok and Instagram carousel generation specialist. Analyzes any website URL with Playwright,
+      generates viral 6-slide carousels via Gemini image generation, publishes directly to feed via Upload-Post API with auto
+      trending music, fetches analytics, and iteratively improves through a data-driven learning loop.
+    url: http://xct-agent-gateway:9000/agents/carousel-growth-engine/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: carousel-growth-engine
+      name: Carousel Growth Engine
+      description: Autonomous TikTok and Instagram carousel generation specialist. Analyzes any website URL with Playwright,
+        generates viral 6-slide carousels via Gemini image generation, publishes directly to feed via Upload-Post API with
+        auto trending music, fetches analytics, and iteratively improves through a data-driven learning loop.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-china-e-commerce-operator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🛒 China E-Commerce Operator
+    description: Expert China e-commerce operations specialist covering Taobao, Tmall, Pinduoduo, and JD ecosystems with deep
+      expertise in product listing optimization, live commerce, store operations, 618/Double 11 campaigns, and cross-platform
+      strategy.
+    url: http://xct-agent-gateway:9000/agents/china-e-commerce-operator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: china-e-commerce-operator
+      name: China E-Commerce Operator
+      description: Expert China e-commerce operations specialist covering Taobao, Tmall, Pinduoduo, and JD ecosystems with
+        deep expertise in product listing optimization, live commerce, store operations, 618/Double 11 campaigns, and cross-platform
+        strategy.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-china-market-localization-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🇨🇳 China Market Localization Strategist
+    description: Full-stack China market localization expert who transforms real-time trend signals into executable go-to-market
+      strategies across Douyin, Xiaohongshu, WeChat, Bilibili, and beyond
+    url: http://xct-agent-gateway:9000/agents/china-market-localization-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: china-market-localization-strategist
+      name: China Market Localization Strategist
+      description: Full-stack China market localization expert who transforms real-time trend signals into executable go-to-market
+        strategies across Douyin, Xiaohongshu, WeChat, Bilibili, and beyond
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-content-creator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ✍️ Content Creator
+    description: Expert content strategist and creator for multi-platform campaigns. Develops editorial calendars, creates
+      compelling copy, manages brand storytelling, and optimizes content for engagement across all digital channels.
+    url: http://xct-agent-gateway:9000/agents/content-creator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: content-creator
+      name: Content Creator
+      description: Expert content strategist and creator for multi-platform campaigns. Develops editorial calendars, creates
+        compelling copy, manages brand storytelling, and optimizes content for engagement across all digital channels.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-cross-border-e-commerce-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌏 Cross-Border E-Commerce Specialist
+    description: Full-funnel cross-border e-commerce strategist covering Amazon, Shopee, Lazada, AliExpress, Temu, and TikTok
+      Shop operations, international logistics and overseas warehousing, compliance and taxation, multilingual listing optimization,
+      brand globalization, and DTC independent site development.
+    url: http://xct-agent-gateway:9000/agents/cross-border-e-commerce-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: cross-border-e-commerce-specialist
+      name: Cross-Border E-Commerce Specialist
+      description: Full-funnel cross-border e-commerce strategist covering Amazon, Shopee, Lazada, AliExpress, Temu, and TikTok
+        Shop operations, international logistics and overseas warehousing, compliance and taxation, multilingual listing optimization,
+        brand globalization, and DTC independent site development.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-douyin-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎵 Douyin Strategist
+    description: Short-video marketing expert specializing in the Douyin platform, with deep expertise in recommendation algorithm
+      mechanics, viral video planning, livestream commerce workflows, and full-funnel brand growth through content matrix
+      strategies.
+    url: http://xct-agent-gateway:9000/agents/douyin-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: douyin-strategist
+      name: Douyin Strategist
+      description: Short-video marketing expert specializing in the Douyin platform, with deep expertise in recommendation
+        algorithm mechanics, viral video planning, livestream commerce workflows, and full-funnel brand growth through content
+        matrix strategies.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-growth-hacker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🚀 Growth Hacker
+    description: Expert growth strategist specializing in rapid user acquisition through data-driven experimentation. Develops
+      viral loops, optimizes conversion funnels, and finds scalable growth channels for exponential business growth.
+    url: http://xct-agent-gateway:9000/agents/growth-hacker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: growth-hacker
+      name: Growth Hacker
+      description: Expert growth strategist specializing in rapid user acquisition through data-driven experimentation. Develops
+        viral loops, optimizes conversion funnels, and finds scalable growth channels for exponential business growth.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-instagram-curator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📸 Instagram Curator
+    description: Expert Instagram marketing specialist focused on visual storytelling, community building, and multi-format
+      content optimization. Masters aesthetic development and drives meaningful engagement.
+    url: http://xct-agent-gateway:9000/agents/instagram-curator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: instagram-curator
+      name: Instagram Curator
+      description: Expert Instagram marketing specialist focused on visual storytelling, community building, and multi-format
+        content optimization. Masters aesthetic development and drives meaningful engagement.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-kuaishou-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎥 Kuaishou Strategist
+    description: Expert Kuaishou marketing strategist specializing in short-video content for China's lower-tier city markets,
+      live commerce operations, community trust building, and grassroots audience growth on 快手.
+    url: http://xct-agent-gateway:9000/agents/kuaishou-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: kuaishou-strategist
+      name: Kuaishou Strategist
+      description: Expert Kuaishou marketing strategist specializing in short-video content for China's lower-tier city markets,
+        live commerce operations, community trust building, and grassroots audience growth on 快手.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-linkedin-content-creator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💼 LinkedIn Content Creator
+    description: Expert LinkedIn content strategist focused on thought leadership, personal brand building, and high-engagement
+      professional content. Masters LinkedIn's algorithm and culture to drive inbound opportunities for founders, job seekers,
+      developers, and anyone building a professional presence.
+    url: http://xct-agent-gateway:9000/agents/linkedin-content-creator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: linkedin-content-creator
+      name: LinkedIn Content Creator
+      description: Expert LinkedIn content strategist focused on thought leadership, personal brand building, and high-engagement
+        professional content. Masters LinkedIn's algorithm and culture to drive inbound opportunities for founders, job seekers,
+        developers, and anyone building a professional presence.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-livestream-commerce-coach
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎙️ Livestream Commerce Coach
+    description: Veteran livestream e-commerce coach specializing in host training and live room operations across Douyin,
+      Kuaishou, Taobao Live, and Channels, covering script design, product sequencing, paid-vs-organic traffic balancing,
+      conversion closing techniques, and real-time data-driven optimization.
+    url: http://xct-agent-gateway:9000/agents/livestream-commerce-coach/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: livestream-commerce-coach
+      name: Livestream Commerce Coach
+      description: Veteran livestream e-commerce coach specializing in host training and live room operations across Douyin,
+        Kuaishou, Taobao Live, and Channels, covering script design, product sequencing, paid-vs-organic traffic balancing,
+        conversion closing techniques, and real-time data-driven optimization.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-podcast-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎧 Podcast Strategist
+    description: Content strategy and operations expert for the Chinese podcast market, with deep expertise in Xiaoyuzhou,
+      Ximalaya, and other major audio platforms, covering show positioning, audio production, audience growth, multi-platform
+      distribution, and monetization to help podcast creators build sticky audio content brands.
+    url: http://xct-agent-gateway:9000/agents/podcast-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: podcast-strategist
+      name: Podcast Strategist
+      description: Content strategy and operations expert for the Chinese podcast market, with deep expertise in Xiaoyuzhou,
+        Ximalaya, and other major audio platforms, covering show positioning, audio production, audience growth, multi-platform
+        distribution, and monetization to help podcast creators build sticky audio content brands.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-private-domain-operator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔒 Private Domain Operator
+    description: Expert in building enterprise WeChat (WeCom) private domain ecosystems, with deep expertise in SCRM systems,
+      segmented community operations, Mini Program commerce integration, user lifecycle management, and full-funnel conversion
+      optimization.
+    url: http://xct-agent-gateway:9000/agents/private-domain-operator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: private-domain-operator
+      name: Private Domain Operator
+      description: Expert in building enterprise WeChat (WeCom) private domain ecosystems, with deep expertise in SCRM systems,
+        segmented community operations, Mini Program commerce integration, user lifecycle management, and full-funnel conversion
+        optimization.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-reddit-community-builder
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💬 Reddit Community Builder
+    description: Expert Reddit marketing specialist focused on authentic community engagement, value-driven content creation,
+      and long-term relationship building. Masters Reddit culture navigation.
+    url: http://xct-agent-gateway:9000/agents/reddit-community-builder/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: reddit-community-builder
+      name: Reddit Community Builder
+      description: Expert Reddit marketing specialist focused on authentic community engagement, value-driven content creation,
+        and long-term relationship building. Masters Reddit culture navigation.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-seo-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔍 SEO Specialist
+    description: Expert search engine optimization strategist specializing in technical SEO, content optimization, link authority
+      building, and organic search growth. Drives sustainable traffic through data-driven search strategies.
+    url: http://xct-agent-gateway:9000/agents/seo-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: seo-specialist
+      name: SEO Specialist
+      description: Expert search engine optimization strategist specializing in technical SEO, content optimization, link
+        authority building, and organic search growth. Drives sustainable traffic through data-driven search strategies.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-short-video-editing-coach
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎬 Short-Video Editing Coach
+    description: Hands-on short-video editing coach covering the full post-production pipeline, with mastery of CapCut Pro,
+      Premiere Pro, DaVinci Resolve, and Final Cut Pro across composition and camera language, color grading, audio engineering,
+      motion graphics and VFX, subtitle design, multi-platform export optimization, editing workflow efficiency, and AI-assisted
+      editing.
+    url: http://xct-agent-gateway:9000/agents/short-video-editing-coach/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: short-video-editing-coach
+      name: Short-Video Editing Coach
+      description: Hands-on short-video editing coach covering the full post-production pipeline, with mastery of CapCut Pro,
+        Premiere Pro, DaVinci Resolve, and Final Cut Pro across composition and camera language, color grading, audio engineering,
+        motion graphics and VFX, subtitle design, multi-platform export optimization, editing workflow efficiency, and AI-assisted
+        editing.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-social-media-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📣 Social Media Strategist
+    description: Expert social media strategist for LinkedIn, Twitter, and professional platforms. Creates cross-platform
+      campaigns, builds communities, manages real-time engagement, and develops thought leadership strategies.
+    url: http://xct-agent-gateway:9000/agents/social-media-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: social-media-strategist
+      name: Social Media Strategist
+      description: Expert social media strategist for LinkedIn, Twitter, and professional platforms. Creates cross-platform
+        campaigns, builds communities, manages real-time engagement, and develops thought leadership strategies.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-tiktok-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎵 TikTok Strategist
+    description: Expert TikTok marketing specialist focused on viral content creation, algorithm optimization, and community
+      building. Masters TikTok's unique culture and features for brand growth.
+    url: http://xct-agent-gateway:9000/agents/tiktok-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: tiktok-strategist
+      name: TikTok Strategist
+      description: Expert TikTok marketing specialist focused on viral content creation, algorithm optimization, and community
+        building. Masters TikTok's unique culture and features for brand growth.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-twitter-engager
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🐦 Twitter Engager
+    description: Expert Twitter marketing specialist focused on real-time engagement, thought leadership building, and community-driven
+      growth. Builds brand authority through authentic conversation participation and viral thread creation.
+    url: http://xct-agent-gateway:9000/agents/twitter-engager/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: twitter-engager
+      name: Twitter Engager
+      description: Expert Twitter marketing specialist focused on real-time engagement, thought leadership building, and community-driven
+        growth. Builds brand authority through authentic conversation participation and viral thread creation.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-video-optimization-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎬 Video Optimization Specialist
+    description: Video marketing strategist specializing in YouTube algorithm optimization, audience retention, chaptering,
+      thumbnail concepts, and cross-platform video syndication.
+    url: http://xct-agent-gateway:9000/agents/video-optimization-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: video-optimization-specialist
+      name: Video Optimization Specialist
+      description: Video marketing strategist specializing in YouTube algorithm optimization, audience retention, chaptering,
+        thumbnail concepts, and cross-platform video syndication.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-wechat-official-account-manager
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📱 WeChat Official Account Manager
+    description: Expert WeChat Official Account (OA) strategist specializing in content marketing, subscriber engagement,
+      and conversion optimization. Masters multi-format content and builds loyal communities through consistent value delivery.
+    url: http://xct-agent-gateway:9000/agents/wechat-official-account-manager/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: wechat-official-account-manager
+      name: WeChat Official Account Manager
+      description: Expert WeChat Official Account (OA) strategist specializing in content marketing, subscriber engagement,
+        and conversion optimization. Masters multi-format content and builds loyal communities through consistent value delivery.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-weibo-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔥 Weibo Strategist
+    description: Full-spectrum operations expert for Sina Weibo, with deep expertise in trending topic mechanics, Super Topic
+      community management, public sentiment monitoring, fan economy strategies, and Weibo advertising, helping brands achieve
+      viral reach and sustained growth on China's leading public discourse platform.
+    url: http://xct-agent-gateway:9000/agents/weibo-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: weibo-strategist
+      name: Weibo Strategist
+      description: Full-spectrum operations expert for Sina Weibo, with deep expertise in trending topic mechanics, Super
+        Topic community management, public sentiment monitoring, fan economy strategies, and Weibo advertising, helping brands
+        achieve viral reach and sustained growth on China's leading public discourse platform.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-xiaohongshu-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌸 Xiaohongshu Specialist
+    description: Expert Xiaohongshu marketing specialist focused on lifestyle content, trend-driven strategies, and authentic
+      community engagement. Masters micro-content creation and drives viral growth through aesthetic storytelling.
+    url: http://xct-agent-gateway:9000/agents/xiaohongshu-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: xiaohongshu-specialist
+      name: Xiaohongshu Specialist
+      description: Expert Xiaohongshu marketing specialist focused on lifestyle content, trend-driven strategies, and authentic
+        community engagement. Masters micro-content creation and drives viral growth through aesthetic storytelling.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-zhihu-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧠 Zhihu Strategist
+    description: Expert Zhihu marketing specialist focused on thought leadership, community credibility, and knowledge-driven
+      engagement. Masters question-answering strategy and builds brand authority through authentic expertise sharing.
+    url: http://xct-agent-gateway:9000/agents/zhihu-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: zhihu-strategist
+      name: Zhihu Strategist
+      description: Expert Zhihu marketing specialist focused on thought leadership, community credibility, and knowledge-driven
+        engagement. Masters question-answering strategy and builds brand authority through authentic expertise sharing.
+      tags:
+      - marketing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-paid-media-auditor
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📋 Paid Media Auditor
+    description: Comprehensive paid media auditor who systematically evaluates Google Ads, Microsoft Ads, and Meta accounts
+      across 200+ checkpoints spanning account structure, tracking, bidding, creative, audiences, and competitive positioning.
+      Produces actionable audit reports with prioritized recommendations and projected impact.
+    url: http://xct-agent-gateway:9000/agents/paid-media-auditor/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: paid-media-auditor
+      name: Paid Media Auditor
+      description: Comprehensive paid media auditor who systematically evaluates Google Ads, Microsoft Ads, and Meta accounts
+        across 200+ checkpoints spanning account structure, tracking, bidding, creative, audiences, and competitive positioning.
+        Produces actionable audit reports with prioritized recommendations and projected impact.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ad-creative-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ✍️ Ad Creative Strategist
+    description: Paid media creative specialist focused on ad copywriting, RSA optimization, asset group design, and creative
+      testing frameworks across Google, Meta, Microsoft, and programmatic platforms. Bridges the gap between performance data
+      and persuasive messaging.
+    url: http://xct-agent-gateway:9000/agents/ad-creative-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ad-creative-strategist
+      name: Ad Creative Strategist
+      description: Paid media creative specialist focused on ad copywriting, RSA optimization, asset group design, and creative
+        testing frameworks across Google, Meta, Microsoft, and programmatic platforms. Bridges the gap between performance
+        data and persuasive messaging.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-paid-social-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📱 Paid Social Strategist
+    description: Cross-platform paid social advertising specialist covering Meta (Facebook/Instagram), LinkedIn, TikTok, Pinterest,
+      X, and Snapchat. Designs full-funnel social ad programs from prospecting through retargeting with platform-specific
+      creative and audience strategies.
+    url: http://xct-agent-gateway:9000/agents/paid-social-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: paid-social-strategist
+      name: Paid Social Strategist
+      description: Cross-platform paid social advertising specialist covering Meta (Facebook/Instagram), LinkedIn, TikTok,
+        Pinterest, X, and Snapchat. Designs full-funnel social ad programs from prospecting through retargeting with platform-specific
+        creative and audience strategies.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-ppc-campaign-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💰 PPC Campaign Strategist
+    description: Senior paid media strategist specializing in large-scale search, shopping, and performance max campaign architecture
+      across Google, Microsoft, and Amazon ad platforms. Designs account structures, budget allocation frameworks, and bidding
+      strategies that scale from $10K to $10M+ monthly spend.
+    url: http://xct-agent-gateway:9000/agents/ppc-campaign-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: ppc-campaign-strategist
+      name: PPC Campaign Strategist
+      description: Senior paid media strategist specializing in large-scale search, shopping, and performance max campaign
+        architecture across Google, Microsoft, and Amazon ad platforms. Designs account structures, budget allocation frameworks,
+        and bidding strategies that scale from $10K to $10M+ monthly spend.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-programmatic-display-buyer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📺 Programmatic & Display Buyer
+    description: Display advertising and programmatic media buying specialist covering managed placements, Google Display
+      Network, DV360, trade desk platforms, partner media (newsletters, sponsored content), and ABM display strategies via
+      platforms like Demandbase and 6Sense.
+    url: http://xct-agent-gateway:9000/agents/programmatic-display-buyer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: programmatic-display-buyer
+      name: Programmatic & Display Buyer
+      description: Display advertising and programmatic media buying specialist covering managed placements, Google Display
+        Network, DV360, trade desk platforms, partner media (newsletters, sponsored content), and ABM display strategies via
+        platforms like Demandbase and 6Sense.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-search-query-analyst
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔍 Search Query Analyst
+    description: Specialist in search term analysis, negative keyword architecture, and query-to-intent mapping. Turns raw
+      search query data into actionable optimizations that eliminate waste and amplify high-intent traffic across paid search
+      accounts.
+    url: http://xct-agent-gateway:9000/agents/search-query-analyst/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: search-query-analyst
+      name: Search Query Analyst
+      description: Specialist in search term analysis, negative keyword architecture, and query-to-intent mapping. Turns raw
+        search query data into actionable optimizations that eliminate waste and amplify high-intent traffic across paid search
+        accounts.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-tracking-measurement-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📡 Tracking & Measurement Specialist
+    description: Expert in conversion tracking architecture, tag management, and attribution modeling across Google Tag Manager,
+      GA4, Google Ads, Meta CAPI, LinkedIn Insight Tag, and server-side implementations. Ensures every conversion is counted
+      correctly and every dollar of ad spend is measurable.
+    url: http://xct-agent-gateway:9000/agents/tracking-measurement-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: tracking-measurement-specialist
+      name: Tracking & Measurement Specialist
+      description: Expert in conversion tracking architecture, tag management, and attribution modeling across Google Tag
+        Manager, GA4, Google Ads, Meta CAPI, LinkedIn Insight Tag, and server-side implementations. Ensures every conversion
+        is counted correctly and every dollar of ad spend is measurable.
+      tags:
+      - paid-media
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-behavioral-nudge-engine
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧠 Behavioral Nudge Engine
+    description: Behavioral psychology specialist that adapts software interaction cadences and styles to maximize user motivation
+      and success.
+    url: http://xct-agent-gateway:9000/agents/behavioral-nudge-engine/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: behavioral-nudge-engine
+      name: Behavioral Nudge Engine
+      description: Behavioral psychology specialist that adapts software interaction cadences and styles to maximize user
+        motivation and success.
+      tags:
+      - product
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-feedback-synthesizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔍 Feedback Synthesizer
+    description: Expert in collecting, analyzing, and synthesizing user feedback from multiple channels to extract actionable
+      product insights. Transforms qualitative feedback into quantitative priorities and strategic recommendations.
+    url: http://xct-agent-gateway:9000/agents/feedback-synthesizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: feedback-synthesizer
+      name: Feedback Synthesizer
+      description: Expert in collecting, analyzing, and synthesizing user feedback from multiple channels to extract actionable
+        product insights. Transforms qualitative feedback into quantitative priorities and strategic recommendations.
+      tags:
+      - product
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-product-manager
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧭 Product Manager
+    description: Holistic product leader who owns the full product lifecycle — from discovery and strategy through roadmap,
+      stakeholder alignment, go-to-market, and outcome measurement. Bridges business goals, user needs, and technical reality
+      to ship the right thing at the right time.
+    url: http://xct-agent-gateway:9000/agents/product-manager/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: product-manager
+      name: Product Manager
+      description: Holistic product leader who owns the full product lifecycle — from discovery and strategy through roadmap,
+        stakeholder alignment, go-to-market, and outcome measurement. Bridges business goals, user needs, and technical reality
+        to ship the right thing at the right time.
+      tags:
+      - product
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sprint-prioritizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎯 Sprint Prioritizer
+    description: Expert product manager specializing in agile sprint planning, feature prioritization, and resource allocation.
+      Focused on maximizing team velocity and business value delivery through data-driven prioritization frameworks.
+    url: http://xct-agent-gateway:9000/agents/sprint-prioritizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sprint-prioritizer
+      name: Sprint Prioritizer
+      description: Expert product manager specializing in agile sprint planning, feature prioritization, and resource allocation.
+        Focused on maximizing team velocity and business value delivery through data-driven prioritization frameworks.
+      tags:
+      - product
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-trend-researcher
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔭 Trend Researcher
+    description: Expert market intelligence analyst specializing in identifying emerging trends, competitive analysis, and
+      opportunity assessment. Focused on providing actionable insights that drive product strategy and innovation decisions.
+    url: http://xct-agent-gateway:9000/agents/trend-researcher/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: trend-researcher
+      name: Trend Researcher
+      description: Expert market intelligence analyst specializing in identifying emerging trends, competitive analysis, and
+        opportunity assessment. Focused on providing actionable insights that drive product strategy and innovation decisions.
+      tags:
+      - product
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-experiment-tracker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧪 Experiment Tracker
+    description: Expert project manager specializing in experiment design, execution tracking, and data-driven decision making.
+      Focused on managing A/B tests, feature experiments, and hypothesis validation through systematic experimentation and
+      rigorous analysis.
+    url: http://xct-agent-gateway:9000/agents/experiment-tracker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: experiment-tracker
+      name: Experiment Tracker
+      description: Expert project manager specializing in experiment design, execution tracking, and data-driven decision
+        making. Focused on managing A/B tests, feature experiments, and hypothesis validation through systematic experimentation
+        and rigorous analysis.
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-jira-workflow-steward
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📋 Jira Workflow Steward
+    description: Expert delivery operations specialist who enforces Jira-linked Git workflows, traceable commits, structured
+      pull requests, and release-safe branch strategy across software teams.
+    url: http://xct-agent-gateway:9000/agents/jira-workflow-steward/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: jira-workflow-steward
+      name: Jira Workflow Steward
+      description: Expert delivery operations specialist who enforces Jira-linked Git workflows, traceable commits, structured
+        pull requests, and release-safe branch strategy across software teams.
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-project-shepherd
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🐑 Project Shepherd
+    description: Expert project manager specializing in cross-functional project coordination, timeline management, and stakeholder
+      alignment. Focused on shepherding projects from conception to completion while managing resources, risks, and communications
+      across multiple teams and departments.
+    url: http://xct-agent-gateway:9000/agents/project-shepherd/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: project-shepherd
+      name: Project Shepherd
+      description: Expert project manager specializing in cross-functional project coordination, timeline management, and
+        stakeholder alignment. Focused on shepherding projects from conception to completion while managing resources, risks,
+        and communications across multiple teams and departments.
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-studio-operations
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏭 Studio Operations
+    description: Expert operations manager specializing in day-to-day studio efficiency, process optimization, and resource
+      coordination. Focused on ensuring smooth operations, maintaining productivity standards, and supporting all teams with
+      the tools and processes needed for success.
+    url: http://xct-agent-gateway:9000/agents/studio-operations/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: studio-operations
+      name: Studio Operations
+      description: Expert operations manager specializing in day-to-day studio efficiency, process optimization, and resource
+        coordination. Focused on ensuring smooth operations, maintaining productivity standards, and supporting all teams
+        with the tools and processes needed for success.
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-studio-producer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎬 Studio Producer
+    description: Senior strategic leader specializing in high-level creative and technical project orchestration, resource
+      allocation, and multi-project portfolio management. Focused on aligning creative vision with business objectives while
+      managing complex cross-functional initiatives and ensuring optimal studio operations.
+    url: http://xct-agent-gateway:9000/agents/studio-producer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: studio-producer
+      name: Studio Producer
+      description: Senior strategic leader specializing in high-level creative and technical project orchestration, resource
+        allocation, and multi-project portfolio management. Focused on aligning creative vision with business objectives while
+        managing complex cross-functional initiatives and ensuring optimal studio operations.
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-senior-project-manager
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📝 Senior Project Manager
+    description: Converts specs to tasks and remembers previous projects. Focused on realistic scope, no background processes,
+      exact spec requirements
+    url: http://xct-agent-gateway:9000/agents/senior-project-manager/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: senior-project-manager
+      name: Senior Project Manager
+      description: Converts specs to tasks and remembers previous projects. Focused on realistic scope, no background processes,
+        exact spec requirements
+      tags:
+      - project-management
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-account-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗺️ Account Strategist
+    description: Expert post-sale account strategist specializing in land-and-expand execution, stakeholder mapping, QBR facilitation,
+      and net revenue retention. Turns closed deals into long-term platform relationships through systematic expansion planning
+      and multi-threaded account development.
+    url: http://xct-agent-gateway:9000/agents/account-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: account-strategist
+      name: Account Strategist
+      description: Expert post-sale account strategist specializing in land-and-expand execution, stakeholder mapping, QBR
+        facilitation, and net revenue retention. Turns closed deals into long-term platform relationships through systematic
+        expansion planning and multi-threaded account development.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sales-coach
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏋️ Sales Coach
+    description: Expert sales coaching specialist focused on rep development, pipeline review facilitation, call coaching,
+      deal strategy, and forecast accuracy. Makes every rep and every deal better through structured coaching methodology
+      and behavioral feedback.
+    url: http://xct-agent-gateway:9000/agents/sales-coach/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sales-coach
+      name: Sales Coach
+      description: Expert sales coaching specialist focused on rep development, pipeline review facilitation, call coaching,
+        deal strategy, and forecast accuracy. Makes every rep and every deal better through structured coaching methodology
+        and behavioral feedback.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-deal-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ♟️ Deal Strategist
+    description: Senior deal strategist specializing in MEDDPICC qualification, competitive positioning, and win planning
+      for complex B2B sales cycles. Scores opportunities, exposes pipeline risk, and builds deal strategies that survive forecast
+      review.
+    url: http://xct-agent-gateway:9000/agents/deal-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: deal-strategist
+      name: Deal Strategist
+      description: Senior deal strategist specializing in MEDDPICC qualification, competitive positioning, and win planning
+        for complex B2B sales cycles. Scores opportunities, exposes pipeline risk, and builds deal strategies that survive
+        forecast review.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-discovery-coach
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔍 Discovery Coach
+    description: Coaches sales teams on elite discovery methodology — question design, current-state mapping, gap quantification,
+      and call structure that surfaces real buying motivation.
+    url: http://xct-agent-gateway:9000/agents/discovery-coach/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: discovery-coach
+      name: Discovery Coach
+      description: Coaches sales teams on elite discovery methodology — question design, current-state mapping, gap quantification,
+        and call structure that surfaces real buying motivation.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sales-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🛠️ Sales Engineer
+    description: Senior pre-sales engineer specializing in technical discovery, demo engineering, POC scoping, competitive
+      battlecards, and bridging product capabilities to business outcomes. Wins the technical decision so the deal can close.
+    url: http://xct-agent-gateway:9000/agents/sales-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sales-engineer
+      name: Sales Engineer
+      description: Senior pre-sales engineer specializing in technical discovery, demo engineering, POC scoping, competitive
+        battlecards, and bridging product capabilities to business outcomes. Wins the technical decision so the deal can close.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-outbound-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎯 Outbound Strategist
+    description: Signal-based outbound specialist who designs multi-channel prospecting sequences, defines ICPs, and builds
+      pipeline through research-driven personalization — not volume.
+    url: http://xct-agent-gateway:9000/agents/outbound-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: outbound-strategist
+      name: Outbound Strategist
+      description: Signal-based outbound specialist who designs multi-channel prospecting sequences, defines ICPs, and builds
+        pipeline through research-driven personalization — not volume.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-pipeline-analyst
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📊 Pipeline Analyst
+    description: Revenue operations analyst specializing in pipeline health diagnostics, deal velocity analysis, forecast
+      accuracy, and data-driven sales coaching. Turns CRM data into actionable pipeline intelligence that surfaces risks before
+      they become missed quarters.
+    url: http://xct-agent-gateway:9000/agents/pipeline-analyst/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: pipeline-analyst
+      name: Pipeline Analyst
+      description: Revenue operations analyst specializing in pipeline health diagnostics, deal velocity analysis, forecast
+        accuracy, and data-driven sales coaching. Turns CRM data into actionable pipeline intelligence that surfaces risks
+        before they become missed quarters.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-proposal-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏹 Proposal Strategist
+    description: Strategic proposal architect who transforms RFPs and sales opportunities into compelling win narratives.
+      Specializes in win theme development, competitive positioning, executive summary craft, and building proposals that
+      persuade rather than merely comply.
+    url: http://xct-agent-gateway:9000/agents/proposal-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: proposal-strategist
+      name: Proposal Strategist
+      description: Strategic proposal architect who transforms RFPs and sales opportunities into compelling win narratives.
+        Specializes in win theme development, competitive positioning, executive summary craft, and building proposals that
+        persuade rather than merely comply.
+      tags:
+      - sales
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-macos-spatial-metal-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🍎 macOS Spatial/Metal Engineer
+    description: Native Swift and Metal specialist building high-performance 3D rendering systems and spatial computing experiences
+      for macOS and Vision Pro
+    url: http://xct-agent-gateway:9000/agents/macos-spatial-metal-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: macos-spatial-metal-engineer
+      name: macOS Spatial/Metal Engineer
+      description: Native Swift and Metal specialist building high-performance 3D rendering systems and spatial computing
+        experiences for macOS and Vision Pro
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-terminal-integration-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🖥️ Terminal Integration Specialist
+    description: Terminal emulation, text rendering optimization, and SwiftTerm integration for modern Swift applications
+    url: http://xct-agent-gateway:9000/agents/terminal-integration-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: terminal-integration-specialist
+      name: Terminal Integration Specialist
+      description: Terminal emulation, text rendering optimization, and SwiftTerm integration for modern Swift applications
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-visionos-spatial-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🥽 visionOS Spatial Engineer
+    description: Native visionOS spatial computing, SwiftUI volumetric interfaces, and Liquid Glass design implementation
+    url: http://xct-agent-gateway:9000/agents/visionos-spatial-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: visionos-spatial-engineer
+      name: visionOS Spatial Engineer
+      description: Native visionOS spatial computing, SwiftUI volumetric interfaces, and Liquid Glass design implementation
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-xr-cockpit-interaction-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🕹️ XR Cockpit Interaction Specialist
+    description: Specialist in designing and developing immersive cockpit-based control systems for XR environments
+    url: http://xct-agent-gateway:9000/agents/xr-cockpit-interaction-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: xr-cockpit-interaction-specialist
+      name: XR Cockpit Interaction Specialist
+      description: Specialist in designing and developing immersive cockpit-based control systems for XR environments
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-xr-immersive-developer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌐 XR Immersive Developer
+    description: Expert WebXR and immersive technology developer with specialization in browser-based AR/VR/XR applications
+    url: http://xct-agent-gateway:9000/agents/xr-immersive-developer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: xr-immersive-developer
+      name: XR Immersive Developer
+      description: Expert WebXR and immersive technology developer with specialization in browser-based AR/VR/XR applications
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-xr-interface-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🫧 XR Interface Architect
+    description: Spatial interaction designer and interface strategist for immersive AR/VR/XR environments
+    url: http://xct-agent-gateway:9000/agents/xr-interface-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: xr-interface-architect
+      name: XR Interface Architect
+      description: Spatial interaction designer and interface strategist for immersive AR/VR/XR environments
+      tags:
+      - spatial-computing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-accounts-payable-agent
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💸 Accounts Payable Agent
+    description: Autonomous payment processing specialist that executes vendor payments, contractor invoices, and recurring
+      bills across any payment rail — crypto, fiat, stablecoins. Integrates with AI agent workflows via tool calls.
+    url: http://xct-agent-gateway:9000/agents/accounts-payable-agent/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: accounts-payable-agent
+      name: Accounts Payable Agent
+      description: Autonomous payment processing specialist that executes vendor payments, contractor invoices, and recurring
+        bills across any payment rail — crypto, fiat, stablecoins. Integrates with AI agent workflows via tool calls.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-agentic-identity-trust-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔐 Agentic Identity & Trust Architect
+    description: Designs identity, authentication, and trust verification systems for autonomous AI agents operating in multi-agent
+      environments. Ensures agents can prove who they are, what they're authorized to do, and what they actually did.
+    url: http://xct-agent-gateway:9000/agents/agentic-identity-trust-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: agentic-identity-trust-architect
+      name: Agentic Identity & Trust Architect
+      description: Designs identity, authentication, and trust verification systems for autonomous AI agents operating in
+        multi-agent environments. Ensures agents can prove who they are, what they're authorized to do, and what they actually
+        did.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-agents-orchestrator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎛️ Agents Orchestrator
+    description: Autonomous pipeline manager that orchestrates the entire development workflow. You are the leader of this
+      process.
+    url: http://xct-agent-gateway:9000/agents/agents-orchestrator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: agents-orchestrator
+      name: Agents Orchestrator
+      description: Autonomous pipeline manager that orchestrates the entire development workflow. You are the leader of this
+        process.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-automation-governance-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚙️ Automation Governance Architect
+    description: Governance-first architect for business automations (n8n-first) who audits value, risk, and maintainability
+      before implementation.
+    url: http://xct-agent-gateway:9000/agents/automation-governance-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: automation-governance-architect
+      name: Automation Governance Architect
+      description: Governance-first architect for business automations (n8n-first) who audits value, risk, and maintainability
+        before implementation.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-blockchain-security-auditor
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🛡️ Blockchain Security Auditor
+    description: Expert smart contract security auditor specializing in vulnerability detection, formal verification, exploit
+      analysis, and comprehensive audit report writing for DeFi protocols and blockchain applications.
+    url: http://xct-agent-gateway:9000/agents/blockchain-security-auditor/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: blockchain-security-auditor
+      name: Blockchain Security Auditor
+      description: Expert smart contract security auditor specializing in vulnerability detection, formal verification, exploit
+        analysis, and comprehensive audit report writing for DeFi protocols and blockchain applications.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-compliance-auditor
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📋 Compliance Auditor
+    description: Expert technical compliance auditor specializing in SOC 2, ISO 27001, HIPAA, and PCI-DSS audits — from readiness
+      assessment through evidence collection to certification.
+    url: http://xct-agent-gateway:9000/agents/compliance-auditor/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: compliance-auditor
+      name: Compliance Auditor
+      description: Expert technical compliance auditor specializing in SOC 2, ISO 27001, HIPAA, and PCI-DSS audits — from
+        readiness assessment through evidence collection to certification.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-corporate-training-designer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📚 Corporate Training Designer
+    description: Expert in enterprise training system design and curriculum development — proficient in training needs analysis,
+      instructional design methodology, blended learning program design, internal trainer development, leadership programs,
+      and training effectiveness evaluation and continuous optimization.
+    url: http://xct-agent-gateway:9000/agents/corporate-training-designer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: corporate-training-designer
+      name: Corporate Training Designer
+      description: Expert in enterprise training system design and curriculum development — proficient in training needs analysis,
+        instructional design methodology, blended learning program design, internal trainer development, leadership programs,
+        and training effectiveness evaluation and continuous optimization.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-customer-service
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎧 Customer Service
+    description: Friendly, professional customer service specialist for any industry — handling inquiries, complaints, account
+      support, FAQs, and seamless escalation with warmth, efficiency, and a genuine commitment to customer satisfaction
+    url: http://xct-agent-gateway:9000/agents/customer-service/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: customer-service
+      name: Customer Service
+      description: Friendly, professional customer service specialist for any industry — handling inquiries, complaints, account
+        support, FAQs, and seamless escalation with warmth, efficiency, and a genuine commitment to customer satisfaction
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-data-consolidation-agent
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗄️ Data Consolidation Agent
+    description: AI agent that consolidates extracted sales data into live reporting dashboards with territory, rep, and pipeline
+      summaries
+    url: http://xct-agent-gateway:9000/agents/data-consolidation-agent/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: data-consolidation-agent
+      name: Data Consolidation Agent
+      description: AI agent that consolidates extracted sales data into live reporting dashboards with territory, rep, and
+        pipeline summaries
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-government-digital-presales-consultant
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏛️ Government Digital Presales Consultant
+    description: Presales expert for China's government digital transformation market (ToG), proficient in policy interpretation,
+      solution design, bid document preparation, POC validation, compliance requirements (classified protection/cryptographic
+      assessment/Xinchuang domestic IT), and stakeholder management — helping technical teams efficiently win government IT
+      projects.
+    url: http://xct-agent-gateway:9000/agents/government-digital-presales-consultant/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: government-digital-presales-consultant
+      name: Government Digital Presales Consultant
+      description: Presales expert for China's government digital transformation market (ToG), proficient in policy interpretation,
+        solution design, bid document preparation, POC validation, compliance requirements (classified protection/cryptographic
+        assessment/Xinchuang domestic IT), and stakeholder management — helping technical teams efficiently win government
+        IT projects.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-healthcare-customer-service
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏥 Healthcare Customer Service
+    description: Empathetic healthcare customer service specialist for patient support, billing inquiries, appointment management,
+      insurance questions, complaint resolution, and seamless escalation to clinical or administrative staff
+    url: http://xct-agent-gateway:9000/agents/healthcare-customer-service/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: healthcare-customer-service
+      name: Healthcare Customer Service
+      description: Empathetic healthcare customer service specialist for patient support, billing inquiries, appointment management,
+        insurance questions, complaint resolution, and seamless escalation to clinical or administrative staff
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-healthcare-marketing-compliance-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚕️ Healthcare Marketing Compliance Specialist
+    description: Expert in healthcare marketing compliance in China, proficient in the Advertising Law, Medical Advertisement
+      Management Measures, Drug Administration Law, and related regulations — covering pharmaceuticals, medical devices, medical
+      aesthetics, health supplements, and internet healthcare across content review, risk control, platform rule interpretation,
+      and patient privacy protection, helping enterprises conduct effective health marketing within legal boundaries.
+    url: http://xct-agent-gateway:9000/agents/healthcare-marketing-compliance-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: healthcare-marketing-compliance-specialist
+      name: Healthcare Marketing Compliance Specialist
+      description: Expert in healthcare marketing compliance in China, proficient in the Advertising Law, Medical Advertisement
+        Management Measures, Drug Administration Law, and related regulations — covering pharmaceuticals, medical devices,
+        medical aesthetics, health supplements, and internet healthcare across content review, risk control, platform rule
+        interpretation, and patient privacy protection, helping enterprises conduct effective health marketing within legal
+        boundaries.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-hospitality-guest-services
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏨 Hospitality Guest Services
+    description: Comprehensive hospitality guest services specialist for hotels, resorts, restaurants, and event venues —
+      covering reservations, check-in/check-out, concierge services, guest complaint resolution, loyalty program management,
+      and post-stay follow-up to deliver exceptional guest experiences that drive loyalty and revenue
+    url: http://xct-agent-gateway:9000/agents/hospitality-guest-services/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: hospitality-guest-services
+      name: Hospitality Guest Services
+      description: Comprehensive hospitality guest services specialist for hotels, resorts, restaurants, and event venues
+        — covering reservations, check-in/check-out, concierge services, guest complaint resolution, loyalty program management,
+        and post-stay follow-up to deliver exceptional guest experiences that drive loyalty and revenue
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-hr-onboarding
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🤝 HR Onboarding
+    description: Comprehensive HR onboarding specialist for employee orientation, documentation management, compliance tracking,
+      benefits enrollment, culture integration, and new hire support — delivering a seamless first-day-to-first-year experience
+      that drives retention and productivity
+    url: http://xct-agent-gateway:9000/agents/hr-onboarding/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: hr-onboarding
+      name: HR Onboarding
+      description: Comprehensive HR onboarding specialist for employee orientation, documentation management, compliance tracking,
+        benefits enrollment, culture integration, and new hire support — delivering a seamless first-day-to-first-year experience
+        that drives retention and productivity
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-identity-graph-operator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🕸️ Identity Graph Operator
+    description: Operates a shared identity graph that multiple AI agents resolve against. Ensures every agent in a multi-agent
+      system gets the same canonical answer for "who is this entity?" - deterministically, even under concurrent writes.
+    url: http://xct-agent-gateway:9000/agents/identity-graph-operator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: identity-graph-operator
+      name: Identity Graph Operator
+      description: Operates a shared identity graph that multiple AI agents resolve against. Ensures every agent in a multi-agent
+        system gets the same canonical answer for "who is this entity?" - deterministically, even under concurrent writes.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-language-translator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌐 Language Translator
+    description: Real-time Spanish ↔ English translation specialist with cultural context, regional dialect awareness, travel
+      phrase guidance, and tone-appropriate communication for everyday, business, and emergency situations
+    url: http://xct-agent-gateway:9000/agents/language-translator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: language-translator
+      name: Language Translator
+      description: Real-time Spanish ↔ English translation specialist with cultural context, regional dialect awareness, travel
+        phrase guidance, and tone-appropriate communication for everyday, business, and emergency situations
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-legal-billing-time-tracking
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⏱️ Legal Billing & Time Tracking
+    description: Comprehensive legal billing and time tracking specialist for accurate time capture, invoice generation, billing
+      narrative writing, collections management, trust account compliance, and billing analysis — maximizing revenue recovery
+      while maintaining client relationships and ethical compliance across any firm size or billing model
+    url: http://xct-agent-gateway:9000/agents/legal-billing-time-tracking/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: legal-billing-time-tracking
+      name: Legal Billing & Time Tracking
+      description: Comprehensive legal billing and time tracking specialist for accurate time capture, invoice generation,
+        billing narrative writing, collections management, trust account compliance, and billing analysis — maximizing revenue
+        recovery while maintaining client relationships and ethical compliance across any firm size or billing model
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-legal-client-intake
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📋 Legal Client Intake
+    description: Comprehensive legal client intake specialist for qualifying prospects, collecting case information, scheduling
+      consultations, managing conflict checks, and delivering attorney-ready intake summaries across any practice area and
+      firm size
+    url: http://xct-agent-gateway:9000/agents/legal-client-intake/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: legal-client-intake
+      name: Legal Client Intake
+      description: Comprehensive legal client intake specialist for qualifying prospects, collecting case information, scheduling
+        consultations, managing conflict checks, and delivering attorney-ready intake summaries across any practice area and
+        firm size
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-legal-document-review
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚖️ Legal Document Review
+    description: Comprehensive legal document review specialist for contracts, litigation documents, and real estate agreements
+      — summarizing documents, flagging risk clauses, comparing contract versions, and checking compliance across any law
+      firm size or practice area
+    url: http://xct-agent-gateway:9000/agents/legal-document-review/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: legal-document-review
+      name: Legal Document Review
+      description: Comprehensive legal document review specialist for contracts, litigation documents, and real estate agreements
+        — summarizing documents, flagging risk clauses, comparing contract versions, and checking compliance across any law
+        firm size or practice area
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-loan-officer-assistant
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏦 Loan Officer Assistant
+    description: Comprehensive loan officer assistant for mortgage and lending professionals — covering borrower intake, pre-qualification,
+      document collection, pipeline management, compliance tracking, rate quoting, and closing coordination across residential,
+      commercial, and consumer lending
+    url: http://xct-agent-gateway:9000/agents/loan-officer-assistant/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: loan-officer-assistant
+      name: Loan Officer Assistant
+      description: Comprehensive loan officer assistant for mortgage and lending professionals — covering borrower intake,
+        pre-qualification, document collection, pipeline management, compliance tracking, rate quoting, and closing coordination
+        across residential, commercial, and consumer lending
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-lsp-index-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔎 LSP/Index Engineer
+    description: Language Server Protocol specialist building unified code intelligence systems through LSP client orchestration
+      and semantic indexing
+    url: http://xct-agent-gateway:9000/agents/lsp-index-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: lsp-index-engineer
+      name: LSP/Index Engineer
+      description: Language Server Protocol specialist building unified code intelligence systems through LSP client orchestration
+        and semantic indexing
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-real-estate-buyer-seller
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏠 Real Estate Buyer & Seller
+    description: Comprehensive real estate agent assistant for buyer representation, seller representation, listing management,
+      offer negotiation, transaction coordination, and closing support — delivering a world-class client experience from first
+      showing to final closing across residential and investment real estate
+    url: http://xct-agent-gateway:9000/agents/real-estate-buyer-seller/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: real-estate-buyer-seller
+      name: Real Estate Buyer & Seller
+      description: Comprehensive real estate agent assistant for buyer representation, seller representation, listing management,
+        offer negotiation, transaction coordination, and closing support — delivering a world-class client experience from
+        first showing to final closing across residential and investment real estate
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-recruitment-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎯 Recruitment Specialist
+    description: Expert recruitment operations and talent acquisition specialist — skilled in China's major hiring platforms,
+      talent assessment frameworks, and labor law compliance. Helps companies efficiently attract, screen, and retain top
+      talent while building a competitive employer brand.
+    url: http://xct-agent-gateway:9000/agents/recruitment-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: recruitment-specialist
+      name: Recruitment Specialist
+      description: Expert recruitment operations and talent acquisition specialist — skilled in China's major hiring platforms,
+        talent assessment frameworks, and labor law compliance. Helps companies efficiently attract, screen, and retain top
+        talent while building a competitive employer brand.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-report-distribution-agent
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📤 Report Distribution Agent
+    description: AI agent that automates distribution of consolidated sales reports to representatives based on territorial
+      parameters
+    url: http://xct-agent-gateway:9000/agents/report-distribution-agent/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: report-distribution-agent
+      name: Report Distribution Agent
+      description: AI agent that automates distribution of consolidated sales reports to representatives based on territorial
+        parameters
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-retail-customer-returns
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🛒 Retail Customer Returns
+    description: Comprehensive retail customer returns specialist for processing returns, exchanges, and refunds across in-store,
+      online, and omnichannel retail — handling policy enforcement, fraud prevention, customer retention, vendor returns,
+      and returns analytics to maximize recovery while preserving customer loyalty
+    url: http://xct-agent-gateway:9000/agents/retail-customer-returns/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: retail-customer-returns
+      name: Retail Customer Returns
+      description: Comprehensive retail customer returns specialist for processing returns, exchanges, and refunds across
+        in-store, online, and omnichannel retail — handling policy enforcement, fraud prevention, customer retention, vendor
+        returns, and returns analytics to maximize recovery while preserving customer loyalty
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sales-data-extraction-agent
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📊 Sales Data Extraction Agent
+    description: AI agent specialized in monitoring Excel files and extracting key sales metrics (MTD, YTD, Year End) for
+      internal live reporting
+    url: http://xct-agent-gateway:9000/agents/sales-data-extraction-agent/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sales-data-extraction-agent
+      name: Sales Data Extraction Agent
+      description: AI agent specialized in monitoring Excel files and extracting key sales metrics (MTD, YTD, Year End) for
+        internal live reporting
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-sales-outreach
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎯 Sales Outreach
+    description: Consultative B2B sales outreach specialist for cold prospecting, lead follow-up, objection handling, proposal
+      writing, and pipeline management — combining data-driven targeting with genuine relationship-building to open doors
+      and close deals
+    url: http://xct-agent-gateway:9000/agents/sales-outreach/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: sales-outreach
+      name: Sales Outreach
+      description: Consultative B2B sales outreach specialist for cold prospecting, lead follow-up, objection handling, proposal
+        writing, and pipeline management — combining data-driven targeting with genuine relationship-building to open doors
+        and close deals
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-chief-of-staff
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧭 Chief of Staff
+    description: Master coordinator for founders and executives — filters noise, owns processes, enforces consistency, routes
+      decisions, and positions outputs for impact so the boss can think clearly.
+    url: http://xct-agent-gateway:9000/agents/chief-of-staff/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: chief-of-staff
+      name: Chief of Staff
+      description: Master coordinator for founders and executives — filters noise, owns processes, enforces consistency, routes
+        decisions, and positions outputs for impact so the boss can think clearly.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-civil-engineer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏗️ Civil Engineer
+    description: Expert civil and structural engineer with global standards coverage — Eurocode, DIN, ACI, AISC, ASCE, AS/NZS,
+      CSA, GB, IS, AIJ, and more. Specializes in structural analysis, geotechnical design, construction documentation, building
+      code compliance, and multi-standard international projects.
+    url: http://xct-agent-gateway:9000/agents/civil-engineer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: civil-engineer
+      name: Civil Engineer
+      description: Expert civil and structural engineer with global standards coverage — Eurocode, DIN, ACI, AISC, ASCE, AS/NZS,
+        CSA, GB, IS, AIJ, and more. Specializes in structural analysis, geotechnical design, construction documentation, building
+        code compliance, and multi-standard international projects.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-cultural-intelligence-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🌍 Cultural Intelligence Strategist
+    description: CQ specialist that detects invisible exclusion, researches global context, and ensures software resonates
+      authentically across intersectional identities.
+    url: http://xct-agent-gateway:9000/agents/cultural-intelligence-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: cultural-intelligence-strategist
+      name: Cultural Intelligence Strategist
+      description: CQ specialist that detects invisible exclusion, researches global context, and ensures software resonates
+        authentically across intersectional identities.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-developer-advocate
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗣️ Developer Advocate
+    description: Expert developer advocate specializing in building developer communities, creating compelling technical content,
+      optimizing developer experience (DX), and driving platform adoption through authentic engineering engagement. Bridges
+      product and engineering teams with external developers.
+    url: http://xct-agent-gateway:9000/agents/developer-advocate/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: developer-advocate
+      name: Developer Advocate
+      description: Expert developer advocate specializing in building developer communities, creating compelling technical
+        content, optimizing developer experience (DX), and driving platform adoption through authentic engineering engagement.
+        Bridges product and engineering teams with external developers.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-document-generator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📄 Document Generator
+    description: Expert document creation specialist who generates professional PDF, PPTX, DOCX, and XLSX files using code-based
+      approaches with proper formatting, charts, and data visualization.
+    url: http://xct-agent-gateway:9000/agents/document-generator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: document-generator
+      name: Document Generator
+      description: Expert document creation specialist who generates professional PDF, PPTX, DOCX, and XLSX files using code-based
+        approaches with proper formatting, charts, and data visualization.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-french-consulting-market-navigator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🇫🇷 French Consulting Market Navigator
+    description: Navigate the French ESN/SI freelance ecosystem — margin models, platform mechanics (Malt, collective.work),
+      portage salarial, rate positioning, and payment cycle realities
+    url: http://xct-agent-gateway:9000/agents/french-consulting-market-navigator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: french-consulting-market-navigator
+      name: French Consulting Market Navigator
+      description: Navigate the French ESN/SI freelance ecosystem — margin models, platform mechanics (Malt, collective.work),
+        portage salarial, rate positioning, and payment cycle realities
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-korean-business-navigator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🇰🇷 Korean Business Navigator
+    description: Korean business culture for foreign professionals — 품의 decision process, nunchi reading, KakaoTalk business
+      etiquette, hierarchy navigation, and relationship-first deal mechanics
+    url: http://xct-agent-gateway:9000/agents/korean-business-navigator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: korean-business-navigator
+      name: Korean Business Navigator
+      description: Korean business culture for foreign professionals — 품의 decision process, nunchi reading, KakaoTalk business
+        etiquette, hierarchy navigation, and relationship-first deal mechanics
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-mcp-builder
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔌 MCP Builder
+    description: Expert Model Context Protocol developer who designs, builds, and tests MCP servers that extend AI agent capabilities
+      with custom tools, resources, and prompts.
+    url: http://xct-agent-gateway:9000/agents/mcp-builder/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: mcp-builder
+      name: MCP Builder
+      description: Expert Model Context Protocol developer who designs, builds, and tests MCP servers that extend AI agent
+        capabilities with custom tools, resources, and prompts.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-model-qa-specialist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔬 Model QA Specialist
+    description: Independent model QA expert who audits ML and statistical models end-to-end - from documentation review and
+      data reconstruction to replication, calibration testing, interpretability analysis, performance monitoring, and audit-grade
+      reporting.
+    url: http://xct-agent-gateway:9000/agents/model-qa-specialist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: model-qa-specialist
+      name: Model QA Specialist
+      description: Independent model QA expert who audits ML and statistical models end-to-end - from documentation review
+        and data reconstruction to replication, calibration testing, interpretability analysis, performance monitoring, and
+        audit-grade reporting.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-salesforce-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ☁️ Salesforce Architect
+    description: Solution architecture for Salesforce platform — multi-cloud design, integration patterns, governor limits,
+      deployment strategy, and data model governance for enterprise-scale orgs
+    url: http://xct-agent-gateway:9000/agents/salesforce-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: salesforce-architect
+      name: Salesforce Architect
+      description: Solution architecture for Salesforce platform — multi-cloud design, integration patterns, governor limits,
+        deployment strategy, and data model governance for enterprise-scale orgs
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-workflow-architect
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🗺️ Workflow Architect
+    description: Workflow design specialist who maps complete workflow trees for every system, user journey, and agent interaction
+      — covering happy paths, all branch conditions, failure modes, recovery paths, handoff contracts, and observable states
+      to produce build-ready specs that agents can implement against and QA can test against.
+    url: http://xct-agent-gateway:9000/agents/workflow-architect/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: workflow-architect
+      name: Workflow Architect
+      description: Workflow design specialist who maps complete workflow trees for every system, user journey, and agent interaction
+        — covering happy paths, all branch conditions, failure modes, recovery paths, handoff contracts, and observable states
+        to produce build-ready specs that agents can implement against and QA can test against.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-study-abroad-advisor
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🎓 Study Abroad Advisor
+    description: Full-spectrum study abroad planning expert covering the US, UK, Canada, Australia, Europe, Hong Kong, and
+      Singapore — proficient in undergraduate, master's, and PhD application strategy, school selection, essay coaching, profile
+      enhancement, standardized test planning, visa preparation, and overseas life adaptation, helping Chinese students craft
+      personalized end-to-end study abroad plans.
+    url: http://xct-agent-gateway:9000/agents/study-abroad-advisor/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: study-abroad-advisor
+      name: Study Abroad Advisor
+      description: Full-spectrum study abroad planning expert covering the US, UK, Canada, Australia, Europe, Hong Kong, and
+        Singapore — proficient in undergraduate, master's, and PhD application strategy, school selection, essay coaching,
+        profile enhancement, standardized test planning, visa preparation, and overseas life adaptation, helping Chinese students
+        craft personalized end-to-end study abroad plans.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-supply-chain-strategist
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔗 Supply Chain Strategist
+    description: Expert supply chain management and procurement strategy specialist — skilled in supplier development, strategic
+      sourcing, quality control, and supply chain digitalization. Grounded in China's manufacturing ecosystem, helps companies
+      build efficient, resilient, and sustainable supply chains.
+    url: http://xct-agent-gateway:9000/agents/supply-chain-strategist/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: supply-chain-strategist
+      name: Supply Chain Strategist
+      description: Expert supply chain management and procurement strategy specialist — skilled in supplier development, strategic
+        sourcing, quality control, and supply chain digitalization. Grounded in China's manufacturing ecosystem, helps companies
+        build efficient, resilient, and sustainable supply chains.
+      tags:
+      - specialized
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-analytics-reporter
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📊 Analytics Reporter
+    description: Expert data analyst transforming raw data into actionable business insights. Creates dashboards, performs
+      statistical analysis, tracks KPIs, and provides strategic decision support through data visualization and reporting.
+    url: http://xct-agent-gateway:9000/agents/analytics-reporter/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: analytics-reporter
+      name: Analytics Reporter
+      description: Expert data analyst transforming raw data into actionable business insights. Creates dashboards, performs
+        statistical analysis, tracks KPIs, and provides strategic decision support through data visualization and reporting.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-executive-summary-generator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📝 Executive Summary Generator
+    description: Consultant-grade AI specialist trained to think and communicate like a senior strategy consultant. Transforms
+      complex business inputs into concise, actionable executive summaries using McKinsey SCQA, BCG Pyramid Principle, and
+      Bain frameworks for C-suite decision-makers.
+    url: http://xct-agent-gateway:9000/agents/executive-summary-generator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: executive-summary-generator
+      name: Executive Summary Generator
+      description: Consultant-grade AI specialist trained to think and communicate like a senior strategy consultant. Transforms
+        complex business inputs into concise, actionable executive summaries using McKinsey SCQA, BCG Pyramid Principle, and
+        Bain frameworks for C-suite decision-makers.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-finance-tracker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💰 Finance Tracker
+    description: Expert financial analyst and controller specializing in financial planning, budget management, and business
+      performance analysis. Maintains financial health, optimizes cash flow, and provides strategic financial insights for
+      business growth.
+    url: http://xct-agent-gateway:9000/agents/finance-tracker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: finance-tracker
+      name: Finance Tracker
+      description: Expert financial analyst and controller specializing in financial planning, budget management, and business
+        performance analysis. Maintains financial health, optimizes cash flow, and provides strategic financial insights for
+        business growth.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-infrastructure-maintainer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🏢 Infrastructure Maintainer
+    description: Expert infrastructure specialist focused on system reliability, performance optimization, and technical operations
+      management. Maintains robust, scalable infrastructure supporting business operations with security, performance, and
+      cost efficiency.
+    url: http://xct-agent-gateway:9000/agents/infrastructure-maintainer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: infrastructure-maintainer
+      name: Infrastructure Maintainer
+      description: Expert infrastructure specialist focused on system reliability, performance optimization, and technical
+        operations management. Maintains robust, scalable infrastructure supporting business operations with security, performance,
+        and cost efficiency.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-legal-compliance-checker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚖️ Legal Compliance Checker
+    description: Expert legal and compliance specialist ensuring business operations, data handling, and content creation
+      comply with relevant laws, regulations, and industry standards across multiple jurisdictions.
+    url: http://xct-agent-gateway:9000/agents/legal-compliance-checker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: legal-compliance-checker
+      name: Legal Compliance Checker
+      description: Expert legal and compliance specialist ensuring business operations, data handling, and content creation
+        comply with relevant laws, regulations, and industry standards across multiple jurisdictions.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-support-responder
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 💬 Support Responder
+    description: Expert customer support specialist delivering exceptional customer service, issue resolution, and user experience
+      optimization. Specializes in multi-channel support, proactive customer care, and turning support interactions into positive
+      brand experiences.
+    url: http://xct-agent-gateway:9000/agents/support-responder/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: support-responder
+      name: Support Responder
+      description: Expert customer support specialist delivering exceptional customer service, issue resolution, and user
+        experience optimization. Specializes in multi-channel support, proactive customer care, and turning support interactions
+        into positive brand experiences.
+      tags:
+      - support
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-accessibility-auditor
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ♿ Accessibility Auditor
+    description: Expert accessibility specialist who audits interfaces against WCAG standards, tests with assistive technologies,
+      and ensures inclusive design. Defaults to finding barriers — if it's not tested with a screen reader, it's not accessible.
+    url: http://xct-agent-gateway:9000/agents/accessibility-auditor/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: accessibility-auditor
+      name: Accessibility Auditor
+      description: Expert accessibility specialist who audits interfaces against WCAG standards, tests with assistive technologies,
+        and ensures inclusive design. Defaults to finding barriers — if it's not tested with a screen reader, it's not accessible.
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-api-tester
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔌 API Tester
+    description: Expert API testing specialist focused on comprehensive API validation, performance testing, and quality assurance
+      across all systems and third-party integrations
+    url: http://xct-agent-gateway:9000/agents/api-tester/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: api-tester
+      name: API Tester
+      description: Expert API testing specialist focused on comprehensive API validation, performance testing, and quality
+        assurance across all systems and third-party integrations
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-evidence-collector
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📸 Evidence Collector
+    description: Screenshot-obsessed, fantasy-allergic QA specialist - Default to finding 3-5 issues, requires visual proof
+      for everything
+    url: http://xct-agent-gateway:9000/agents/evidence-collector/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: evidence-collector
+      name: Evidence Collector
+      description: Screenshot-obsessed, fantasy-allergic QA specialist - Default to finding 3-5 issues, requires visual proof
+        for everything
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-performance-benchmarker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⏱️ Performance Benchmarker
+    description: Expert performance testing and optimization specialist focused on measuring, analyzing, and improving system
+      performance across all applications and infrastructure
+    url: http://xct-agent-gateway:9000/agents/performance-benchmarker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: performance-benchmarker
+      name: Performance Benchmarker
+      description: Expert performance testing and optimization specialist focused on measuring, analyzing, and improving system
+        performance across all applications and infrastructure
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-reality-checker
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🧐 Reality Checker
+    description: Stops fantasy approvals, evidence-based certification - Default to "NEEDS WORK", requires overwhelming proof
+      for production readiness
+    url: http://xct-agent-gateway:9000/agents/reality-checker/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: reality-checker
+      name: Reality Checker
+      description: Stops fantasy approvals, evidence-based certification - Default to "NEEDS WORK", requires overwhelming
+        proof for production readiness
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-test-results-analyzer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 📋 Test Results Analyzer
+    description: Expert test analysis specialist focused on comprehensive test result evaluation, quality metrics analysis,
+      and actionable insight generation from testing activities
+    url: http://xct-agent-gateway:9000/agents/test-results-analyzer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: test-results-analyzer
+      name: Test Results Analyzer
+      description: Expert test analysis specialist focused on comprehensive test result evaluation, quality metrics analysis,
+        and actionable insight generation from testing activities
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-tool-evaluator
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: 🔧 Tool Evaluator
+    description: Expert technology assessment specialist focused on evaluating, testing, and recommending tools, software,
+      and platforms for business use and productivity optimization
+    url: http://xct-agent-gateway:9000/agents/tool-evaluator/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: tool-evaluator
+      name: Tool Evaluator
+      description: Expert technology assessment specialist focused on evaluating, testing, and recommending tools, software,
+        and platforms for business use and productivity optimization
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
+- agent_name: xct-workflow-optimizer
+  agent_card_params:
+    protocolVersion: '1.0'
+    name: ⚡ Workflow Optimizer
+    description: Expert process improvement specialist focused on analyzing, optimizing, and automating workflows across all
+      business functions for maximum productivity and efficiency
+    url: http://xct-agent-gateway:9000/agents/workflow-optimizer/
+    version: 1.0.0
+    defaultInputModes:
+    - text
+    defaultOutputModes:
+    - text
+    capabilities:
+      streaming: false
+    skills:
+    - id: workflow-optimizer
+      name: Workflow Optimizer
+      description: Expert process improvement specialist focused on analyzing, optimizing, and automating workflows across
+        all business functions for maximum productivity and efficiency
+      tags:
+      - testing
+      examples: []
+  litellm_params:
+    make_public: true
