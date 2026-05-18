@@ -2477,6 +2477,82 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
 
 
 @pytest.mark.parametrize(
+    "reasoning_effort_value",
+    [
+        # String shape — what callers send when using `reasoning_effort="low"` directly.
+        "low",
+        # Dict shape with `effort` only — what the Responses->Chat parser produces
+        # when `reasoning={"effort": "low"}` is set without `summary`.
+        {"effort": "low"},
+        # Dict shape with `effort` AND `summary` — what the Responses->Chat parser
+        # produces when callers send `Reasoning(effort="low", summary="concise")`.
+        # PR #25359 added the dict-keeping branch for this case, but the Anthropic
+        # transformation must coerce the dict back to a string before mapping.
+        {"effort": "low", "summary": "concise"},
+        {"effort": "low", "summary": "detailed"},
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape_from_responses_bridge(reasoning_effort_value):
+    """
+    Regression test for the dict-shape `reasoning_effort` produced by the
+    Responses->Chat parser when `summary` is set on the request's `reasoning`
+    field (see ``transform_responses_api_request_to_chat_completion_request``).
+
+    Before this fix, the Anthropic transformation guarded on
+    ``isinstance(value, str)`` and silently dropped the param when it arrived
+    as a dict — disabling extended thinking entirely. This test pins the
+    shape-tolerant behavior matching OpenAI's
+    ``_normalize_reasoning_effort_for_chat_completion``.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort_value},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    # thinking must be set (adaptive for 4.6+)
+    assert "thinking" in result, (
+        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
+    )
+    assert result["thinking"]["type"] == "adaptive"
+    # output_config must carry the mapped effort
+    assert "output_config" in result, (
+        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
+    )
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_reasoning_effort_unparseable_dict_is_dropped():
+    """
+    A dict shape that doesn't carry a usable ``effort`` key (e.g. only
+    ``summary`` is set, or the value is some other unexpected type) should be
+    silently dropped — not crash, not partially apply.
+    """
+    config = AnthropicConfig()
+
+    for bad_value in [
+        {"summary": "concise"},  # missing effort
+        {"effort": None},  # explicit None effort
+        {"effort": 123},  # non-string effort
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": bad_value},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+        assert "thinking" not in result, (
+            f"thinking should not be set for bad value {bad_value!r}"
+        )
+        assert "output_config" not in result, (
+            f"output_config should not be set for bad value {bad_value!r}"
+        )
+
+
+@pytest.mark.parametrize(
     "model",
     [
         "claude-sonnet-4-6",
