@@ -156,6 +156,105 @@ def test_pr_gate_job_persists_compat_result_artifacts(
     )
 
 
+def _find_step_command(job: dict, name_substring: str) -> str:
+    """Return the `command` text of the first run-step whose `name`
+    contains `name_substring`; empty string if no match.
+
+    The PR-gate job has many run-steps; matching by a substring of
+    `name:` keeps this helper resilient to non-load-bearing renames
+    (e.g. "Resolve Claude Code CLI version (newest published >= 3 days
+    ago)" -> "Resolve Claude Code CLI version") without coupling the
+    test to the full step name.
+    """
+    for step in job.get("steps", []):
+        if not (isinstance(step, dict) and "run" in step):
+            continue
+        run = step["run"]
+        if not isinstance(run, dict):
+            continue
+        if name_substring in (run.get("name") or ""):
+            return run.get("command") or ""
+    return ""
+
+
+def test_pr_gate_resolver_step_scrubs_secrets_from_env(
+    circleci_config: dict,
+) -> None:
+    """The version resolver is PR-controlled Python code that runs in
+    the same CircleCI job as the provider secrets injected later into
+    the proxy container. If the resolver step doesn't scrub the env,
+    a malicious PR can edit `tests/claude_code/pr_gate_version_resolver`
+    to read ANTHROPIC_API_KEY / AWS_* / VERTEXAI_* / AZURE_FOUNDRY_* /
+    GITHUB_TOKEN out of `os.environ` and exfiltrate them over the
+    outbound npm registry HTTPS call.
+
+    Pin the `env -i` scrub here so the mitigation cannot silently
+    regress in a future YAML refactor.
+    """
+    job = circleci_config["jobs"][JOB_NAME]
+    command = _find_step_command(job, "Resolve Claude Code CLI version")
+    assert command, "PR gate must have a step that resolves the CLI version."
+    assert "env -i" in command, (
+        "The version-resolver step must wrap the resolver invocation in "
+        "`env -i` so PR-controlled Python cannot read provider secrets "
+        "from the CircleCI job env."
+    )
+    # The actual resolver invocation must be downstream of `env -i` —
+    # i.e. they must appear in that order in the command body. Use
+    # `rindex` for the resolver match in case the surrounding comment
+    # block also mentions the module in prose; the actual `python -m`
+    # invocation is always the last occurrence.
+    env_i_idx = command.index("env -i")
+    resolver_idx = command.rindex("tests.claude_code.pr_gate_version_resolver")
+    assert env_i_idx < resolver_idx, (
+        "`env -i` must precede the resolver invocation; otherwise the "
+        "resolver still sees the unscrubbed env."
+    )
+
+
+def test_pr_gate_npm_install_step_scrubs_secrets_from_env(
+    circleci_config: dict,
+) -> None:
+    """`npm install -g @anthropic-ai/claude-code` runs the package's
+    `postinstall: node install.cjs` script, which executes arbitrary
+    code from npm with the full job env — and the job env carries
+    provider credentials. `claude --version` on the next line is also
+    package code. A compromised package release (or a transitive
+    registry hijack) could exfiltrate ANTHROPIC_API_KEY / AWS_* /
+    VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN.
+
+    Pin the `env -i` scrub on the install step so the mitigation
+    cannot silently regress.
+    """
+    job = circleci_config["jobs"][JOB_NAME]
+    command = _find_step_command(job, "Install Node.js")
+    assert command, "PR gate must have a step that installs Node + the CLI."
+    assert "env -i" in command, (
+        "The `npm install -g @anthropic-ai/claude-code` step must wrap "
+        "the install + `claude --version` invocations in `env -i` so "
+        "package install/postinstall code cannot read provider secrets "
+        "from the CircleCI job env."
+    )
+    # Both load-bearing invocations must be downstream of `env -i`. We
+    # use `rindex` because the surrounding comment block also mentions
+    # `claude --version` and `npm install` in prose; what we care about
+    # is the *actual* shell invocation, which is always the last
+    # occurrence of each string in the step body.
+    env_i_idx = command.index("env -i")
+    npm_install_idx = command.rindex(
+        'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"'
+    )
+    claude_version_idx = command.rindex("claude --version")
+    assert env_i_idx < npm_install_idx, (
+        "`env -i` must precede `npm install -g`; otherwise the install/"
+        "postinstall scripts still see the unscrubbed env."
+    )
+    assert env_i_idx < claude_version_idx, (
+        "`env -i` must precede `claude --version`; otherwise the CLI "
+        "still sees the unscrubbed env on its first invocation."
+    )
+
+
 def test_existing_proxy_e2e_anthropic_job_unchanged(circleci_config: dict) -> None:
     """No regression to the existing `proxy_e2e_anthropic_messages_tests`
     job (acceptance criterion). We don't lock its full body, but we do
