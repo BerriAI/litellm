@@ -365,11 +365,11 @@ def cost_per_token(  # noqa: PLR0915
         if _pt_details is not None:
             _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
             # OpenAI-compatible providers report cache-write tokens under
-            # either `cache_creation_tokens` or `cache_write_tokens` (kimi-k2
-            # uses the latter). Mirror db_spend_update_writer to stay symmetric.
+            # either `cache_write_tokens` (kimi-k2) or `cache_creation_tokens`.
+            # Mirror db_spend_update_writer to stay symmetric.
             _cache_creation_tokens = float(
-                getattr(_pt_details, "cache_creation_tokens", 0)
-                or getattr(_pt_details, "cache_write_tokens", 0)
+                getattr(_pt_details, "cache_write_tokens", 0)
+                or getattr(_pt_details, "cache_creation_tokens", 0)
                 or 0
             )
 

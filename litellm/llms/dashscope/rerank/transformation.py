@@ -159,10 +159,13 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Optional[dict] = None,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> RerankResponse:
+        request_data = request_data or {}
+        optional_params = optional_params or {}
+        litellm_params = litellm_params or {}
         try:
             response_json = raw_response.json()
         except Exception:
