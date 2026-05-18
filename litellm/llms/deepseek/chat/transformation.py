@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import _supports_factory
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -21,6 +22,25 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         params = super().get_supported_openai_params(model)
         params.extend(["thinking", "reasoning_effort"])
         return params
+
+    @staticmethod
+    def _supports_reasoning_effort_level(model: str, level: str) -> bool:
+        """Check whether the DeepSeek model supports a specific reasoning_effort
+        level natively, per ``supports_{level}_reasoning_effort`` in
+        ``model_prices_and_context_window.json``.  Only level-specific flags
+        for divergent levels (``minimal``, ``low``, ``none``, ``xhigh``,
+        ``max``) are tracked in the schema — baseline ``high``/``medium``
+        always work for models that accept the parameter natively.
+
+        Returns False for unknown models (safe fallback) — the caller will
+        still emit ``thinking: {"type": "enabled"}`` so the model thinks,
+        just without the explicit effort hint.
+        """
+        return _supports_factory(
+            model=model,
+            custom_llm_provider="deepseek",
+            key=f"supports_{level}_reasoning_effort",
+        )
 
     def map_openai_params(
         self,
@@ -47,18 +67,38 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
+        # Normalize reasoning_effort values to DeepSeek's supported levels.
+        # OpenAI levels low/medium → DeepSeek "high"; xhigh → DeepSeek "max".
+        if reasoning_effort is not None and reasoning_effort != "none":
+            if reasoning_effort in ("low", "medium"):
+                reasoning_effort = "high"
+            elif reasoning_effort == "xhigh":
+                reasoning_effort = "max"
+
         # Handle thinking parameter - only accept {"type": "enabled"}
         if thinking_value is not None:
             if (
                 isinstance(thinking_value, dict)
                 and thinking_value.get("type") == "enabled"
             ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
                 optional_params["thinking"] = {"type": "enabled"}
+                # Forward reasoning_effort natively only if the model declares
+                # support for the explicit "max" level — used as a proxy for
+                # "model accepts reasoning_effort as a wire param" because the
+                # schema only tracks divergent levels (xhigh, max) and the V4
+                # family is the only DeepSeek line with native support.
+                if (
+                    reasoning_effort is not None
+                    and reasoning_effort != "none"
+                    and self._supports_reasoning_effort_level(model, "max")
+                ):
+                    optional_params["reasoning_effort"] = reasoning_effort
 
-        # Handle reasoning_effort - map to thinking enabled
+        # Handle reasoning_effort alone (without explicit thinking dict)
         elif reasoning_effort is not None and reasoning_effort != "none":
             optional_params["thinking"] = {"type": "enabled"}
+            if self._supports_reasoning_effort_level(model, "max"):
+                optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
 
