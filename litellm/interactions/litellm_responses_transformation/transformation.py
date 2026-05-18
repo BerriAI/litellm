@@ -240,15 +240,16 @@ class LiteLLMResponsesInteractionsConfig:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
                         if text is not None:
-                            text_entry = {"type": "text", "text": text}
-                            outputs.append(text_entry)
-                            model_output_contents.append(text_entry)
+                            # Use independent dict instances so mutations to one
+                            # of `outputs` / `steps` don't leak into the other.
+                            outputs.append({"type": "text", "text": text})
+                            model_output_contents.append({"type": "text", "text": text})
                         elif (
                             isinstance(content_item, dict)
                             and content_item.get("type") == "text"
                         ):
-                            outputs.append(content_item)
-                            model_output_contents.append(content_item)
+                            outputs.append({**content_item})
+                            model_output_contents.append({**content_item})
                     if model_output_contents:
                         steps.append(
                             {

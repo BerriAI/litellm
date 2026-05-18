@@ -47,6 +47,8 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
     ):
+        import litellm
+
         self.model = model
         self.responses_stream_iterator = litellm_custom_stream_wrapper
         self.request_input = request_input
@@ -57,12 +59,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         self.collected_text = ""
         self.sent_interaction_start = False
         self.sent_content_start = False
-
-    @property
-    def _use_legacy(self) -> bool:
-        import litellm
-
-        return litellm.use_legacy_interactions_schema
+        # Capture the schema flag once at construction time so all events
+        # emitted by this stream use a consistent schema, even if the global
+        # flag is mutated mid-stream (e.g. by a config reload).
+        self._use_legacy: bool = litellm.use_legacy_interactions_schema
 
     def _transform_responses_chunk_to_interactions_chunk(
         self,
@@ -201,16 +201,18 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
     def __next__(self) -> InteractionsAPIStreamingResponse:
         """Get next chunk in sync mode."""
-        if self.finished:
-            raise StopIteration
-
-        # Check if we have a pending interaction.complete to send
+        # Check for a pending interaction.complete/completed event BEFORE the
+        # finished check — otherwise the buffered completion event (which
+        # carries the full text) would be dropped after `self.finished` is set.
         if hasattr(self, "_pending_interaction_complete"):
             pending: InteractionsAPIStreamingResponse = getattr(
                 self, "_pending_interaction_complete"
             )
             delattr(self, "_pending_interaction_complete")
             return pending
+
+        if self.finished:
+            raise StopIteration
 
         # Use a loop instead of recursion to avoid stack overflow
         sync_iterator = cast(
@@ -287,16 +289,18 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
     async def __anext__(self) -> InteractionsAPIStreamingResponse:
         """Get next chunk in async mode."""
-        if self.finished:
-            raise StopAsyncIteration
-
-        # Check if we have a pending interaction.complete to send
+        # Check for a pending interaction.complete/completed event BEFORE the
+        # finished check — otherwise the buffered completion event (which
+        # carries the full text) would be dropped after `self.finished` is set.
         if hasattr(self, "_pending_interaction_complete"):
             pending: InteractionsAPIStreamingResponse = getattr(
                 self, "_pending_interaction_complete"
             )
             delattr(self, "_pending_interaction_complete")
             return pending
+
+        if self.finished:
+            raise StopAsyncIteration
 
         # Use a loop instead of recursion to avoid stack overflow
         async_iterator = cast(
