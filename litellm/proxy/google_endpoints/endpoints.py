@@ -269,10 +269,6 @@ async def create_interaction(
 
     data = await _read_request_body(request=request)
 
-    # Default to gemini provider for interactions
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = "gemini"
-
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
