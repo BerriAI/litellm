@@ -798,8 +798,7 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert any(c.apply_to_output for c in created)
 
 
-@pytest.mark.asyncio
-async def test_presidio_filter_scope_with_output_parse_pii(monkeypatch):
+def test_presidio_filter_scope_with_output_parse_pii(monkeypatch):
     """
     When output_parse_pii=True, the round-trip masker/unmasker pair must not be
     accompanied by an apply_to_output=True callback — that companion callback
@@ -835,13 +834,9 @@ async def test_presidio_filter_scope_with_output_parse_pii(monkeypatch):
     monkeypatch.setattr(litellm, "logging_callback_manager", mgr, raising=False)
 
     import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
-    import litellm.proxy.guardrails.guardrail_initializers as gi
 
     monkeypatch.setattr(
         presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
-    )
-    monkeypatch.setattr(
-        gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
     )
 
     from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
