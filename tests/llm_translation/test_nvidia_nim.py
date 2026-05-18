@@ -271,11 +271,12 @@ class TestNvidiaNim(BaseLLMRerankTest):
 
         NVIDIA reached end-of-life for the hosted
         nvidia/llama-3.2-nv-rerankqa-1b-v2 rerank API on 2026-05-18 and
-        published no replacement model on the API catalog account used in
-        CI, so a live call now returns HTTP 410 / 404. Mock the transport
-        instead (same pattern as test_nvidia_nim_rerank_ranking_endpoint
-        above) so the request/response transformation and cost calculation
-        stay covered offline.
+        published no replacement model, so a live call now returns HTTP 410
+        ("Gone"). NVIDIA's hosted catalog rotates on a schedule, so pointing
+        at another live model would only defer the same failure. Mock the
+        transport instead (same pattern as
+        test_nvidia_nim_rerank_ranking_endpoint above) so the request/response
+        transformation and cost calculation stay covered offline.
         """
         monkeypatch.setenv("NVIDIA_NIM_API_KEY", "fake-api-key")
 

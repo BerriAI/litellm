@@ -190,22 +190,36 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             len(transcript_deltas) >= 1
         ), f"Expected guardrail message in transcript delta, got: {event_types}"
 
-        # 3. No *real* AI response should have been generated.
-        #    The guardrail may produce its own response (e.g. "Content blocked: ...")
-        #    via response.cancel + conversation.item.create + response.create.
-        #    We allow the guardrail's own block message and any refusal-style
-        #    response the upstream model emits if the cancel arrives late
-        #    (gpt-realtime sometimes returns "I'm sorry, but I can't say that"
-        #    when handed the blocked phrase before the cancel takes effect).
-        done_events = [e for e in client_events if e.get("type") == "response.done"]
-        refusal_markers = (
-            "blocked",
+        # 3. No *real* AI response to the blocked content should have been
+        #    generated. The original user message is blocked BEFORE it is
+        #    forwarded to OpenAI, so the only thing the model ever sees is the
+        #    guardrail's "say exactly: <block message>" prompt
+        #    (see realtime_streaming.py). Two safe outcomes are possible:
+        #      - the model voices the block message verbatim (older realtime
+        #        snapshots did this -> text contains "blocked"), or
+        #      - the model declines to repeat it (gpt-realtime tends to refuse
+        #        verbatim-repeat instructions, e.g. "I'm sorry, but I can't
+        #        repeat that message.").
+        #    Both mean the blocked prompt itself was never answered, so we
+        #    accept either. The hard invariant is that the blocked phrase must
+        #    never leak into AI output, and the model must not have produced a
+        #    normal answer to the user (which would have neither a block nor a
+        #    refusal marker).
+        safe_markers = (
+            "block",
             "guardrail",
-            "sorry",
-            "can't",
-            "cannot",
-            "unable",
+            "content filter",
+            "policy",
+            "can't repeat",
+            "cannot repeat",
+            "won't repeat",
+            "can't assist",
+            "can't help",
+            "unable to",
+            "i'm sorry",
+            "i am sorry",
         )
+        done_events = [e for e in client_events if e.get("type") == "response.done"]
         for done in done_events:
             output = done.get("response", {}).get("output", [])
             ai_texts = [
@@ -215,9 +229,11 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             ]
             real_ai_text = " ".join(ai_texts).strip()
             if real_ai_text:
-                lowered = real_ai_text.lower()
+                assert (
+                    BLOCKED_PHRASE not in real_ai_text
+                ), f"Blocked phrase leaked into AI response: {real_ai_text!r}"
                 assert any(
-                    marker in lowered for marker in refusal_markers
+                    marker in real_ai_text.lower() for marker in safe_markers
                 ), f"AI responded with non-guardrail content even though message was blocked: {real_ai_text!r}"
 
     finally:
