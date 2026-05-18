@@ -16,7 +16,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
-from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+    messages_contain_video_url,
+)
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
@@ -944,9 +947,6 @@ def test_token_counter_with_video_url():
     assert (
         tokens_str > 0
     ), f"Expected positive token count for string video_url, got {tokens_str}"
-    assert (
-        tokens_str > DEFAULT_IMAGE_TOKEN_COUNT
-    ), f"Expected default video token budget, got {tokens_str}"
 
     messages_base64_str = [
         {
@@ -959,38 +959,198 @@ def test_token_counter_with_video_url():
             ],
         }
     ]
+    assert token_counter(model="gpt-4o", messages=messages_base64_str) == tokens_str
+
+    messages_one_second_without_audio = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "duration_seconds": 1,
+                        "has_audio": False,
+                    },
+                }
+            ],
+        }
+    ]
+    messages_one_second_with_audio = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "duration_seconds": 1,
+                        "has_audio": True,
+                    },
+                }
+            ],
+        }
+    ]
+    messages_two_seconds_with_audio = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "duration_seconds": 2,
+                        "has_audio": True,
+                    },
+                }
+            ],
+        }
+    ]
+
+    tokens_one_second_without_audio = token_counter(
+        model="gpt-4o", messages=messages_one_second_without_audio
+    )
+    tokens_one_second_with_audio = token_counter(
+        model="gpt-4o", messages=messages_one_second_with_audio
+    )
+    tokens_two_seconds_with_audio = token_counter(
+        model="gpt-4o", messages=messages_two_seconds_with_audio
+    )
+    expected_audio_tokens_per_second = 32
+    expected_video_tokens_per_second = 263
     assert (
-        token_counter(model="gpt-4o", messages=messages_base64_str) == tokens_str
+        tokens_one_second_with_audio - tokens_one_second_without_audio
+        == expected_audio_tokens_per_second
+    )
+    assert (
+        tokens_two_seconds_with_audio - tokens_one_second_with_audio
+        == expected_video_tokens_per_second + expected_audio_tokens_per_second
     )
 
-    messages_empty_url = [
+
+def _count_video_url_for_test(video_url):
+    return token_counter(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "video_url", "video_url": video_url}],
+            }
+        ],
+    )
+
+
+def test_token_counter_video_url_metadata_shapes():
+    zero_second_no_audio_tokens = _count_video_url_for_test(
         {
-            "role": "user",
-            "content": [{"type": "video_url", "video_url": ""}],
+            "url": "https://example.com/video.mp4",
+            "duration_seconds": 0,
+            "has_audio": False,
         }
-    ]
-    messages_none_url = [
+    )
+
+    metadata_tokens = _count_video_url_for_test(
         {
-            "role": "user",
-            "content": [{"type": "video_url", "video_url": None}],
+            "url": "https://example.com/video.mp4",
+            "video_metadata": {
+                "duration": "2s",
+                "fps": "2",
+                "audio": "no",
+            },
         }
-    ]
-    messages_none_nested_url = [
+    )
+    assert metadata_tokens - zero_second_no_audio_tokens == 2 * 2 * 263
+
+    offset_tokens = _count_video_url_for_test(
+        {
+            "url": "https://example.com/video.mp4",
+            "video_metadata": {
+                "startOffset": {"seconds": 1, "nanos": 0},
+                "endOffset": {"seconds": 4, "nanos": 0},
+                "contains_audio": "yes",
+            },
+        }
+    )
+    assert offset_tokens - zero_second_no_audio_tokens == 3 * (263 + 32)
+
+    invalid_duration_tokens = _count_video_url_for_test(
+        {
+            "url": "https://example.com/video.mp4",
+            "duration_seconds": "not-a-duration",
+            "has_audio": False,
+        }
+    )
+    one_second_no_audio_tokens = _count_video_url_for_test(
+        {
+            "url": "https://example.com/video.mp4",
+            "duration_seconds": 1,
+            "has_audio": False,
+        }
+    )
+    assert invalid_duration_tokens == one_second_no_audio_tokens
+
+
+def test_video_url_token_count_for_limit_enforcement_uses_full_limit():
+    messages = [
         {
             "role": "user",
-            "content": [{"type": "video_url", "video_url": {"url": None}}],
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/long-video.mp4",
+                        "duration_seconds": 1,
+                        "fps": 0,
+                        "has_audio": False,
+                    },
+                }
+            ],
         }
     ]
 
-    tokens_empty_url = token_counter(model="gpt-4o", messages=messages_empty_url)
-    assert tokens_empty_url > DEFAULT_IMAGE_TOKEN_COUNT
+    input_tokens = token_counter(model="gpt-4o", messages=messages)
+
+    assert messages_contain_video_url(messages) is True
     assert (
-        token_counter(model="gpt-4o", messages=messages_none_url) == tokens_empty_url
+        get_token_count_for_limit_enforcement(
+            input_tokens=input_tokens,
+            messages=messages,
+            token_limit=128_000,
+        )
+        == 128_000
     )
+
+    text_messages = [{"role": "user", "content": "hello"}]
     assert (
-        token_counter(model="gpt-4o", messages=messages_none_nested_url)
-        == tokens_empty_url
+        get_token_count_for_limit_enforcement(
+            input_tokens=5,
+            messages=text_messages,
+            token_limit=128_000,
+        )
+        == 5
     )
+
+
+@pytest.mark.parametrize(
+    "video_url,error",
+    [
+        ("", "Empty video_url string is not valid"),
+        (None, "Invalid video_url type"),
+        ({"url": ""}, "Missing required key 'url'"),
+        (
+            {"url": "https://example.com/video.mp4", "duration_seconds": -1},
+            "duration must be non-negative",
+        ),
+        (
+            {"url": "https://example.com/video.mp4", "fps": -1},
+            "fps must be non-negative",
+        ),
+    ],
+)
+def test_token_counter_invalid_video_url_metadata(video_url, error):
+    with pytest.raises(ValueError) as exc_info:
+        _count_video_url_for_test(video_url)
+    assert error in str(exc_info.value)
 
 
 def test_token_counter_invalid_content_type_lists_video_url():

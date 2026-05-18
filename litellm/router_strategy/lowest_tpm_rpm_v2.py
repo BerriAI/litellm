@@ -11,6 +11,9 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+)
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -330,6 +333,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         all_deployments: Dict,
         input_tokens: int,
         rpm_dict: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
     ):
         lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
@@ -355,6 +359,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
             if _deployment_tpm is None:
                 _deployment_tpm = float("inf")
+            input_tokens_for_tpm = get_token_count_for_limit_enforcement(
+                input_tokens=input_tokens,
+                messages=messages,
+                token_limit=_deployment_tpm,
+            )
 
             _deployment_rpm = None
             if _deployment_rpm is None:
@@ -365,7 +374,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 _deployment_rpm = _deployment.get("model_info", {}).get("rpm")
             if _deployment_rpm is None:
                 _deployment_rpm = float("inf")
-            if item_tpm + input_tokens > _deployment_tpm:
+            if item_tpm + input_tokens_for_tpm > _deployment_tpm:
                 continue
             elif (
                 (rpm_dict is not None and item in rpm_dict)
@@ -433,6 +442,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             all_deployments=all_deployments,
             input_tokens=input_tokens,
             rpm_dict=rpm_dict,
+            messages=messages,
         )
         print_verbose("returning picked lowest tpm/rpm deployment.")
 

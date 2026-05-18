@@ -10,6 +10,9 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+)
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -485,6 +488,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
+            input_tokens_for_tpm = get_token_count_for_limit_enforcement(
+                input_tokens=input_tokens,
+                messages=messages,
+                token_limit=_deployment_tpm,
+            )
             item_latency = item_map.get("latency", [])
             item_ttft_latency = item_map.get("time_to_first_token", [])
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
@@ -524,7 +532,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # -------------- #
 
             if (
-                item_tpm + input_tokens > _deployment_tpm
+                item_tpm + input_tokens_for_tpm > _deployment_tpm
                 or item_rpm + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue

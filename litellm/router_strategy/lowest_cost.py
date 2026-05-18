@@ -8,6 +8,9 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+)
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -260,6 +263,11 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
+            input_tokens_for_tpm = get_token_count_for_limit_enforcement(
+                input_tokens=input_tokens,
+                messages=messages,
+                token_limit=_deployment_tpm,
+            )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
             item_litellm_model_cost_map = litellm.model_cost.get(
                 item_litellm_model_name, {}
@@ -314,7 +322,7 @@ class LowestCostLoggingHandler(CustomLogger):
             # -------------- #
 
             if (
-                item_tpm + input_tokens > _deployment_tpm
+                item_tpm + input_tokens_for_tpm > _deployment_tpm
                 or item_rpm + 1 > _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue

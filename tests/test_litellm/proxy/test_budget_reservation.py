@@ -699,6 +699,47 @@ async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequest
     await release_budget_reservation(reservation)
 
 
+def test_should_reserve_max_input_tokens_for_video_url_budget_estimate():
+    request_body = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_url",
+                        "video_url": {
+                            "url": "https://example.com/long-video.mp4",
+                            "duration_seconds": 1,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": 0,
+    }
+
+    input_cost_per_token = 1e-6
+    max_input_tokens = 128_000
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "input_cost_per_token": input_cost_per_token,
+            "max_input_tokens": max_input_tokens,
+        },
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    assert estimated == pytest.approx(max_input_tokens * input_cost_per_token)
+
+
 @pytest.mark.asyncio
 async def test_should_reserve_image_generation_cost_per_image(
     spend_counter_state,

@@ -9,6 +9,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.token_counter import (
+    get_token_count_for_limit_enforcement,
+)
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -932,11 +935,17 @@ def _estimate_input_tokens(
 ) -> Optional[int]:
     try:
         if "messages" in request_body:
-            return litellm.token_counter(
+            messages = request_body.get("messages") or []
+            input_tokens = litellm.token_counter(
                 model=model,
-                messages=request_body.get("messages") or [],
+                messages=messages,
                 tools=request_body.get("tools"),
                 tool_choice=request_body.get("tool_choice"),
+            )
+            return get_token_count_for_limit_enforcement(
+                input_tokens=input_tokens,
+                messages=messages,
+                token_limit=_to_int(model_info.get("max_input_tokens")),
             )
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
