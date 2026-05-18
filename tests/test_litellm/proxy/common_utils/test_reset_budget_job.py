@@ -221,6 +221,45 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     assert set(calls[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
 
+def test_reset_budget_for_key_skips_missing_token(reset_budget_job, mock_prisma_client):
+    now = datetime.now(timezone.utc)
+    missing_token_key = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {
+            "token": None,
+            "spend": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now,
+            "budget_limits": [{"budget_duration": "1d", "budget_limit": 10.0}],
+            "object_permission_id": "obj-perm-123",
+            "id": "test-key-missing-token",
+        },
+    )
+    valid_key = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {
+            "token": "hashed-key-token",
+            "spend": 50.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now,
+            "id": "test-key-valid",
+        },
+    )
+
+    mock_prisma_client.data["key"] = [missing_token_key, valid_key]
+
+    with pytest.raises(Exception, match="Failed to reset 1 keys"):
+        asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+    assert len(calls) == 1
+    assert calls[0]["where"] == {"token": "hashed-key-token"}
+    assert len(mock_prisma_client.db.batchers) == 1
+    assert mock_prisma_client.db.batchers[0].commit_calls == 1
+
+
 def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
     # Setup test data with timezone-aware datetime
     now = datetime.now(timezone.utc)

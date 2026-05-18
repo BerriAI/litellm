@@ -362,8 +362,14 @@ class ResetBudgetJob:
                 if updated_keys:
                     batcher = self.prisma_client.db.batch_()
                     for key in updated_keys:
+                        token = getattr(key, "token", None)
+                        if token is None:
+                            failed_keys.append(
+                                {"key": key, "error": "Missing token on key row"}
+                            )
+                            continue
                         batcher.litellm_verificationtoken.update(
-                            where={"token": key.token},
+                            where={"token": token},
                             data={
                                 "spend": key.spend,
                                 "budget_reset_at": key.budget_reset_at,
