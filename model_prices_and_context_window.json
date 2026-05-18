@@ -8513,7 +8513,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_reasoning": true
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -9130,7 +9131,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_reasoning": true
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -40415,7 +40417,11 @@
         "max_tokens": 262144,
         "max_input_tokens": 262144,
         "max_output_tokens": 262144,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://telnyx.com/pricing/inference-api"
     },
     "telnyx/zai-org/GLM-5.1-FP8": {
         "input_cost_per_token": 1.4e-06,
@@ -40425,7 +40431,11 @@
         "mode": "chat",
         "max_tokens": 202752,
         "max_input_tokens": 202752,
-        "max_output_tokens": 202752
+        "max_output_tokens": 202752,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://telnyx.com/pricing/inference-api"
     },
     "telnyx/MiniMaxAI/MiniMax-M2.7": {
         "input_cost_per_token": 3e-07,
@@ -40435,6 +40445,10 @@
         "mode": "chat",
         "max_tokens": 200000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 200000
+        "max_output_tokens": 200000,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://telnyx.com/pricing/inference-api"
     }
 }
