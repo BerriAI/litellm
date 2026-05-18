@@ -270,6 +270,7 @@ class CustomStreamWrapper:
             return
 
         if not self.chunks[-1].choices or not self.chunks[-2].choices:
+            self._repeated_messages_count = 1
             return
 
         last_content = self.chunks[-1].choices[0].delta.content
