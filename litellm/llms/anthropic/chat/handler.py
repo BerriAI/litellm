@@ -820,7 +820,7 @@ class ModelResponseIterator:
                     "type"
                 ]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    text = content_block_start["content_block"].get("text", "")
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
