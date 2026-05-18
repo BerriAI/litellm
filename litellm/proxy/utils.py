@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import signal
 import smtplib
 import sys
 import threading
@@ -4203,6 +4204,65 @@ class PrismaClient:
             return True
 
     @staticmethod
+    def _format_signal_name(signal_number: int) -> str:
+        try:
+            return signal.Signals(signal_number).name
+        except ValueError:
+            return f"UNKNOWN_SIGNAL_{signal_number}"
+
+    @staticmethod
+    def _format_engine_wait_status(wait_status: int) -> str:
+        if os.WIFEXITED(wait_status):
+            return f"exit_code={os.WEXITSTATUS(wait_status)}"
+        elif os.WIFSIGNALED(wait_status):
+            signal_number = os.WTERMSIG(wait_status)
+            signal_name = PrismaClient._format_signal_name(signal_number)
+            core_dumped = (
+                os.WCOREDUMP(wait_status) if hasattr(os, "WCOREDUMP") else False
+            )
+            return (
+                f"signal={signal_name} signal_number={signal_number} "
+                f"core_dumped={core_dumped}"
+            )
+        elif os.WIFSTOPPED(wait_status):
+            signal_number = os.WSTOPSIG(wait_status)
+            signal_name = PrismaClient._format_signal_name(signal_number)
+            return f"stopped_by_signal={signal_name} signal_number={signal_number}"
+        elif hasattr(os, "WIFCONTINUED") and os.WIFCONTINUED(wait_status):
+            return "continued=True"
+        else:
+            return f"raw_wait_status={wait_status}"
+
+    def _format_prisma_engine_exit_reason(
+        self,
+        *,
+        detection_method: str,
+        wait_status: Optional[int],
+    ) -> str:
+        if wait_status is None:
+            return f"detection_method={detection_method} exit_status=unavailable"
+        return (
+            f"detection_method={detection_method} "
+            f"{self._format_engine_wait_status(wait_status)}"
+        )
+
+    def _log_prisma_engine_exit_reason(
+        self,
+        *,
+        pid: int,
+        detection_method: str,
+        wait_status: Optional[int],
+    ) -> None:
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited; %s; triggering reconnect.",
+            pid,
+            self._format_prisma_engine_exit_reason(
+                detection_method=detection_method,
+                wait_status=wait_status,
+            ),
+        )
+
+    @staticmethod
     def _reap_all_zombies() -> set:
         """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
 
@@ -4240,7 +4300,7 @@ class PrismaClient:
         if sys.platform == "win32":
             return False
         try:
-            probe_pid, _ = os.waitpid(pid, os.WNOHANG)
+            probe_pid, wait_status = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
             verbose_proxy_logger.debug(
                 "PID %s is not a child process; skipping waitpid watch.",
@@ -4249,8 +4309,13 @@ class PrismaClient:
             return False
 
         if probe_pid == pid:
+            self._log_prisma_engine_exit_reason(
+                pid=pid,
+                detection_method="waitpid watch start",
+                wait_status=wait_status,
+            )
             verbose_proxy_logger.warning(
-                "prisma-query-engine PID %s already dead at watch start.",
+                "prisma-query-engine PID %s already dead at watch start; triggering reconnect.",
                 pid,
             )
             self._engine_confirmed_dead = True
@@ -4286,26 +4351,32 @@ class PrismaClient:
         in its SIGCHLD handler. In that case our waitpid raises ChildProcessError.
         we still notify the event loop because the engine is dead either way.
         """
+        wait_status: Optional[int] = None
         try:
-            os.waitpid(pid, 0)
+            _, wait_status = os.waitpid(pid, 0)
         except ChildProcessError:
             pass
         except OSError:
             pass
         try:
-            loop.call_soon_threadsafe(self._on_engine_death_from_thread, pid)
+            loop.call_soon_threadsafe(
+                self._on_engine_death_from_thread, pid, wait_status
+            )
         except RuntimeError:
             pass
 
-    def _on_engine_death_from_thread(self, dead_pid: int) -> None:
+    def _on_engine_death_from_thread(
+        self, dead_pid: int, wait_status: Optional[int] = None
+    ) -> None:
         """Called on the event loop thread when the waitpid thread detects engine death."""
         if self._engine_confirmed_dead:
             return
         if dead_pid != self._engine_pid:
             return
-        verbose_proxy_logger.error(
-            "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
-            dead_pid,
+        self._log_prisma_engine_exit_reason(
+            pid=dead_pid,
+            detection_method="waitpid thread",
+            wait_status=wait_status,
         )
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
@@ -4357,9 +4428,10 @@ class PrismaClient:
                 self._engine_pidfd = -1
             return
         dead_pid = self._engine_pid
-        verbose_proxy_logger.error(
-            "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
-            dead_pid,
+        self._log_prisma_engine_exit_reason(
+            pid=dead_pid,
+            detection_method="pidfd event",
+            wait_status=None,
         )
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
@@ -4380,9 +4452,11 @@ class PrismaClient:
             try:
                 os.kill(self._engine_pid, 0)
             except ProcessLookupError:
-                verbose_proxy_logger.error(
-                    "prisma-query-engine PID %s gone; triggering reconnect.",
-                    self._engine_pid,
+                dead_pid = self._engine_pid
+                self._log_prisma_engine_exit_reason(
+                    pid=dead_pid,
+                    detection_method="os.kill polling",
+                    wait_status=None,
                 )
                 self._engine_confirmed_dead = True
                 self._reap_all_zombies()

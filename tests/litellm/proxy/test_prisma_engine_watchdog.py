@@ -16,8 +16,7 @@ Covers:
 
 import asyncio
 import os
-import threading
-import time
+import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -89,6 +88,19 @@ def test_is_engine_alive_returns_true_for_running_process(engine_client):
     engine_client._engine_pid = 1234
     with patch("os.kill"):
         assert engine_client._is_engine_alive() is True
+
+
+def test_format_engine_wait_status_for_exit_code(engine_client):
+    wait_status = 7 << 8
+
+    assert engine_client._format_engine_wait_status(wait_status) == "exit_code=7"
+
+
+def test_format_engine_wait_status_for_signal(engine_client):
+    assert (
+        engine_client._format_engine_wait_status(signal.SIGTERM.value)
+        == "signal=SIGTERM signal_number=15 core_dumped=False"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -399,12 +411,27 @@ def test_try_waitpid_watch_starts_thread_for_child(engine_client):
     with (
         patch("os.waitpid", return_value=(0, 0)),
         patch("asyncio.get_running_loop", return_value=mock_loop),
-        patch("threading.Thread", return_value=mock_thread) as mock_thread_cls,
+        patch("threading.Thread", return_value=mock_thread),
     ):
         result = engine_client._try_waitpid_watch(1234)
     assert result is True
     mock_thread.start.assert_called_once()
     assert engine_client._engine_wait_thread is mock_thread
+
+
+def test_waitpid_thread_passes_exit_status_to_event_loop(engine_client):
+    """waitpid thread forwards the raw wait status so logs can include the exit reason."""
+    mock_loop = MagicMock()
+    wait_status = 9 << 8
+
+    with patch("os.waitpid", return_value=(1234, wait_status)):
+        engine_client._waitpid_thread_func(1234, mock_loop)
+
+    mock_loop.call_soon_threadsafe.assert_called_once_with(
+        engine_client._on_engine_death_from_thread,
+        1234,
+        wait_status,
+    )
 
 
 @pytest.mark.asyncio
@@ -451,7 +478,7 @@ async def test_on_engine_death_from_thread_triggers_reconnect(engine_client) -> 
         return MagicMock()
 
     with patch("asyncio.create_task", side_effect=capture_task):
-        engine_client._on_engine_death_from_thread(1234)
+        engine_client._on_engine_death_from_thread(1234, 7 << 8)
 
     assert len(created_coros) == 1
     await created_coros[0]
