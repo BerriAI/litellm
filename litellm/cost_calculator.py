@@ -375,11 +375,11 @@ def cost_per_token(  # noqa: PLR0915
 
         _anthropic_read = getattr(usage_object, "cache_read_input_tokens", None)
         _anthropic_create = getattr(usage_object, "cache_creation_input_tokens", None)
-        if _anthropic_read or _anthropic_create:
+        if _anthropic_read is not None or _anthropic_create is not None:
             _is_anthropic_style = True
-            if _anthropic_read:
+            if _anthropic_read is not None:
                 _cache_read_tokens = float(_anthropic_read)
-            if _anthropic_create:
+            if _anthropic_create is not None:
                 _cache_creation_tokens = float(_anthropic_create)
 
     if not _cache_read_tokens and cache_read_input_tokens:

@@ -166,7 +166,9 @@ class TestDashScopeRerankResponse:
 
     def _resp(self, body, status_code=200):
         return httpx.Response(
-            status_code=status_code, content=json.dumps(body).encode()
+            status_code=status_code,
+            content=json.dumps(body).encode(),
+            request=httpx.Request("POST", "https://example.com"),
         )
 
     def test_success_response(self):
@@ -291,7 +293,11 @@ class TestDashScopeRerankResponse:
         assert "Invalid API-key provided." in str(exc_info.value)
 
     def test_non_json_response_raises(self):
-        bad = httpx.Response(status_code=500, content=b"<html>bad gateway</html>")
+        bad = httpx.Response(
+            status_code=500,
+            content=b"<html>bad gateway</html>",
+            request=httpx.Request("POST", "https://example.com"),
+        )
         with pytest.raises(DashScopeError):
             self.config.transform_rerank_response(
                 model="qwen3-rerank",

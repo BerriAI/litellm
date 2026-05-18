@@ -10426,6 +10426,12 @@ class Router:
 
             # 3. If specific deployment returned, verify if it supports pass-through
             if isinstance(healthy_deployments, dict):
+                if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                    raise litellm.ServiceUnavailableError(
+                        message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                        model=model,
+                        llm_provider="",
+                    )
                 litellm_params = healthy_deployments.get("litellm_params", {})
                 if litellm_params.get("use_in_pass_through"):
                     return healthy_deployments
