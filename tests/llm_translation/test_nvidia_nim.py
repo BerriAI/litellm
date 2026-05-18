@@ -255,8 +255,13 @@ class TestNvidiaNim(BaseLLMRerankTest):
         return litellm.LlmProviders.NVIDIA_NIM
 
     def get_base_rerank_call_args(self) -> dict:
+        # nvidia/llama-3_2-nv-rerankqa-1b-v2 reached end-of-life on
+        # 2026-05-18 (returns HTTP 410 Gone from ai.api.nvidia.com).
+        # Use nv-rerankqa-mistral-4b-v3, which is still hosted on the
+        # NVIDIA API catalog and is already listed in
+        # model_prices_and_context_window.json with a 0.0 cost.
         return {
-            "model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
+            "model": "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3",
         }
 
     def get_expected_cost(self) -> float:
