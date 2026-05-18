@@ -364,8 +364,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
 
-  // Check if team selection is required
-  const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
+  // Require team selection only when the user has no personal/default model access.
+  const hasConcreteModelAccess = modelsToPick.some((model) => model !== "no-default-models");
+  const isTeamSelectionRequired =
+    !selectedCreateKeyTeam && modelsToPick.includes("no-default-models") && !hasConcreteModelAccess;
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
 
   const handleCreate = async (formValues: Record<string, any>) => {
