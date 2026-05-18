@@ -1,4 +1,5 @@
 import base64
+import json
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -7,6 +8,10 @@ from httpx._types import RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.common_utils import (
+    map_openai_size_to_gemini_image_config,
+    supports_gemini_image_size,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -22,7 +27,7 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["size"]
+    SUPPORTED_PARAMS: List[str] = ["size", "imageConfig"]
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return list(self.SUPPORTED_PARAMS)
@@ -43,9 +48,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         mapped_params: Dict[str, Any] = {}
 
         if "size" in filtered_params:
-            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
-                filtered_params["size"]  # type: ignore[arg-type]
+            image_config = map_openai_size_to_gemini_image_config(
+                filtered_params["size"],  # type: ignore[arg-type]
+                model,
             )
+            if image_config is not None:
+                mapped_params["imageConfig"] = image_config
+
+        image_config_param = filtered_params.get("imageConfig")
+        if isinstance(image_config_param, str):
+            image_config_param = json.loads(image_config_param)
+        if isinstance(image_config_param, dict):
+            mapped_params["imageConfig"] = image_config_param
 
         return mapped_params
 
@@ -109,13 +123,12 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         generation_config: Dict[str, Any] = {}
 
-        if "aspectRatio" in image_edit_optional_request_params:
-            # Move aspectRatio into imageConfig inside generationConfig
-            if "imageConfig" not in generation_config:
-                generation_config["imageConfig"] = {}
-            generation_config["imageConfig"]["aspectRatio"] = (
-                image_edit_optional_request_params["aspectRatio"]
-            )
+        if isinstance(image_edit_optional_request_params.get("imageConfig"), dict):
+            image_config = dict(image_edit_optional_request_params["imageConfig"])
+            if not supports_gemini_image_size(model):
+                image_config.pop("imageSize", None)
+            if image_config:
+                generation_config["imageConfig"] = image_config
 
         if generation_config:
             request_body["generationConfig"] = generation_config
@@ -157,16 +170,6 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         model_response.data = cast(List[OpenAIImage], data_list)
         return model_response
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        aspect_ratio_map = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _prepare_inline_image_parts(
         self, image: Union[FileTypes, List[FileTypes]]

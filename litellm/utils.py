@@ -3140,6 +3140,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    imageConfig: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -3176,6 +3177,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "imageConfig": None,
     }
 
     non_default_params = _get_non_default_params(

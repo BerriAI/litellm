@@ -1,5 +1,6 @@
 import base64
 import datetime
+import math
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -11,6 +12,151 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
+
+
+GEMINI_IMAGE_ASPECT_RATIOS: Dict[str, float] = {
+    "1:1": 1 / 1,
+    "1:4": 1 / 4,
+    "1:8": 1 / 8,
+    "2:3": 2 / 3,
+    "3:2": 3 / 2,
+    "3:4": 3 / 4,
+    "4:1": 4 / 1,
+    "4:3": 4 / 3,
+    "4:5": 4 / 5,
+    "5:4": 5 / 4,
+    "8:1": 8 / 1,
+    "9:16": 9 / 16,
+    "16:9": 16 / 9,
+    "21:9": 21 / 9,
+}
+
+GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
+    (512, 512): "1:1",
+    (1024, 1024): "1:1",
+    (2048, 2048): "1:1",
+    (4096, 4096): "1:1",
+    (256, 1024): "1:4",
+    (512, 2048): "1:4",
+    (1024, 4096): "1:4",
+    (2048, 8192): "1:4",
+    (192, 1536): "1:8",
+    (384, 3072): "1:8",
+    (768, 6144): "1:8",
+    (1536, 12288): "1:8",
+    (424, 632): "2:3",
+    (848, 1264): "2:3",
+    (1696, 2528): "2:3",
+    (3392, 5056): "2:3",
+    (632, 424): "3:2",
+    (1264, 848): "3:2",
+    (2528, 1696): "3:2",
+    (5056, 3392): "3:2",
+    (448, 600): "3:4",
+    (896, 1200): "3:4",
+    (1792, 2400): "3:4",
+    (3584, 4800): "3:4",
+    (1024, 256): "4:1",
+    (2048, 512): "4:1",
+    (4096, 1024): "4:1",
+    (8192, 2048): "4:1",
+    (600, 448): "4:3",
+    (1200, 896): "4:3",
+    (2400, 1792): "4:3",
+    (4800, 3584): "4:3",
+    (464, 576): "4:5",
+    (928, 1152): "4:5",
+    (1856, 2304): "4:5",
+    (3712, 4608): "4:5",
+    (576, 464): "5:4",
+    (1152, 928): "5:4",
+    (2304, 1856): "5:4",
+    (4608, 3712): "5:4",
+    (1536, 192): "8:1",
+    (3072, 384): "8:1",
+    (6144, 768): "8:1",
+    (12288, 1536): "8:1",
+    (384, 688): "9:16",
+    (768, 1376): "9:16",
+    (1536, 2752): "9:16",
+    (3072, 5504): "9:16",
+    (688, 384): "16:9",
+    (1376, 768): "16:9",
+    (2752, 1536): "16:9",
+    (5504, 3072): "16:9",
+    (792, 168): "21:9",
+    (1584, 672): "21:9",
+    (3168, 1344): "21:9",
+    (6336, 2688): "21:9",
+    (1280, 896): "4:3",
+    (896, 1280): "3:4",
+}
+
+
+def map_openai_size_to_gemini_image_config(
+    size: str, model: str
+) -> Optional[Dict[str, str]]:
+    dimensions = _parse_openai_image_size(size)
+    if dimensions is None:
+        return None
+
+    width, height = dimensions
+    image_config = {
+        "aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height)
+    }
+    if supports_gemini_image_size(model):
+        image_config["imageSize"] = _map_dimensions_to_gemini_image_size(width, height)
+    return image_config
+
+
+def supports_gemini_image_size(model: str) -> bool:
+    # Gemini 2.5 Flash image supports aspectRatio but rejects imageSize; newer
+    # Gemini image models are expected to support both fields.
+    return "2.5-flash" not in model
+
+
+def _parse_openai_image_size(size: str) -> Optional[tuple[int, int]]:
+    if size == "auto":
+        return None
+
+    width_str, separator, height_str = size.lower().partition("x")
+    if not separator:
+        return None
+
+    try:
+        width = int(width_str)
+        height = int(height_str)
+    except ValueError:
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    return width, height
+
+
+def _map_dimensions_to_gemini_aspect_ratio(width: int, height: int) -> str:
+    if (width, height) in GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO:
+        return GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO[(width, height)]
+
+    requested_ratio = width / height
+    return min(
+        GEMINI_IMAGE_ASPECT_RATIOS,
+        key=lambda aspect_ratio: abs(
+            math.log(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio] / requested_ratio)
+        ),
+    )
+
+
+def _map_dimensions_to_gemini_image_size(width: int, height: int) -> str:
+    effective_square_side = math.sqrt(width * height)
+    if effective_square_side < 768:
+        return "512"
+    if effective_square_side < 1536:
+        return "1K"
+    if effective_square_side < 3072:
+        return "2K"
+    return "4K"
 
 
 class GeminiError(BaseLLMException):
