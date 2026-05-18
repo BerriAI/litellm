@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
@@ -57,7 +58,13 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         image_config_param = filtered_params.get("imageConfig")
         if isinstance(image_config_param, str):
-            image_config_param = json.loads(image_config_param)
+            try:
+                image_config_param = json.loads(image_config_param)
+            except json.JSONDecodeError as exc:
+                raise litellm.UnsupportedParamsError(
+                    model=model,
+                    message="`imageConfig` must be valid JSON when provided as a string.",
+                ) from exc
         if isinstance(image_config_param, dict):
             mapped_params["imageConfig"] = image_config_param
 

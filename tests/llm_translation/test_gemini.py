@@ -70,7 +70,7 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS = [
     ("1376x768", "16:9", "1K"),
     ("2752x1536", "16:9", "2K"),
     ("5504x3072", "16:9", "4K"),
-    ("792x168", "21:9", "512"),
+    ("792x336", "21:9", "512"),
     ("1584x672", "21:9", "1K"),
     ("3168x1344", "21:9", "2K"),
     ("6336x2688", "21:9", "4K"),
@@ -609,6 +609,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
         assert "instances" in request_data
         assert "parameters" in request_data
         assert request_data["parameters"]["aspectRatio"] == "4:3"
+        assert request_data["parameters"]["imageSize"] == "1K"
         assert "imageConfig" not in request_data["parameters"]
 
 

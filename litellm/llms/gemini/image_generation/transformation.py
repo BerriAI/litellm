@@ -67,6 +67,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     mapped_params["imageConfig"] = image_config
                 else:
                     mapped_params["aspectRatio"] = image_config["aspectRatio"]
+                    if "imageSize" in image_config:
+                        mapped_params["imageSize"] = image_config["imageSize"]
 
         if (
             "imageConfig" in supported_params
