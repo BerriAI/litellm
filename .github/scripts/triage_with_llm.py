@@ -30,6 +30,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -41,6 +42,25 @@ from typing import Any
 DEFAULT_MODEL = "gpt-5.4-mini"
 
 INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+# Login of the account that performs Agent Shin's GitHub writes. When the
+# workflow uses `secrets.GITHUB_TOKEN` (our default), the closure / reopen
+# event's `actor.login` is `github-actions[bot]`. The env override exists
+# for local debugging and for repos that wire Agent Shin to a PAT.
+AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
+
+# HTML marker appended to every reconsider verdict comment. We grep for this
+# on subsequent reconsider triggers to enforce a short cooldown so that
+# repeated `@agent-shin reconsider` comments don't burn CI/LLM budget.
+# Using a unique HTML comment keeps the marker invisible to humans while
+# being trivially greppable from a comments-list API response.
+RECONSIDER_COMMENT_MARKER = "<!-- agent-shin:reconsider-verdict -->"
+
+# Minimum gap between two reconsider verdicts on the same PR/issue. Set to
+# 10 minutes — long enough that a contributor can't trivially spam the
+# trigger, short enough that a genuine "I just pushed a fix and reupdated
+# the body" iteration loop isn't punished.
+RECONSIDER_RATE_LIMIT_SECONDS = 600
 
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
@@ -158,6 +178,103 @@ def reopen_issue(repo: str, number: int) -> None:
         "-f",
         "state_reason=reopened",
     )
+
+
+def _iter_paginated_json(*api_args: str) -> Any:
+    """Yield JSON objects from `gh api --paginate ... -q '.[]'`.
+
+    `gh api --paginate` on a JSON-array endpoint concatenates pages into
+    one stream; `-q '.[]'` flattens that stream into newline-delimited
+    objects (jq-style). This keeps memory bounded for chatty endpoints
+    like issue events/comments on long-lived PRs.
+    """
+    raw = gh("api", "--paginate", *api_args, "-q", ".[]")
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            # A malformed line should not blow up the whole guard. Skip and
+            # carry on — at worst the guard fail-closes (returns False /
+            # None) and the caller treats it as "unknown".
+            continue
+
+
+def fetch_last_close_actor(repo: str, number: int) -> str | None:
+    """Return the login of the actor who most recently closed this PR/issue.
+
+    Returns None if no `closed` event is found (unusual for a closed item,
+    but possible if the events API returns nothing — in which case the
+    bot-closed guard should fail-closed, i.e. refuse to reopen).
+    """
+    last: str | None = None
+    for event in _iter_paginated_json(f"repos/{repo}/issues/{number}/events"):
+        if event.get("event") == "closed":
+            last = (event.get("actor") or {}).get("login")
+    return last
+
+
+def was_closed_by_agent_shin(
+    repo: str, number: int, *, bot_login: str | None = None
+) -> bool:
+    """Return True iff the PR/issue was most-recently closed by Agent Shin.
+
+    This is the guard that stops `@agent-shin reconsider` from being used
+    to override a maintainer's closure for non-rubric reasons (security,
+    duplicate, design rejection, etc.). The check is intentionally
+    fail-closed: any uncertainty about who closed the item must be
+    treated as "not the bot" so the destructive reopen path stays gated.
+    """
+    expected = (
+        bot_login
+        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
+        or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
+    actor = fetch_last_close_actor(repo, number)
+    if not actor:
+        return False
+    return actor.lower() == expected
+
+
+def seconds_since_last_reconsider_verdict(
+    repo: str, number: int, *, bot_login: str | None = None
+) -> float | None:
+    """Return seconds since the bot's most recent reconsider verdict comment.
+
+    Detects comments by matching the HTML marker `RECONSIDER_COMMENT_MARKER`
+    appended by `format_reopen_comment` and
+    `format_reconsider_still_failing_comment`. Returns None when the bot
+    has never posted a reconsider verdict on this PR/issue (or when the
+    only matching comments are missing a `created_at` timestamp, which
+    shouldn't happen on a real GitHub response).
+    """
+    expected_login = (
+        bot_login
+        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
+        or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
+    latest: dt.datetime | None = None
+    for comment in _iter_paginated_json(f"repos/{repo}/issues/{number}/comments"):
+        author = ((comment.get("user") or {}).get("login") or "").lower()
+        if author != expected_login:
+            continue
+        body = comment.get("body") or ""
+        if RECONSIDER_COMMENT_MARKER not in body:
+            continue
+        created = comment.get("created_at")
+        if not created:
+            continue
+        try:
+            ts = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    if latest is None:
+        return None
+    return (dt.datetime.now(dt.timezone.utc) - latest).total_seconds()
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +575,9 @@ def write_step_summary(content: str) -> None:
 def format_reopen_comment(kind: str) -> str:
     """Comment posted when Agent Shin reopens after a successful reconsider."""
     noun = "PR" if kind == "pr" else "issue"
+    # The trailing HTML marker is used by `seconds_since_last_reconsider_verdict`
+    # to enforce a cooldown between repeated `@agent-shin reconsider` triggers.
+    # Keep the marker on its own line so it doesn't disturb the rendered text.
     return (
         f"♻️ **Re-evaluated and reopened.** Thanks for updating the {noun}!\n"
         "\n"
@@ -467,7 +587,9 @@ def format_reopen_comment(kind: str) -> str:
         "\n"
         "_(If a maintainer ends up closing this for non-rubric reasons, that "
         "decision stands; comment `@agent-shin reconsider` again only if you "
-        "have substantively new information.)_"
+        "have substantively new information.)_\n"
+        "\n"
+        f"{RECONSIDER_COMMENT_MARKER}"
     )
 
 
@@ -476,6 +598,8 @@ def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
     missing_lines = _format_missing(verdict.get("missing") or [])
     explanation = verdict.get("explanation") or ""
     noun = "PR" if kind == "pr" else "issue"
+    # The trailing HTML marker is used by `seconds_since_last_reconsider_verdict`
+    # to enforce a cooldown between repeated `@agent-shin reconsider` triggers.
     return (
         f"⏸️ **Re-evaluated; this {noun} still doesn't meet the rubric.**\n"
         "\n"
@@ -490,7 +614,9 @@ def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
         "`@agent-shin reconsider` again, or ping a maintainer if you think "
         "I got this wrong.\n"
         "\n"
-        "_(I'm an LLM and I'm not infallible.)_"
+        "_(I'm an LLM and I'm not infallible.)_\n"
+        "\n"
+        f"{RECONSIDER_COMMENT_MARKER}"
     )
 
 
@@ -514,10 +640,22 @@ def triage(
     fail-but-no-comment is replaced with a "still failing" comment + leave
     closed; a pass triggers `reopen_pr`/`reopen_issue` plus a reopen comment.
     Reconsider mode is intended for the `@agent-shin reconsider` comment
-    trigger. `close` is forced True implicitly when `reconsider` is set
-    because the bot has already decided this is a real (non-dry-run)
-    invocation; it's the caller's responsibility to gate on
-    AGENT_SHIN_ENABLED before calling reconsider mode.
+    trigger. Like regular triage, `close=False` keeps reconsider in dry-run
+    (returns `would-reopen` / `would-reconsider-still-failing` so a local
+    operator can preview without write side effects); the workflow only
+    passes `--close` when `AGENT_SHIN_ENABLED=true`.
+
+    Reconsider mode adds two extra safety guards on top of the regular
+    triage skip-internal-author check:
+
+      1. **Bot-closed guard.** Only reopens if the most recent close was
+         performed by the bot identity (default `github-actions[bot]`).
+         This stops a contributor from using `@agent-shin reconsider` to
+         override a maintainer's close for non-rubric reasons.
+      2. **Rate-limit guard.** If the bot has already posted a reconsider
+         verdict on this PR/issue within `RECONSIDER_RATE_LIMIT_SECONDS`,
+         skip — repeated triggers from the same contributor shouldn't burn
+         CI minutes or LLM budget.
     """
     fetcher = {"pr": fetch_pr, "issue": fetch_issue}[kind]
     item = fetcher(repo, number)
@@ -551,6 +689,20 @@ def triage(
     if is_internal_contributor(item):
         return {**base_result, "action": "skip-internal-author"}
 
+    # Reconsider-only guards — these run BEFORE the LLM call so a
+    # maintainer-closed PR / rate-limited trigger never spends LLM budget.
+    if reconsider:
+        if not was_closed_by_agent_shin(repo, number):
+            return {**base_result, "action": "skip-not-bot-closed"}
+        age = seconds_since_last_reconsider_verdict(repo, number)
+        if age is not None and age < RECONSIDER_RATE_LIMIT_SECONDS:
+            return {
+                **base_result,
+                "action": "skip-rate-limited",
+                "rate_limit_age_seconds": age,
+                "rate_limit_window_seconds": RECONSIDER_RATE_LIMIT_SECONDS,
+            }
+
     if kind == "pr":
         prompt = build_pr_prompt(title=title, body=body)
         # Short-circuit: if body very clearly links a related issue, just pass.
@@ -567,6 +719,12 @@ def triage(
             if reconsider:
                 # Pass-on-reconsider -> reopen the PR with a friendly comment.
                 reopen_body = format_reopen_comment(kind)
+                if not close:
+                    return {
+                        **base,
+                        "action": "would-reopen",
+                        "comment": reopen_body,
+                    }
                 post_comment(repo, number, reopen_body)
                 reopen_pr(repo, number)
                 return {
@@ -607,8 +765,20 @@ def triage(
         # Reconsider: pass -> reopen + post reopen comment;
         # fail -> leave closed + post a "still failing" comment so the
         # contributor can iterate again.
+        # In dry-run (`close=False`) we return `would-*` actions instead
+        # of touching GitHub state, mirroring the regular triage flow's
+        # `would-close`. This lets a local operator preview the outcome
+        # of `python triage_with_llm.py --reconsider --pr N` without
+        # risking accidental comments or reopens.
         if decision != "fail":
             reopen_body = format_reopen_comment(kind)
+            if not close:
+                return {
+                    **base_result,
+                    "action": "would-reopen",
+                    "verdict": verdict,
+                    "comment": reopen_body,
+                }
             post_comment(repo, number, reopen_body)
             if kind == "pr":
                 reopen_pr(repo, number)
@@ -621,6 +791,13 @@ def triage(
                 "comment": reopen_body,
             }
         still_failing = format_reconsider_still_failing_comment(kind, verdict)
+        if not close:
+            return {
+                **base_result,
+                "action": "would-reconsider-still-failing",
+                "verdict": verdict,
+                "comment": still_failing,
+            }
         post_comment(repo, number, still_failing)
         return {
             **base_result,
