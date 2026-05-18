@@ -138,6 +138,47 @@ commands:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+  restore_vcr_l1_cache:
+    description: |
+      Restore the local-disk VCR L1 cassette cache (read-through layer in
+      front of Redis/R2). Most cassette reads on a re-run never reach the
+      remote store, which is what cuts Redis Cloud bandwidth.
+      Cache key includes the parallelism node index so each xdist shard
+      restores its own slice; falls back to the same shard on `main`,
+      and finally to the index-0 shard so freshly-spawned shards still
+      get a warm starting point.
+    parameters:
+      cache_dir:
+        type: string
+        default: ".vcr-l1-cache"
+    steps:
+      - restore_cache:
+          keys:
+            - vcr-l1-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLE_NODE_INDEX }}-{{ .Branch }}-{{ .Revision }}
+            - vcr-l1-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLE_NODE_INDEX }}-{{ .Branch }}-
+            - vcr-l1-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLE_NODE_INDEX }}-main-
+            - vcr-l1-v1-{{ .Environment.CIRCLE_JOB }}-0-main-
+      - run:
+          name: "Configure VCR L1 cache directory"
+          command: |
+            mkdir -p "<< parameters.cache_dir >>"
+            echo "export CASSETTE_LOCAL_CACHE_DIR=$(pwd)/<< parameters.cache_dir >>" >> "$BASH_ENV"
+  save_vcr_l1_cache:
+    description: |
+      Persist the local-disk VCR L1 cassette cache so the next run on the
+      same branch (or the next run on `main`) starts warm. `when: always`
+      because cassettes for tests that *did* pass are still worth keeping
+      even if other tests in the same job failed.
+    parameters:
+      cache_dir:
+        type: string
+        default: ".vcr-l1-cache"
+    steps:
+      - save_cache:
+          paths:
+            - << parameters.cache_dir >>
+          key: vcr-l1-v1-{{ .Environment.CIRCLE_JOB }}-{{ .Environment.CIRCLE_NODE_INDEX }}-{{ .Branch }}-{{ .Revision }}
+          when: always
 
 jobs:
   # Add Windows testing job
@@ -215,6 +256,7 @@ jobs:
             ./docker/entrypoint.sh
             set -e
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests (Part 1 - A-M)
           command: |
@@ -237,6 +279,7 @@ jobs:
                 --timeout=300 \
                 --timeout_method=thread"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -280,6 +323,7 @@ jobs:
             ./docker/entrypoint.sh
             set -e
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests (Part 2 - N-Z)
           command: |
@@ -302,6 +346,7 @@ jobs:
                 --timeout=300 \
                 --timeout_method=thread"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -347,6 +392,7 @@ jobs:
             set -e
 
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -361,6 +407,7 @@ jobs:
                 -k \"langfuse\""
           no_output_timeout: 15m
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
   auth_ui_unit_tests:
@@ -452,6 +499,7 @@ jobs:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -469,6 +517,7 @@ jobs:
                 --timeout=300 --timeout_method=thread"
           no_output_timeout: 15m
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
 
@@ -495,6 +544,7 @@ jobs:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -509,6 +559,7 @@ jobs:
                 --durations=5 \
                 -n 4"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -538,6 +589,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -552,6 +604,7 @@ jobs:
                 -k \"assistants\""
           no_output_timeout: 15m
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
   llm_translation_testing:
@@ -576,6 +629,7 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -598,6 +652,7 @@ jobs:
           no_output_timeout: 15m
 
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
   realtime_translation_testing:
@@ -614,6 +669,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run realtime tests
           command: |
@@ -631,6 +687,7 @@ jobs:
                 -n 4 \
                 --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -700,6 +757,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -716,6 +774,7 @@ jobs:
                 -n 2 \
                 --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -745,6 +804,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -759,6 +819,7 @@ jobs:
                 --durations=5 \
                 --retries 3 --retry-delay 5"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -796,6 +857,7 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -811,6 +873,7 @@ jobs:
           no_output_timeout: 15m
 
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
   ocr_testing:
@@ -827,6 +890,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -841,6 +905,7 @@ jobs:
                 --durations=5 \
                 -n 4"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -869,6 +934,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -883,6 +949,7 @@ jobs:
                 --durations=5 \
                 -n 4"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -985,6 +1052,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -999,6 +1067,7 @@ jobs:
                 --durations=5 \
                 -n 2"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -1028,6 +1097,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -1042,6 +1112,7 @@ jobs:
                 --durations=5 \
                 -n 4"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -1071,6 +1142,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -1085,6 +1157,7 @@ jobs:
                 -n 4"
           no_output_timeout: 15m
       # Store test results
+      - save_vcr_l1_cache
       - store_test_results:
           path: test-results
   logging_testing:
@@ -1102,6 +1175,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -1118,6 +1192,7 @@ jobs:
                 --durations=5 \
                 --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
@@ -1146,6 +1221,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - restore_vcr_l1_cache
       - run:
           name: Run tests
           command: |
@@ -1159,6 +1235,7 @@ jobs:
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
+      - save_vcr_l1_cache
       - run:
           name: Rename the coverage files
           command: |
