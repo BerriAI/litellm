@@ -18,6 +18,16 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture(autouse=True)
+def _reset_bedrock_response_stream_shape_cache():
+    """Prevent lru_cache leakage between tests in this module."""
+    import litellm.llms.bedrock.common_utils as mod
+
+    mod.get_bedrock_response_stream_shape.cache_clear()
+    yield
+    mod.get_bedrock_response_stream_shape.cache_clear()
+
+
 def test_bedrock_response_stream_shape_lazy_loads_once():
     """
     get_bedrock_response_stream_shape() loads from botocore at most once per process.
@@ -26,7 +36,6 @@ def test_bedrock_response_stream_shape_lazy_loads_once():
 
     import litellm.llms.bedrock.common_utils as mod
 
-    mod.get_bedrock_response_stream_shape.cache_clear()
     sentinel = MagicMock()
     with patch.object(
         mod, "_load_bedrock_response_stream_shape", return_value=sentinel
@@ -41,6 +50,7 @@ def test_bedrock_response_stream_shape_loaded_on_first_access():
     get_bedrock_response_stream_shape() loads once on first use.
     In a standard environment with botocore installed it must be non-None.
     """
+    pytest.importorskip("botocore")
     from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
     assert get_bedrock_response_stream_shape() is not None

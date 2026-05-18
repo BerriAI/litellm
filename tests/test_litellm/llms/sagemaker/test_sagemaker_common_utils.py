@@ -16,6 +16,16 @@ from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 # --------------------------------------------------------------------------- #
 
 
+@pytest.fixture(autouse=True)
+def _reset_sagemaker_response_stream_shape_cache():
+    """Prevent lru_cache leakage between tests in this module."""
+    import litellm.llms.sagemaker.common_utils as mod
+
+    mod.get_sagemaker_response_stream_shape.cache_clear()
+    yield
+    mod.get_sagemaker_response_stream_shape.cache_clear()
+
+
 def test_sagemaker_response_stream_shape_lazy_loads_once():
     """
     get_sagemaker_response_stream_shape() loads from botocore at most once per process.
@@ -24,7 +34,6 @@ def test_sagemaker_response_stream_shape_lazy_loads_once():
 
     import litellm.llms.sagemaker.common_utils as mod
 
-    mod.get_sagemaker_response_stream_shape.cache_clear()
     sentinel = MagicMock()
     with patch.object(
         mod, "_load_sagemaker_response_stream_shape", return_value=sentinel
@@ -39,6 +48,7 @@ def test_sagemaker_response_stream_shape_loaded_on_first_access():
     get_sagemaker_response_stream_shape() loads once on first use.
     In a standard environment with botocore installed it must be non-None.
     """
+    pytest.importorskip("botocore")
     from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
     assert get_sagemaker_response_stream_shape() is not None
