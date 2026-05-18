@@ -51,20 +51,6 @@ class TestInteractionsAgentParameter:
         model = data.get("model") or data.get("agent")
         assert model is None
 
-    def test_no_forced_gemini_provider_in_request_data(self):
-        """
-        Proxy endpoint must NOT force custom_llm_provider="gemini" so that
-        non-Gemini models (e.g. gpt-4o) are routed correctly via the
-        litellm_responses bridge in interactions/main.py.
-        """
-        # Simulate what the endpoint does with model data — no provider override
-        data = {"model": "gpt-4o", "input": "Hello"}
-        assert "custom_llm_provider" not in data
-
-        # For agent-only requests the SDK defaults to gemini internally, not the endpoint
-        data_agent = {"agent": "deep-research-pro-preview-12-2025", "input": "Research"}
-        assert "custom_llm_provider" not in data_agent
-
     def test_route_type_in_skip_model_routing_list(self):
         """
         Test that acreate_interaction is in the list of routes
