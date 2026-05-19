@@ -1894,6 +1894,41 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     [
         LitellmUserRoles.INTERNAL_USER.value,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize("route", ["/tag/list", "/tag/daily/activity"])
+def test_internal_users_can_access_scoped_tag_usage_routes(user_role, route):
+    """
+    Internal users can read tag usage endpoints because the endpoint handlers
+    scope results to the caller's own keys.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=user_role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     ],
 )
@@ -2150,3 +2185,55 @@ def test_internal_user_roles_can_view_own_log_detail(route, role):
         )
     except Exception as e:
         pytest.fail(f"{role.value} should access {route}; got: {e}")
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/credentials/by_name/openai",
+        "/credentials/openai",
+        "/credentials/azure",
+        "/credentials/by_name/anthropic",
+        "/model/delete/openai",
+        "/model/delete/anthropic-prod",
+        "/budget/update/bedrock",
+        "/user/delete/gemini-user",
+    ],
+)
+def test_provider_name_substring_not_classified_as_llm_route(route):
+    """
+    Regression: mapped_pass_through_routes used a substring check
+    (`_llm_passthrough_route in route`) so any admin-only path whose URL
+    happened to contain a provider name (openai, anthropic, azure, …) was
+    misclassified as an LLM API route and bypassed the admin gate.
+
+    The fix uses an exact/prefix match so only routes that actually *start*
+    with a passthrough prefix are allowed through.
+    """
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert RouteChecks.is_llm_api_route(route=route) is False, (
+        f"{route!r} should NOT be classified as an LLM API route — "
+        "provider-name substring match bypass"
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/chat/completions",
+        "/openai",
+        "/anthropic/v1/messages",
+        "/anthropic",
+        "/bedrock/invoke",
+        "/azure/openai/deployments/gpt-4/chat/completions",
+        "/gemini/v1/models",
+        "/vertex-ai/predict",
+        "/vertex_ai/predict",
+    ],
+)
+def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
+    """Legitimate passthrough routes must still pass is_llm_api_route."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert (
+        RouteChecks.is_llm_api_route(route=route) is True
+    ), f"{route!r} should be classified as an LLM API route"

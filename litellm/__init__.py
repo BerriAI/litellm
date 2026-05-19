@@ -416,6 +416,7 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
@@ -1426,6 +1427,12 @@ if TYPE_CHECKING:
     )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
+    from .llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig as BedrockClaudePlatformConfig,
+    )
+    from .llms.bedrock.claude_platform.messages_transformation import (
+        BedrockClaudePlatformMessagesConfig as BedrockClaudePlatformMessagesConfig,
+    )
     from .llms.anthropic.completion.transformation import (
         AnthropicTextConfig as AnthropicTextConfig,
     )
@@ -1873,6 +1880,12 @@ if TYPE_CHECKING:
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,
+    )
+    from .llms.dashscope.embed.transformation import (
+        DashScopeEmbeddingConfig as DashScopeEmbeddingConfig,
+    )
+    from .llms.dashscope.rerank.transformation import (
+        DashScopeRerankConfig as DashScopeRerankConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

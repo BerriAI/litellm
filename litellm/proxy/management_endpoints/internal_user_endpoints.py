@@ -1152,6 +1152,81 @@ def _update_internal_user_params(
     return non_default_values
 
 
+async def _schedule_user_update_audit_log(
+    response: Dict[str, Any],
+    existing_user_row: Optional[BaseModel],
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+    try:
+        updated_user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": response["user_id"]}
+        )
+        if updated_user_row:
+            user_row_typed = LiteLLM_UserTable(
+                **updated_user_row.model_dump(exclude_none=True)
+            )
+            asyncio.create_task(
+                UserManagementEventHooks.create_internal_user_audit_log(
+                    user_id=user_row_typed.user_id,
+                    action="updated",
+                    litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    before_value=(
+                        existing_user_row.model_dump_json(exclude_none=True)
+                        if existing_user_row
+                        else None
+                    ),
+                    after_value=user_row_typed.model_dump_json(exclude_none=True),
+                )
+            )
+    except Exception as audit_error:
+        verbose_proxy_logger.warning(
+            f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
+        )
+
+
+def _check_user_update_authz(
+    user_request: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_user_row: Optional[BaseModel],
+) -> None:
+    """Authorization checks for /user/update — raises HTTPException on failure."""
+    if (
+        user_request.user_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can modify user roles."
+        )
+
+    if existing_user_row is not None:
+        typed_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+        if not can_user_call_user_update(
+            user_api_key_dict=user_api_key_dict, user_info=typed_row
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
+    elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        # Silent-create guard: only PROXY_ADMIN may create via /user/update.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "User not found. Only PROXY_ADMIN can create users via /user/update; use /user/new instead."
+            },
+        )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1168,31 +1243,15 @@ async def _update_single_user_helper(
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
-    # Only proxy admins can modify user_role
-    if (
-        user_request.user_role is not None
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admins can modify user roles.",
-        )
-
-    # Validate user identifier
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    # Convert to data format expected by update logic
     data_json: dict = user_request.model_dump(exclude_unset=True)
-
-    # Apply update transformations (reuse existing logic)
     non_default_values = _update_internal_user_params(
         data_json=data_json, data=user_request
     )
-
     _hash_password_in_dict(non_default_values)
 
-    # Get existing user data for audit logging and metadata preparation
     existing_user_row: Optional[BaseModel] = None
     if user_request.user_id:
         existing_user_row = await prisma_client.db.litellm_usertable.find_first(
@@ -1203,37 +1262,38 @@ async def _update_single_user_helper(
             where={"user_email": user_request.user_email}
         )
 
+    _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
+
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(
             **existing_user_row.model_dump(exclude_none=True)
         )
-        if not can_user_call_user_update(
-            user_api_key_dict=user_api_key_dict,
-            user_info=existing_user_row,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
-                },
-            )
-    else:
-        # Silent-create guard: if the target user doesn't exist, the update
-        # path falls through to an upsert that creates a new user with
-        # caller-supplied fields (models, metadata, budgets, …). Only
-        # PROXY_ADMIN is allowed to create users this way; otherwise an org
-        # admin could spawn arbitrary users attached to nothing by supplying
-        # a fresh email, bypassing the /user/new org/team-scoping checks.
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": (
-                        "User not found. Only PROXY_ADMIN can create users "
-                        "via /user/update; use /user/new instead."
-                    )
-                },
-            )
+
+    # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
+    # must not be able to raise their own budget/spend fields.
+    # can_user_call_user_update() already restricts non-admins to self-updates,
+    # so this guard only fires for self-escalation attempts.
+    _target_user_id = user_request.user_id or (
+        getattr(existing_user_row, "user_id", None)
+        if existing_user_row is not None
+        else None
+    )
+    _is_self_update = (
+        _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
+    )
+    if (
+        _is_self_update
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        _protected_fields = ("max_budget", "soft_budget", "spend")
+        for _field in _protected_fields:
+            if _field in non_default_values:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
+                    },
+                )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
@@ -1286,39 +1346,14 @@ async def _update_single_user_helper(
                 data=non_default_values, table_name="user"
             )
 
-    # Create audit log for successful update
     if response is not None:
-        try:
-            updated_user_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
-            )
-
-            if updated_user_row:
-                user_row_typed = LiteLLM_UserTable(
-                    **updated_user_row.model_dump(exclude_none=True)
-                )
-
-                # Create audit log asynchronously
-                asyncio.create_task(
-                    UserManagementEventHooks.create_internal_user_audit_log(
-                        user_id=user_row_typed.user_id,
-                        action="updated",
-                        litellm_changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=(
-                            existing_user_row.model_dump_json(exclude_none=True)
-                            if existing_user_row
-                            else None
-                        ),
-                        after_value=user_row_typed.model_dump_json(exclude_none=True),
-                    )
-                )
-        except Exception as audit_error:
-            verbose_proxy_logger.warning(
-                f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
-            )
+        await _schedule_user_update_audit_log(
+            response=response,
+            existing_user_row=existing_user_row,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
 
     if response is None:
         raise HTTPException(

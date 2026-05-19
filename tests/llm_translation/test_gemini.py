@@ -1362,8 +1362,12 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         # For Gemini 3, should not force thinkingLevel by default
-        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
-        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
+        assert (
+            "thinkingLevel" not in result
+        ), "Should not force thinkingLevel for Gemini 3"
+        assert (
+            "thinkingBudget" not in result
+        ), "Should NOT have thinkingBudget for Gemini 3"
         assert result["includeThoughts"] is True
 
         # Test 2: Anthropic thinking disabled for Gemini 3
@@ -1395,7 +1399,10 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+        assert (
+            "thinkingLevel" not in result_zero
+            or result_zero.get("thinkingLevel") is None
+        )
 
         # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
@@ -1525,8 +1532,12 @@ def test_anthropic_thinking_param_via_map_openai_params():
     # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
-    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
+    assert (
+        "thinkingLevel" not in thinking_config
+    ), "Should not force thinkingLevel for Gemini 3 by default"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     # Test with Gemini 2 model
@@ -1594,13 +1605,49 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
 
 
-def test_gemini_image_size_limit_exceeded():
+def test_gemini_image_size_limit_exceeded(monkeypatch):
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
 
     This validates that the 50MB default limit prevents downloading very large images
     that could cause memory issues and pod crashes.
+
+    The image fetch is mocked (mirroring the LargeImageClient pattern in
+    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    deterministically exercises the size-limit rejection path without any
+    external network dependency.
     """
+    from httpx import Request, Response
+
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    class LargeImageClient:
+        """Returns a response whose Content-Length exceeds the 50MB limit."""
+
+        def get(self, url, follow_redirects=True):
+            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(size_bytes),
+                },
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
+                request=Request("GET", url),
+            )
+
+    # Bypass SSRF validation (which would resolve DNS / hit the network) and
+    # route straight to our mocked client.
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
+
     messages = [
         {
             "role": "user",
@@ -1608,7 +1655,7 @@ def test_gemini_image_size_limit_exceeded():
                 {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg",
+                    "image_url": "https://example.com/large-image.jpg",
                 },
             ],
         }
