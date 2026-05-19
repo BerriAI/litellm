@@ -232,8 +232,15 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
                 assert (
                     BLOCKED_PHRASE not in real_ai_text
                 ), f"Blocked phrase leaked into AI response: {real_ai_text!r}"
+                normalized_ai_text = (
+                    real_ai_text.lower()
+                    .replace("\u2019", "'")
+                    .replace("\u2018", "'")
+                    .replace("\u201c", '"')
+                    .replace("\u201d", '"')
+                )
                 assert any(
-                    marker in real_ai_text.lower() for marker in safe_markers
+                    marker in normalized_ai_text for marker in safe_markers
                 ), f"AI responded with non-guardrail content even though message was blocked: {real_ai_text!r}"
 
     finally:
