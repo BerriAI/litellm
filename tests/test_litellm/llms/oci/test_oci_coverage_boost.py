@@ -738,6 +738,21 @@ class TestOCIChatConfigGetCompleteUrl:
         )
         assert url == "https://custom.endpoint.com/20231130/actions/chat"
 
+    def test_full_chat_url_is_not_doubled(self):
+        config = OCIChatConfig()
+        full_url = (
+            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+            "/20231130/actions/chat"
+        )
+        url = config.get_complete_url(
+            api_base=full_url,
+            api_key=None,
+            model=_GENERIC_MODEL,
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == full_url
+
 
 class TestOCIChatConfigGetErrorClass:
     def test_returns_oci_error(self):

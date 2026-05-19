@@ -96,6 +96,22 @@ class TestOCIEmbedConfig:
         )
         assert url == "https://custom.endpoint.example.com/20231130/actions/embedText"
 
+    def test_get_complete_url_full_url_is_not_doubled(self):
+        """A fully-formed embedText URL must not have the action path appended twice."""
+        cfg = self._config()
+        full_url = (
+            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+            "/20231130/actions/embedText"
+        )
+        url = cfg.get_complete_url(
+            api_base=full_url,
+            api_key=None,
+            model="cohere.embed-v3.0",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == full_url
+
     # ------------------------------------------------------------------
     # transform_embedding_request
     # ------------------------------------------------------------------

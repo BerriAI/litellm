@@ -152,6 +152,21 @@ def test_get_oci_base_url_explicit_api_base():
     assert url == "https://custom.endpoint.com"
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/chat",
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/chat/",
+        "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText",
+    ],
+)
+def test_get_oci_base_url_strips_trailing_action_path(api_base):
+    assert (
+        get_oci_base_url({}, api_base=api_base)
+        == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+    )
+
+
 def test_get_oci_base_url_from_region():
     url = get_oci_base_url({"oci_region": "eu-frankfurt-1"})
     assert url == "https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"

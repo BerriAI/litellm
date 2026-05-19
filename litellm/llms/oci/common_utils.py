@@ -187,12 +187,18 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
 
 
 _OCI_REGION_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+_OCI_ACTION_PATH_RE = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
 
 
 def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
-    """Return the OCI inference base URL, respecting any explicit api_base override."""
+    """Return the OCI inference base URL, respecting any explicit api_base override.
+
+    If ``api_base`` already ends with a fully-formed OCI action path
+    (``/{OCI_API_VERSION}/actions/<name>``), that suffix is stripped so callers
+    can append their own action path without producing a doubled URL.
+    """
     if api_base:
-        return api_base.rstrip("/")
+        return _OCI_ACTION_PATH_RE.sub("", api_base).rstrip("/")
     creds = resolve_oci_credentials(optional_params)
     region = creds["oci_region"]
     if not isinstance(region, str) or not _OCI_REGION_RE.match(region):
