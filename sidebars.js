@@ -697,6 +697,7 @@ const sidebars = {
         "apply_guardrail",
         "bedrock_invoke",
         "interactions",
+        "managed_agents",
         "memory_management",
         "image_edits",
         "image_generation",
