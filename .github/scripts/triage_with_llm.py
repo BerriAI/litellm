@@ -699,9 +699,11 @@ def triage(
                         "action": "would-reopen",
                         "comment": reopen_body,
                     }
-                # Pass-on-reconsider -> reopen the PR with a friendly comment.
-                post_comment(repo, number, reopen_body)
+                # Reopen before posting so a failed reopen call doesn't
+                # leave a misleading "we reopened it" comment on a still-
+                # closed PR.
                 reopen_pr(repo, number)
+                post_comment(repo, number, reopen_body)
                 return {
                     **base,
                     "action": "reopened",
@@ -753,11 +755,13 @@ def triage(
                     "verdict": verdict,
                     "comment": reopen_body,
                 }
-            post_comment(repo, number, reopen_body)
+            # Reopen before posting so a failed reopen call doesn't leave a
+            # misleading "reopened" comment on a still-closed item.
             if kind == "pr":
                 reopen_pr(repo, number)
             else:
                 reopen_issue(repo, number)
+            post_comment(repo, number, reopen_body)
             return {
                 **base_result,
                 "action": "reopened",

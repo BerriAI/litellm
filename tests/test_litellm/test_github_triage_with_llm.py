@@ -1098,6 +1098,109 @@ class TestTriageOrchestration:
         assert reopened["n"] == 7
         assert "reopened" in posted["body"].lower()
 
+    def test_should_reopen_before_posting_on_reconsider_pass(
+        self, triage_module, monkeypatch
+    ):
+        # A failed reopen call must not leave a misleading "we reopened it"
+        # comment on a still-closed PR. Pin the order: reopen happens first;
+        # if reopen raises, post_comment must not run.
+        pr = self._make_pr(state="closed", body="Updated body with QA proof.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post comment if reopen fails"),
+        )
+
+        def boom(*a, **kw):
+            raise RuntimeError("reopen 422")
+
+        monkeypatch.setattr(triage_module, "reopen_pr", boom)
+        with pytest.raises(RuntimeError):
+            triage_module.triage(
+                repo="o/r",
+                kind="pr",
+                number=42,
+                close=True,
+                model="m",
+                judge=lambda p: json.dumps(
+                    {"verdict": "pass", "missing": [], "explanation": "ok"}
+                ),
+                reconsider=True,
+            )
+
+    def test_should_reopen_before_posting_on_reconsider_linked_issue(
+        self, triage_module, monkeypatch
+    ):
+        # Same ordering invariant for the linked-issue short-circuit.
+        pr = self._make_pr(state="closed", body="Fixes #1234")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post comment if reopen fails"),
+        )
+
+        def boom(*a, **kw):
+            raise RuntimeError("reopen 422")
+
+        monkeypatch.setattr(triage_module, "reopen_pr", boom)
+        with pytest.raises(RuntimeError):
+            triage_module.triage(
+                repo="o/r",
+                kind="pr",
+                number=55,
+                close=True,
+                model="m",
+                judge=lambda p: pytest.fail("LLM must not run for linked-issue path"),
+                reconsider=True,
+            )
+
+    def test_should_reopen_before_posting_on_reconsider_issue_pass(
+        self, triage_module, monkeypatch
+    ):
+        # Same ordering invariant for issues (reopen_issue, not reopen_pr).
+        issue = {
+            "number": 7,
+            "title": "Bug",
+            "body": "Repro: curl ...",
+            "state": "closed",
+            "author_association": "NONE",
+            "user": {"login": "outside"},
+        }
+        monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        monkeypatch.setattr(
+            triage_module, "was_auto_closed_by_agent_shin", lambda repo, n: True
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post comment if reopen fails"),
+        )
+
+        def boom(*a, **kw):
+            raise RuntimeError("reopen 422")
+
+        monkeypatch.setattr(triage_module, "reopen_issue", boom)
+        with pytest.raises(RuntimeError):
+            triage_module.triage(
+                repo="o/r",
+                kind="issue",
+                number=7,
+                close=True,
+                model="m",
+                judge=lambda p: json.dumps(
+                    {"verdict": "pass", "missing": [], "explanation": "ok"}
+                ),
+                reconsider=True,
+            )
+
     def test_should_triage_issues_kind(self, triage_module, monkeypatch):
         issue = {
             "number": 7,
