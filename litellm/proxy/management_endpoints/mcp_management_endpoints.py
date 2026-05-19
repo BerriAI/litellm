@@ -216,22 +216,24 @@ if MCP_AVAILABLE:
     def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
-        _validate_mcp_user_fields_byok_exclusive(payload)
+        _validate_mcp_user_fields_exclusive(payload)
 
-    def _validate_mcp_user_fields_byok_exclusive(payload: Any) -> None:
-        """Reject server configurations that combine is_byok with user_fields.
+    def _validate_mcp_user_fields_exclusive(payload: Any) -> None:
+        """Reject server configurations that combine user_fields with another
+        credential type that shares the same per-user storage row.
 
-        Both credential types share the same (user_id, server_id) row in
-        LiteLLM_MCPUserCredentials, and the store paths refuse to overwrite
-        the other type — so a user can save BYOK or user-fields for a given
-        server, never both. Allowing this combination at admin time would
-        trap end-users in an unresolvable state: every tool call would 401
-        on whichever check the user has not (and cannot) satisfy.
+        BYOK strings, OAuth2 access tokens, and user_fields blobs all encode
+        into the single ``credential_b64`` column of LiteLLM_MCPUserCredentials,
+        and the write paths refuse to overwrite a different type. Mixing
+        ``is_byok=True`` or ``auth_type=oauth2`` with non-empty ``user_fields``
+        would let whichever credential the user saves first permanently block
+        the other — every tool call would 401 on the unsatisfied check, and
+        the user has no path to resolve it without admin intervention.
         """
-        if not getattr(payload, "is_byok", False):
-            return
         user_fields = getattr(payload, "user_fields", None) or []
-        if user_fields:
+        if not user_fields:
+            return
+        if getattr(payload, "is_byok", False):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -240,6 +242,20 @@ if MCP_AVAILABLE:
                         "Use user_fields if the server needs multiple per-user "
                         "values; use is_byok only for a single legacy BYOK "
                         "credential."
+                    )
+                },
+            )
+        if getattr(payload, "auth_type", None) == MCPAuth.oauth2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "MCP servers cannot combine auth_type='oauth2' with "
+                        "user_fields. The interactive OAuth2 token and "
+                        "user_fields share the same per-user credential row, "
+                        "so saving one would block saving the other. Use "
+                        "user_fields for per-user secrets or oauth2 for the "
+                        "primary upstream auth, not both."
                     )
                 },
             )
