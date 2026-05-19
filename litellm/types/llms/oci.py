@@ -96,6 +96,7 @@ class OCIChatRequestPayload(BaseModel):
     isStream: bool = False
     numGenerations: Optional[int] = None
     maxTokens: Optional[int] = None
+    maxCompletionTokens: Optional[int] = None
     temperature: Optional[float] = None
     topP: Optional[float] = None
     stop: Optional[List[str]] = None

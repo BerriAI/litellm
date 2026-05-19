@@ -213,7 +213,7 @@ class OCIChatConfig(BaseConfig):
         self.openai_to_oci_generic_param_map = {
             "stream": "isStream",
             "max_tokens": "maxTokens",
-            "max_completion_tokens": "maxTokens",
+            "max_completion_tokens": "maxCompletionTokens",
             "temperature": "temperature",
             "tools": "tools",
             "frequency_penalty": "frequencyPenalty",
