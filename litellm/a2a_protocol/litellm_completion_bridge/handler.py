@@ -110,7 +110,7 @@ class A2ACompletionBridgeHandler:
         )
 
         # Build completion params dict
-        completion_params = {
+        completion_params: Dict[str, Any] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
@@ -236,7 +236,7 @@ class A2ACompletionBridgeHandler:
         )
 
         # Build completion params dict
-        completion_params = {
+        completion_params: Dict[str, Any] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
