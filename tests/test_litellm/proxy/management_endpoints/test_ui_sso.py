@@ -2496,6 +2496,11 @@ class TestCLIKeyRegenerationFlow:
             "user_id": "test-user-789",
             "user_role": "internal_user",
             "teams": ["team-a", "team-b", "team-c"],
+            "team_details": [
+                {"team_id": "team-a", "team_alias": "Team A"},
+                {"team_id": "team-b", "team_alias": "Team B"},
+                {"team_id": "team-c", "team_alias": "Team C"},
+            ],
             "models": ["gpt-4"],
             "user_email": "test@example.com",
         }
@@ -2550,6 +2555,7 @@ class TestCLIKeyRegenerationFlow:
             mock_get_jwt.assert_called_once()
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
+            assert jwt_call_args.kwargs["team_alias"] == "Team B"
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()

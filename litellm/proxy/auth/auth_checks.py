@@ -2353,7 +2353,9 @@ class ExperimentalUIJWTToken:
 
     @staticmethod
     def get_cli_jwt_auth_token(
-        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
+        user_info: LiteLLM_UserTable,
+        team_id: Optional[str] = None,
+        team_alias: Optional[str] = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2364,6 +2366,7 @@ class ExperimentalUIJWTToken:
         Args:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
+            team_alias: Team alias for the selected team, if available
 
         Returns:
             Encrypted JWT token string
@@ -2397,6 +2400,7 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
+            team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
