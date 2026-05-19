@@ -2971,6 +2971,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rate_limit_type: Literal["output", "input", "total"],
     ) -> List[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
+        from litellm.litellm_core_utils.core_helpers import (
+            get_litellm_metadata_from_kwargs,
+        )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -3020,10 +3023,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         is_centralized_redis_cache_incremented = kwargs.get(
             "litellm_params", {}
         ).get("is_centralized_redis_cache_incremented", False)
+        litellm_metadata_for_auth = get_litellm_metadata_from_kwargs(kwargs=kwargs) or {}
+        user_api_key_auth_obj = litellm_metadata_for_auth.get("user_api_key_auth")
+        max_parallel_requests_configured = not (
+            user_api_key_auth_obj is not None
+            and getattr(user_api_key_auth_obj, "max_parallel_requests", None) is None
+        )
 
         # max_parallel_requests is its own counter (api-key only). Only
         # decrement when pre-call actually incremented it.
-        if user_api_key and is_centralized_redis_cache_incremented:
+        if user_api_key and is_centralized_redis_cache_incremented and max_parallel_requests_configured:
             pipeline_operations.append(
                 RedisPipelineIncrementOperation(
                     key=self.create_rate_limit_keys(
@@ -3043,7 +3052,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "MPR success-path decrement skipped because user_api_key_hash was not resolved. "
                 "standard_logging_object_present=%s, standard_logging_metadata_present=%s, "
                 "stream=%r, call_type=%r, cache_hit=%r, async_complete_streaming_response_present=%s, "
-                "model=%r, litellm_params.metadata.user_api_key=%r, "
+                "model=%r, max_parallel_requests_configured=%s, litellm_params.metadata.user_api_key=%r, "
                 "litellm_params.litellm_metadata.user_api_key=%r",
                 bool(kwargs.get("standard_logging_object")),
                 bool(standard_logging_metadata),
@@ -3052,6 +3061,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 kwargs.get("cache_hit"),
                 "async_complete_streaming_response" in kwargs,
                 kwargs.get("model"),
+                max_parallel_requests_configured,
                 _lp_metadata.get("user_api_key"),
                 _lp_litellm_metadata.get("user_api_key"),
             )
@@ -3146,7 +3156,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "is_centralized_redis_cache_incremented",
                 request_data.get("litellm_params", {}).get("is_centralized_redis_cache_incremented", False),
             )
-            if user_api_key and is_centralized_redis_cache_incremented:
+            max_parallel_requests_configured = not (
+                user_api_key_dict is not None and user_api_key_dict.max_parallel_requests is None
+            )
+            if user_api_key and is_centralized_redis_cache_incremented and max_parallel_requests_configured:
                 counter_key = self.create_rate_limit_keys(
                     key="api_key",
                     value=user_api_key,
