@@ -160,3 +160,62 @@ def test_delete_skill_admin_succeeds():
     assert resp.status_code == 200
     assert resp.json() == {"skill_id": "sk-001", "deleted": True}
     prisma.db.litellm_skillstable.delete.assert_awaited_once()
+
+
+# ============================================================================
+# S2-06: publish semantics
+# ============================================================================
+
+
+def test_publish_sets_metadata_flags():
+    prisma = _mock_prisma()
+    prisma.db.litellm_skillstable.find_unique.return_value = _mock_row(
+        skill_id="sk-001", user_id="u-1"
+    )
+    prisma.db.litellm_skillstable.update.return_value = _mock_row(
+        skill_id="sk-001", xct_metadata={"published": True}
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = _make_client(role=LitellmUserRoles.PROXY_ADMIN).post(
+            "/v1/xct-skills/sk-001/publish",
+            headers={"Authorization": "Bearer k"},
+        )
+    assert resp.status_code == 200
+    update_data = prisma.db.litellm_skillstable.update.call_args.kwargs["data"]
+    meta = update_data["xct_metadata"]
+    assert meta["published"] is True
+    assert "published_at" in meta and meta["published_by"] == "u-1"
+
+
+def test_patch_published_skill_409s_on_content_field():
+    """After publish, tool_schema/system_prompt_template/instructions are frozen."""
+    prisma = _mock_prisma()
+    prisma.db.litellm_skillstable.find_unique.return_value = _mock_row(
+        skill_id="sk-001", user_id="u-1", xct_metadata={"published": True}
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = _make_client(role=LitellmUserRoles.PROXY_ADMIN).patch(
+            "/v1/xct-skills/sk-001",
+            json={"system_prompt_template": "new!"},
+            headers={"Authorization": "Bearer k"},
+        )
+    assert resp.status_code == 409
+    prisma.db.litellm_skillstable.update.assert_not_awaited()
+
+
+def test_patch_published_skill_allows_safe_field():
+    """display_title and description stay mutable even after publish."""
+    prisma = _mock_prisma()
+    prisma.db.litellm_skillstable.find_unique.return_value = _mock_row(
+        skill_id="sk-001", user_id="u-1", xct_metadata={"published": True}
+    )
+    prisma.db.litellm_skillstable.update.return_value = _mock_row(
+        skill_id="sk-001", display_title="New Title", xct_metadata={"published": True}
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = _make_client(role=LitellmUserRoles.PROXY_ADMIN).patch(
+            "/v1/xct-skills/sk-001",
+            json={"display_title": "New Title"},
+            headers={"Authorization": "Bearer k"},
+        )
+    assert resp.status_code == 200

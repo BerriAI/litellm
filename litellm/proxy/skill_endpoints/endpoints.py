@@ -33,6 +33,16 @@ router = APIRouter()
 # value rather than introducing 'xct' to avoid a backfill migration).
 _XCT_SOURCE = "custom"
 
+# Once a skill row is published, the content-bearing fields below are frozen
+# (next PATCH that targets any of them returns 409). New versions are made
+# by POSTing a fresh row with the same skill_name and a bumped version.
+_IMMUTABLE_AFTER_PUBLISH = {
+    "tool_schema",
+    "system_prompt_template",
+    "instructions",
+    "file_content",
+}
+
 
 def _is_admin(uak: UserAPIKeyAuth) -> bool:
     return uak.user_role in (
@@ -228,15 +238,67 @@ async def patch_skill(
 ) -> XCTSkill:
     from litellm.proxy.proxy_server import prisma_client
 
-    await _require_writable(skill_id, user_api_key_dict)
+    row = await _require_writable(skill_id, user_api_key_dict)
     update_data = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not update_data:
         # Re-fetch + return; no-op patches shouldn't error.
         return await get_skill(skill_id, user_api_key_dict)
+
+    # S2-06: once published, content-bearing fields are immutable.
+    published = (
+        bool(getattr(row, "xct_metadata", None) or {})
+        and (getattr(row, "xct_metadata", None) or {}).get("published") is True
+    )
+    if published:
+        frozen = set(update_data.keys()) & _IMMUTABLE_AFTER_PUBLISH
+        if frozen:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Skill is published; cannot modify {sorted(frozen)}. "
+                    "Create a new version via POST /v1/xct-skills/{id}/publish."
+                ),
+            )
+
     update_data["updated_by"] = user_api_key_dict.user_id
     row = await prisma_client.db.litellm_skillstable.update(
         where={"skill_id": skill_id},
         data=update_data,
+    )
+    return _row_to_skill(row)
+
+
+@router.post(
+    "/v1/xct-skills/{skill_id}/publish",
+    tags=["[beta] XCT Skills"],
+    response_model=XCTSkill,
+)
+async def publish_skill(
+    skill_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> XCTSkill:
+    """Mark a draft skill as published.
+
+    Sets ``xct_metadata.published = True`` and stamps ``published_at`` /
+    ``published_by``. After this returns, the content fields named in
+    ``_IMMUTABLE_AFTER_PUBLISH`` cannot be modified — a fresh version
+    requires a new POST.
+    """
+    from datetime import datetime as _dt
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    row = await _require_writable(skill_id, user_api_key_dict)
+    xct_meta = dict(getattr(row, "xct_metadata", None) or {})
+    if xct_meta.get("published") is True:
+        # Idempotent: re-publishing a published skill is a no-op.
+        return _row_to_skill(row)
+    xct_meta["published"] = True
+    xct_meta["published_at"] = _dt.utcnow().isoformat()
+    xct_meta["published_by"] = user_api_key_dict.user_id
+    row = await prisma_client.db.litellm_skillstable.update(
+        where={"skill_id": skill_id},
+        data={"xct_metadata": xct_meta, "updated_by": user_api_key_dict.user_id},
     )
     return _row_to_skill(row)
 
