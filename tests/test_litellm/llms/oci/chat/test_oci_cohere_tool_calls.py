@@ -326,20 +326,24 @@ class TestOCICohereToolCalls:
 
         chat_history = adapt_messages_to_cohere_standard(messages)
 
-        # First message is the user message
-        assert chat_history[0].role == "USER"
-        assert chat_history[0].message == "What's the weather?"
+        # The last user message is consumed by the request's top-level `message`
+        # field, so chatHistory carries the assistant tool call and tool result.
+        assert len(chat_history) == 2
 
-        # Second message is the assistant with tool calls and no text
-        assistant_msg = chat_history[1]
+        assistant_msg = chat_history[0]
         assert assistant_msg.role == "CHATBOT"
         assert assistant_msg.message is None or assistant_msg.message == ""
         assert assistant_msg.toolCalls is not None
         assert len(assistant_msg.toolCalls) == 1
         assert assistant_msg.toolCalls[0].name == "get_weather"
 
+        tool_msg = chat_history[1]
+        assert tool_msg.role == "TOOL"
+        assert tool_msg.toolResults[0].call.name == "get_weather"
+        assert tool_msg.toolResults[0].outputs[0]["output"] == "Sunny, 25C"
+
     def test_cohere_chat_history_with_tool_calls(self):
-        """Test chat history transformation with tool calls"""
+        """Tool results trailing the last user turn must be preserved in chatHistory."""
         config = OCIChatConfig()
 
         messages = [
@@ -367,26 +371,27 @@ class TestOCICohereToolCalls:
 
         chat_history = adapt_messages_to_cohere_standard(messages)
 
-        # Verify chat history structure (excludes last message)
+        # The last user message becomes the request's top-level `message`.
+        # Everything else — including the trailing tool result — must remain in
+        # chatHistory so the model can see the tool output.
         assert len(chat_history) == 2
 
-        # Check user message
-        user_msg = chat_history[0]
-        assert user_msg.role == "USER"
-        assert user_msg.message == "What's the weather like in Tokyo?"
-
-        # Check assistant message with tool calls
-        assistant_msg = chat_history[1]
+        assistant_msg = chat_history[0]
         assert assistant_msg.role == "CHATBOT"
         assert assistant_msg.message == "I will look up the weather in Tokyo."
         assert assistant_msg.toolCalls is not None
         assert len(assistant_msg.toolCalls) == 1
         assert assistant_msg.toolCalls[0].name == "get_weather"
-        # The parameters should be parsed as JSON
         assert assistant_msg.toolCalls[0].parameters == {"location": "Tokyo"}
 
-        # Note: The tool message (last message) is excluded from chat history
-        # This is the expected behavior for Cohere models
+        tool_msg = chat_history[1]
+        assert tool_msg.role == "TOOL"
+        assert tool_msg.toolResults[0].call.name == "get_weather"
+        assert tool_msg.toolResults[0].call.parameters == {"location": "Tokyo"}
+        assert (
+            tool_msg.toolResults[0].outputs[0]["output"]
+            == "The weather in Tokyo is 22°C with partly cloudy skies."
+        )
 
     def test_cohere_streaming_chunk_handling(self):
         """Test Cohere streaming chunk handling"""

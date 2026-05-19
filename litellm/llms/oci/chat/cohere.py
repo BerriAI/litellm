@@ -60,7 +60,11 @@ def adapt_messages_to_cohere_standard(
 ) -> List[CohereMessage]:
     """Build a Cohere ``chatHistory`` list from an OpenAI-format message array.
 
-    - All messages except the last are included (the last becomes ``message``).
+    - All messages except the *last user message* are included. The caller pulls
+      the last user message into the request's top-level ``message`` field, so
+      trailing tool results (the standard agentic continuation pattern) still
+      appear in ``chatHistory`` and reach the model.
+    - If no user message exists, every message is included (no slice).
     - Tool results are expressed as OCI ``CohereToolMessage.toolResults`` entries,
       with the originating call's name and parameters resolved from the preceding
       assistant message via a ``tool_call_id`` lookup.
@@ -85,8 +89,22 @@ def adapt_messages_to_cohere_standard(
                     parameters=params,
                 )
 
+    last_user_index = next(
+        (
+            i
+            for i in range(len(messages) - 1, -1, -1)
+            if messages[i].get("role") == "user"
+        ),
+        None,
+    )
+    history_source = (
+        messages
+        if last_user_index is None
+        else [m for i, m in enumerate(messages) if i != last_user_index]
+    )
+
     chat_history: List[CohereMessage] = []
-    for msg in messages[:-1]:
+    for msg in history_source:
         role = msg.get("role")
         content = _extract_text_content(msg.get("content"))
 
