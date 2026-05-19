@@ -419,7 +419,63 @@ async def get_capabilities(
         skills=await _collect_skills(user_api_key_dict, admin=admin),
         access_groups=await _collect_access_groups(),
     )
+
+    # S4-08: app-tenancy intersect. If the caller carries an app_id AND
+    # that app declares a capability_scope_id (= access group), the
+    # caller's visible models/agents/mcps are FURTHER NARROWED to the
+    # intersection with that access group. Empty intersection → empty
+    # list (don't fall back to "all").
+    if not admin:
+        response = await _intersect_with_app_capability_scope(
+            response, user_api_key_dict
+        )
+
     await cache.async_set_cache(cache_key, response, ttl=CAPABILITIES_CACHE_TTL)
+    return response
+
+
+async def _intersect_with_app_capability_scope(
+    response: CapabilitiesResponse,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> CapabilitiesResponse:
+    """If the caller's app has a capability_scope_id set, narrow each list."""
+    app_id = getattr(user_api_key_dict, "app_id", None)
+    if not app_id:
+        return response
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return response
+        # Look up the app and resolve capability_scope_id → access group row.
+        # find_unique on app_id is O(1) thanks to the PK; we already cache the
+        # whole capability response so this DB hit is once per cache window.
+        app_row = await prisma_client.db.litellm_xctapptable.find_unique(
+            where={"app_id": app_id}
+        )
+        if app_row is None:
+            return response
+        scope_id = getattr(app_row, "capability_scope_id", None)
+        if not scope_id:
+            return response
+        group = await prisma_client.db.litellm_accessgrouptable.find_unique(
+            where={"access_group_id": scope_id}
+        )
+        if group is None:
+            return response
+
+        allowed_models = set(group.access_model_names or [])
+        allowed_agents = set(group.access_agent_ids or [])
+        allowed_mcps = set(group.access_mcp_server_ids or [])
+
+        response.models = [m for m in response.models if m.id in allowed_models]
+        response.agents = [a for a in response.agents if a.agent_id in allowed_agents]
+        response.mcps = [m for m in response.mcps if m.server_id in allowed_mcps]
+        # skills + access_groups untouched — access groups don't constrain those today
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "capability_scope intersect failed for app=%s: %s", app_id, e
+        )
     return response
 
 

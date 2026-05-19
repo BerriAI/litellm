@@ -647,3 +647,178 @@ def test_capabilities_includes_skills_for_caller(monkeypatch):
     assert skills[0]["display_title"] == "Fact Check"
     assert skills[0]["category"] == "research"
     assert skills[0]["version"] == "3"
+
+
+# ============================================================================
+# S4-08: capability_scope_id intersect
+# ============================================================================
+
+
+class TestCapabilityScopeIntersect:
+    """When a caller's app declares capability_scope_id, the caller's visible
+    models/agents/mcps are FURTHER narrowed to the access group's allow lists.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _wire(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                "model-in-scope": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                },
+                "model-out-of-scope": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                },
+            },
+        )
+        monkeypatch.setattr(litellm, "public_agent_groups", [])
+
+        agent_in = MagicMock()
+        agent_in.agent_id = "agent-in-scope"
+        agent_in.agent_name = "in"
+        agent_in.agent_card_params = {}
+        agent_out = MagicMock()
+        agent_out.agent_id = "agent-out-of-scope"
+        agent_out.agent_name = "out"
+        agent_out.agent_card_params = {}
+        self.fake_registry = MagicMock()
+        self.fake_registry.get_agent_list.return_value = [agent_in, agent_out]
+
+        srv_in = MagicMock()
+        srv_in.server_id = "mcp-in-scope"
+        srv_in.name = "in"
+        srv_in.alias = None
+        srv_in.transport = "http"
+        srv_in.auth_type = "api_key"
+        srv_in.mcp_access_groups = []
+        srv_out = MagicMock()
+        srv_out.server_id = "mcp-out-of-scope"
+        srv_out.name = "out"
+        srv_out.alias = None
+        srv_out.transport = "http"
+        srv_out.auth_type = "api_key"
+        srv_out.mcp_access_groups = []
+        self.fake_manager = MagicMock()
+        self.fake_manager.get_registered_mcp_servers.return_value = [srv_in, srv_out]
+
+    def test_intersect_narrows_to_app_capability_scope(self):
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        # Caller has WIDE individual grants (all entities visible to them).
+        # But their app's capability_scope_id only allows a subset.
+        app_row = MagicMock()
+        app_row.app_id = "app-1"
+        app_row.capability_scope_id = "scope-1"
+        scope_row = MagicMock()
+        scope_row.access_model_names = ["model-in-scope"]
+        scope_row.access_agent_ids = ["agent-in-scope"]
+        scope_row.access_mcp_server_ids = ["mcp-in-scope"]
+
+        prisma = MagicMock()
+        prisma.db.litellm_xctapptable.find_unique = _AsyncMock(return_value=app_row)
+        prisma.db.litellm_accessgrouptable.find_unique = _AsyncMock(
+            return_value=scope_row
+        )
+        prisma.db.litellm_agentstable.find_many = _AsyncMock(return_value=[])
+        prisma.db.litellm_skillstable.find_many = _AsyncMock(return_value=[])
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-x",
+            user_id="u-1",
+            team_id="t-1",
+            api_key_app_id=None,  # not a real field; placeholder
+            app_id="app-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["model-in-scope", "model-out-of-scope"],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+                _AsyncMock(return_value=["agent-in-scope", "agent-out-of-scope"]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                _AsyncMock(return_value=["mcp-in-scope", "mcp-out-of-scope"]),
+            ),
+        ):
+            resp = TestClient(app).get(
+                "/v1/capabilities", headers={"Authorization": "Bearer k"}
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Only the scope-allowed entities survive the intersect.
+        assert {m["id"] for m in body["models"]} == {"model-in-scope"}
+        assert {a["agent_id"] for a in body["agents"]} == {"agent-in-scope"}
+        assert {m["server_id"] for m in body["mcps"]} == {"mcp-in-scope"}
+
+    def test_no_capability_scope_id_means_no_intersect(self):
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        app_row = MagicMock()
+        app_row.app_id = "app-1"
+        app_row.capability_scope_id = None  # not configured
+
+        prisma = MagicMock()
+        prisma.db.litellm_xctapptable.find_unique = _AsyncMock(return_value=app_row)
+        prisma.db.litellm_agentstable.find_many = _AsyncMock(return_value=[])
+        prisma.db.litellm_skillstable.find_many = _AsyncMock(return_value=[])
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-x",
+            user_id="u-1",
+            team_id="t-1",
+            app_id="app-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["model-in-scope", "model-out-of-scope"],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+                _AsyncMock(return_value=["agent-in-scope", "agent-out-of-scope"]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                _AsyncMock(return_value=["mcp-in-scope", "mcp-out-of-scope"]),
+            ),
+        ):
+            resp = TestClient(app).get(
+                "/v1/capabilities", headers={"Authorization": "Bearer k"}
+            )
+        # All caller-allowed entities visible — no narrowing.
+        body = resp.json()
+        assert {m["id"] for m in body["models"]} == {
+            "model-in-scope",
+            "model-out-of-scope",
+        }
+        assert {a["agent_id"] for a in body["agents"]} == {
+            "agent-in-scope",
+            "agent-out-of-scope",
+        }
