@@ -98,7 +98,16 @@ jobs:
         if: steps.auth.outputs.authorized == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Mirror the OPENAI_API_KEY gate used in triage_pr_with_llm.yml and
+          # triage_issue_with_llm.yml: only expose the LLM key when the bot
+          # has been opted in (AGENT_SHIN_ENABLED=true). Reconsider has no
+          # workflow_dispatch path, so AGENT_SHIN_ENABLED is the sole gate.
+          # Without this, an external OSS contributor whose PR was auto-closed
+          # could comment `@agent-shin reconsider` and trigger paid LLM calls
+          # before the team has set AGENT_SHIN_ENABLED — the authorization
+          # check alone is not enough, since the PR/issue author counts as
+          # "authorized" but is still an external contributor.
+          OPENAI_API_KEY: ${{ vars.AGENT_SHIN_ENABLED == 'true' && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
