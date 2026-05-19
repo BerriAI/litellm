@@ -318,18 +318,42 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-        aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_role_name = optional_params.pop("aws_role_name", None)
-        aws_session_name = optional_params.pop("aws_session_name", None)
-        aws_profile_name = optional_params.pop("aws_profile_name", None)
+        # Fall back to `litellm_params` because `base_pre_process_non_default_params`
+        # filters out keys that are not in `DEFAULT_CHAT_COMPLETION_PARAM_VALUES`
+        # before they ever reach `optional_params`, so config-YAML values like
+        # `aws_role_name` for cross-account Bedrock would otherwise silently disappear.
+        aws_secret_access_key = optional_params.pop(
+            "aws_secret_access_key", None
+        ) or litellm_params.get("aws_secret_access_key")
+        aws_access_key_id = optional_params.pop(
+            "aws_access_key_id", None
+        ) or litellm_params.get("aws_access_key_id")
+        aws_session_token = optional_params.pop(
+            "aws_session_token", None
+        ) or litellm_params.get("aws_session_token")
+        aws_role_name = optional_params.pop(
+            "aws_role_name", None
+        ) or litellm_params.get("aws_role_name")
+        aws_session_name = optional_params.pop(
+            "aws_session_name", None
+        ) or litellm_params.get("aws_session_name")
+        aws_profile_name = optional_params.pop(
+            "aws_profile_name", None
+        ) or litellm_params.get("aws_profile_name")
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
+        ) or litellm_params.get(
+            "aws_bedrock_runtime_endpoint"
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
-        aws_external_id = optional_params.pop("aws_external_id", None)
+        aws_web_identity_token = optional_params.pop(
+            "aws_web_identity_token", None
+        ) or litellm_params.get("aws_web_identity_token")
+        aws_sts_endpoint = optional_params.pop(
+            "aws_sts_endpoint", None
+        ) or litellm_params.get("aws_sts_endpoint")
+        aws_external_id = optional_params.pop(
+            "aws_external_id", None
+        ) or litellm_params.get("aws_external_id")
         optional_params.pop("aws_region_name", None)
 
         litellm_params["aws_region_name"] = (
