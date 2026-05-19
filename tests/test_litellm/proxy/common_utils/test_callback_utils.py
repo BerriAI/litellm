@@ -76,6 +76,91 @@ def test_process_callback_with_no_required_env_vars(mock_get_env_vars):
     assert result["variables"] == {}
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
+)
+def test_process_callback_generic_api_falls_back_to_os_env(
+    mock_get_env_vars, monkeypatch
+):
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "https://callback.example.com")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer token")
+
+    result = process_callback(
+        _callback="generic_api",
+        callback_type="success",
+        environment_variables={},
+    )
+
+    assert result["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADERS": "Authorization=Bearer token",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
+)
+def test_process_callback_custom_callback_api_falls_back_to_os_env(
+    mock_get_env_vars, monkeypatch
+):
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "https://callback.example.com")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer token")
+
+    result = process_callback(
+        _callback="custom_callback_api",
+        callback_type="success",
+        environment_variables={},
+    )
+
+    assert result["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADERS": "Authorization=Bearer token",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
+)
+def test_process_callback_config_value_wins_over_os_env(mock_get_env_vars, monkeypatch):
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "https://env.example.com")
+    monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer env")
+
+    result = process_callback(
+        _callback="generic_api",
+        callback_type="success",
+        environment_variables={
+            "GENERIC_LOGGER_ENDPOINT": "https://config.example.com",
+            "GENERIC_LOGGER_HEADERS": "Authorization=Bearer config",
+        },
+    )
+
+    assert result["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://config.example.com",
+        "GENERIC_LOGGER_HEADERS": "Authorization=Bearer config",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_PUBLIC_KEY"],
+)
+def test_process_callback_falls_back_to_os_env_for_registered_callback_vars(
+    mock_get_env_vars, monkeypatch
+):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+
+    result = process_callback(
+        _callback="langfuse",
+        callback_type="success",
+        environment_variables={},
+    )
+
+    assert result["variables"] == {"LANGFUSE_PUBLIC_KEY": "pk-env"}
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []
