@@ -1,10 +1,66 @@
+<!--
+👋 Hi there — please read before submitting.
+
+To keep the review queue healthy for everyone, **every external PR is
+auto-triaged** by an LLM bot ("Agent Shin") on open / reopen, regardless of
+whether the PR is a draft or marked ready for review. PRs that don't meet
+the rubric below are auto-closed with an explanation.
+
+To pass triage, your PR must satisfy AT LEAST ONE of:
+
+  (A) Link a related GitHub issue (e.g. "Fixes #1234" or "Resolves
+      https://github.com/BerriAI/litellm/issues/1234"), OR
+
+  (B) Provide ALL of the following IN THIS PR DESCRIPTION:
+      - A clear problem description (what bug or missing feature this addresses)
+      - Expected vs. actual behavior
+      - Visual QA proof (before/after screenshots, screen recording, or
+        terminal output demonstrating that the fix/feature works end-to-end)
+
+Every external PR (including drafts, regardless of age) also receives a
+Greptile code review. Any PR with a Greptile Confidence Score below 4/5 is
+auto-closed.
+
+If your PR was auto-closed and you've addressed the feedback, you have two
+options to bring it back:
+
+  - **Open a new PR** with the updated branch (recommended — GitHub does not
+    let external contributors reopen a PR that was closed by a bot or
+    maintainer).
+  - **Or** comment `@agent-shin reconsider` on the closed PR. Agent Shin
+    will re-run triage and reopen the PR if it now meets the bar.
+
+Internal BerriAI contributors are exempt from this auto-triage — fill in the
+Linear ticket section instead.
+-->
+
 ## Relevant issues
 
-<!-- e.g. "Fixes #000" -->
+<!-- e.g. "Fixes #000". If you have no related issue, fill in the
+"Problem description / Expected vs. Actual / QA proof" sections below. -->
 
 ## Linear ticket
 
-<!-- if you are an internal contributor, add the Linear ticket e.g. "Resolves LIT-1234" to magically link the Linear ticket to the GitHub PR -->
+<!-- INTERNAL CONTRIBUTORS ONLY: add the Linear ticket e.g. "Resolves LIT-1234"
+to magically link the Linear ticket to the GitHub PR. External contributors:
+leave this blank and fill in the problem/expected-actual/QA sections below. -->
+
+## Problem description
+
+<!-- What bug or missing feature does this PR address? One or two paragraphs.
+External contributors: required unless you linked a GitHub issue above. -->
+
+## Expected vs. actual behavior
+
+<!-- What did you expect to happen? What is happening today (before this PR)?
+External contributors: required unless you linked a GitHub issue above. -->
+
+## QA proof
+
+<!-- Required for external contributors: include before/after screenshots,
+a screen recording, or terminal/log output that demonstrates the fix or feature
+works end-to-end. For UI changes, before/after screenshots are mandatory.
+For backend changes, terminal output of a passing test or curl command is fine. -->
 
 ## Pre-Submission checklist
 
@@ -13,7 +69,7 @@
 - [ ] I have Added testing in the [`tests/test_litellm/`](https://github.com/BerriAI/litellm/tree/main/tests/test_litellm) directory, **Adding at least 1 test is a hard requirement** - [see details](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR passes all unit tests on [`make test-unit`](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
-- [ ] I have requested a Greptile review by commenting `@greptileai` and received a **Confidence Score of at least 4/5** before requesting a maintainer review
+- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically on open; comment `@greptileai` to re-trigger after pushing fixes)
 
 ## Delays in PR merge?
 
@@ -35,13 +91,6 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 - [ ] **Merge / cherry-pick CI run**  
        Links:
-
-## Screenshots / Proof of Fix
-
-<!-- Include screenshots, screen recordings, or log output demonstrating that your changes work as expected.
-     For bug fixes: show reproduction before the fix and passing behavior after.
-     For new features: show the feature working end-to-end.
-     For UI changes: include before/after screenshots. -->
 
 ## Type
 
