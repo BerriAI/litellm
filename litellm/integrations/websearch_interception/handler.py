@@ -19,12 +19,14 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
     get_litellm_web_search_tool_openai,
+    is_anthropic_native_web_search_tool,
     is_web_search_tool,
     is_web_search_tool_chat_completion,
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
@@ -35,6 +37,16 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+# Key used to flag, on per-request kwargs, that the originating client sent
+# an Anthropic-native ``web_search_*`` tool — meaning the final response
+# should include ``web_search_tool_result`` content blocks so the client
+# (e.g. Claude Desktop's citations panel) can render sources.
+WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY = "_websearch_interception_emit_native_blocks"
+
+# Key on ``AgenticLoopPlan.metadata`` carrying the list of pre-built
+# ``web_search_tool_result`` blocks to inject into the final response.
+WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY = "websearch_native_blocks"
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -152,22 +164,55 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"(provider={provider_str}, query='{query}')"
         )
 
-        # Execute search
+        # Native clients (Claude Desktop / Cowork / Anthropic SDK) make a
+        # standalone /v1/messages sub-request just for the search, and they
+        # expect the response in native shape with server_tool_use +
+        # web_search_tool_result content blocks so the citations panel can
+        # render. The agentic-loop post-hook never fires on this path because
+        # there is no model call — emit the native blocks here instead.
+        native_tool = next(
+            (t for t in tools if is_anthropic_native_web_search_tool(t)),
+            None,
+        )
+
+        # Execute search — keep the structured SearchResponse so the native
+        # block can carry per-result url/title/page_age.
         try:
-            search_result_text = await self._execute_search(query)
+            search_result_text, structured = await self._execute_search(query)
         except Exception as e:
             verbose_logger.error(
                 f"WebSearchInterception: Short-circuit search failed: {e}"
             )
-            search_result_text = f"Search failed: {e}"
+            search_result_text, structured = f"Search failed: {e}", None
 
-        # Build synthetic Anthropic response
+        content: List[Dict[str, Any]] = []
+        if native_tool is not None:
+            tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
+            tool_name = native_tool.get("name") or "web_search"
+            content.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_use_id,
+                    "name": tool_name,
+                    "input": {"query": query},
+                }
+            )
+            content.append(
+                WebSearchTransformation.build_web_search_tool_result_block(
+                    tool_use_id=tool_use_id,
+                    search_response=structured,
+                )
+            )
+        # Keep the text block so non-native short-circuit callers (Claude Code,
+        # github_copilot, etc.) see the same payload they always have.
+        content.append({"type": "text", "text": search_result_text})
+
         response: Dict[str, Any] = {
             "id": f"msg_{str(uuid.uuid4())}",
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": [{"type": "text", "text": search_result_text}],
+            "content": content,
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 0, "output_tokens": 0},
@@ -175,7 +220,8 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, "
-            f"returning synthetic response ({len(search_result_text)} chars)"
+            f"returning synthetic response ({len(search_result_text)} chars, "
+            f"native_blocks={native_tool is not None})"
         )
         return response
 
@@ -218,6 +264,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(
             "WebSearchInterception: Converting native web_search tools to LiteLLM standard"
         )
+
+        # If the client sent an Anthropic-native web_search_* tool, mark the
+        # request so the agentic loop emits native web_search_tool_result
+        # blocks in the final response (matches async_pre_request_hook). This
+        # deployment hook fires before async_pre_request_hook on some paths,
+        # so flagging here ensures the signal isn't lost regardless of order.
+        if any(is_anthropic_native_web_search_tool(t) for t in tools):
+            kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools = []
@@ -341,6 +395,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(
             f"WebSearchInterception: Pre-request hook triggered for provider={custom_llm_provider}"
         )
+
+        # If the client sent an Anthropic-native web_search_* tool, mark the
+        # request so the agentic loop emits native web_search_tool_result
+        # blocks in the final response (for citations panels, etc.). The flag
+        # is read by async_build_agentic_loop_plan; the leading underscore
+        # prefix ensures it is stripped before the follow-up call kwargs.
+        if any(is_anthropic_native_web_search_tool(t) for t in tools):
+            kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
 
         # Convert native web search tools to LiteLLM standard
         converted_tools = []
@@ -591,7 +653,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> AgenticLoopPlan:
         tool_calls = tools["tool_calls"]
         thinking_blocks = tools.get("thinking_blocks", [])
-        request_patch = await self._build_anthropic_request_patch(
+        request_patch, structured_results = await self._build_anthropic_request_patch(
             model=model,
             messages=messages,
             tool_calls=tool_calls,
@@ -600,11 +662,91 @@ class WebSearchInterceptionLogger(CustomLogger):
             logging_obj=logging_obj,
             kwargs=kwargs,
         )
+
+        metadata: Dict[str, Any] = {
+            "tool_type": "websearch",
+            "response_format": "anthropic",
+        }
+
+        # If the client request originally carried a native web_search_* tool,
+        # pre-build the Anthropic-native ``web_search_tool_result`` blocks now
+        # (while we still have the structured SearchResponse list) and stash
+        # them on plan metadata for the post-hook to inject.
+        if kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY):
+            metadata[WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY] = (
+                self._build_native_result_blocks(
+                    tool_calls=tool_calls,
+                    structured_results=structured_results,
+                )
+            )
+
         return AgenticLoopPlan(
             run_agentic_loop=True,
             request_patch=request_patch,
-            metadata={"tool_type": "websearch", "response_format": "anthropic"},
+            metadata=metadata,
         )
+
+    async def async_post_agentic_loop_response_hook(
+        self,
+        response: Any,
+        plan: AgenticLoopPlan,
+        kwargs: Dict,
+    ) -> Any:
+        """
+        Inject Anthropic-native ``web_search_tool_result`` blocks into the
+        final response when the originating client used a native
+        ``web_search_*`` tool.
+
+        See ``WebSearchTransformation.build_web_search_tool_result_block`` for
+        the block shape. The blocks are prepended to ``response.content`` so
+        Anthropic-native clients (Claude Desktop, the Anthropic SDK) can
+        render citations / sources alongside the model's textual reply.
+        """
+        native_blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
+        if not native_blocks:
+            return response
+        return self._inject_native_blocks(response, native_blocks)
+
+    @staticmethod
+    def _build_native_result_blocks(
+        tool_calls: List[Dict],
+        structured_results: List[Optional[SearchResponse]],
+    ) -> List[Dict[str, Any]]:
+        """Build one ``web_search_tool_result`` block per tool_call."""
+        blocks: List[Dict[str, Any]] = []
+        for i, tool_call in enumerate(tool_calls):
+            tool_use_id = tool_call.get("id") or ""
+            structured = structured_results[i] if i < len(structured_results) else None
+            blocks.append(
+                WebSearchTransformation.build_web_search_tool_result_block(
+                    tool_use_id=tool_use_id,
+                    search_response=structured,
+                )
+            )
+        return blocks
+
+    @staticmethod
+    def _inject_native_blocks(
+        response: Any, native_blocks: List[Dict[str, Any]]
+    ) -> Any:
+        """Prepend native blocks to response content, dict or object form."""
+        if not native_blocks:
+            return response
+        if isinstance(response, dict):
+            existing = response.get("content") or []
+            response["content"] = list(native_blocks) + list(existing)
+            return response
+        existing = getattr(response, "content", None) or []
+        try:
+            response.content = list(native_blocks) + list(existing)
+        except (AttributeError, TypeError):
+            # Object refused write — fall through and leave the response
+            # untouched rather than crash the request.
+            verbose_logger.debug(
+                "WebSearchInterception: could not inject native blocks into "
+                f"response of type {type(response).__name__}"
+            )
+        return response
 
     async def async_run_chat_completion_agentic_loop(
         self,
@@ -733,7 +875,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs: Dict,
     ) -> Any:
         """Legacy path: execute search + build patch + run follow-up call."""
-        request_patch = await self._build_anthropic_request_patch(
+        request_patch, structured_results = await self._build_anthropic_request_patch(
             model=model,
             messages=messages,
             tool_calls=tool_calls,
@@ -755,13 +897,25 @@ class WebSearchInterceptionLogger(CustomLogger):
         if max_tokens is None:
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
-        return await anthropic_messages.acreate(
+        response = await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
             **optional_params,
             **request_patch.kwargs,
         )
+
+        # Legacy path: the new path goes through the typed plan + core
+        # dispatcher which runs the post-hook automatically. Mirror the
+        # native-block injection here so both paths behave identically.
+        if kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY):
+            native_blocks = self._build_native_result_blocks(
+                tool_calls=tool_calls,
+                structured_results=structured_results,
+            )
+            response = self._inject_native_blocks(response, native_blocks)
+
+        return response
 
     async def _build_anthropic_request_patch(
         self,
@@ -772,8 +926,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         anthropic_messages_optional_request_params: Dict,
         logging_obj: Any,
         kwargs: Dict,
-    ) -> AgenticLoopRequestPatch:
-        """Execute litellm.search() and build follow-up request patch."""
+    ) -> Tuple[AgenticLoopRequestPatch, List[Optional[SearchResponse]]]:
+        """
+        Execute litellm.search() and build follow-up request patch.
+
+        Returns the patch alongside the parallel list of structured
+        ``SearchResponse`` objects (one per tool_call, ``None`` when the
+        search failed or the tool_call had no query). The caller uses these
+        to optionally build Anthropic-native ``web_search_tool_result``
+        content blocks for the final response.
+        """
 
         # Extract search queries from tool_use blocks
         search_tasks = []
@@ -797,23 +959,38 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-        # Handle any exceptions in search results
+        # Split the gathered (text, structured) tuples into two parallel lists.
+        # The text list feeds the follow-up model call; the structured list
+        # is returned to the caller for native-block emission.
         final_search_results: List[str] = []
+        structured_results: List[Optional[SearchResponse]] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
                 verbose_logger.error(
                     f"WebSearchInterception: Search {i} failed with error: {str(result)}"
                 )
                 final_search_results.append(f"Search failed: {str(result)}")
-            elif isinstance(result, str):
-                # Explicitly cast to str for type checker
-                final_search_results.append(cast(str, result))
+                structured_results.append(None)
+            elif isinstance(result, tuple) and len(result) == 2:
+                text_value, structured_value = result
+                final_search_results.append(
+                    cast(str, text_value)
+                    if isinstance(text_value, str)
+                    else str(text_value)
+                )
+                structured_results.append(
+                    structured_value
+                    if isinstance(structured_value, SearchResponse)
+                    else None
+                )
             else:
-                # Should never happen, but handle for type safety
+                # Defensive: legacy callers / unexpected shape — preserve text,
+                # drop structure.
                 verbose_logger.debug(
                     f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
                 )
                 final_search_results.append(str(result))
+                structured_results.append(None)
 
         # Build assistant and user messages using transformation
         assistant_message, user_message = WebSearchTransformation.transform_response(
@@ -859,16 +1036,26 @@ class WebSearchInterceptionLogger(CustomLogger):
             len(follow_up_messages),
             len(final_search_results),
         )
-        return AgenticLoopRequestPatch(
+        patch = AgenticLoopRequestPatch(
             model=full_model_name,
             messages=follow_up_messages,
             max_tokens=max_tokens,
             optional_params=optional_params_without_max_tokens,
             kwargs=kwargs_for_followup,
         )
+        return patch, structured_results
 
-    async def _execute_search(self, query: str) -> str:
-        """Execute a single web search using router's search tools"""
+    async def _execute_search(self, query: str) -> Tuple[str, Optional[SearchResponse]]:
+        """
+        Execute a single web search using router's search tools.
+
+        Returns both the formatted text (fed back to the model in the follow-up
+        call) and the structured ``SearchResponse`` (preserved so callers can
+        build Anthropic-native ``web_search_tool_result`` blocks for clients
+        that requested a native ``web_search_*`` tool). The structured value
+        is None on the failure path so callers can still emit an empty result
+        block rather than dropping the search entirely.
+        """
         try:
             # Import router from proxy_server
             try:
@@ -934,7 +1121,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Search completed for '{query}', got {len(search_result_text)} chars"
             )
-            return search_result_text
+            return search_result_text, result
         except Exception as e:
             verbose_logger.error(
                 f"WebSearchInterception: Search failed for '{query}': {str(e)}"
@@ -1015,7 +1202,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-        # Handle any exceptions in search results
+        # Chat-completion path only needs text — OpenAI tool_result format
+        # has no equivalent of Anthropic's web_search_tool_result block.
         final_search_results: List[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
@@ -1023,8 +1211,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                     f"WebSearchInterception: Search {i} failed with error: {str(result)}"
                 )
                 final_search_results.append(f"Search failed: {str(result)}")
-            elif isinstance(result, str):
-                final_search_results.append(cast(str, result))
+            elif isinstance(result, tuple) and len(result) == 2:
+                text_value, _ = result
+                final_search_results.append(
+                    cast(str, text_value)
+                    if isinstance(text_value, str)
+                    else str(text_value)
+                )
             else:
                 verbose_logger.debug(
                     f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
@@ -1112,9 +1305,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             kwargs=kwargs_for_followup,
         )
 
-    async def _create_empty_search_result(self) -> str:
+    async def _create_empty_search_result(
+        self,
+    ) -> Tuple[str, Optional[SearchResponse]]:
         """Create an empty search result for tool calls without queries"""
-        return "No search query provided"
+        return "No search query provided", None
 
     @staticmethod
     def initialize_from_proxy_config(

@@ -393,8 +393,20 @@ def test_multiple_function_call():
                     "role": "model",
                     "parts": [
                         {"text": "test"},
-                        {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                        {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                        {
+                            "function_call": {
+                                "name": "test",
+                                "args": {"arg": "test"},
+                                "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
+                            }
+                        },
+                        {
+                            "function_call": {
+                                "name": "test2",
+                                "args": {"arg": "test2"},
+                                "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
+                            }
+                        },
                     ],
                 },
                 {
@@ -404,12 +416,14 @@ def test_multiple_function_call():
                             "function_response": {
                                 "name": "test",
                                 "response": {"content": "42"},
+                                "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
                             }
                         },
                         {
                             "function_response": {
                                 "name": "test2",
                                 "response": {"content": "15"},
+                                "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
                             }
                         },
                     ],
@@ -502,8 +516,20 @@ def test_multiple_function_call_changed_text_pos():
                 "role": "model",
                 "parts": [
                     {"text": "test"},
-                    {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                    {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                    {
+                        "function_call": {
+                            "name": "test",
+                            "args": {"arg": "test"},
+                            "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
+                        }
+                    },
+                    {
+                        "function_call": {
+                            "name": "test2",
+                            "args": {"arg": "test2"},
+                            "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
+                        }
+                    },
                 ],
             },
             {
@@ -513,12 +539,14 @@ def test_multiple_function_call_changed_text_pos():
                         "function_response": {
                             "name": "test2",
                             "response": {"content": "15"},
+                            "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
                         }
                     },
                     {
                         "function_response": {
                             "name": "test",
                             "response": {"content": "42"},
+                            "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
                         }
                     },
                 ],
@@ -1219,6 +1247,32 @@ def test_process_gemini_media():
         mime_type="image/jpeg", file_uri="gs://bucket/image"
     )
 
+    # Test gs url without extension using mime_type from image_url object
+    image_message = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "gs://bucket/image-without-extension",
+                        "mime_type": "image/png",
+                    },
+                }
+            ],
+        }
+    ]
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    converted = _gemini_convert_messages_with_history(
+        messages=image_message, model="gemini-2.5-flash"
+    )
+    assert converted[0]["parts"][0]["file_data"] == FileDataType(
+        mime_type="image/png", file_uri="gs://bucket/image-without-extension"
+    )
+
     # Test HTTPS JPG URL
     https_result = _process_gemini_media("https://example.com/image.jpg")
     print("https_result JPG", https_result)
@@ -1254,6 +1308,7 @@ def test_process_gemini_media():
     print("base64_result", base64_result)
     assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
+
 
 
 def test_get_image_mime_type_from_url():
@@ -1490,39 +1545,31 @@ def test_vertex_parallel_tool_calls_true():
     assert "tools" in optional_params
 
 
-def test_vertex_parallel_tool_calls_false_multiple_tools_error():
+def test_vertex_parallel_tool_calls_false_multiple_tools_dropped():
     """
-    Test that parallel_tool_calls = False with multiple tools raises UnsupportedParamsError
-    when drop_params is False.
+    parallel_tool_calls=False with multiple tools is dropped for Gemini
+  (unsupported upstream). Request should succeed without the param.
     """
     tools = [
         {"type": "function", "function": {"name": "get_weather"}},
         {"type": "function", "function": {"name": "get_time"}},
     ]
-    with pytest.raises(litellm.utils.UnsupportedParamsError) as excinfo:
-        get_optional_params(
-            model="gemini-1.5-pro",
-            custom_llm_provider="vertex_ai",
-            tools=tools,
-            parallel_tool_calls=False,
-        )
-    assert (
-        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
-        in str(excinfo.value)
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+        parallel_tool_calls=False,
     )
+    assert "parallel_tool_calls" not in optional_params
+    assert "tools" in optional_params
 
-    # works when specified as "functions"
-    with pytest.raises(litellm.utils.UnsupportedParamsError) as excinfo:
-        get_optional_params(
-            model="gemini-1.5-pro",
-            custom_llm_provider="vertex_ai",
-            functions=tools,
-            parallel_tool_calls=False,
-        )
-    assert (
-        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
-        in str(excinfo.value)
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        functions=tools,
+        parallel_tool_calls=False,
     )
+    assert "parallel_tool_calls" not in optional_params
 
 
 def test_vertex_parallel_tool_calls_false_single_tool():
