@@ -390,10 +390,24 @@ class AnthropicPassthroughLoggingHandler:
                     return None
                 if dtype != "text_delta":
                     return None
-                if data.get("index") not in text_block_indexes:
+                cur_index = data.get("index")
+                if cur_index not in text_block_indexes:
+                    return None
+                # Defensive: Anthropic sends blocks strictly sequentially
+                # (start/deltas/stop, then next block), so pending_text from
+                # block N must be flushed by content_block_stop before block
+                # N+1's deltas arrive. If we ever see a delta whose index
+                # disagrees with the current pending buffer, the stream is
+                # interleaved -- fall back to legacy rather than risk merging
+                # text from different blocks under a single index.
+                if (
+                    pending_text
+                    and pending_index is not None
+                    and cur_index != pending_index
+                ):
                     return None
                 saw_any_text_delta = True
-                pending_index = data.get("index")
+                pending_index = cur_index
                 pending_text.append(delta.get("text") or "")
             elif etype == "ping":
                 # Interior no-op; legacy maps it to an empty chunk.

@@ -1596,7 +1596,22 @@ class ProxyLogging:
                 iterator_overrides.append((resolved, "override"))
             elif "apply_guardrail" in cls_attrs:
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            if "async_post_call_streaming_hook" in cls_attrs:
+            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
+            # using the leaf-class ``__dict__`` check used by the other flags:
+            # before this PR the hook was unconditionally invoked, so a
+            # callback that inherits an override from an intermediate parent
+            # (e.g. a vendor base class providing the override, with the
+            # registered class adding nothing else) MUST still be detected.
+            # A leaf-class miss here would silently drop the inherited hook.
+            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
+            cls_streaming_hook = getattr(
+                cls,
+                "async_post_call_streaming_hook",
+                base_streaming_hook,
+            )
+            if getattr(
+                cls_streaming_hook, "__func__", cls_streaming_hook
+            ) is not getattr(base_streaming_hook, "__func__", base_streaming_hook):
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True

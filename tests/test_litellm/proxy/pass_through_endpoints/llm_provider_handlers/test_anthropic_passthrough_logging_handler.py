@@ -977,3 +977,69 @@ class TestPureTextFastPathParity:
         assert collapsed is not None
         # 50 text deltas + 50 event markers + 1 ping collapse to far fewer.
         assert len(collapsed) < len(all_chunks) / 2
+
+    def test_collapse_returns_none_for_interleaved_block_indexes(self):
+        """
+        Anthropic sends content blocks strictly sequentially (start/deltas/stop
+        for one, then the next). If a stream ever interleaves deltas across
+        block indexes, the fast path must bail to legacy rather than merge text
+        from different blocks under a single index.
+        """
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            # Interleave: delta for block 0, then delta for block 1, with no
+            # content_block_stop between them.
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hello "},
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": "world"},
+                },
+            ),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = list(self._to_all_chunks(frames))
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
+            is None
+        )
