@@ -349,6 +349,13 @@ ignored_keys = [
     "endTime",
     "request_duration_ms",
     "organization_id",
+    # S2-10 / S6-01 — capability-dimension attribution fields. Their presence
+    # is covered by tests/test_litellm/proxy/spend_tracking/test_capability_dimensions.py.
+    "skill_ids",
+    "app_id",
+    "entity_type",
+    "entity_id",
+    "entity_version",
     "metadata.model_map_information",
     "metadata.usage_object",
     "metadata.cold_storage_object_key",

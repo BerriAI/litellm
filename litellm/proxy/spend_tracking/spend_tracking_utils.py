@@ -498,6 +498,19 @@ def get_logging_payload(  # noqa: PLR0915
             ),
         )
 
+        # S6-02: capability-dimension Prometheus counters. Best-effort
+        # side-channel; failures inside record_capability_call never bubble.
+        from litellm.integrations.prometheus_helpers.capability_metrics import (
+            record_capability_call,
+        )
+
+        record_capability_call(
+            app_id=app_id_val,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            spend=float(kwargs.get("response_cost", 0) or 0),
+        )
+
         verbose_proxy_logger.debug(
             "SpendTable: created payload - request_id: %s, model: %s, spend: %s",
             payload.get("request_id"),

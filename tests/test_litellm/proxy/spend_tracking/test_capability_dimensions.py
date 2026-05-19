@@ -39,7 +39,9 @@ def _call(metadata=None):
     kwargs = _build_kwargs(metadata)
     start = datetime(2026, 5, 19, 6, 0, 0)
     end = datetime(2026, 5, 19, 6, 0, 1)
-    return get_logging_payload(kwargs=kwargs, response_obj={}, start_time=start, end_time=end)
+    return get_logging_payload(
+        kwargs=kwargs, response_obj={}, start_time=start, end_time=end
+    )
 
 
 def test_plain_chat_call_attributes_as_model():
