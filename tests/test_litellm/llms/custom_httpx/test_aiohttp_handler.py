@@ -54,12 +54,16 @@ class TestBaseLLMAIOHTTPHandler:
 
         assert result is instance_session
 
-    @patch("aiohttp.ClientSession")
-    def test_get_async_client_session_create_new(self, mock_client_session):
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
+    def test_get_async_client_session_create_new(
+        self, mock_client_session, mock_tcp_connector
+    ):
         """Test _get_async_client_session creates new session when none provided"""
         handler = BaseLLMAIOHTTPHandler()
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_tcp_connector.return_value = Mock()
 
         result = handler._get_async_client_session()
 
@@ -151,12 +155,15 @@ class TestBaseLLMAIOHTTPHandler:
         handler2 = BaseLLMAIOHTTPHandler()
         assert handler2._owns_session
 
-        with patch("aiohttp.ClientSession") as mock_client_session:
-            mock_session_instance = Mock()
-            mock_client_session.return_value = mock_session_instance
+        with patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector"):
+            with patch(
+                "litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession"
+            ) as mock_client_session:
+                mock_session_instance = Mock()
+                mock_client_session.return_value = mock_session_instance
 
-            handler2._get_async_client_session()
-            assert handler2._owns_session
+                handler2._get_async_client_session()
+                assert handler2._owns_session
 
     @pytest.mark.asyncio
     async def test_context_manager_pattern_compatibility(self):
@@ -180,8 +187,9 @@ class TestBaseLLMAIOHTTPHandler:
         # Verify cleanup happened
         mock_session.close.assert_called_once()
 
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
     @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
-    def test_lazy_session_creation(self, mock_client_session):
+    def test_lazy_session_creation(self, mock_client_session, mock_tcp_connector):
         """Test that session is created lazily only when needed"""
         handler = BaseLLMAIOHTTPHandler()
 
@@ -192,6 +200,7 @@ class TestBaseLLMAIOHTTPHandler:
         # Session should be created when requested
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_tcp_connector.return_value = Mock()
 
         session = handler._get_async_client_session()
 
@@ -323,18 +332,30 @@ class TestBaseLLMAIOHTTPHandler:
         mock_client_session.assert_called_once_with(connector=mock_connector)
         assert result is mock_session_instance
 
-    @patch("aiohttp.ClientSession")
-    def test_create_client_session_default(self, mock_client_session):
-        """Test default session creation when no transport/connector provided"""
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.TCPConnector")
+    @patch("litellm.llms.custom_httpx.aiohttp_handler.aiohttp.ClientSession")
+    def test_create_client_session_default(
+        self, mock_client_session, mock_tcp_connector
+    ):
+        """Test default session creation attaches SSRFGuardResolver via TCPConnector."""
         mock_session_instance = Mock()
         mock_client_session.return_value = mock_session_instance
+        mock_connector_instance = Mock()
+        mock_tcp_connector.return_value = mock_connector_instance
 
         handler = BaseLLMAIOHTTPHandler()
 
         result = handler._create_client_session_with_transport()
 
-        # Should create default session
-        mock_client_session.assert_called_once_with()
+        # Verify TCPConnector was created with an SSRFGuardResolver
+        mock_tcp_connector.assert_called_once()
+        _, kwargs = mock_tcp_connector.call_args
+        from litellm.llms.custom_httpx.aiohttp_handler import _SSRFGuardResolver
+
+        assert isinstance(kwargs.get("resolver"), _SSRFGuardResolver)
+
+        # Verify ClientSession received the connector
+        mock_client_session.assert_called_once_with(connector=mock_connector_instance)
         assert result is mock_session_instance
 
     def test_get_or_create_transport(self):
