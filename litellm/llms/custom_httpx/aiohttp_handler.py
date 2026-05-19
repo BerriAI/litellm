@@ -1,3 +1,4 @@
+import asyncio
 import ipaddress
 import socket
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
@@ -6,6 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 import httpx  # type: ignore
 from aiohttp import ClientSession, FormData
+from aiohttp.abc import AbstractResolver
 
 import litellm
 import litellm.litellm_core_utils
@@ -60,6 +62,7 @@ def _assert_not_private_url(url: str) -> None:
     """Raise ValueError if url resolves to any private/reserved IP (SSRF protection).
 
     Validates all DNS answers, not just the first, to prevent A-record rotation attacks.
+    Used as a fast-fail guard on the sync path (httpx) and as defence-in-depth on async.
     """
     parsed = urlparse(url)
     hostname = parsed.hostname
@@ -80,6 +83,52 @@ def _assert_not_private_url(url: str) -> None:
                 f"api_base '{url}' resolves to a private/reserved IP address "
                 f"({raw_ip}) which is not allowed (SSRF protection)"
             )
+
+
+class _SSRFGuardResolver(AbstractResolver):
+    """Custom aiohttp resolver that validates IPs at TCP-connection time.
+
+    By hooking into aiohttp's resolver — used for every connection including
+    redirect targets — this eliminates the DNS-rebinding TOCTOU window that
+    a separate preflight check cannot close.  All DNS answers are validated,
+    not just the first, to defend against A-record rotation.
+    """
+
+    async def resolve(
+        self, host: str, port: int = 0, family: int = socket.AF_INET
+    ) -> list:
+        loop = asyncio.get_event_loop()
+        try:
+            infos = await loop.getaddrinfo(
+                host, port, family=family, type=socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            return []  # Let aiohttp surface the connection error naturally
+        for info in infos:
+            raw_ip = info[4][0]
+            try:
+                addr = ipaddress.ip_address(raw_ip)
+            except ValueError:
+                continue
+            if _is_blocked_address(addr):
+                raise ValueError(
+                    f"Host '{host}' resolves to a private/reserved IP address "
+                    f"({raw_ip}) which is not allowed (SSRF protection)"
+                )
+        return [
+            {
+                "hostname": host,
+                "host": info[4][0],
+                "port": info[4][1] if len(info[4]) > 1 else port,
+                "family": info[0],
+                "proto": info[2],
+                "flags": 0,
+            }
+            for info in infos
+        ]
+
+    async def close(self) -> None:
+        pass
 
 
 class BaseLLMAIOHTTPHandler:
@@ -145,8 +194,12 @@ class BaseLLMAIOHTTPHandler:
             session = aiohttp.ClientSession(connector=connector)
             return session
         else:
-            # Default session creation
-            session = aiohttp.ClientSession()
+            # Default session creation — attach SSRF guard resolver so every
+            # TCP connection (including redirect targets) is validated at the
+            # network layer, eliminating the DNS-rebinding TOCTOU window.
+            session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(resolver=_SSRFGuardResolver())
+            )
             return session
 
     def _get_async_client_session(
@@ -250,7 +303,6 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
-                    allow_redirects=False,
                 )
                 if not response.ok:
                     response.raise_for_status()

@@ -1,8 +1,10 @@
+import asyncio
 import ipaddress
 import pytest
 from unittest.mock import patch
 
 from litellm.llms.custom_httpx.aiohttp_handler import (
+    _SSRFGuardResolver,
     _assert_not_private_url,
     _is_blocked_address,
 )
@@ -10,7 +12,6 @@ from litellm.llms.custom_httpx.aiohttp_handler import (
 
 class TestBlockedAddress:
     def test_ipv4_mapped_ipv6_private_blocked(self):
-        # ::ffff:10.0.0.1 is IPv4-mapped IPv6 for 10.0.0.1 — must be blocked
         addr = ipaddress.ip_address("::ffff:10.0.0.1")
         assert _is_blocked_address(addr)
 
@@ -19,16 +20,13 @@ class TestBlockedAddress:
         assert not _is_blocked_address(addr)
 
     def test_ipv6_link_local_blocked(self):
-        addr = ipaddress.ip_address("fe80::1")
-        assert _is_blocked_address(addr)
+        assert _is_blocked_address(ipaddress.ip_address("fe80::1"))
 
     def test_ipv6_ula_blocked(self):
-        addr = ipaddress.ip_address("fc00::1")
-        assert _is_blocked_address(addr)
+        assert _is_blocked_address(ipaddress.ip_address("fc00::1"))
 
     def test_0_0_0_0_blocked(self):
-        addr = ipaddress.ip_address("0.0.0.0")
-        assert _is_blocked_address(addr)
+        assert _is_blocked_address(ipaddress.ip_address("0.0.0.0"))
 
 
 class TestAiohttpSSRFProtection:
@@ -57,7 +55,6 @@ class TestAiohttpSSRFProtection:
             _assert_not_private_url("http://100.64.0.1/internal")
 
     def test_all_dns_answers_checked(self):
-        # Domain returns public IP first, private IP second — must still block
         with patch(
             "socket.getaddrinfo",
             return_value=[
@@ -83,3 +80,54 @@ class TestAiohttpSSRFProtection:
 
         with patch("socket.getaddrinfo", side_effect=_socket.gaierror("DNS fail")):
             _assert_not_private_url("https://nonexistent.invalid/path")
+
+
+class TestSSRFGuardResolver:
+    """Tests for the async resolver that eliminates TOCTOU DNS rebinding."""
+
+    def _run(self, coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def test_private_ip_blocked_at_connection_time(self):
+        resolver = _SSRFGuardResolver()
+        mock_infos = [
+            (2, 1, 6, "", ("10.0.0.1", 443)),
+        ]
+        with patch("asyncio.AbstractEventLoop.getaddrinfo", return_value=mock_infos):
+
+            async def run():
+                loop = asyncio.get_event_loop()
+                with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                    with pytest.raises(ValueError, match="private/reserved"):
+                        await resolver.resolve("evil.internal", 443)
+
+            self._run(run())
+
+    def test_public_ip_passes_resolver(self):
+        resolver = _SSRFGuardResolver()
+        mock_infos = [
+            (2, 1, 6, "", ("104.18.7.8", 443)),
+        ]
+
+        async def run():
+            loop = asyncio.get_event_loop()
+            with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                result = await resolver.resolve("api.openai.com", 443)
+            assert result[0]["host"] == "104.18.7.8"
+
+        self._run(run())
+
+    def test_all_answers_checked_by_resolver(self):
+        resolver = _SSRFGuardResolver()
+        mock_infos = [
+            (2, 1, 6, "", ("104.18.7.8", 443)),
+            (2, 1, 6, "", ("169.254.169.254", 443)),
+        ]
+
+        async def run():
+            loop = asyncio.get_event_loop()
+            with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                with pytest.raises(ValueError, match="private/reserved"):
+                    await resolver.resolve("rebinding.example.com", 443)
+
+        self._run(run())
