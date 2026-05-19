@@ -612,10 +612,12 @@ class MCPJWTSigner(CustomGuardrail):
         When allowed_scopes is configured: join them verbatim.
         Otherwise auto-generate minimal, least-privilege scopes:
           - Tool call   → mcp:tools/call  mcp:tools/<name>:call
-          - No tool     → mcp:tools/call  mcp:tools/list
+          - No tool     → mcp:tools/list
 
         NOTE: tools/list is intentionally NOT granted on tool-call JWTs to
         prevent callers from enumerating tools they didn't ask to use.
+        Conversely, tools/call is NOT granted on tools/list-only JWTs so an
+        intercepted list token cannot be replayed to invoke tools.
         """
         if self.allowed_scopes is not None:
             return " ".join(self.allowed_scopes)
@@ -626,7 +628,7 @@ class MCPJWTSigner(CustomGuardrail):
         if tool_name:
             scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
         else:
-            scopes = ["mcp:tools/call", "mcp:tools/list"]
+            scopes = ["mcp:tools/list"]
         return " ".join(scopes)
 
     # ------------------------------------------------------------------

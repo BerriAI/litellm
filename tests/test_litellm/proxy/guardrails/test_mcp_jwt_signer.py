@@ -219,7 +219,7 @@ def test_build_claims_scope_with_tool():
 
 
 def test_build_claims_scope_without_tool():
-    """_build_claims() includes mcp:tools/list when no specific tool is called."""
+    """_build_claims() emits only mcp:tools/list when no specific tool is called."""
     signer = _make_signer()
     user_dict = _make_user_api_key_dict()
     data: Dict[str, Any] = {}
@@ -227,10 +227,11 @@ def test_build_claims_scope_without_tool():
     claims = signer._build_claims(user_dict, data)
 
     scopes = set(claims["scope"].split())
-    assert "mcp:tools/call" in scopes
     assert "mcp:tools/list" in scopes
+    # List-only JWTs must NOT carry mcp:tools/call — least-privilege
+    assert "mcp:tools/call" not in scopes
     # No per-tool call scope when no tool name was given
-    assert not any(s.endswith(":call") and s != "mcp:tools/call" for s in scopes)
+    assert not any(s.endswith(":call") for s in scopes)
 
 
 def test_build_claims_act_fallback_to_litellm_proxy():
@@ -372,7 +373,10 @@ async def test_hook_signs_list_mcp_tools():
     assert result["extra_headers"]["Authorization"].startswith("Bearer ")
     token = result["extra_headers"]["Authorization"].removeprefix("Bearer ")
     decoded = _decode_unverified(token)
-    assert "mcp:tools/list" in decoded["scope"]
+    scopes = set(decoded["scope"].split())
+    assert "mcp:tools/list" in scopes
+    # List-only JWTs must NOT carry mcp:tools/call — least-privilege
+    assert "mcp:tools/call" not in scopes
 
 
 @pytest.mark.asyncio

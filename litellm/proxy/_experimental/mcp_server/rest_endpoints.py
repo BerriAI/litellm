@@ -802,7 +802,7 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            tool_arguments = data.get("arguments")
+            tool_arguments = data.get("arguments") or {}
 
             proxy_base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
             (
