@@ -595,3 +595,55 @@ def test_create_model_info_response_includes_capabilities(monkeypatch):
     # original OpenAI-compatible fields preserved
     assert info["id"] == "gpt-4.1"
     assert info["object"] == "model"
+
+
+# ============================================================================
+# S2-04: skills wired into /v1/capabilities
+# ============================================================================
+
+
+def test_capabilities_includes_skills_for_caller(monkeypatch):
+    """An accessible skill row surfaces as a SkillSummary in /v1/capabilities."""
+    monkeypatch.setattr(litellm, "model_cost", {})
+    monkeypatch.setattr(litellm, "public_agent_groups", [])
+    fake_registry = MagicMock()
+    fake_registry.get_agent_list.return_value = []
+    fake_manager = MagicMock()
+    fake_manager.get_registered_mcp_servers.return_value = []
+
+    skill_row = MagicMock()
+    skill_row.skill_id = "sk-xct-1"
+    skill_row.display_title = "Fact Check"
+    skill_row.description = "Verify a claim."
+    skill_row.version = "3"
+    skill_row.source = "custom"
+    skill_row.is_public = False
+    skill_row.xct_metadata = {"category": "research"}
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    prisma = MagicMock()
+    prisma.db.litellm_skillstable.find_many = _AsyncMock(return_value=[skill_row])
+    prisma.db.litellm_agentstable.find_many = _AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            fake_registry,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            fake_manager,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        resp = _make_client(role=LitellmUserRoles.PROXY_ADMIN).get(
+            "/v1/capabilities", headers={"Authorization": "Bearer k"}
+        )
+
+    assert resp.status_code == 200
+    skills = resp.json()["skills"]
+    assert len(skills) == 1
+    assert skills[0]["skill_id"] == "sk-xct-1"
+    assert skills[0]["display_title"] == "Fact Check"
+    assert skills[0]["category"] == "research"
+    assert skills[0]["version"] == "3"

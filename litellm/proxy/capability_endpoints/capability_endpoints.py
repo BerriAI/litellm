@@ -325,9 +325,54 @@ async def _collect_mcps(
     return [_build_mcp_summary(s) for s in servers if s.server_id in allowed]
 
 
-async def _collect_skills() -> List[SkillSummary]:
-    """Placeholder until S2-04 wires native skill table reads."""
-    return []
+async def _collect_skills(
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    admin: bool,
+) -> List[SkillSummary]:
+    """xct-native skills visible to the caller.
+
+    Same scoping shape as ``/v1/xct-skills`` list: admin sees every
+    ``source='custom'`` row; non-admin sees ``is_public OR user_id=me
+    OR team_id=mine``. We re-implement the filter inline instead of
+    importing from skill_endpoints to avoid a circular import.
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+    except Exception:
+        return []
+    if prisma_client is None:
+        return []
+
+    where: Dict[str, Any] = {"source": "custom"}
+    if not admin:
+        caller_clauses: List[Dict[str, Any]] = [{"is_public": True}]
+        if user_api_key_dict.user_id:
+            caller_clauses.append({"user_id": user_api_key_dict.user_id})
+        if user_api_key_dict.team_id:
+            caller_clauses.append({"team_id": user_api_key_dict.team_id})
+        where = {"AND": [where, {"OR": caller_clauses}]}
+
+    try:
+        rows = await prisma_client.db.litellm_skillstable.find_many(where=where)
+    except Exception as e:
+        verbose_proxy_logger.debug("capabilities: skill filter fell back to []: %s", e)
+        return []
+
+    summaries: List[SkillSummary] = []
+    for row in rows:
+        summaries.append(
+            SkillSummary(
+                skill_id=row.skill_id,
+                display_title=getattr(row, "display_title", None),
+                description=getattr(row, "description", None),
+                version=getattr(row, "version", None),
+                source=getattr(row, "source", "custom"),
+                category=(getattr(row, "xct_metadata", None) or {}).get("category"),
+                is_public=bool(getattr(row, "is_public", False)),
+            )
+        )
+    return summaries
 
 
 async def _collect_access_groups() -> List[AccessGroupSummary]:
@@ -371,7 +416,7 @@ async def get_capabilities(
         models=_collect_models(user_api_key_dict, admin=admin),
         agents=await _collect_agents(user_api_key_dict, admin=admin),
         mcps=await _collect_mcps(user_api_key_dict, admin=admin),
-        skills=await _collect_skills(),
+        skills=await _collect_skills(user_api_key_dict, admin=admin),
         access_groups=await _collect_access_groups(),
     )
     await cache.async_set_cache(cache_key, response, ttl=CAPABILITIES_CACHE_TTL)
@@ -444,7 +489,7 @@ def _public_mcp_allowlist() -> set:
     return set(getattr(litellm, "public_mcp_groups", None) or [])
 
 
-def _build_public_response() -> PublicCapabilitiesResponse:
+async def _build_public_response() -> PublicCapabilitiesResponse:
     """Snapshot only public-flagged entities. Credential / server URL omitted."""
     model_costs: Dict[str, Any] = getattr(litellm, "model_cost", {}) or {}
     public_models = _public_model_allowlist()
@@ -489,8 +534,33 @@ def _build_public_response() -> PublicCapabilitiesResponse:
     except Exception as e:
         verbose_proxy_logger.debug("public capabilities: skipped mcps (%s)", e)
 
+    skills: List[SkillSummary] = []
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is not None:
+            rows = await prisma_client.db.litellm_skillstable.find_many(
+                where={"AND": [{"source": "custom"}, {"is_public": True}]}
+            )
+            for row in rows:
+                skills.append(
+                    SkillSummary(
+                        skill_id=row.skill_id,
+                        display_title=getattr(row, "display_title", None),
+                        description=getattr(row, "description", None),
+                        version=getattr(row, "version", None),
+                        source=getattr(row, "source", "custom"),
+                        category=(getattr(row, "xct_metadata", None) or {}).get(
+                            "category"
+                        ),
+                        is_public=True,
+                    )
+                )
+    except Exception as e:
+        verbose_proxy_logger.debug("public capabilities: skipped skills (%s)", e)
+
     return PublicCapabilitiesResponse(
-        models=models, agents=agents, mcps=mcps, skills=[]
+        models=models, agents=agents, mcps=mcps, skills=skills
     )
 
 
@@ -509,7 +579,7 @@ async def get_public_capabilities() -> PublicCapabilitiesResponse:
         if isinstance(hit, dict):
             return PublicCapabilitiesResponse(**hit)
 
-    response = _build_public_response()
+    response = await _build_public_response()
     await cache.async_set_cache(
         _PUBLIC_CACHE_KEY, response, ttl=PUBLIC_CAPABILITIES_CACHE_TTL
     )
