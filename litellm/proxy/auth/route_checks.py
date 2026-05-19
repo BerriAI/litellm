@@ -23,7 +23,6 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
     [
         # user
         "/user/new",
-        "/user/delete",
         "/user/bulk_update",
         # team
         "/team/new",
