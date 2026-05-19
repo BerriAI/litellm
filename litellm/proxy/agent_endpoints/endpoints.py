@@ -142,17 +142,31 @@ async def _check_agent_url_health(
     """
     Perform a GET request against the agent's URL and return the health result.
 
+    S3-05: per-agent ``health_check_timeout_ms`` and ``health_check_enabled``
+    (both inside ``agent_card_params``) override the module defaults.
+    Disabled agents short-circuit to healthy without a network call.
+
     Returns a dict with ``agent_id``, ``healthy`` (bool), and an optional
     ``error`` message.
     """
-    url = (agent.agent_card_params or {}).get("url")
+    card = agent.agent_card_params or {}
+    url = card.get("url")
     if not url:
         return {"agent_id": agent.agent_id, "healthy": True}
+    if card.get("health_check_enabled") is False:
+        # Operator-opted-out of health checks; treat as healthy.
+        return {"agent_id": agent.agent_id, "healthy": True, "skipped": True}
+
+    timeout_ms = card.get("health_check_timeout_ms")
+    if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+        per_agent_timeout = float(timeout_ms) / 1000.0
+    else:
+        per_agent_timeout = AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
 
     try:
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.AgentHealthCheck,
-            params={"timeout": AGENT_HEALTH_CHECK_TIMEOUT_SECONDS},
+            params={"timeout": per_agent_timeout},
         )
         response = await client.get(url)
         if response.status_code >= 500:

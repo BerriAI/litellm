@@ -926,3 +926,56 @@ class TestListAgentsFilters:
             "/v1/agents?limit=1&cursor=a-1", headers={"Authorization": "Bearer k"}
         )
         assert [a["agent_id"] for a in r2.json()] == ["a-2"]
+
+
+# ============================================================================
+# S3-05: per-agent health check config
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_health_check_disabled_agent_is_healthy_without_network():
+    """An agent with health_check_enabled=False should not be hit at all."""
+    from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+    agent = _sample_agent_response()
+    agent.agent_card_params = {
+        "url": "http://this-should-not-be-called/",
+        "health_check_enabled": False,
+    }
+    with patch(
+        "litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client"
+    ) as get_client:
+        result = await _check_agent_url_health(agent)
+    assert result["healthy"] is True
+    assert result.get("skipped") is True
+    get_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_check_uses_per_agent_timeout(monkeypatch):
+    """health_check_timeout_ms overrides the module default."""
+    from litellm.proxy.agent_endpoints.endpoints import _check_agent_url_health
+
+    agent = _sample_agent_response()
+    agent.agent_card_params = {
+        "url": "http://example/",
+        "health_check_timeout_ms": 1500,
+    }
+
+    captured = {}
+
+    def _fake_client(*, llm_provider, params):
+        captured["timeout"] = params["timeout"]
+        client = MagicMock()
+        client.get = AsyncMock(return_value=MagicMock(status_code=200))
+        return client
+
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.endpoints.get_async_httpx_client",
+        _fake_client,
+    )
+    result = await _check_agent_url_health(agent)
+    assert result["healthy"] is True
+    # 1500ms → 1.5s
+    assert captured["timeout"] == pytest.approx(1.5)
