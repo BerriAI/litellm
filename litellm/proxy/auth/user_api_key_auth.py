@@ -2131,6 +2131,18 @@ async def user_api_key_auth(
     )
     user_api_key_auth_obj.budget_reservation = None
 
+    # S4-04: XCT app-tenancy. Priority:
+    #   1. value already on the token row (set by OAuth /token, S4-06)
+    #   2. x-xct-app-id header — legacy admin keys can declare which app
+    #      they're acting on behalf of (used by xct-* server-side jobs
+    #      that authenticate with a service-account API key)
+    # Explicit header NEVER overrides a token-baked app_id — that would
+    # let a leaked admin key impersonate any app's traffic.
+    if not getattr(user_api_key_auth_obj, "app_id", None):
+        header_app_id = request.headers.get("x-xct-app-id")
+        if header_app_id:
+            user_api_key_auth_obj.app_id = header_app_id
+
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
 

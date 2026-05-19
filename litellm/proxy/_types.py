@@ -2565,6 +2565,12 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
     router_settings: Optional[dict] = None
     budget_limits: Optional[List[dict]] = None  # multiple concurrent budget windows
+    # S4-02: XCT app-tenancy. app_id propagates from the issuing OAuth flow
+    # (S4-06) or from explicit x-xct-app-id header (S4-04 fallback).
+    # token_type tags how the row was minted: "oauth_access" / "oauth_refresh"
+    # / null (legacy admin-provisioned virtual keys).
+    app_id: Optional[str] = None
+    token_type: Optional[str] = None
     model_config = ConfigDict(protected_namespaces=())
 
 

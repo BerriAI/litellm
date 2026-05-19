@@ -8345,6 +8345,11 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+        # S4-04: stamp app_id so spend log / capability counters / webhooks
+        # all attribute correctly. user_api_key_app_id is the key
+        # spend_tracking_utils.get_logging_payload reads.
+        if getattr(user_api_key_dict, "app_id", None):
+            data["metadata"]["user_api_key_app_id"] = user_api_key_dict.app_id
 
     # S2-05: resolve `skills: [...]` in the request body, inject prompt +
     # tools, strip the meta fields. No-ops when `skills` is absent.
