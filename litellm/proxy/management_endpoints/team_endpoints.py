@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BlockTeamRequest,
@@ -2237,6 +2238,10 @@ async def _add_team_members_to_team(
     litellm_proxy_admin_name: str,
 ) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
     """Add team members to the team."""
+    # Track size before adding so we can emit the actual delta (ignoring
+    # duplicates that get filtered out by _update_team_members_list).
+    members_before = len(complete_team_data.members_with_roles)
+
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
         data=data,
@@ -2259,6 +2264,15 @@ async def _add_team_members_to_team(
         where={"team_id": data.team_id},
         data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
+
+    # Emit prometheus team member count metric for the actual delta.
+    members_added = len(complete_team_data.members_with_roles) - members_before
+    if members_added > 0:
+        PrometheusLogger.emit_team_member_added_metric(
+            team_id=complete_team_data.team_id,
+            team_alias=complete_team_data.team_alias,
+            count=members_added,
+        )
 
     return updated_team, updated_users, updated_team_memberships
 
@@ -2589,6 +2603,7 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
+    members_before = len(existing_team_row.members_with_roles)
     is_member_in_team, new_team_members = _cleanup_members_with_roles(
         existing_team_row=existing_team_row,
         data=data,
@@ -2607,6 +2622,15 @@ async def team_member_delete(
         },
         data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
     )
+
+    # Emit prometheus team member count metric for the actual delta.
+    members_removed = members_before - len(new_team_members)
+    if members_removed > 0:
+        PrometheusLogger.emit_team_member_removed_metric(
+            team_id=existing_team_row.team_id,
+            team_alias=existing_team_row.team_alias,
+            count=members_removed,
+        )
 
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row

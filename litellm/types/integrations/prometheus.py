@@ -239,6 +239,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    # Team membership metrics
+    "litellm_team_member_count_metric",
     # Managed batch metrics
     "litellm_managed_batch_created_total",
     "litellm_managed_file_size_bytes",
@@ -499,6 +501,13 @@ class PrometheusMetricLabels:
     ]
 
     litellm_team_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    # Team membership count - emitted on team/member_add and team/member_delete.
+    # Gauge value increases when a user is added and decreases when one is removed.
+    litellm_team_member_count_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]

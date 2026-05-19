@@ -68,6 +68,58 @@ class PrometheusLogger(CustomLogger):
                 return cb
         return None
 
+    @staticmethod
+    def emit_team_member_added_metric(
+        team_id: Optional[str],
+        team_alias: Optional[str],
+        count: int = 1,
+    ) -> None:
+        """
+        Increment the team member count gauge when one or more members are added
+        to a team. No-op if PrometheusLogger is not registered as a callback or
+        if count <= 0 (e.g. all members were duplicates).
+        """
+        if count <= 0 or not team_id:
+            return
+        instance = PrometheusLogger.get_instance()
+        if instance is None:
+            return
+        try:
+            instance.litellm_team_member_count_metric.labels(
+                team=team_id,
+                team_alias=team_alias or "",
+            ).inc(count)
+        except Exception as e:
+            verbose_logger.debug(
+                f"Prometheus: error emitting team member added metric: {e}"
+            )
+
+    @staticmethod
+    def emit_team_member_removed_metric(
+        team_id: Optional[str],
+        team_alias: Optional[str],
+        count: int = 1,
+    ) -> None:
+        """
+        Decrement the team member count gauge when one or more members are
+        removed from a team. No-op if PrometheusLogger is not registered as a
+        callback or if count <= 0.
+        """
+        if count <= 0 or not team_id:
+            return
+        instance = PrometheusLogger.get_instance()
+        if instance is None:
+            return
+        try:
+            instance.litellm_team_member_count_metric.labels(
+                team=team_id,
+                team_alias=team_alias or "",
+            ).dec(count)
+        except Exception as e:
+            verbose_logger.debug(
+                f"Prometheus: error emitting team member removed metric: {e}"
+            )
+
     def __init__(  # noqa: PLR0915
         self,
         **kwargs,
@@ -475,6 +527,16 @@ class PrometheusLogger(CustomLogger):
                 "litellm_teams_count",
                 "Total number of teams in LiteLLM",
                 labelnames=[],
+            )
+
+            # Team membership gauge - tracks number of members per team.
+            # Incremented on /team/member_add and decremented on /team/member_delete.
+            self.litellm_team_member_count_metric = self._gauge_factory(
+                "litellm_team_member_count_metric",
+                "Number of members in a team. Incremented when a member is added, decremented when a member is removed.",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_team_member_count_metric"
+                ),
             )
 
             ########################################
