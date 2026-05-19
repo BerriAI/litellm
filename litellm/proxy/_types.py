@@ -3521,6 +3521,12 @@ class SpendLogsPayload(TypedDict):
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]
     agent_id: Optional[str]
+    # S2-10 / S6-01 — capability-dimension attribution.
+    skill_ids: List[str]
+    app_id: Optional[str]
+    entity_type: Optional[str]
+    entity_id: Optional[str]
+    entity_version: Optional[str]
     api_base: str
     user: str
     metadata: str  # json str

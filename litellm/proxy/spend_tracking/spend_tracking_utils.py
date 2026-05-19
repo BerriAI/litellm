@@ -413,6 +413,37 @@ def get_logging_payload(  # noqa: PLR0915
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
+    # S2-10 + S6-01: capability-dimension attribution.
+    # - skill_ids: stamped into metadata by chat_completion when `skills`
+    #   is in the body (see proxy_server.chat_completion + skill injection).
+    # - entity_type/entity_id/entity_version: derived from which subsystem
+    #   produced the row (A2A agent / MCP tool / native skill / plain model).
+    # - app_id: set by S4-04 auth on UserAPIKeyAuth; passes through metadata.
+    skill_ids: List[str] = [
+        s for s in (metadata.get("skill_ids") or []) if isinstance(s, str)
+    ]
+    app_id_val: Optional[str] = (
+        metadata.get("user_api_key_app_id")
+        or metadata.get("app_id")
+        or kwargs.get("app_id")
+    )
+    if agent_id:
+        entity_type = "agent"
+        entity_id = agent_id
+        entity_version = None
+    elif mcp_namespaced_tool_name:
+        entity_type = "mcp"
+        entity_id = mcp_namespaced_tool_name
+        entity_version = None
+    elif skill_ids:
+        entity_type = "skill"
+        entity_id = skill_ids[0]  # primary skill if multiple were injected
+        entity_version = None
+    else:
+        entity_type = "model"
+        entity_id = model_name or None
+        entity_version = None
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -441,6 +472,11 @@ def get_logging_payload(  # noqa: PLR0915
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
+            skill_ids=skill_ids,
+            app_id=app_id_val,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_version=entity_version,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
