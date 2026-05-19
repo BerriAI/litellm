@@ -5523,8 +5523,6 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
-                "acreate_interaction",
-                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -5584,6 +5582,8 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "acreate_interaction",
+                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",
@@ -5711,6 +5711,9 @@ class Router:
         # Default to gemini for interactions API
         if "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = "gemini"
+        # If the proxy accidentally passed agent name as model, clear it
+        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
+            kwargs["model"] = None
         return await original_function(**kwargs)
 
     async def _init_managed_agents_api_endpoints(

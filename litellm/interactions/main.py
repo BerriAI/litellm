@@ -266,7 +266,14 @@ def create(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        if model:
+        # Routing logic:
+        # - agent provided (no model, or model accidentally set to agent name) → gemini
+        # - model provided → resolve provider via get_llm_provider (normal routing)
+        if agent and model == agent:
+            model = None
+        if agent and not model:
+            custom_llm_provider = custom_llm_provider or "gemini"
+        elif model:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,

@@ -89,6 +89,12 @@ async def create_gemini_agent(
     """
     srv = _proxy_server_imports()
     data = await _read_request_body(request=request)
+    # Merge litellm_params_template (e.g. custom_llm_provider, api_key) into the request
+    litellm_params_template = data.pop("litellm_params_template", None) or {}
+    if isinstance(litellm_params_template, dict):
+        for key, value in litellm_params_template.items():
+            if key not in data:
+                data[key] = value
     data.setdefault("custom_llm_provider", "gemini")
 
     processor = ProxyBaseLLMRequestProcessing(data=data)

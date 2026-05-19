@@ -107,10 +107,9 @@ class TestInitInteractionsApiEndpoints:
             interaction_id="test-id",
         )
 
-        mock_function.assert_called_once_with(
-            custom_llm_provider="gemini",
-            interaction_id="test-id",
-        )
+        call_kwargs = mock_function.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "gemini"
+        assert call_kwargs["interaction_id"] == "test-id"
         assert result == {"result": "success"}
 
     @pytest.mark.asyncio
@@ -140,3 +139,63 @@ class TestInitInteractionsApiEndpoints:
             custom_llm_provider="vertex_ai",
         )
         assert result == {"result": "success"}
+
+    @pytest.mark.asyncio
+    async def test_init_interactions_api_endpoints_clears_model_when_equals_agent(
+        self,
+    ):
+        """Managed agent interactions must not pass agent name as model to the SDK."""
+        router = Router(model_list=[])
+
+        mock_function = AsyncMock(return_value={"result": "success"})
+
+        await router._init_interactions_api_endpoints(
+            original_function=mock_function,
+            agent="mqy-custom-slides-agent",
+            model="mqy-custom-slides-agent",
+            input="hello",
+        )
+
+        mock_function.assert_called_once_with(
+            custom_llm_provider="gemini",
+            agent="mqy-custom-slides-agent",
+            model=None,
+            input="hello",
+        )
+
+
+class TestRouterCreateInteractionRouting:
+    """acreate_interaction must bypass model-group fallbacks (openai/* wildcards)."""
+
+    @pytest.mark.asyncio
+    async def test_acreate_interaction_uses_init_interactions_not_generic_fallbacks(
+        self,
+    ):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "gpt-4"},
+                }
+            ]
+        )
+
+        with patch.object(
+            router,
+            "_init_interactions_api_endpoints",
+            new_callable=AsyncMock,
+            return_value={"id": "int-1"},
+        ) as mock_init, patch.object(
+            router,
+            "_ageneric_api_call_with_fallbacks",
+            new_callable=AsyncMock,
+        ) as mock_generic:
+            result = await router.acreate_interaction(
+                agent="mqy-custom-slides-agent",
+                input="hello",
+                custom_llm_provider="gemini",
+            )
+
+        mock_init.assert_called_once()
+        mock_generic.assert_not_called()
+        assert result == {"id": "int-1"}
