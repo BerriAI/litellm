@@ -1134,8 +1134,12 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 stream=stream,
             )
         except Exception as e:
-            if "openai-internal" in str(e):
+            err = str(e)
+            if "openai-internal" in err:
                 pytest.skip("Skipping test due to openai-internal error")
+            if "model_not_found" in err or "does not exist" in err:
+                pytest.skip(f"Skipping test - upstream model unavailable: {err}")
+            raise
 
         if stream:
             for chunk in response:
