@@ -1045,10 +1045,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
-                            or "gemini-3.1-flash" in model.lower()
-                            or "gemini-3.5-flash" in model.lower()
+                            "gemini-3" in model.lower() and "flash" in model.lower()
                         )
                         params["thinkingLevel"] = (
                             "minimal" if is_gemini3flash else "low"
