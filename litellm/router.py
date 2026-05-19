@@ -208,6 +208,11 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 
     Span = Union[_Span, Any]
 else:
@@ -2207,11 +2212,137 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
+    @staticmethod
+    def _extract_partial_responses_usage(
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+    ) -> Optional[Usage]:
+        """
+        Best-effort: pull partial token usage from a Responses-API streaming
+        iterator that errored mid-stream.
+
+        Two sources, in priority order:
+          1. The bridge path (LiteLLMCompletionStreamingIterator) accumulates
+             chat-completion chunks while streaming — feed them through
+             stream_chunk_builder to recover usage.
+          2. The native path (ResponsesAPIStreamingIterator) only has a
+             completed_response object if the stream reached
+             RESPONSE_COMPLETED before erroring — uncommon mid-stream but
+             worth checking.
+
+        Returns None when no partial usage is recoverable (in which case
+        the caller skips usage combining).
+        """
+        chunks = getattr(source_iterator, "collected_chat_completion_chunks", None)
+        if chunks:
+            try:
+                from litellm.main import stream_chunk_builder
+
+                built = stream_chunk_builder(chunks=chunks)
+                usage = cast(Optional[Usage], getattr(built, "usage", None))
+                if usage is not None:
+                    return usage
+            except Exception:
+                # Builder is best-effort — fall through to native path.
+                pass
+        completed = getattr(source_iterator, "completed_response", None)
+        response_obj = getattr(completed, "response", None) if completed else None
+        # Native path emits ResponseAPIUsage (input_tokens/output_tokens) rather
+        # than chat Usage (prompt_tokens/completion_tokens); combine_usage_objects
+        # operates on attribute names so the two cannot be merged into a single
+        # combined object. Caller treats both as Optional[Usage]-shaped for the
+        # static type while runtime behavior is attribute-driven.
+        return (
+            cast(Optional[Usage], getattr(response_obj, "usage", None))
+            if response_obj
+            else None
+        )
+
+    @staticmethod
+    def _combine_responses_fallback_usage(
+        fallback_item: "BaseLiteLLMOpenAIResponseObject",
+        partial_usage: Usage,
+    ) -> None:
+        """
+        Merge partial-stream usage with fallback-stream usage on a
+        Responses-API streaming event.
+
+        Only mutates events that carry a `response` with a `usage` field
+        (e.g. response.completed). Other events pass through unchanged.
+        """
+        response = getattr(fallback_item, "response", None)
+        if response is None:
+            return
+        fallback_usage = cast(Optional[Usage], getattr(response, "usage", None))
+        if fallback_usage is None:
+            return
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        combined = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[partial_usage, fallback_usage]
+        )
+        setattr(response, "usage", combined)
+
+    @staticmethod
+    def _build_responses_continuation_input(
+        input_val: Optional[Union[str, "ResponseInputParam"]],
+        generated_content: str,
+    ) -> "ResponseInputParam":
+        """
+        Convert Responses-API input + partial assistant output into a
+        continuation input that asks the fallback model to pick up where the
+        prior assistant message stopped.
+
+        Best effort across providers. The chat-completions path uses
+        Anthropic's `prefix: True` prefill trick on the assistant message;
+        the Responses-API input schema has no direct equivalent, so we
+        append an instruction (developer role) plus a prior assistant
+        message containing the partial output. Providers without prefill
+        semantics (OpenAI, Vertex) treat this as conversational context
+        and may regenerate — same trade-off as the chat-completions path
+        for non-Anthropic fallbacks.
+        """
+        base: List[Dict[str, Any]]
+        if isinstance(input_val, str):
+            base = [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_val}],
+                }
+            ]
+        elif isinstance(input_val, list):
+            base = list(input_val)
+        else:
+            base = []
+        continuation: List[Dict[str, Any]] = [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "The previous assistant response was interrupted "
+                            "mid-stream. Continue exactly where it stopped — "
+                            "do not repeat any of its content. Your response "
+                            "must read as a seamless continuation."
+                        ),
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": generated_content}],
+            },
+        ]
+        return cast("ResponseInputParam", base + continuation)
+
     async def _aresponses_streaming_iterator(
         self,
-        response: Any,
-        initial_kwargs: dict,
-    ) -> Any:
+        response: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: Dict[str, Any],
+    ) -> "BaseResponsesAPIStreamingIterator":
         """
         Wrap a Responses-API streaming iterator so MidStreamFallbackError
         triggers the Router's fallback chain (parity with
@@ -2226,9 +2357,15 @@ class Router:
         served via the completion bridge) propagates unhandled and the
         configured cross-provider fallback never fires.
 
-        Only pre-first-chunk retry is supported — the Responses-API input
-        shape differs from chat completions, so partial-content
-        continuation is intentionally out of scope.
+        Full parity with the chat-completions path:
+          - Pre-first-chunk: retry with the original input unchanged.
+          - Partial content: inject a developer instruction + prior
+            assistant message carrying the generated text so the fallback
+            model continues rather than restarts.
+          - Usage combining: merge partial-stream usage onto the fallback's
+            response.completed event so accounting reflects both attempts.
+          - Stream cleanup: shielded aclose() on both source and fallback
+            iterators on terminate.
         """
         from litellm.exceptions import MidStreamFallbackError
         from litellm.responses.streaming_iterator import (
@@ -2282,6 +2419,7 @@ class Router:
                 async for item in source_iterator:
                     yield item
             except MidStreamFallbackError as e:
+                partial_usage = Router._extract_partial_responses_usage(source_iterator)
                 try:
                     model_group = cast(str, initial_kwargs.get("model"))
                     fallbacks: Optional[List] = initial_kwargs.get(
@@ -2301,6 +2439,18 @@ class Router:
                     initial_kwargs["original_function"] = (
                         self._ageneric_api_call_with_fallbacks_helper
                     )
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content generated before the error — retry with the
+                        # original input. Adding a continuation prompt would
+                        # waste tokens and confuse the model.
+                        pass
+                    else:
+                        initial_kwargs["input"] = (
+                            Router._build_responses_continuation_input(
+                                initial_kwargs.get("input"),
+                                e.generated_content,
+                            )
+                        )
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
@@ -2319,6 +2469,10 @@ class Router:
 
                     if hasattr(fallback_response, "__aiter__"):
                         async for fallback_item in fallback_response:  # type: ignore
+                            if partial_usage is not None:
+                                Router._combine_responses_fallback_usage(
+                                    fallback_item, partial_usage
+                                )
                             yield fallback_item
                     else:
                         yield fallback_response
@@ -4397,8 +4551,8 @@ class Router:
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
-        self, original_function: Callable, **kwargs
-    ):
+        self, original_function: Callable, **kwargs: Any
+    ) -> Union["ResponsesAPIResponse", "BaseResponsesAPIStreamingIterator"]:
         """
         _ageneric_api_call_with_fallbacks for the Responses API, with the
         addition of mid-stream fallback handling.
@@ -4415,7 +4569,7 @@ class Router:
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. The original_generic_function is preserved so the
         # per-attempt helper knows which underlying API to call on fallback.
-        fallback_kwargs = kwargs.copy()
+        fallback_kwargs: Dict[str, Any] = kwargs.copy()
         fallback_kwargs["original_generic_function"] = original_function
 
         response = await self._ageneric_api_call_with_fallbacks(
