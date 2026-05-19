@@ -147,7 +147,12 @@ export const useInfiniteTeams = (
     }),
     queryFn: async ({ pageParam }) => {
       return await teamListCall(accessToken!, pageParam as number, pageSize, {
-        team_alias: search || undefined,
+        // Use the backend's combined `search` parameter so the dropdown matches
+        // both team_id (exact) and team_alias (case-insensitive contains).
+        // This restores the team-id search behavior that the previous
+        // client-side filterOption supported before the move to paginated
+        // backend search.
+        search: search || undefined,
         organizationID: organizationId,
         userID: !isAdmin ? userId : undefined,
       });

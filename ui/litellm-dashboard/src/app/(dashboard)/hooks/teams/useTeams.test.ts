@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useTeams, useTeam, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
+import { useTeams, useTeam, useDeletedTeams, DeletedTeam, teamListCall, useInfiniteTeams } from "./useTeams";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { teamInfoCall } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
@@ -793,5 +793,70 @@ describe("useDeletedTeams", () => {
 
     expect(result.current.data).toEqual(mockDeletedTeams);
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useInfiniteTeams", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    vi.clearAllMocks();
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        teams: mockTeams,
+        total: mockTeams.length,
+        page: 1,
+        page_size: 20,
+        total_pages: 1,
+      }),
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("should send the search input via the backend's combined `search` param (matches team_id or team_alias)", async () => {
+    // The dropdown displays teams as "<alias> (<team_id>)" so admins paste
+    // either value when filtering. The backend's `search` param is the only
+    // one that matches both — `team_alias` only matches the alias and would
+    // hide results when an admin pastes a team_id.
+    renderHook(() => useInfiniteTeams(20, "team-1234-uuid"), { wrapper });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const callUrl = (global.fetch as any).mock.calls[0][0] as string;
+    expect(callUrl).toContain("search=team-1234-uuid");
+    expect(callUrl).not.toContain("team_alias=");
+  });
+
+  it("should not send a search param when search is empty", async () => {
+    renderHook(() => useInfiniteTeams(20), { wrapper });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const callUrl = (global.fetch as any).mock.calls[0][0] as string;
+    expect(callUrl).not.toContain("search=");
+    expect(callUrl).not.toContain("team_alias=");
   });
 });
