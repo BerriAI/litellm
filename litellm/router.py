@@ -2232,30 +2232,49 @@ class Router:
         Returns None when no partial usage is recoverable (in which case
         the caller skips usage combining).
         """
-        chunks = getattr(source_iterator, "collected_chat_completion_chunks", None)
-        if chunks:
-            try:
-                from litellm.main import stream_chunk_builder
-
-                built = stream_chunk_builder(chunks=chunks)
-                usage = cast(Optional[Usage], getattr(built, "usage", None))
-                if usage is not None:
-                    return usage
-            except Exception:
-                # Builder is best-effort — fall through to native path.
-                pass
-        completed = getattr(source_iterator, "completed_response", None)
-        response_obj = getattr(completed, "response", None) if completed else None
-        # Native path emits ResponseAPIUsage (input_tokens/output_tokens) rather
-        # than chat Usage (prompt_tokens/completion_tokens); combine_usage_objects
-        # operates on attribute names so the two cannot be merged into a single
-        # combined object. Caller treats both as Optional[Usage]-shaped for the
-        # static type while runtime behavior is attribute-driven.
-        return (
-            cast(Optional[Usage], getattr(response_obj, "usage", None))
-            if response_obj
-            else None
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
         )
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        # Bridge subclass is the only iterator that accumulates chat-completion
+        # chunks. isinstance narrows the type so we can read the attribute
+        # directly instead of getattr-ing on the base class.
+        if isinstance(source_iterator, LiteLLMCompletionStreamingIterator):
+            chunks = source_iterator.collected_chat_completion_chunks
+            if chunks:
+                try:
+                    from litellm.main import stream_chunk_builder
+
+                    built = stream_chunk_builder(chunks=chunks)
+                    if built is not None and built.usage is not None:
+                        # stream_chunk_builder returns ModelResponse/
+                        # TextCompletionResponse whose .usage is Optional[Usage].
+                        return cast(Usage, built.usage)
+                except Exception:
+                    # Builder is best-effort — fall through to native path.
+                    pass
+
+        # Native path: completed_response is set only if RESPONSE_COMPLETED
+        # arrived before the error (uncommon mid-stream but worth checking).
+        # Only the three terminal event shapes carry a usage object; narrow
+        # via isinstance so the field accesses below stay strongly typed.
+        # Note: native usage is ResponseAPIUsage (input/output_tokens) rather
+        # than chat Usage (prompt/completion_tokens). combine_usage_objects
+        # merges attribute-by-attribute, so the two flavors coexist in the
+        # combined object — we just cast to Optional[Usage] for the static
+        # type. Runtime behavior is attribute-driven.
+        completed = source_iterator.completed_response
+        if isinstance(
+            completed,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
+            return cast(Optional[Usage], completed.response.usage)
+        return None
 
     @staticmethod
     def _combine_responses_fallback_usage(
@@ -2267,19 +2286,32 @@ class Router:
         Responses-API streaming event.
 
         Only mutates events that carry a `response` with a `usage` field
-        (e.g. response.completed). Other events pass through unchanged.
+        (response.completed / response.failed / response.incomplete). Other
+        events pass through unchanged.
         """
-        response = getattr(fallback_item, "response", None)
-        if response is None:
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        if not isinstance(
+            fallback_item,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
             return
-        fallback_usage = cast(Optional[Usage], getattr(response, "usage", None))
-        if fallback_usage is None:
+        response = fallback_item.response
+        if response.usage is None:
             return
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
         combined = BaseTokenUsageProcessor.combine_usage_objects(
-            usage_objects=[partial_usage, fallback_usage]
+            usage_objects=[partial_usage, cast(Usage, response.usage)]
         )
+        # combined is statically typed Usage but response.usage expects
+        # ResponseAPIUsage; field-name-driven merging produces an object that
+        # carries both flavors of token attributes, so setattr keeps the
+        # assignment runtime-correct without lying to the type checker.
         setattr(response, "usage", combined)
 
     @staticmethod
@@ -2387,19 +2419,15 @@ class Router:
                 self.finished = False
                 # Preserve hidden params and identity attributes so response
                 # headers (model_id, api_base, additional_headers) still flow.
-                self._hidden_params = dict(
-                    getattr(source_iterator, "_hidden_params", {}) or {}
-                )
-                self.model = getattr(source_iterator, "model", "")
-                self.custom_llm_provider = getattr(
-                    source_iterator, "custom_llm_provider", None
-                )
-                self.logging_obj = getattr(source_iterator, "logging_obj", None)
-                self.litellm_metadata = getattr(
-                    source_iterator, "litellm_metadata", None
-                )
-                self.responses_api_provider_config = getattr(
-                    source_iterator, "responses_api_provider_config", None
+                # Direct attribute access — all of these are defined on
+                # BaseResponsesAPIStreamingIterator.__init__.
+                self._hidden_params = dict(source_iterator._hidden_params or {})
+                self.model = source_iterator.model
+                self.custom_llm_provider = source_iterator.custom_llm_provider
+                self.logging_obj = source_iterator.logging_obj
+                self.litellm_metadata = source_iterator.litellm_metadata
+                self.responses_api_provider_config = (
+                    source_iterator.responses_api_provider_config
                 )
 
             def __aiter__(self):
@@ -2409,9 +2437,8 @@ class Router:
                 return await self._async_generator.__anext__()
 
             async def aclose(self):
-                close = getattr(self._async_generator, "aclose", None)
-                if close is not None:
-                    await close()
+                # async generators always expose aclose — no defensive check needed.
+                await self._async_generator.aclose()
 
         async def stream_with_fallbacks():
             fallback_response = None

@@ -1790,6 +1790,7 @@ async def test_aresponses_streaming_iterator_fallback():
             self.litellm_metadata = None
             self.responses_api_provider_config = None
             self.finished = False
+            self.completed_response = None
 
         def __aiter__(self):
             return self
@@ -1910,6 +1911,7 @@ async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation(
             self.litellm_metadata = None
             self.responses_api_provider_config = None
             self.finished = False
+            self.completed_response = None
 
         def __aiter__(self):
             return self
@@ -1990,6 +1992,7 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
             self.litellm_metadata = None
             self.responses_api_provider_config = None
             self.finished = False
+            self.completed_response = None
 
         def __aiter__(self):
             return self
@@ -2071,7 +2074,14 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
 
     partial_usage = SimpleNamespace(prompt_tokens=10, completion_tokens=4)
 
-    class _BridgeStyleIterator(BaseResponsesAPIStreamingIterator):
+    # The bridge subclass is what the wrapper isinstance-narrows on to read
+    # collected_chat_completion_chunks. Inherit from it (and skip super().__init__)
+    # so the test exercises the same code path production hits.
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    class _BridgeStyleIterator(LiteLLMCompletionStreamingIterator):
         """Emits a delta chunk then raises mid-stream. Mimics the bridge
         path's collected_chat_completion_chunks attribute, but here we
         intercept stream_chunk_builder so we don't have to construct real
@@ -2088,6 +2098,7 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
             self.litellm_metadata = None
             self.responses_api_provider_config = None
             self.finished = False
+            self.completed_response = None
 
         def __aiter__(self):
             return self
@@ -2104,11 +2115,22 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
                 generated_content="hello",
             )
 
-    fallback_response_object = SimpleNamespace(
-        usage=SimpleNamespace(prompt_tokens=20, completion_tokens=15)
+    # Use real event/response types so the wrapper's isinstance narrowing
+    # (ResponseCompletedEvent / ResponsesAPIResponse) matches.
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
     )
-    fallback_completed_event = SimpleNamespace(
-        type="response.completed",
+
+    fallback_response_object = ResponsesAPIResponse(
+        id="resp_test", created_at=0, model="gpt-4", object="response", output=[]
+    )
+    fallback_response_object.usage = SimpleNamespace(  # type: ignore[assignment]
+        prompt_tokens=20, completion_tokens=15
+    )
+    fallback_completed_event = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
         response=fallback_response_object,
     )
 
