@@ -141,22 +141,21 @@ class TestSSRFGuardResolver:
     """Tests for the async resolver that eliminates TOCTOU DNS rebinding."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     def test_private_ip_blocked_at_connection_time(self):
         resolver = _SSRFGuardResolver()
         mock_infos = [
             (2, 1, 6, "", ("10.0.0.1", 443)),
         ]
-        with patch("asyncio.AbstractEventLoop.getaddrinfo", return_value=mock_infos):
 
-            async def run():
-                loop = asyncio.get_event_loop()
-                with patch.object(loop, "getaddrinfo", return_value=mock_infos):
-                    with pytest.raises(ValueError, match="private/reserved"):
-                        await resolver.resolve("evil.internal", 443)
+        async def run():
+            loop = asyncio.get_running_loop()
+            with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                with pytest.raises(ValueError, match="private/reserved"):
+                    await resolver.resolve("evil.internal", 443)
 
-            self._run(run())
+        self._run(run())
 
     def test_public_ip_passes_resolver(self):
         resolver = _SSRFGuardResolver()
@@ -165,7 +164,7 @@ class TestSSRFGuardResolver:
         ]
 
         async def run():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with patch.object(loop, "getaddrinfo", return_value=mock_infos):
                 result = await resolver.resolve("api.openai.com", 443)
             assert result[0]["host"] == "104.18.7.8"
@@ -180,25 +179,25 @@ class TestSSRFGuardResolver:
         ]
 
         async def run():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with patch.object(loop, "getaddrinfo", return_value=mock_infos):
                 with pytest.raises(ValueError, match="private/reserved"):
                     await resolver.resolve("rebinding.example.com", 443)
 
         self._run(run())
 
-    def test_resolver_dns_failure_returns_empty(self):
+    def test_resolver_dns_failure_propagates(self):
         import socket as _socket
 
         resolver = _SSRFGuardResolver()
 
         async def run():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with patch.object(
                 loop, "getaddrinfo", side_effect=_socket.gaierror("DNS fail")
             ):
-                result = await resolver.resolve("nonexistent.invalid", 443)
-            assert result == []
+                with pytest.raises(_socket.gaierror):
+                    await resolver.resolve("nonexistent.invalid", 443)
 
         self._run(run())
 
@@ -210,7 +209,7 @@ class TestSSRFGuardResolver:
         ]
 
         async def run():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with patch.object(loop, "getaddrinfo", return_value=mock_infos):
                 result = await resolver.resolve("example.com", 443)
             assert any(r["host"] == "104.18.7.8" for r in result)
