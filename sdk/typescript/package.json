@@ -1,0 +1,43 @@
+{
+  "name": "@xct/litellm-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the xct-litellm capability-provider API.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "gen:types": "openapi-typescript ../../tmp/openapi-public.json -o src/types/generated.ts"
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "devDependencies": {
+    "openapi-typescript": "^7.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XcityUS/xcity-litellm.git",
+    "directory": "sdk/typescript"
+  }
+}

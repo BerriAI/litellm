@@ -1,0 +1,41 @@
+[project]
+name = "xct-litellm"
+version = "0.1.0"
+description = "Python SDK for the xct-litellm capability-provider API."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "XcityUS" }]
+dependencies = [
+    "httpx>=0.27",
+    "openai>=1.40",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+async = ["anyio>=4.4"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.5",
+    "datamodel-code-generator>=0.25",
+]
+
+[project.urls]
+Repository = "https://github.com/XcityUS/xcity-litellm"
+Source = "https://github.com/XcityUS/xcity-litellm/tree/main/sdk/python"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["xct_litellm"]
+
+[tool.hatch.build.targets.sdist]
+include = ["xct_litellm", "README.md", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

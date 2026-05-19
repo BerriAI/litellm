@@ -90,6 +90,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/v1/capabilities", "/.well-known/xct-capabilities"),
     ),
     LazyFeature(
+        name="openapi_public",
+        module_path="litellm.proxy.capability_endpoints.openapi_public",
+        path_prefixes=("/openapi-public.json",),
+    ),
+    LazyFeature(
         name="xct_skills",
         module_path="litellm.proxy.skill_endpoints.endpoints",
         path_prefixes=("/v1/xct-skills",),
