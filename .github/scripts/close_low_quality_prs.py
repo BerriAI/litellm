@@ -623,7 +623,17 @@ def main() -> int:
     print("\n=== Summary ===")
     for key, value in summary.items():
         print(f"  {key:28s} {value}")
-    print(f"\nTotal {'would close' if dry_run else 'closed'}: {summary['close']}")
+    # `IMMEDIATE_CLOSE_LOGINS` PRs are closed even in global dry-run mode, so
+    # report actual closures alongside the dry-run "would close" count to avoid
+    # misleading operators into thinking no writes occurred.
+    would_close = summary["close"] - closed
+    if dry_run:
+        if closed:
+            print(f"\nTotal closed: {closed}; would close: {would_close}")
+        else:
+            print(f"\nTotal would close: {would_close}")
+    else:
+        print(f"\nTotal closed: {closed}")
     print(
         f"Total {'would warn (grace)' if dry_run else 'warned (grace)'}: "
         f"{summary['warn-grace']}"
