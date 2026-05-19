@@ -5455,6 +5455,27 @@ class Router:
 
             return vector_store_file_sync_wrapper
 
+        if call_type in (
+            "create_agent",
+            "list_agents",
+            "get_agent",
+            "delete_agent",
+            "list_agent_versions",
+        ):
+
+            def managed_agents_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = "gemini"
+                return original_function(**kwargs)
+
+            return managed_agents_sync_wrapper
+
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: Optional[str] = None,
