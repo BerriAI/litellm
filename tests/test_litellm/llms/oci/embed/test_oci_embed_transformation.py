@@ -73,7 +73,7 @@ class TestOCIEmbedConfig:
         )
 
     def test_get_complete_url_respects_api_base(self):
-        """api_base is returned as-is (caller supplies complete URL for dedicated/custom endpoints)."""
+        """api_base is treated as a base URL — the action path is appended."""
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com",
@@ -82,10 +82,10 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == "https://custom.endpoint.example.com"
+        assert url == "https://custom.endpoint.example.com/20231130/actions/embedText"
 
     def test_get_complete_url_strips_trailing_slash(self):
-        """Trailing slash is stripped from api_base."""
+        """Trailing slash is stripped from api_base before appending the action path."""
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com/",
@@ -94,7 +94,7 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == "https://custom.endpoint.example.com"
+        assert url == "https://custom.endpoint.example.com/20231130/actions/embedText"
 
     # ------------------------------------------------------------------
     # transform_embedding_request

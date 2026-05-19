@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializeAsAny
 
 OCIRoles = Literal["SYSTEM", "USER", "ASSISTANT", "TOOL"]
 
@@ -318,7 +318,11 @@ class CohereChatRequest(BaseModel):
     apiFormat: Literal["COHERE"] = "COHERE"
 
     # Optional fields
-    chatHistory: Optional[List[CohereMessage]] = None
+    # ``SerializeAsAny`` preserves subclass-specific fields (e.g. ``toolResults``
+    # on ``CohereToolMessage``) when this request is serialized via ``model_dump``.
+    # Without it, Pydantic v2 would serialize each element using the declared
+    # ``CohereMessage`` schema and silently drop subclass fields.
+    chatHistory: Optional[List[SerializeAsAny[CohereMessage]]] = None
     maxTokens: Optional[int] = None
     temperature: Optional[float] = None
     topP: Optional[float] = None

@@ -124,12 +124,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        # If the caller provides a full endpoint URL, use it as-is.
-        # Otherwise construct the standard OCI GenAI embedText endpoint from the region.
-        resolved_base = api_base or litellm.api_base
-        if resolved_base:
-            return resolved_base.rstrip("/")
-        base = get_oci_base_url(optional_params, None)
+        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/embedText"
 
     def sign_request(

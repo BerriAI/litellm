@@ -76,7 +76,7 @@ class TestOCIEmbeddingConfig:
         assert "embedText" in url
 
     def test_get_complete_url_custom_api_base(self):
-        """test_get_complete_url returns api_base as-is when provided."""
+        """test_get_complete_url treats api_base as a base URL and appends the embedText path."""
         config = OCIEmbeddingConfig()
         custom_base = "https://custom.oci.example.com/embed"
         url = config.get_complete_url(
@@ -86,7 +86,7 @@ class TestOCIEmbeddingConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == custom_base
+        assert url == f"{custom_base}/20231130/actions/embedText"
 
     def test_get_supported_openai_params(self):
         """test_get_supported_openai_params returns expected params list."""

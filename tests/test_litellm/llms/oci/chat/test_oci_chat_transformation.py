@@ -443,7 +443,7 @@ class TestOCIChatConfig:
                                 {"type": "TEXT", "text": "I am doing well, thank you!"}
                             ],
                         },
-                        "finishReason": "STOP",
+                        "finishReason": "COMPLETE",
                     }
                 ],
                 "timeCreated": created_time,
