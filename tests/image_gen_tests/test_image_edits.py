@@ -133,20 +133,6 @@ class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
         }
 
 
-class TestOpenAIImageEditDallE2(BaseLLMImageEditTest):
-    """
-    Concrete implementation of BaseLLMImageEditTest for OpenAI DALL-E-2 image edits.
-    DALL-E-2 only supports a single image (not an array).
-    """
-
-    def get_base_image_edit_call_args(self) -> dict:
-        """Return base call args for OpenAI DALL-E-2 image edit (single image only)"""
-        return {
-            "model": "dall-e-2",
-            "image": SINGLE_TEST_IMAGE,
-        }
-
-
 class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
     """
     Concrete implementation of BaseLLMImageEditTest for Azure AI FLUX 2 image edits.
@@ -244,7 +230,7 @@ async def test_openai_image_edit_with_bytesio():
 @pytest.mark.asyncio
 async def test_azure_image_edit_litellm_sdk():
     """Test Azure image edit with mocked httpx request to validate request body and URL"""
-    from litellm import image_edit, aimage_edit
+    from litellm import aimage_edit
 
     # Mock response for Azure image edit
     mock_response = {
@@ -316,12 +302,11 @@ async def test_azure_image_edit_litellm_sdk():
                 list(form_data.keys()) if hasattr(form_data, "keys") else "Not a dict",
             )
 
-            # Validate that model and prompt are in the form data
-            assert "model" in form_data, "model should be in form data"
-            assert "prompt" in form_data, "prompt should be in form data"
+            # Deployment is in the URL path; Azure rejects model in multipart for this route.
             assert (
-                form_data["model"] == "gpt-image-1"
-            ), f"Expected model 'gpt-image-1', got {form_data['model']}"
+                "model" not in form_data
+            ), "model must not be in form data for Azure /openai/deployments/.../images/edits"
+            assert "prompt" in form_data, "prompt should be in the form data"
             assert (
                 prompt.strip() in form_data["prompt"]
             ), f"Expected prompt to contain '{prompt.strip()}'"
@@ -329,10 +314,13 @@ async def test_azure_image_edit_litellm_sdk():
         # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert "Authorization" in headers, "Authorization header should be present"
-        assert headers["Authorization"].startswith(
-            "Bearer "
-        ), "Authorization should be Bearer token"
+        assert (
+            "api-key" in headers
+        ), "Azure image edit must use the api-key header, not Authorization: Bearer"
+        assert headers["api-key"] == test_api_key
+        assert (
+            "Authorization" not in headers
+        ), "Azure image edit must not send an Authorization header when an api_key is provided"
 
         print("result from image edit", result)
 

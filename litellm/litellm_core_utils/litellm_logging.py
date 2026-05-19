@@ -1212,7 +1212,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response)
+            original_response = json.dumps(original_response, default=str)
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -3242,10 +3242,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     langfuse_secret=self.standard_callback_dynamic_params.get(
                         "langfuse_secret"
-                    ),
+                    )
+                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
                     langfuse_host=self.standard_callback_dynamic_params.get(
                         "langfuse_host"
                     ),
+                    allow_env_credentials=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    )
+                    is None,
                 )
             return langFuseLogger
 
@@ -4720,7 +4725,7 @@ class StandardLoggingPayloadSetup:
         ):
             for key, value in litellm_params["metadata"].items():
                 # Skip non-serializable objects like UserAPIKeyAuth
-                if key == "user_api_key_auth":
+                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
                     continue
                 merged_metadata[key] = value
 

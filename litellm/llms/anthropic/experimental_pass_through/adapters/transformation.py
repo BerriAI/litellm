@@ -667,7 +667,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -1084,10 +1084,23 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """Translate output_format to response_format when applicable."""
-        if "output_format" not in anthropic_message_request:
-            return
-        output_format = anthropic_message_request["output_format"]
+        """Translate Anthropic structured-output config to OpenAI ``response_format``.
+
+        Accepts either the legacy top-level ``output_format`` field OR the
+        newer ``output_config.format`` (sub-key on ``output_config``) so that
+        both shapes flow through to non-Anthropic backends as
+        ``response_format``. Without the ``output_config.format`` branch,
+        callers using the new Anthropic Structured Outputs API would have
+        their schema silently dropped on the adapter path — only the legacy
+        top-level ``output_format`` was being mapped.
+
+        ``output_format`` takes precedence when both are provided.
+        """
+        output_format: Any = anthropic_message_request.get("output_format")
+        if not output_format:
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict):
+                output_format = output_config.get("format")
         if not output_format:
             return
         response_format = self.translate_anthropic_output_format_to_openai(
@@ -1286,9 +1299,18 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
+                    # Strip Gemini thought-signature suffix from id (mirrors streaming
+                    # path below); base64 chars (+ / =) violate Anthropic's
+                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    raw_id = tool_call.id or ""
+                    base_id = (
+                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+                        else raw_id
+                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=tool_call.id,
+                        id=base_id,
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,

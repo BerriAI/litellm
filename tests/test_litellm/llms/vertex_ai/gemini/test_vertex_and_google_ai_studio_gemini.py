@@ -4261,3 +4261,32 @@ def test_sync_streaming_uses_custom_client():
     # Verify that gemini_client is in the partial's keywords
     assert "gemini_client" in partial_make_sync_call.keywords
     assert partial_make_sync_call.keywords["gemini_client"] is mock_client
+
+
+def test_transform_response_does_not_leak_body_on_parse_failure():
+    leaky_body = {"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}
+    raw_response = MagicMock()
+    raw_response.json.return_value = leaky_body
+    raw_response.text = json.dumps(leaky_body)
+    raw_response.headers = {}
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.GenerateContentResponseBody",
+        side_effect=KeyError("missing required field"),
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            VertexGeminiConfig().transform_response(
+                model="gemini-pro",
+                raw_response=raw_response,
+                model_response=ModelResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    msg = str(exc_info.value)
+    assert "secret content" not in msg
+    assert "Error converting to valid response block" in msg
