@@ -41,7 +41,48 @@ from litellm.types.interactions import (
 from litellm.types.router import GenericLiteLLMParams
 
 
-class InteractionsHTTPHandler:
+class _BaseHTTPHandler:
+    """
+    Shared HTTP infrastructure for LiteLLM handler classes.
+
+    Provides common client resolution and error-mapping helpers so that
+    handler subclasses (InteractionsHTTPHandler, AgentsHTTPHandler, …) do
+    not duplicate this boilerplate.
+    """
+
+    def _handle_error(self, e: Exception, provider_config: Any) -> Exception:
+        if isinstance(e, httpx.HTTPStatusError):
+            return provider_config.get_error_class(
+                error_message=e.response.text,
+                status_code=e.response.status_code,
+                headers=dict(e.response.headers),
+            )
+        return e
+
+    def _sync_client(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[HTTPHandler],
+    ) -> HTTPHandler:
+        return client or _get_httpx_client(
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+        )
+
+    def _async_client(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        client: Optional[AsyncHTTPHandler],
+    ) -> AsyncHTTPHandler:
+        provider = litellm_params.get(
+            "custom_llm_provider", litellm.LlmProviders.GEMINI
+        )
+        return client or get_async_httpx_client(
+            llm_provider=provider,
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+        )
+
+
+class InteractionsHTTPHandler(_BaseHTTPHandler):
     """
     HTTP handler for Interactions API requests.
     """

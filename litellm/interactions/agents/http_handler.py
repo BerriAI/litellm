@@ -1,24 +1,20 @@
 """
 HTTP handler for the Agents API.
 
-Mirrors InteractionsHTTPHandler — owns all HTTP logic so that
-BaseAgentsAPIConfig stays as pure transform code.
+Extends InteractionsHTTPHandler so that the shared HTTP infrastructure
+(_handle_error, _sync_client, _async_client) is reused rather than
+duplicated. BaseAgentsAPIConfig stays as pure transform code.
 """
 
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
 
-import litellm
 from litellm.constants import request_timeout
+from litellm.interactions.http_handler import InteractionsHTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.agents import (
     AgentCreateResponse,
     GeminiAgentDeleteResult,
@@ -28,38 +24,8 @@ from litellm.types.agents import (
 from litellm.types.router import GenericLiteLLMParams
 
 
-class AgentsHTTPHandler:
+class AgentsHTTPHandler(InteractionsHTTPHandler):
     """HTTP handler for Agents API CRUD requests."""
-
-    def _handle_error(
-        self,
-        e: Exception,
-        provider_config: BaseAgentsAPIConfig,
-    ) -> Exception:
-        if isinstance(e, httpx.HTTPStatusError):
-            return provider_config.get_error_class(
-                error_message=e.response.text,
-                status_code=e.response.status_code,
-                headers=dict(e.response.headers),
-            )
-        return e
-
-    def _sync_client(
-        self, litellm_params: GenericLiteLLMParams, client: Optional[HTTPHandler]
-    ) -> HTTPHandler:
-        return client or _get_httpx_client(
-            params={"ssl_verify": litellm_params.get("ssl_verify", None)}
-        )
-
-    def _async_client(
-        self,
-        litellm_params: GenericLiteLLMParams,
-        client: Optional[AsyncHTTPHandler],
-    ) -> AsyncHTTPHandler:
-        return client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.GEMINI,
-            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-        )
 
     # ------------------------------------------------------------------ #
     # CREATE                                                               #
@@ -105,7 +71,11 @@ class AgentsHTTPHandler:
         logging_obj.pre_call(
             input=name,
             api_key="",
-            additional_args={"complete_input_dict": data, "api_base": url, "headers": headers},
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+            },
         )
         try:
             response = sync_httpx_client.post(
@@ -118,7 +88,9 @@ class AgentsHTTPHandler:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        return agents_api_config.transform_create_response(raw_response=response, name=name)
+        return agents_api_config.transform_create_response(
+            raw_response=response, name=name
+        )
 
     async def async_create_agent(
         self,
@@ -148,7 +120,11 @@ class AgentsHTTPHandler:
         logging_obj.pre_call(
             input=name,
             api_key="",
-            additional_args={"complete_input_dict": data, "api_base": url, "headers": headers},
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+            },
         )
         try:
             response = await async_httpx_client.post(
@@ -161,7 +137,9 @@ class AgentsHTTPHandler:
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        return agents_api_config.transform_create_response(raw_response=response, name=name)
+        return agents_api_config.transform_create_response(
+            raw_response=response, name=name
+        )
 
     # ------------------------------------------------------------------ #
     # LIST                                                                 #
@@ -200,15 +178,11 @@ class AgentsHTTPHandler:
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = sync_httpx_client.get(
-                url=url, headers=headers, params=params
-            )
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
-        )
+        logging_obj.post_call(original_response=response.text, additional_args={})
         return agents_api_config.transform_list_response(raw_response=response)
 
     async def async_list_agents(
@@ -240,9 +214,7 @@ class AgentsHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
-        )
+        logging_obj.post_call(original_response=response.text, additional_args={})
         return agents_api_config.transform_list_response(raw_response=response)
 
     # ------------------------------------------------------------------ #
@@ -289,10 +261,10 @@ class AgentsHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
+        logging_obj.post_call(original_response=response.text, additional_args={})
+        return agents_api_config.transform_get_response(
+            raw_response=response, name=name
         )
-        return agents_api_config.transform_get_response(raw_response=response, name=name)
 
     async def async_get_agent(
         self,
@@ -319,14 +291,16 @@ class AgentsHTTPHandler:
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
+        logging_obj.post_call(original_response=response.text, additional_args={})
+        return agents_api_config.transform_get_response(
+            raw_response=response, name=name
         )
-        return agents_api_config.transform_get_response(raw_response=response, name=name)
 
     # ------------------------------------------------------------------ #
     # DELETE                                                               #
@@ -374,10 +348,10 @@ class AgentsHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
+        logging_obj.post_call(original_response=response.text, additional_args={})
+        return agents_api_config.transform_delete_response(
+            raw_response=response, name=name
         )
-        return agents_api_config.transform_delete_response(raw_response=response, name=name)
 
     async def async_delete_agent(
         self,
@@ -410,10 +384,10 @@ class AgentsHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
+        logging_obj.post_call(original_response=response.text, additional_args={})
+        return agents_api_config.transform_delete_response(
+            raw_response=response, name=name
         )
-        return agents_api_config.transform_delete_response(raw_response=response, name=name)
 
     # ------------------------------------------------------------------ #
     # LIST VERSIONS                                                        #
@@ -429,7 +403,9 @@ class AgentsHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
         _is_async: bool = False,
-    ) -> Union[GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]]:
+    ) -> Union[
+        GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]
+    ]:
         if _is_async:
             return self.async_list_agent_versions(
                 agents_api_config=agents_api_config,
@@ -459,9 +435,7 @@ class AgentsHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
-        )
+        logging_obj.post_call(original_response=response.text, additional_args={})
         return agents_api_config.transform_list_versions_response(
             raw_response=response, name=name
         )
@@ -491,13 +465,13 @@ class AgentsHTTPHandler:
             additional_args={"api_base": url, "headers": headers},
         )
         try:
-            response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=agents_api_config)
 
-        logging_obj.post_call(
-            original_response=response.text, additional_args={}
-        )
+        logging_obj.post_call(original_response=response.text, additional_args={})
         return agents_api_config.transform_list_versions_response(
             raw_response=response, name=name
         )

@@ -1601,15 +1601,9 @@ class Router:
         self.alist_agents = self.factory_function(
             alist_agents, call_type="alist_agents"
         )
-        self.list_agents = self.factory_function(
-            list_agents, call_type="list_agents"
-        )
-        self.aget_agent = self.factory_function(
-            aget_agent, call_type="aget_agent"
-        )
-        self.get_agent = self.factory_function(
-            get_agent, call_type="get_agent"
-        )
+        self.list_agents = self.factory_function(list_agents, call_type="list_agents")
+        self.aget_agent = self.factory_function(aget_agent, call_type="aget_agent")
+        self.get_agent = self.factory_function(get_agent, call_type="get_agent")
         self.adelete_agent = self.factory_function(
             adelete_agent, call_type="adelete_agent"
         )
@@ -5582,9 +5576,12 @@ class Router:
                     client=client,
                     **kwargs,
                 )
+            elif call_type in ("acreate_interaction", "create_interaction"):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
-                "acreate_interaction",
-                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",

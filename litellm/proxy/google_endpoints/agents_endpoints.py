@@ -32,32 +32,31 @@ router = APIRouter(tags=["gemini managed agents"])
 
 def _merge_query_params_into_data(data: dict, request: Request) -> dict:
     """
-    For GET/DELETE endpoints that cannot carry a JSON body, read any
-    ``litellm_params_template`` (a JSON-encoded string) and plain
-    ``key=value`` pairs from the query string and merge them into *data*,
-    without overwriting keys that are already present (e.g. path params
-    like ``name`` or the fixed ``custom_llm_provider``).
+    For GET/DELETE endpoints that cannot carry a JSON body, read a
+    JSON-encoded ``litellm_params_template`` query parameter and merge its
+    contents into *data*, without overwriting keys that are already present
+    (e.g. path params like ``name`` or the fixed ``custom_llm_provider``).
 
     This mirrors the ``litellm_params_template`` handling in
-    ``create_gemini_agent`` and allows multi-tenant callers to supply
-    per-request credentials such as ``api_key``:
+    ``create_gemini_agent`` and is the supported way for multi-tenant
+    callers to supply per-request credentials on non-POST endpoints:
 
     .. code-block:: bash
 
-        # JSON-encoded template
         curl "http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
             -H "Authorization: Bearer sk-..."
 
-        # or directly as a flat query parameter
-        curl "http://localhost:4000/v1beta/agents?api_key=AIza..." \\
-            -H "Authorization: Bearer sk-..."
+    Credentials MUST NOT be passed as plain flat query parameters (e.g.
+    ``?api_key=AIza...``) because URL query strings appear verbatim in
+    web-server access logs, CDN edge logs, browser history, and Referer
+    headers. Use the ``litellm_params_template`` JSON body field on POST
+    requests, or the JSON-encoded query parameter above for GET/DELETE.
     """
     query_params = _safe_get_request_query_params(request)
     if not query_params:
         return data
 
-    # Handle JSON-encoded litellm_params_template first (e.g. api_key, api_base)
-    raw_template = query_params.pop("litellm_params_template", None)
+    raw_template = query_params.get("litellm_params_template")
     if raw_template:
         try:
             template = (
@@ -70,11 +69,6 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
         if isinstance(template, dict):
             for key, value in template.items():
                 data.setdefault(key, value)
-
-    # Apply remaining flat query params (e.g. api_key=...) without
-    # overwriting path params or custom_llm_provider already in data.
-    for key, value in query_params.items():
-        data.setdefault(key, value)
 
     return data
 
