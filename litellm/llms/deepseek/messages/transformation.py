@@ -88,6 +88,8 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             base_url = base_url[: -len("/v1/messages")]
         if base_url.endswith("/v1"):
             base_url = base_url[: -len("/v1")]
+        if base_url.endswith("/beta"):
+            base_url = base_url[: -len("/beta")]
 
         if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
             base_url = f"{base_url}/anthropic"
