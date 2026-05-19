@@ -643,55 +643,32 @@ class BaseAWSLLM:
     def _parse_sts_region_from_endpoint(
         aws_sts_endpoint: Optional[str],
     ) -> Optional[str]:
-        """
-        Extract the AWS region from a standard STS endpoint URL.
-
-        Supports public regional endpoints (sts.{region}.amazonaws.com) and
-        VPC interface endpoints (vpce-....sts.{region}.vpce.amazonaws.com).
-        Returns None for the global endpoint (sts.amazonaws.com) or unparseable URLs.
-        """
+        """Extract region from sts.{region}.amazonaws.com or vpce-x.sts.{region}.vpce.amazonaws.com."""
         if not aws_sts_endpoint:
             return None
-        try:
-            host = urllib.parse.urlparse(aws_sts_endpoint).hostname or ""
-        except Exception:
-            return None
+        host = urllib.parse.urlparse(aws_sts_endpoint).hostname or ""
         match = _STS_REGION_FROM_ENDPOINT_PATTERN.search(host)
-        if not match:
-            return None
-        region = match.group(1)
-        if _VALID_AWS_REGION_PATTERN.match(region):
-            return region
-        return None
+        return match.group(1) if match else None
 
     @staticmethod
-    def _resolve_sts_region(
-        aws_sts_endpoint: Optional[str] = None,
-    ) -> Optional[str]:
-        """
-        Resolve the region used for STS SigV4 signing.
-
-        Bedrock's aws_region_name is intentionally not used here; STS follows the
-        caller environment or an explicit aws_sts_endpoint.
-        """
-        if aws_sts_endpoint:
-            parsed_region = BaseAWSLLM._parse_sts_region_from_endpoint(
-                aws_sts_endpoint
-            )
-            if parsed_region:
-                return parsed_region
-        return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    def _resolve_sts_region(aws_sts_endpoint: Optional[str] = None) -> Optional[str]:
+        """STS signing region: parsed from aws_sts_endpoint else AWS_REGION / AWS_DEFAULT_REGION."""
+        return (
+            BaseAWSLLM._parse_sts_region_from_endpoint(aws_sts_endpoint)
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
 
     def _build_sts_client_kwargs(
         self,
         aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
-        """Build boto3 STS client kwargs with aligned endpoint_url and region_name."""
+        """STS client kwargs with aligned endpoint_url and region_name (SigV4)."""
         kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
-        sts_region = self._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
         if aws_sts_endpoint is not None:
             kwargs["endpoint_url"] = aws_sts_endpoint
+        sts_region = self._resolve_sts_region(aws_sts_endpoint)
         if sts_region is not None:
             kwargs["region_name"] = sts_region
         return kwargs
@@ -850,14 +827,6 @@ class BaseAWSLLM:
             f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
         )
 
-        sts_region = self._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
-        if aws_sts_endpoint is not None:
-            sts_endpoint = aws_sts_endpoint
-        elif sts_region is not None:
-            sts_endpoint = f"https://sts.{sts_region}.amazonaws.com"
-        else:
-            sts_endpoint = "https://sts.amazonaws.com"
-
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -867,7 +836,7 @@ class BaseAWSLLM:
             )
 
         sts_client_kwargs = self._build_sts_client_kwargs(
-            aws_sts_endpoint=sts_endpoint,
+            aws_sts_endpoint=aws_sts_endpoint,
             ssl_verify=ssl_verify,
         )
 
