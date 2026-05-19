@@ -441,7 +441,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                         deployment = llm_router.get_deployment_by_model_group_name(
                             model_group_name=model
                         )
-                        if deployment and deployment.litellm_params:
+                        if (
+                            deployment
+                            and deployment.litellm_params
+                            and not llm_router._is_deployment_blocked(deployment)
+                        ):
                             deployment_creds = deployment.litellm_params.model_dump(
                                 exclude_none=True
                             )
