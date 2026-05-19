@@ -2923,6 +2923,9 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     sso_user_id: Optional[str] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    budget_limits: Optional[List[BudgetLimitEntry]] = (
+        None  # multiple concurrent budget windows
+    )
     metadata: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -2931,6 +2934,14 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+        value = values.get("budget_limits")
+        if value is not None and isinstance(value, str):
+            try:
+                values["budget_limits"] = json.loads(value)
+            except json.JSONDecodeError:
+                raise ValueError("Field budget_limits should be valid JSON")
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:
