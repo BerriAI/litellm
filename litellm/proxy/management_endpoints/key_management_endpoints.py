@@ -1842,6 +1842,10 @@ async def prepare_key_update_data(
             key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+        else:
+            # budget_duration explicitly set to null: clear the field and reset time
+            non_default_values["budget_duration"] = None
+            non_default_values["budget_reset_at"] = None
 
     if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
