@@ -1791,6 +1791,10 @@ async def test_aresponses_streaming_iterator_fallback():
             self.responses_api_provider_config = None
             self.finished = False
             self.completed_response = None
+            self.response = None
+            self.start_time = None
+            self.request_data = {}
+            self.call_type = None
 
         def __aiter__(self):
             return self
@@ -1872,6 +1876,97 @@ async def test_aresponses_streaming_iterator_fallback():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_writes_litellm_metadata_on_fallback():
+    """On fallback re-entry, model_group / model_group_alias must land under
+    "litellm_metadata" (the key litellm.aresponses reads from) — not the
+    default "metadata" key the chat-completions path uses. Regression test
+    for greptile-apps comment on PR #28215."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "k1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k2"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    error = MidStreamFallbackError(
+        message="boom",
+        model="gpt-4",
+        llm_provider="anthropic",
+        is_pre_first_chunk=True,
+        generated_content="",
+    )
+
+    class _ImmediateErrorIterator(BaseResponsesAPIStreamingIterator):
+        def __init__(self):
+            self._hidden_params = {}
+            self.model = "gpt-4"
+            self.custom_llm_provider = "anthropic"
+            self.logging_obj = MagicMock()
+            self.litellm_metadata = None
+            self.responses_api_provider_config = None
+            self.finished = False
+            self.completed_response = None
+            self.response = None
+            self.start_time = None
+            self.request_data = {}
+            self.call_type = None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise error
+
+    class _EmptyIter:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_EmptyIter(),
+    ) as mock_fallback_utils:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=_ImmediateErrorIterator(),
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        async for _ in wrapped:
+            pass
+
+    fallback_call_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+    # Routing metadata must land under litellm_metadata, NOT the default
+    # "metadata" key (which litellm.aresponses doesn't read).
+    assert "litellm_metadata" in fallback_call_kwargs, (
+        "litellm_metadata key missing — _update_kwargs_before_fallbacks "
+        "called with the wrong metadata_variable_name"
+    )
+    assert fallback_call_kwargs["litellm_metadata"]["model_group"] == "gpt-4"
+    assert "metadata" not in fallback_call_kwargs or (
+        "model_group" not in fallback_call_kwargs.get("metadata", {})
+    ), "model_group leaked into 'metadata' instead of 'litellm_metadata'"
+
+
+@pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation():
     """Pre-first-chunk MidStreamFallbackError: original input is preserved
     unchanged, no continuation messages are injected."""
@@ -1912,6 +2007,10 @@ async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation(
             self.responses_api_provider_config = None
             self.finished = False
             self.completed_response = None
+            self.response = None
+            self.start_time = None
+            self.request_data = {}
+            self.call_type = None
 
         def __aiter__(self):
             return self
@@ -1993,6 +2092,10 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
             self.responses_api_provider_config = None
             self.finished = False
             self.completed_response = None
+            self.response = None
+            self.start_time = None
+            self.request_data = {}
+            self.call_type = None
 
         def __aiter__(self):
             return self
@@ -2099,6 +2202,10 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
             self.responses_api_provider_config = None
             self.finished = False
             self.completed_response = None
+            self.response = None
+            self.start_time = None
+            self.request_data = {}
+            self.call_type = None
 
         def __aiter__(self):
             return self

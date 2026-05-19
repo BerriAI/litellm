@@ -2415,20 +2415,37 @@ class Router:
             """
 
             def __init__(self, async_generator: AsyncGenerator):
+                import time
+
                 self._async_generator = async_generator
-                self.finished = False
-                # Preserve hidden params and identity attributes so response
-                # headers (model_id, api_base, additional_headers) still flow.
-                # Direct attribute access — all of these are defined on
-                # BaseResponsesAPIStreamingIterator.__init__.
-                self._hidden_params = dict(source_iterator._hidden_params or {})
+                # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
+                # would have set. The wrapper bypasses super().__init__ (it has no
+                # httpx.Response of its own and no provider config to drive), so
+                # we copy from source_iterator where applicable and use safe
+                # defaults elsewhere. This keeps inherited methods (e.g.
+                # _check_max_streaming_duration, _handle_failure) safe to call.
+                self.response = source_iterator.response
                 self.model = source_iterator.model
-                self.custom_llm_provider = source_iterator.custom_llm_provider
                 self.logging_obj = source_iterator.logging_obj
-                self.litellm_metadata = source_iterator.litellm_metadata
+                self.finished = False
                 self.responses_api_provider_config = (
                     source_iterator.responses_api_provider_config
                 )
+                self.completed_response = None
+                self.start_time = source_iterator.start_time
+                self._failure_handled = False
+                self._completed_response_cached = False
+                self._completed_response_logged = False
+                self._completed_response_cache_hit = None
+                self._persist_completed_response_before_logging = True
+                self._stream_created_time = time.time()
+                self.litellm_metadata = source_iterator.litellm_metadata
+                self.custom_llm_provider = source_iterator.custom_llm_provider
+                self.request_data = source_iterator.request_data
+                self.call_type = source_iterator.call_type
+                # Preserve hidden params so response headers (model_id,
+                # api_base, additional_headers) keep flowing.
+                self._hidden_params = dict(source_iterator._hidden_params or {})
 
             def __aiter__(self):
                 return self
@@ -2478,8 +2495,15 @@ class Router:
                                 e.generated_content,
                             )
                         )
+                    # The Responses-API path stores observability metadata
+                    # under "litellm_metadata" (not the default "metadata") —
+                    # see _ageneric_api_call_with_fallbacks. Mirroring that
+                    # here ensures model_group, model_group_alias, and trace
+                    # ids land in the same key litellm.aresponses reads from.
                     self._update_kwargs_before_fallbacks(
-                        model=model_group, kwargs=initial_kwargs
+                        model=model_group,
+                        kwargs=initial_kwargs,
+                        metadata_variable_name="litellm_metadata",
                     )
                     fallback_response = (
                         await self.async_function_with_fallbacks_common_utils(
