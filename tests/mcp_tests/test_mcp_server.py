@@ -382,6 +382,11 @@ async def test_mcp_http_transport_tool_not_found():
         }
     )
 
+    # Mapping populated for this server but not for the requested tool
+    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+        "test_http_server"
+    )
+
     # Try to call a tool that doesn't exist in mapping
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
