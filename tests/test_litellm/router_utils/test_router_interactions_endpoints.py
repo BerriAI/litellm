@@ -107,9 +107,10 @@ class TestInitInteractionsApiEndpoints:
             interaction_id="test-id",
         )
 
-        call_kwargs = mock_function.call_args.kwargs
-        assert call_kwargs["custom_llm_provider"] == "gemini"
-        assert call_kwargs["interaction_id"] == "test-id"
+        mock_function.assert_called_once_with(
+            custom_llm_provider="gemini",
+            interaction_id="test-id",
+        )
         assert result == {"result": "success"}
 
     @pytest.mark.asyncio
