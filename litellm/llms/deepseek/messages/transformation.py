@@ -82,9 +82,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> str:
         base_url = self.get_api_base(api_base=api_base).rstrip("/")
 
-        if base_url.endswith("/v1/messages") and (
-            "/anthropic/" in base_url or base_url.endswith("/anthropic/v1/messages")
-        ):
+        if base_url.endswith("/v1/messages") and "/anthropic/" in base_url:
             return base_url
         if base_url.endswith("/v1/messages"):
             base_url = base_url[: -len("/v1/messages")]
