@@ -2222,9 +2222,11 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
                 generated_content="hello",
             )
 
-    # Use real event/response types so the wrapper's isinstance narrowing
-    # (ResponseCompletedEvent / ResponsesAPIResponse) matches.
+    # Use real event/response/usage types so the wrapper's isinstance
+    # narrowing matches AND the combined output is a clean ResponseAPIUsage
+    # (no token-naming split between chat and responses conventions).
     from litellm.types.llms.openai import (
+        ResponseAPIUsage,
         ResponseCompletedEvent,
         ResponsesAPIResponse,
         ResponsesAPIStreamEvents,
@@ -2233,8 +2235,9 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     fallback_response_object = ResponsesAPIResponse(
         id="resp_test", created_at=0, model="gpt-4", object="response", output=[]
     )
-    fallback_response_object.usage = SimpleNamespace(  # type: ignore[assignment]
-        prompt_tokens=20, completion_tokens=15
+    # Fallback usage arrives in responses-API shape (input/output_tokens).
+    fallback_response_object.usage = ResponseAPIUsage(
+        input_tokens=20, output_tokens=15, total_tokens=35
     )
     fallback_completed_event = ResponseCompletedEvent(
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -2279,10 +2282,19 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
         async for _ in wrapped:
             pass
 
-    # combine_usage_objects sums attribute-wise: 10+20 prompt, 4+15 completion
+    # Combined output must be a clean ResponseAPIUsage (no split between
+    # chat-style and responses-style token names). Bridge partial of 10/4
+    # gets translated to input/output_tokens, then summed with the fallback's
+    # 20/15 to produce 30/19/49.
     merged_usage = fallback_response_object.usage
-    assert getattr(merged_usage, "prompt_tokens") == 30
-    assert getattr(merged_usage, "completion_tokens") == 19
+    assert isinstance(merged_usage, ResponseAPIUsage)
+    assert merged_usage.input_tokens == 30
+    assert merged_usage.output_tokens == 19
+    assert merged_usage.total_tokens == 49
+    # Chat-style attributes should NOT leak onto the merged object.
+    assert not hasattr(merged_usage, "prompt_tokens") or getattr(
+        merged_usage, "prompt_tokens", None
+    ) in (None, 0)
 
 
 @pytest.mark.asyncio

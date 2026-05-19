@@ -212,7 +212,11 @@ if TYPE_CHECKING:
         BaseResponsesAPIStreamingIterator,
     )
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-    from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseInputParam,
+        ResponsesAPIResponse,
+    )
 
     Span = Union[_Span, Any]
 else:
@@ -2215,27 +2219,29 @@ class Router:
     @staticmethod
     def _extract_partial_responses_usage(
         source_iterator: "BaseResponsesAPIStreamingIterator",
-    ) -> Optional[Usage]:
+    ) -> Optional["ResponseAPIUsage"]:
         """
         Best-effort: pull partial token usage from a Responses-API streaming
-        iterator that errored mid-stream.
+        iterator that errored mid-stream, normalized to ResponseAPIUsage so
+        the caller can combine without crossing token-naming conventions.
 
         Two sources, in priority order:
           1. The bridge path (LiteLLMCompletionStreamingIterator) accumulates
              chat-completion chunks while streaming — feed them through
-             stream_chunk_builder to recover usage.
+             stream_chunk_builder to recover chat Usage, then translate
+             (prompt_tokens → input_tokens, completion_tokens → output_tokens).
           2. The native path (ResponsesAPIStreamingIterator) only has a
              completed_response object if the stream reached
              RESPONSE_COMPLETED before erroring — uncommon mid-stream but
-             worth checking.
+             worth checking. Already ResponseAPIUsage-shaped.
 
-        Returns None when no partial usage is recoverable (in which case
-        the caller skips usage combining).
+        Returns None when no partial usage is recoverable.
         """
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
         from litellm.types.llms.openai import (
+            ResponseAPIUsage,
             ResponseCompletedEvent,
             ResponseFailedEvent,
             ResponseIncompleteEvent,
@@ -2252,34 +2258,40 @@ class Router:
 
                     built = stream_chunk_builder(chunks=chunks)
                     if built is not None and built.usage is not None:
-                        # stream_chunk_builder returns ModelResponse/
-                        # TextCompletionResponse whose .usage is Optional[Usage].
-                        return cast(Usage, built.usage)
+                        chat = built.usage
+                        # getattr-with-default because the test path may
+                        # substitute a SimpleNamespace lacking some fields;
+                        # real Usage instances always have them.
+                        prompt = int(getattr(chat, "prompt_tokens", 0) or 0)
+                        completion = int(getattr(chat, "completion_tokens", 0) or 0)
+                        total = int(
+                            getattr(chat, "total_tokens", prompt + completion)
+                            or (prompt + completion)
+                        )
+                        return ResponseAPIUsage(
+                            input_tokens=prompt,
+                            output_tokens=completion,
+                            total_tokens=total,
+                        )
                 except Exception:
                     # Builder is best-effort — fall through to native path.
                     pass
 
         # Native path: completed_response is set only if RESPONSE_COMPLETED
         # arrived before the error (uncommon mid-stream but worth checking).
-        # Only the three terminal event shapes carry a usage object; narrow
-        # via isinstance so the field accesses below stay strongly typed.
-        # Note: native usage is ResponseAPIUsage (input/output_tokens) rather
-        # than chat Usage (prompt/completion_tokens). combine_usage_objects
-        # merges attribute-by-attribute, so the two flavors coexist in the
-        # combined object — we just cast to Optional[Usage] for the static
-        # type. Runtime behavior is attribute-driven.
+        # Already ResponseAPIUsage-shaped — return as-is.
         completed = source_iterator.completed_response
         if isinstance(
             completed,
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
         ):
-            return cast(Optional[Usage], completed.response.usage)
+            return completed.response.usage
         return None
 
     @staticmethod
     def _combine_responses_fallback_usage(
         fallback_item: "BaseLiteLLMOpenAIResponseObject",
-        partial_usage: Usage,
+        partial_usage: "ResponseAPIUsage",
     ) -> None:
         """
         Merge partial-stream usage with fallback-stream usage on a
@@ -2288,8 +2300,15 @@ class Router:
         Only mutates events that carry a `response` with a `usage` field
         (response.completed / response.failed / response.incomplete). Other
         events pass through unchanged.
+
+        Both inputs are ResponseAPIUsage-shaped (see
+        _extract_partial_responses_usage which normalizes the bridge path),
+        so we can sum input_tokens / output_tokens / total_tokens directly
+        and produce a clean ResponseAPIUsage — no token-naming split, no
+        setattr bypass.
         """
         from litellm.types.llms.openai import (
+            ResponseAPIUsage,
             ResponseCompletedEvent,
             ResponseFailedEvent,
             ResponseIncompleteEvent,
@@ -2303,16 +2322,13 @@ class Router:
         response = fallback_item.response
         if response.usage is None:
             return
-        from litellm.cost_calculator import BaseTokenUsageProcessor
 
-        combined = BaseTokenUsageProcessor.combine_usage_objects(
-            usage_objects=[partial_usage, cast(Usage, response.usage)]
+        fb = response.usage
+        response.usage = ResponseAPIUsage(
+            input_tokens=(partial_usage.input_tokens or 0) + (fb.input_tokens or 0),
+            output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
+            total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
         )
-        # combined is statically typed Usage but response.usage expects
-        # ResponseAPIUsage; field-name-driven merging produces an object that
-        # carries both flavors of token attributes, so setattr keeps the
-        # assignment runtime-correct without lying to the type checker.
-        setattr(response, "usage", combined)
 
     @staticmethod
     def _build_responses_continuation_input(
