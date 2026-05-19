@@ -189,6 +189,78 @@ def test_build_matrix_all_not_tested_stays_not_tested():
     assert matrix["features"][0]["providers"]["anthropic"] == {"status": "not_tested"}
 
 
+def test_build_matrix_mixed_pass_and_not_applicable_surfaces_pass():
+    """A `not_applicable` row mixed with `pass` rows must surface as
+    `pass`, not `not_applicable`. The published cell answers "does this
+    feature work on this provider?"; if any tier passes, the feature
+    works there. Discarding passing tiers because one tier is NA would
+    misrepresent the cell as unsupported.
+    """
+    manifest = {
+        "schema_version": "1",
+        "providers": ["anthropic"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    results = [
+        {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {
+                "status": "not_applicable",
+                "reason": "haiku does not support extended thinking",
+            },
+        },
+        {"feature_id": "f", "provider": "anthropic", "result": {"status": "pass"}},
+    ]
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    assert matrix["features"][0]["providers"]["anthropic"] == {"status": "pass"}
+
+
+def test_build_matrix_all_not_applicable_stays_not_applicable():
+    """When every observed row is `not_applicable`, the cell remains
+    `not_applicable` and the first row's reason carries through to the
+    published matrix.
+    """
+    manifest = {
+        "schema_version": "1",
+        "providers": ["anthropic"],
+        "features": [{"id": "f", "name": "F"}],
+    }
+    results = [
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {
+                "status": "not_applicable",
+                "reason": "feature unsupported on this provider",
+            },
+        },
+        {
+            "feature_id": "f",
+            "provider": "anthropic",
+            "result": {"status": "not_applicable", "reason": "ditto"},
+        },
+    ]
+    matrix = build_matrix(
+        manifest=manifest,
+        results=results,
+        litellm_version="v",
+        claude_code_version="c",
+        generated_at="t",
+    )
+    assert matrix["features"][0]["providers"]["anthropic"] == {
+        "status": "not_applicable",
+        "reason": "feature unsupported on this provider",
+    }
+
+
 def test_build_matrix_fills_not_tested_for_missing_cells():
     manifest = {
         "schema_version": "1",

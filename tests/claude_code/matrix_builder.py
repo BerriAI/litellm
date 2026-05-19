@@ -133,8 +133,14 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
       - Any `fail` → cell is `fail` with every failing model's error
         joined by `"; "` so a multi-tier breakage doesn't silently hide
         all but the first error from the published matrix.
-      - `not_applicable` → cell is `not_applicable` with the reason.
-      - `pass` → cell is `pass`.
+      - Any `pass` → cell is `pass`. A mix of (pass, not_applicable) —
+        e.g. a tier where the feature isn't supported alongside tiers
+        where it works — surfaces as `pass` so the published cell
+        reflects that the feature *does* work on this provider rather
+        than silently demoting it to `not_applicable` and discarding
+        the passing tiers.
+      - All `not_applicable` → cell is `not_applicable` with the first
+        row's reason.
       - empty / nothing recognized → `not_tested`.
 
     `not_tested` rows are treated as absent data: they're dropped before
@@ -156,15 +162,14 @@ def _aggregate_cell(results: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         errors = [str(r.get("error", "test failed")) for r in failures]
         return {"status": "fail", "error": "; ".join(errors)}
 
-    for r in observed:
-        if r.get("status") == "not_applicable":
-            return {
-                "status": "not_applicable",
-                "reason": str(r.get("reason", "not applicable")),
-            }
-
-    if all(r.get("status") == "pass" for r in observed):
+    if any(r.get("status") == "pass" for r in observed):
         return {"status": "pass"}
+
+    if all(r.get("status") == "not_applicable" for r in observed):
+        return {
+            "status": "not_applicable",
+            "reason": str(observed[0].get("reason", "not applicable")),
+        }
 
     return {"status": "not_tested"}
 
