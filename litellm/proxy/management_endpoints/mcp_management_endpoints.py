@@ -670,6 +670,7 @@ if MCP_AVAILABLE:
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
+            user_fields=payload.user_fields,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -2159,19 +2160,8 @@ if MCP_AVAILABLE:
         (None when no row exists yet). ``missing_field_keys`` enumerates only
         the ``required`` fields the user has yet to fill in.
         """
-        raw_fields = getattr(server, "user_fields", None) or []
-        if isinstance(raw_fields, str):
-            try:
-                raw_fields = json.loads(raw_fields)
-            except (ValueError, TypeError):
-                raw_fields = []
         user_fields: List[MCPUserField] = []
-        for entry in raw_fields:
-            if isinstance(entry, MCPUserField):
-                user_fields.append(entry)
-                continue
-            if not isinstance(entry, dict):
-                continue
+        for entry in coerce_user_fields(server):
             try:
                 user_fields.append(MCPUserField(**entry))
             except Exception:  # noqa: BLE001 — drop malformed entries silently
