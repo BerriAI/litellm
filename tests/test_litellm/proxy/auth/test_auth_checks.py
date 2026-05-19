@@ -127,6 +127,23 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
+def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_values):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_alias"] == "test-team"
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
