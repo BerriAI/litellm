@@ -177,6 +177,8 @@ class A2ACompletionBridgeHandler:
             params: A2A MessageSendParams containing the message
             litellm_params: Agent's litellm_params (custom_llm_provider, model, etc.)
             api_base: API base URL from agent_card_params
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call.
 
         Yields:
             A2A streaming response events
@@ -323,6 +325,7 @@ async def handle_a2a_completion(
     params: Dict[str, Any],
     litellm_params: Dict[str, Any],
     api_base: Optional[str] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Convenience function for non-streaming A2A completion."""
     return await A2ACompletionBridgeHandler.handle_non_streaming(
@@ -330,6 +333,7 @@ async def handle_a2a_completion(
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
+        agent_extra_headers=agent_extra_headers,
     )
 
 
@@ -338,6 +342,7 @@ async def handle_a2a_completion_streaming(
     params: Dict[str, Any],
     litellm_params: Dict[str, Any],
     api_base: Optional[str] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Convenience function for streaming A2A completion."""
     async for chunk in A2ACompletionBridgeHandler.handle_streaming(
@@ -345,5 +350,6 @@ async def handle_a2a_completion_streaming(
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
+        agent_extra_headers=agent_extra_headers,
     ):
         yield chunk
