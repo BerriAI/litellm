@@ -41,9 +41,9 @@ from litellm.interactions.agents.utils import get_provider_agents_api_config
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.agents import (
     AgentCreateResponse,
-    GeminiAgentDeleteResult,
-    GeminiAgentListResponse,
-    GeminiAgentVersionsResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
 )
 from litellm.types.interactions import InteractionEnvironment
 from litellm.types.router import GenericLiteLLMParams
@@ -214,7 +214,7 @@ async def alist(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> GeminiAgentListResponse:
+) -> AgentListResponse:
     """Async: List all agents on the provider side."""
     local_vars = locals()
     try:
@@ -248,7 +248,7 @@ def list(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> Union[GeminiAgentListResponse, Coroutine[Any, Any, GeminiAgentListResponse]]:
+) -> Union[AgentListResponse, Coroutine[Any, Any, AgentListResponse]]:
     """Sync: List all agents on the provider side."""
     local_vars = locals()
     custom_llm_provider = (
@@ -373,7 +373,7 @@ async def adelete(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> GeminiAgentDeleteResult:
+) -> AgentDeleteResult:
     """Async: Delete a specific agent by name."""
     local_vars = locals()
     try:
@@ -409,7 +409,7 @@ def delete(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> Union[GeminiAgentDeleteResult, Coroutine[Any, Any, GeminiAgentDeleteResult]]:
+) -> Union[AgentDeleteResult, Coroutine[Any, Any, AgentDeleteResult]]:
     """Sync: Delete a specific agent by name."""
     local_vars = locals()
     custom_llm_provider = (
@@ -454,7 +454,7 @@ async def alist_versions(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> GeminiAgentVersionsResponse:
+) -> AgentVersionsResponse:
     """Async: List versions of a specific agent."""
     local_vars = locals()
     try:
@@ -490,9 +490,7 @@ def list_versions(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> Union[
-    GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]
-]:
+) -> Union[AgentVersionsResponse, Coroutine[Any, Any, AgentVersionsResponse]]:
     """Sync: List versions of a specific agent."""
     local_vars = locals()
     custom_llm_provider = (

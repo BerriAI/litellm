@@ -246,7 +246,7 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
-class GeminiAgentDeleteResult(LiteLLMPydanticObjectBase):
+class AgentDeleteResult(LiteLLMPydanticObjectBase):
     """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
 
     Gemini returns an empty body ``{}`` on success; we synthesise ``name`` and
@@ -260,7 +260,7 @@ class GeminiAgentDeleteResult(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
-class GeminiAgentListResponse(LiteLLMPydanticObjectBase):
+class AgentListResponse(LiteLLMPydanticObjectBase):
     """Response from listing agents on the provider side (e.g. Gemini GET /v1beta/agents).
 
     Gemini returns ``{"agents": [{"id": "..."}, ...]}``; each item is kept as
@@ -274,7 +274,7 @@ class GeminiAgentListResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
-class GeminiAgentVersionsResponse(LiteLLMPydanticObjectBase):
+class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
 
     Gemini returns ``{"agentVersions": [...]}``; each version has a ``name``

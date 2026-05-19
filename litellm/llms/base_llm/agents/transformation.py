@@ -16,9 +16,9 @@ import httpx
 
 from litellm.types.agents import (
     AgentCreateResponse,
-    GeminiAgentDeleteResult,
-    GeminiAgentListResponse,
-    GeminiAgentVersionsResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
 )
 
 
@@ -79,7 +79,7 @@ class BaseAgentsAPIConfig(ABC):
     def transform_list_response(
         self,
         raw_response: httpx.Response,
-    ) -> GeminiAgentListResponse:
+    ) -> AgentListResponse:
         """Parse list-agents response. Raise on non-2xx."""
 
     # ------------------------------------------------------------------ #
@@ -121,7 +121,7 @@ class BaseAgentsAPIConfig(ABC):
         self,
         raw_response: httpx.Response,
         name: str,
-    ) -> GeminiAgentDeleteResult:
+    ) -> AgentDeleteResult:
         """Parse delete-agent response. Raise on non-2xx."""
 
     # ------------------------------------------------------------------ #
@@ -142,7 +142,7 @@ class BaseAgentsAPIConfig(ABC):
         self,
         raw_response: httpx.Response,
         name: str,
-    ) -> GeminiAgentVersionsResponse:
+    ) -> AgentVersionsResponse:
         """Parse list-versions response. Raise on non-2xx."""
 
     # ------------------------------------------------------------------ #

@@ -26,9 +26,9 @@ from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.agents import (
     AgentCreateResponse,
-    GeminiAgentDeleteResult,
-    GeminiAgentListResponse,
-    GeminiAgentVersionsResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -98,9 +98,7 @@ def test_module_singleton_is_agents_http_handler_instance():
 
 
 class TestCreateAgent:
-    def test_sync_returns_parsed_create_response(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_returns_parsed_create_response(self, handler, config, litellm_params):
         client = _make_sync_client()
         client.post.return_value = _make_response(
             200, json_data={"id": "agent-x", "base_agent": "gemini-2.5-flash"}
@@ -147,9 +145,7 @@ class TestCreateAgent:
         assert asyncio.iscoroutine(result)
         result.close()
 
-    def test_sync_maps_http_error_via_config(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
         client.post.side_effect = httpx.HTTPStatusError(
@@ -230,7 +226,7 @@ class TestListAgents:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentListResponse)
+        assert isinstance(result, AgentListResponse)
         assert len(result.agents) == 2
         assert result.next_page_token == "tok"
         client.get.assert_called_once()
@@ -253,9 +249,7 @@ class TestListAgents:
         assert asyncio.iscoroutine(result)
         result.close()
 
-    def test_sync_maps_http_error_via_config(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(403, text="forbidden")
         client.get.side_effect = httpx.HTTPStatusError(
@@ -271,9 +265,7 @@ class TestListAgents:
             )
 
     @pytest.mark.asyncio
-    async def test_async_returns_list_response(
-        self, handler, config, litellm_params
-    ):
+    async def test_async_returns_list_response(self, handler, config, litellm_params):
         client = _make_async_client()
         client.get.return_value = _make_response(
             200, json_data={"agents": [{"id": "a-1"}]}
@@ -286,7 +278,7 @@ class TestListAgents:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentListResponse)
+        assert isinstance(result, AgentListResponse)
         assert len(result.agents) == 1
         client.get.assert_awaited_once()
 
@@ -317,9 +309,7 @@ class TestListAgents:
 class TestGetAgent:
     def test_sync_returns_get_response(self, handler, config, litellm_params):
         client = _make_sync_client()
-        client.get.return_value = _make_response(
-            200, json_data={"id": "agent-x"}
-        )
+        client.get.return_value = _make_response(200, json_data={"id": "agent-x"})
 
         result = handler.get_agent(
             agents_api_config=config,
@@ -350,9 +340,7 @@ class TestGetAgent:
         assert asyncio.iscoroutine(result)
         result.close()
 
-    def test_sync_maps_http_error_via_config(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
         client.get.side_effect = httpx.HTTPStatusError(
@@ -369,13 +357,9 @@ class TestGetAgent:
             )
 
     @pytest.mark.asyncio
-    async def test_async_returns_get_response(
-        self, handler, config, litellm_params
-    ):
+    async def test_async_returns_get_response(self, handler, config, litellm_params):
         client = _make_async_client()
-        client.get.return_value = _make_response(
-            200, json_data={"id": "agent-y"}
-        )
+        client.get.return_value = _make_response(200, json_data={"id": "agent-y"})
 
         result = await handler.async_get_agent(
             agents_api_config=config,
@@ -426,7 +410,7 @@ class TestDeleteAgent:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentDeleteResult)
+        assert isinstance(result, AgentDeleteResult)
         assert result.name == "agent-x"
         assert result.deleted is True
         kwargs = client.delete.call_args.kwargs
@@ -448,9 +432,7 @@ class TestDeleteAgent:
         assert asyncio.iscoroutine(result)
         result.close()
 
-    def test_sync_maps_http_error_via_config(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(403, text="forbidden")
         client.delete.side_effect = httpx.HTTPStatusError(
@@ -467,9 +449,7 @@ class TestDeleteAgent:
             )
 
     @pytest.mark.asyncio
-    async def test_async_returns_delete_result(
-        self, handler, config, litellm_params
-    ):
+    async def test_async_returns_delete_result(self, handler, config, litellm_params):
         client = _make_async_client()
         client.delete.return_value = _make_response(200, json_data={})
 
@@ -481,7 +461,7 @@ class TestDeleteAgent:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentDeleteResult)
+        assert isinstance(result, AgentDeleteResult)
         assert result.name == "agent-y"
         assert result.deleted is True
 
@@ -511,9 +491,7 @@ class TestDeleteAgent:
 
 
 class TestListAgentVersions:
-    def test_sync_returns_versions_response(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_returns_versions_response(self, handler, config, litellm_params):
         client = _make_sync_client()
         client.get.return_value = _make_response(
             200,
@@ -533,7 +511,7 @@ class TestListAgentVersions:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentVersionsResponse)
+        assert isinstance(result, AgentVersionsResponse)
         assert len(result.agent_versions) == 1
         assert result.next_page_token == "tok"
         kwargs = client.get.call_args.kwargs
@@ -555,9 +533,7 @@ class TestListAgentVersions:
         assert asyncio.iscoroutine(result)
         result.close()
 
-    def test_sync_maps_http_error_via_config(
-        self, handler, config, litellm_params
-    ):
+    def test_sync_maps_http_error_via_config(self, handler, config, litellm_params):
         client = _make_sync_client()
         bad = _make_response(404, text="not found")
         client.get.side_effect = httpx.HTTPStatusError(
@@ -578,9 +554,7 @@ class TestListAgentVersions:
         self, handler, config, litellm_params
     ):
         client = _make_async_client()
-        client.get.return_value = _make_response(
-            200, json_data={"agentVersions": []}
-        )
+        client.get.return_value = _make_response(200, json_data={"agentVersions": []})
 
         result = await handler.async_list_agent_versions(
             agents_api_config=config,
@@ -590,7 +564,7 @@ class TestListAgentVersions:
             client=client,
         )
 
-        assert isinstance(result, GeminiAgentVersionsResponse)
+        assert isinstance(result, AgentVersionsResponse)
         assert result.agent_versions == []
 
     @pytest.mark.asyncio

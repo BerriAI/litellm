@@ -18,9 +18,9 @@ from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.agents import (
     AgentCreateResponse,
-    GeminiAgentDeleteResult,
-    GeminiAgentListResponse,
-    GeminiAgentVersionsResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
 )
 
 
@@ -178,14 +178,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     def transform_list_response(
         self,
         raw_response: httpx.Response,
-    ) -> GeminiAgentListResponse:
+    ) -> AgentListResponse:
         self._raise_for_status(raw_response)
         try:
             data = raw_response.json()
         except Exception:
             data = {}
         verbose_logger.debug("GeminiAgentsConfig list response: %s", data)
-        return GeminiAgentListResponse(
+        return AgentListResponse(
             agents=data.get("agents", []),
             next_page_token=data.get("nextPageToken"),
         )
@@ -235,7 +235,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         raw_response: httpx.Response,
         name: str,
-    ) -> GeminiAgentDeleteResult:
+    ) -> AgentDeleteResult:
         """Gemini returns an empty body ``{}`` with HTTP 200 on success."""
         self._raise_for_status(raw_response)
         verbose_logger.debug(
@@ -243,7 +243,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             raw_response.status_code,
             name,
         )
-        return GeminiAgentDeleteResult(name=name, deleted=True)
+        return AgentDeleteResult(name=name, deleted=True)
 
     # ------------------------------------------------------------------ #
     # LIST VERSIONS                                                        #
@@ -267,7 +267,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         self,
         raw_response: httpx.Response,
         name: str,
-    ) -> GeminiAgentVersionsResponse:
+    ) -> AgentVersionsResponse:
         """
         Gemini returns:
           {"agentVersions": [{"agent": "waverunner", "name": "agents/.../versions/uuid", ...}]}
@@ -280,7 +280,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         verbose_logger.debug(
             "GeminiAgentsConfig list_versions response for '%s': %s", name, data
         )
-        return GeminiAgentVersionsResponse(
+        return AgentVersionsResponse(
             agent_versions=data.get("agentVersions", []),
             next_page_token=data.get("nextPageToken"),
         )

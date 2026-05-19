@@ -17,9 +17,9 @@ from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.agents import (
     AgentCreateResponse,
-    GeminiAgentDeleteResult,
-    GeminiAgentListResponse,
-    GeminiAgentVersionsResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 
@@ -154,7 +154,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
         _is_async: bool = False,
-    ) -> Union[GeminiAgentListResponse, Coroutine[Any, Any, GeminiAgentListResponse]]:
+    ) -> Union[AgentListResponse, Coroutine[Any, Any, AgentListResponse]]:
         if _is_async:
             return self.async_list_agents(
                 agents_api_config=agents_api_config,
@@ -193,7 +193,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         extra_headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> GeminiAgentListResponse:
+    ) -> AgentListResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
@@ -316,7 +316,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
         _is_async: bool = False,
-    ) -> Union[GeminiAgentDeleteResult, Coroutine[Any, Any, GeminiAgentDeleteResult]]:
+    ) -> Union[AgentDeleteResult, Coroutine[Any, Any, AgentDeleteResult]]:
         if _is_async:
             return self.async_delete_agent(
                 agents_api_config=agents_api_config,
@@ -362,7 +362,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         extra_headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> GeminiAgentDeleteResult:
+    ) -> AgentDeleteResult:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
@@ -403,9 +403,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
         _is_async: bool = False,
-    ) -> Union[
-        GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]
-    ]:
+    ) -> Union[AgentVersionsResponse, Coroutine[Any, Any, AgentVersionsResponse]]:
         if _is_async:
             return self.async_list_agent_versions(
                 agents_api_config=agents_api_config,
@@ -449,7 +447,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         extra_headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> GeminiAgentVersionsResponse:
+    ) -> AgentVersionsResponse:
         async_httpx_client = self._async_client(litellm_params, client)
         headers = agents_api_config.validate_environment(
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
