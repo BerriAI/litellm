@@ -1168,18 +1168,30 @@ if MCP_AVAILABLE:
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
 
+            has_explicit_litellm_admission_header = (
+                normalized_raw_headers.get("x-litellm-api-key") is not None
+            )
+
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                # Never forward the inbound Authorization header that was used for
-                # LiteLLM API key authentication:
-                # - skip if server has client_credentials (fetch upstream token via M2M flow)
-                # - skip if server is oauth_passthrough (upstream token must come from
-                #   a server-specific header, not the LiteLLM API key header)
-                if header.lower() == "authorization" and (
-                    server.has_client_credentials or server.is_oauth_passthrough
-                ):
-                    continue
+                if header.lower() == "authorization":
+                    # M2M servers fetch their own upstream token via the
+                    # client_credentials flow — never forward the caller's
+                    # Authorization header.
+                    if server.has_client_credentials:
+                        continue
+                    # Transparent OAuth pass-through: forward the caller's
+                    # Authorization header only when LiteLLM admission used
+                    # a different header (`x-litellm-api-key`). Without an
+                    # explicit admission header, `Authorization` may itself
+                    # be the LiteLLM key — strip it to avoid leaking the
+                    # gateway credential upstream.
+                    if (
+                        server.is_oauth_passthrough
+                        and not has_explicit_litellm_admission_header
+                    ):
+                        continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
                     continue
