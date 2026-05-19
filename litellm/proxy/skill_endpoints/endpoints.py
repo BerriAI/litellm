@@ -15,11 +15,16 @@ wire-up in S2-04.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.skill_endpoints.skill_zip import (
+    MAX_SKILL_ZIP_SIZE_BYTES,
+    SkillZipError,
+    parse_skill_zip,
+)
 from litellm.types.xct_skills import (
     XCTSkill,
     XCTSkillCreate,
@@ -320,3 +325,96 @@ async def delete_skill(
         verbose_proxy_logger.exception("delete_skill failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     return {"skill_id": skill_id, "deleted": True}
+
+
+# ============================================================================
+# S2-07: ZIP upload pipeline
+# ============================================================================
+
+
+@router.post(
+    "/v1/xct-skills/upload",
+    tags=["[beta] XCT Skills"],
+    response_model=XCTSkill,
+)
+async def upload_skill_zip(
+    file: UploadFile = File(
+        ..., description="Skill ZIP archive (manifest.yaml + SKILL.md required)."
+    ),
+    team_id: Optional[str] = Form(None),
+    is_public_override: Optional[bool] = Form(
+        None,
+        description="When set, overrides the is_public flag declared in manifest.yaml.",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> XCTSkill:
+    """
+    Upload a skill ZIP and create a new ``LiteLLM_SkillsTable`` row with
+    ``source='custom'``. The ZIP is parsed server-side; the raw archive is
+    persisted in ``file_content`` so operators can re-download.
+
+    Limits:
+      - 10 MB compressed and uncompressed (LITELLM_SKILL_UPLOAD_MAX_SIZE_BYTES)
+      - no symlinks, no path traversal
+      - manifest.yaml required at the root with display_title (or name)
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=503, detail="DB not initialized")
+
+    if file.content_type and file.content_type not in (
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Expected a ZIP upload, got Content-Type: {file.content_type}. "
+                "Use application/zip."
+            ),
+        )
+
+    payload = await file.read()
+    if len(payload) > MAX_SKILL_ZIP_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Skill ZIP too large: {len(payload)} bytes "
+                f"(limit {MAX_SKILL_ZIP_SIZE_BYTES})."
+            ),
+        )
+
+    try:
+        parsed = parse_skill_zip(payload, file_name=file.filename)
+    except SkillZipError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    create_data: dict = {
+        "display_title": parsed.display_title,
+        "description": parsed.description,
+        "instructions": parsed.instructions,
+        "system_prompt_template": parsed.system_prompt_template,
+        "tool_schema": parsed.tool_schema,
+        "source": _XCT_SOURCE,
+        "version": parsed.version or "1",
+        "is_public": (
+            is_public_override if is_public_override is not None else parsed.is_public
+        ),
+        "team_id": team_id or user_api_key_dict.team_id,
+        "user_id": user_api_key_dict.user_id,
+        "xct_metadata": parsed.xct_metadata,
+        "file_content": parsed.file_content,
+        "file_name": parsed.file_name,
+        "file_type": parsed.file_type,
+        "created_by": user_api_key_dict.user_id,
+    }
+    row = await prisma_client.db.litellm_skillstable.create(data=create_data)
+    verbose_proxy_logger.info(
+        "uploaded xct skill %s (%d bytes, by %s)",
+        row.skill_id,
+        len(payload),
+        user_api_key_dict.user_id,
+    )
+    return _row_to_skill(row)
