@@ -77,6 +77,10 @@ class MCPServer(BaseModel):
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
+    # Raw user_fields blob (list of dicts) as stored on the server. Decoded
+    # at request time to inject per-user headers/env-vars. Kept as plain
+    # dicts here to avoid a dependency on proxy/_types from this module.
+    user_fields: List[Dict[str, Any]] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # OAuth2 flow type.  Defaults to None (interactive / authorization_code).

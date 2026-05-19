@@ -112,13 +112,17 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         get_all_mcp_servers_for_user,
+        delete_user_field_values,
+        get_all_mcp_servers,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
+        get_user_field_values,
         get_user_oauth_credential,
         list_user_oauth_credentials,
         reject_mcp_server,
         store_user_credential,
+        store_user_field_values,
         store_user_oauth_credential,
         update_mcp_server,
     )
@@ -146,6 +150,9 @@ if MCP_AVAILABLE:
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
+        MCPUserField,
+        MCPUserFieldsStatus,
+        MCPUserFieldValuesRequest,
         NewMCPServerRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
@@ -472,6 +479,47 @@ if MCP_AVAILABLE:
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
+
+    def _coerce_user_fields_list(raw: Any) -> List[Dict[str, Any]]:
+        """Normalize a server.user_fields value (JSON string or list) to a list of dicts.
+
+        Used by the BYOK-list-annotation block and any other site that needs
+        to inspect declared fields without instantiating MCPUserField models.
+        """
+        if not raw:
+            return []
+        if isinstance(raw, list):
+            return [e for e in raw if isinstance(e, dict)]
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                return []
+            if isinstance(parsed, list):
+                return [e for e in parsed if isinstance(e, dict)]
+        return []
+
+    def _has_required_user_fields(raw: Any) -> bool:
+        """True iff the server declares at least one required user field."""
+        for entry in _coerce_user_fields_list(raw):
+            if entry.get("required", True):
+                return True
+        return False
+
+    def _compute_missing_user_field_keys(
+        raw: Any, stored_values: Dict[str, str]
+    ) -> List[str]:
+        """Field keys the user must still supply (required + currently empty)."""
+        missing: List[str] = []
+        for entry in _coerce_user_fields_list(raw):
+            field_key = entry.get("field_key")
+            if not isinstance(field_key, str) or not field_key:
+                continue
+            if not entry.get("required", True):
+                continue
+            if not stored_values.get(field_key):
+                missing.append(field_key)
+        return missing
 
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
@@ -944,26 +992,57 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
 
-        # Annotate has_user_credential for BYOK servers (single batched query)
+        # Annotate has_user_credential (BYOK) and missing_user_field_keys
+        # (user_fields) for the calling user. Both flags share the same
+        # storage table, so we batch a single query covering both feature
+        # sets.
+        from litellm.proxy._experimental.mcp_server.db import (
+            _decode_user_credential,
+            _decode_user_fields_payload,
+        )
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
         user_id = user_api_key_dict.user_id or ""
         if user_id and _byok_prisma_client is not None:
-            byok_server_ids = [
+            relevant_server_ids = [
                 s.server_id
                 for s in redacted_mcp_servers
                 if getattr(s, "is_byok", False)
+                or _has_required_user_fields(getattr(s, "user_fields", None))
             ]
-            if byok_server_ids:
+            if relevant_server_ids:
                 cred_rows = (
                     await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                        where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                        where={
+                            "user_id": user_id,
+                            "server_id": {"in": relevant_server_ids},
+                        }
                     )
                 )
-                cred_set = {r.server_id for r in cred_rows}
+                # Build two indexes: one for BYOK presence, one mapping
+                # server_id → stored user-field values.
+                byok_set: set = set()
+                user_fields_by_server: Dict[str, Dict[str, str]] = {}
+                for row in cred_rows:
+                    payload = _decode_user_fields_payload(row.credential_b64)
+                    if payload is not None:
+                        user_fields_by_server[row.server_id] = payload
+                    else:
+                        # Anything that isn't a user-fields payload counts
+                        # as a BYOK credential for has_user_credential.
+                        decoded = _decode_user_credential(row.credential_b64)
+                        if decoded:
+                            byok_set.add(row.server_id)
                 for server in redacted_mcp_servers:
                     if getattr(server, "is_byok", False):
-                        server.has_user_credential = server.server_id in cred_set
+                        server.has_user_credential = server.server_id in byok_set
+                    if _has_required_user_fields(getattr(server, "user_fields", None)):
+                        stored = user_fields_by_server.get(server.server_id, {})
+                        server.missing_user_field_keys = (
+                            _compute_missing_user_field_keys(
+                                getattr(server, "user_fields", None), stored
+                            )
+                        )
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
@@ -2054,6 +2133,265 @@ if MCP_AVAILABLE:
             is_expired=is_expired,
             connected_at=cred.get("connected_at"),
         )
+
+    # ── User-fields endpoints ─────────────────────────────────────────────────
+    #
+    # Admin-declared user fields (e.g. per-user bearer tokens) are stored on
+    # the MCP server row as a list of definitions. Each end-user then supplies
+    # their own values via these endpoints; values are injected at request
+    # time as either HTTP headers (http/sse) or env vars (stdio).
+
+    def _build_user_fields_status(
+        server: "LiteLLM_MCPServerTable",
+        stored_values: Optional[Dict[str, str]],
+    ) -> MCPUserFieldsStatus:
+        """Compose the dashboard-facing per-server status object.
+
+        ``stored_values`` is the dict of values the calling user has saved
+        (None when no row exists yet). ``missing_field_keys`` enumerates only
+        the ``required`` fields the user has yet to fill in.
+        """
+        raw_fields = getattr(server, "user_fields", None) or []
+        if isinstance(raw_fields, str):
+            try:
+                raw_fields = json.loads(raw_fields)
+            except (ValueError, TypeError):
+                raw_fields = []
+        user_fields: List[MCPUserField] = []
+        for entry in raw_fields:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                user_fields.append(MCPUserField(**entry))
+            except Exception:  # noqa: BLE001 — drop malformed entries silently
+                continue
+        stored: Dict[str, str] = stored_values or {}
+        stored_keys = [k for k, v in stored.items() if v]
+        missing_keys = [
+            f.field_key
+            for f in user_fields
+            if f.required and not stored.get(f.field_key)
+        ]
+        return MCPUserFieldsStatus(
+            server_id=server.server_id,
+            user_fields=user_fields,
+            stored_field_keys=stored_keys,
+            missing_field_keys=missing_keys,
+        )
+
+    @router.get(
+        "/server/{server_id}/user-field-values",
+        description=(
+            "Return the calling user's saved values (presence only — values are "
+            "never echoed back) for an MCP server's admin-declared user fields."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserFieldsStatus,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_user_field_values(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        stored = await get_user_field_values(prisma_client, user_id, server_id)
+        return _build_user_fields_status(server, stored)
+
+    @router.post(
+        "/server/{server_id}/user-field-values",
+        description=(
+            "Store the calling user's values for an MCP server's admin-declared "
+            "user fields. Values are encrypted at rest."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserFieldsStatus,
+    )
+    @management_endpoint_wrapper
+    async def store_mcp_user_field_values(
+        server_id: str,
+        payload: MCPUserFieldValuesRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+
+        # Pre-compute allowed keys from the server's declared fields, then
+        # filter the incoming payload to only those keys. This prevents
+        # callers from polluting the storage blob with arbitrary keys.
+        raw_fields = getattr(server, "user_fields", None) or []
+        if isinstance(raw_fields, str):
+            try:
+                raw_fields = json.loads(raw_fields)
+            except (ValueError, TypeError):
+                raw_fields = []
+        declared_keys = {
+            entry.get("field_key")
+            for entry in raw_fields
+            if isinstance(entry, dict) and entry.get("field_key")
+        }
+        if not declared_keys:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "This MCP server has no user fields declared",
+                    "server_id": server_id,
+                },
+            )
+
+        # Merge with anything already stored — partial saves should preserve
+        # previously-supplied values rather than wipe them.
+        existing = await get_user_field_values(prisma_client, user_id, server_id) or {}
+        merged: Dict[str, str] = {**existing}
+        for key, value in payload.values.items():
+            if key not in declared_keys:
+                continue
+            if value == "":
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+
+        await store_user_field_values(prisma_client, user_id, server_id, merged)
+
+        # Invalidate the BYOK credential cache for this (user, server) pair
+        # so the next tool call re-reads the row. We piggyback on the
+        # existing cache because user-fields, BYOK, and OAuth2 all share
+        # the same DB row.
+        from litellm.proxy._experimental.mcp_server.server import (
+            _invalidate_byok_cred_cache,
+            _invalidate_user_fields_cache,
+        )
+
+        _invalidate_byok_cred_cache(user_id, server_id)
+        _invalidate_user_fields_cache(user_id, server_id)
+        return _build_user_fields_status(server, merged)
+
+    @router.delete(
+        "/server/{server_id}/user-field-values",
+        description="Clear all of the calling user's saved user-field values for an MCP server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserFieldsStatus,
+    )
+    @management_endpoint_wrapper
+    async def delete_mcp_user_field_values(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        try:
+            await delete_user_field_values(prisma_client, user_id, server_id)
+        except RecordNotFoundError:
+            pass
+        from litellm.proxy._experimental.mcp_server.server import (
+            _invalidate_byok_cred_cache,
+            _invalidate_user_fields_cache,
+        )
+
+        _invalidate_byok_cred_cache(user_id, server_id)
+        _invalidate_user_fields_cache(user_id, server_id)
+        return _build_user_fields_status(server, None)
+
+    @router.get(
+        "/user-field-values",
+        description=(
+            "Aggregate user-fields status across every MCP server the calling user "
+            "can see. Used by the dashboard to render 'needs setup' badges."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=List[MCPUserFieldsStatus],
+    )
+    @management_endpoint_wrapper
+    async def list_mcp_user_field_values(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        all_servers = await get_all_mcp_servers(prisma_client)
+        # Pre-filter to servers that actually declare user_fields, then
+        # batch-fetch every credential row for the calling user in one
+        # query. The N+1 alternative (per-server get_user_field_values)
+        # would scale linearly with server count.
+        relevant_servers: List["LiteLLM_MCPServerTable"] = []
+        relevant_ids: List[str] = []
+        for server in all_servers:
+            raw_fields = getattr(server, "user_fields", None) or []
+            if isinstance(raw_fields, str):
+                try:
+                    raw_fields = json.loads(raw_fields)
+                except (ValueError, TypeError):
+                    raw_fields = []
+            if not raw_fields:
+                continue
+            relevant_servers.append(server)
+            relevant_ids.append(server.server_id)
+        if not relevant_servers:
+            return []
+
+        # Single batched read; we only need rows for the calling user.
+        from litellm.proxy._experimental.mcp_server.db import (
+            _decode_user_fields_payload,
+        )
+
+        cred_rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
+            where={"user_id": user_id, "server_id": {"in": relevant_ids}}
+        )
+        stored_by_server: Dict[str, Dict[str, str]] = {}
+        for row in cred_rows:
+            decoded = _decode_user_fields_payload(row.credential_b64)
+            if decoded is not None:
+                stored_by_server[row.server_id] = decoded
+
+        return [
+            _build_user_fields_status(server, stored_by_server.get(server.server_id))
+            for server in relevant_servers
+        ]
 
     @router.get(
         "/user-credentials",

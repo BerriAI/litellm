@@ -190,6 +190,25 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _deserialize_user_fields(data: Any) -> List[Dict[str, Any]]:
+    """Decode the JSON-encoded ``user_fields`` blob from the MCP server row.
+
+    Always returns a list — falsy or malformed values become ``[]`` so callers
+    can iterate without a None check.
+    """
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, str):
+        try:
+            decoded = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -812,6 +831,9 @@ class MCPServerManager:
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            user_fields=_deserialize_user_fields(
+                getattr(mcp_server, "user_fields", None)
+            ),
             # AWS SigV4 fields
             aws_access_key_id=aws_creds.get("aws_access_key_id"),
             aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
@@ -1276,11 +1298,20 @@ class MCPServerManager:
         self,
         server: MCPServer,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_field_env: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, str]]:
-        """Resolve stdio env values, supporting header-driven placeholders."""
+        """Resolve stdio env values, supporting header-driven placeholders.
 
-        if server.transport != MCPTransport.stdio or not server.env:
-            return None
+        ``user_field_env`` carries values resolved from admin-declared
+        user_fields with an ``env_var_name`` set. They take precedence
+        over the static server.env entries so a user's stored value
+        always overrides any placeholder default.
+        """
+
+        if server.transport != MCPTransport.stdio:
+            return user_field_env or None
+        if not server.env:
+            return user_field_env or None
 
         resolved_env: Dict[str, str] = {}
         normalized_headers = {k.lower(): v for k, v in (raw_headers or {}).items()}
@@ -1297,7 +1328,98 @@ class MCPServerManager:
             else:
                 resolved_env[env_key] = env_value
 
+        if user_field_env:
+            resolved_env.update(user_field_env)
+        # Preserve the legacy contract: when an env dict is present on the
+        # server we always return a dict (even if empty after template
+        # resolution). Only return None when no env is configured at all.
         return resolved_env
+
+    async def _resolve_user_field_values(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> Dict[str, str]:
+        """Read the calling user's stored user-field values for ``mcp_server``.
+
+        Returns ``{}`` when the user has no row, no user_id, or there's no
+        DB. The caller decides what to do with missing required fields —
+        ``server.execute_mcp_tool`` raises a 401 with a config_url before
+        we even get here, so by the time injection happens we already
+        know the values are present.
+        """
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            coerce_user_fields,
+        )
+
+        if not coerce_user_fields(mcp_server):
+            return {}
+        if user_api_key_auth is None or not getattr(user_api_key_auth, "user_id", None):
+            return {}
+
+        # Reuse the cache and lookup function from server.py so we don't
+        # pay a second DB round-trip after the enforcement check populated
+        # the same cache key.
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                _USER_FIELDS_CACHE_TTL,
+                _user_fields_cache,
+                _write_user_fields_cache,
+            )
+        except ImportError:
+            _user_fields_cache = {}  # type: ignore[assignment]
+            _USER_FIELDS_CACHE_TTL = 60
+            _write_user_fields_cache = None  # type: ignore[assignment]
+
+        user_id = user_api_key_auth.user_id or ""
+        cache_key = (user_id, mcp_server.server_id)
+        cached = _user_fields_cache.get(cache_key) if _user_fields_cache else None
+        if cached is not None:
+            values, ts = cached
+            if time.monotonic() - ts < _USER_FIELDS_CACHE_TTL:
+                return values or {}
+
+        from litellm.proxy._experimental.mcp_server.db import get_user_field_values
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return {}
+        values = await get_user_field_values(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=mcp_server.server_id,
+        )
+        if _write_user_fields_cache is not None:
+            _write_user_fields_cache(user_id, mcp_server.server_id, values)
+        return values or {}
+
+    async def _resolve_user_field_headers(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> Dict[str, str]:
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            resolve_user_field_headers,
+        )
+
+        stored = await self._resolve_user_field_values(mcp_server, user_api_key_auth)
+        if not stored:
+            return {}
+        return resolve_user_field_headers(mcp_server, stored)
+
+    async def _resolve_user_field_env(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> Dict[str, str]:
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            resolve_user_field_env,
+        )
+
+        stored = await self._resolve_user_field_values(mcp_server, user_api_key_auth)
+        if not stored:
+            return {}
+        return resolve_user_field_env(mcp_server, stored)
 
     async def _create_mcp_client(
         self,
@@ -2633,6 +2755,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2717,6 +2840,16 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
 
+        # User-fields: inject each declared user field's stored value either
+        # as a header (http/sse) or env var (stdio path; handled below).
+        user_field_headers = await self._resolve_user_field_headers(
+            mcp_server, user_api_key_auth
+        )
+        if user_field_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(user_field_headers)
+
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
@@ -2746,7 +2879,12 @@ class MCPServerManager:
         if extra_headers is not None and len(extra_headers) == 0:
             extra_headers = None
 
-        stdio_env = self._build_stdio_env(mcp_server, raw_headers)
+        user_field_env = await self._resolve_user_field_env(
+            mcp_server, user_api_key_auth
+        )
+        stdio_env = self._build_stdio_env(
+            mcp_server, raw_headers, user_field_env=user_field_env or None
+        )
 
         client = await self._create_mcp_client(
             server=mcp_server,
@@ -2923,6 +3061,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         # For OpenAPI tools, await outside the client context

@@ -85,6 +85,13 @@ def _prepare_mcp_server_data(
     # but be explicit to ensure a False value is always written to the DB).
     data_dict["is_byok"] = getattr(data, "is_byok", False)
 
+    # user_fields is a list of MCPUserField models. exclude_none=True will
+    # already have dict-ified them, but the JSONB column expects a JSON
+    # string when written through Prisma.
+    user_fields = data_dict.get("user_fields")
+    if user_fields is not None:
+        data_dict["user_fields"] = safe_dumps(user_fields)
+
     return data_dict
 
 
@@ -633,6 +640,104 @@ async def delete_user_credential(
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
+
+
+# ── User-fields helpers ───────────────────────────────────────────────────────
+#
+# User-fields share the credential_b64 column with BYOK and OAuth2. We tag
+# the JSON payload with ``"type": "user_fields"`` so the read path can
+# distinguish formats without an extra column.
+
+
+def _decode_user_fields_payload(stored: str) -> Optional[Dict[str, str]]:
+    """Return the field-values dict if ``stored`` holds a user-fields payload."""
+    decoded = _decode_user_credential(stored)
+    if decoded is None:
+        return None
+    try:
+        parsed = json.loads(decoded)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict) or parsed.get("type") != "user_fields":
+        return None
+    values = parsed.get("values")
+    if not isinstance(values, dict):
+        return {}
+    return {str(k): str(v) for k, v in values.items()}
+
+
+async def store_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    values: Dict[str, str],
+) -> None:
+    """Persist the calling user's values for an MCP server's user fields.
+
+    The full set of values is encoded into a single encrypted JSON blob in
+    ``LiteLLM_MCPUserCredentials.credential_b64``. A ``"type"`` discriminator
+    lets ``get_user_field_values`` tell user-fields rows apart from BYOK
+    strings and OAuth2 payloads sharing the same column.
+    """
+
+    payload = json.dumps({"type": "user_fields", "values": values})
+    encoded = encrypt_value_helper(payload)
+    await prisma_client.db.litellm_mcpusercredentials.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        data={
+            "create": {
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": encoded,
+            },
+            "update": {"credential_b64": encoded},
+        },
+    )
+
+
+async def get_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[Dict[str, str]]:
+    """Return the user's stored field values, or ``None`` if not stored.
+
+    Returns ``None`` both when no row exists and when the row holds a
+    different credential type (BYOK / OAuth2) — callers should treat both
+    as "no user-fields configured for this user yet".
+    """
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    return _decode_user_fields_payload(row.credential_b64)
+
+
+async def delete_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> bool:
+    """Delete the user's stored field values.
+
+    Only removes the row when it actually holds a user-fields payload, so a
+    co-located BYOK / OAuth2 credential for the same (user, server) pair is
+    not accidentally wiped. Returns True if a row was deleted.
+    """
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return False
+    if _decode_user_fields_payload(row.credential_b64) is None:
+        return False
+    await prisma_client.db.litellm_mcpusercredentials.delete(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    return True
 
 
 # ── OAuth2 user-credential helpers ────────────────────────────────────────────
