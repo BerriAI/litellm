@@ -10,11 +10,11 @@ LiteLLM ships new releases regularly with new provider support, performance impr
 
 ## Latest Release
 
-### [v1.84.0 — Reliability hardening + multi-pod budget accuracy](/release_notes/v1.84.0/v1-84-0)
+### [v1.85.0 — Realtime GA, MCP Gateway Expansion & Hardened Multi-Tenancy](/release_notes/v1.85.0/v1-85-0)
 
-_May 14, 2026_
+_May 16, 2026_
 
-Pass-through endpoints auth-by-default, multi-pod budget enforcement accuracy, non-blocking Prisma DB reconnect, ~700 MB lower memory via lazy-loaded routers, durable agent workflow run tracking. Read the **Important Behavior Changes** section before upgrading a production deployment.
+OpenAI Realtime GA (with `gpt-realtime-2` pricing and `/openai/v1/realtime` logging), a broad multi-tenancy hardening sweep across keys, projects, batches, files, and MCP servers, MCP Gateway expansion (org-level permissions, OBO auth, `delegate_auth_to_upstream` PKCE passthrough), an observability overhaul (Prometheus label/cardinality fixes + OTEL handler isolation), and new models including xAI `grok-4.3`, OpenAI `gpt-realtime-2`, OpenRouter Qwen 3.6 Plus, SambaNova MiniMax-M2.7, and Bedrock Z.AI GLM-5.
 
 ---
 
@@ -22,6 +22,7 @@ Pass-through endpoints auth-by-default, multi-pod budget enforcement accuracy, n
 
 | Version                             | Date         | Highlights                                                 |
 | ----------------------------------- | ------------ | ---------------------------------------------------------- |
+| [v1.85.0](/release_notes/v1.85.0/v1-85-0)   | May 16, 2026 | Realtime GA, MCP Gateway expansion & hardened multi-tenancy |
 | [v1.84.0](/release_notes/v1.84.0/v1-84-0)   | May 14, 2026 | Reliability hardening + multi-pod budget accuracy          |
 | [v1.83.14](/release_notes/v1.83.14/v1-83-14) | Apr 27, 2026 | GPT-5.5, Prompt Compression & Memory API                   |
 | [v1.83.10](/release_notes/v1.83.10/v1-83-10) | Apr 27, 2026 | Claude Opus 4.7, Prompt Compression & Multi-Window Budgets |
