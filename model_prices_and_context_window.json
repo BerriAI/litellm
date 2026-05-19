@@ -15678,6 +15678,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
