@@ -68,7 +68,7 @@ class LiteLLM_Proxy_MCP_Handler:
     def _encode_lazymcp_tool_server_map_value(
         mcp_servers: Optional[List[str]], toolset_id: Optional[str]
     ) -> str:
-        payload = {"mcp_servers": mcp_servers or [], "toolset_id": toolset_id}
+        payload = {"mcp_servers": mcp_servers, "toolset_id": toolset_id}
         return f"{LITELLM_PROXY_LAZYMCP_TOOL_SERVER_MAP_PREFIX}{json.dumps(payload, sort_keys=True)}"
 
     @staticmethod
@@ -88,6 +88,8 @@ class LiteLLM_Proxy_MCP_Handler:
         if not isinstance(decoded, dict):
             return {"mcp_servers": [], "toolset_id": None}
         mcp_servers = decoded.get("mcp_servers")
+        if mcp_servers is None and "mcp_servers" in decoded:
+            return decoded
         if not isinstance(mcp_servers, list):
             decoded["mcp_servers"] = []
         return decoded
@@ -886,7 +888,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         set_auth_context,
                     )
 
-                    lazy_mcp_servers = lazymcp_scope.get("mcp_servers") or None
+                    lazy_mcp_servers = lazymcp_scope.get("mcp_servers")
                     if not isinstance(lazy_mcp_servers, list):
                         lazy_mcp_servers = None
                     lazy_toolset_id = lazymcp_scope.get("toolset_id")

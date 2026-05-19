@@ -378,6 +378,60 @@ async def test_lazymcp_call_uses_unavailable_server_error_when_server_missing():
     assert payload["error"] == "MCP server is not available for this request."
 
 
+@pytest.mark.asyncio
+async def test_lazymcp_call_empty_scope_cannot_execute_allowed_server():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed_server = MCPServer(
+        server_id="allowed-server",
+        name="github",
+        alias="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    visible_tool = MCPTool(
+        name="github-search",
+        description="Search GitHub",
+        inputSchema={"type": "object"},
+    )
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"), mcp_servers=[])
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            AsyncMock(return_value=["allowed-server"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            MagicMock(return_value=allowed_server),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[visible_tool]),
+        ) as tools_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            AsyncMock(),
+        ) as call_mock,
+    ):
+        result = await _lazymcp_call(
+            {"server": "github", "tool": "github-search", "arguments": {}}
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "MCP server is not available for this request."
+    tools_mock.assert_not_awaited()
+    call_mock.assert_not_awaited()
+
+
 def test_lazymcp_cache_get_set_and_invalidate_paths(monkeypatch):
     try:
         from litellm.proxy._experimental.mcp_server import server as mcp_server_module

@@ -254,6 +254,9 @@ def test_decode_lazymcp_tool_server_map_value_handles_invalid_payloads():
     assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
         'lazymcp:{"mcp_servers":"github"}'
     ) == {"mcp_servers": []}
+    assert LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(None, "toolset")
+    ) == {"mcp_servers": None, "toolset_id": "toolset"}
 
 
 def test_should_use_litellm_mcp_gateway_matches_proxy_urls():
@@ -571,6 +574,48 @@ async def test_execute_tool_calls_passes_lazymcp_route_scope(monkeypatch):
     )
 
     assert captured["mcp_servers"] == ["github"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_preserves_empty_lazymcp_scope(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    captured = {}
+
+    def fake_set_auth_context(**kwargs):
+        captured.update(kwargs)
+
+    async def fake_lazymcp_tool_call(_name, _arguments):
+        return _DummyMCPResult()
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        fake_set_auth_context,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.lazymcp_tool_call",
+        fake_lazymcp_tool_call,
+    )
+    tool_server_map_value = (
+        LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value([], None)
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_call": tool_server_map_value},
+        tool_calls=[
+            {
+                "id": "call-lazy-empty-scope",
+                "function": {
+                    "name": "mcp_call",
+                    "arguments": '{"server":"github","tool":"search","arguments":{}}',
+                },
+            }
+        ],
+        user_api_key_auth=None,
+    )
+
+    assert captured["mcp_servers"] == []
 
 
 @pytest.mark.asyncio
