@@ -215,6 +215,7 @@ jobs:
               tests/proxy_unit_tests/test_models_fallback_endpoint.py
               tests/proxy_unit_tests/test_google_endpoint_routing.py
               tests/proxy_unit_tests/test_google_gemini_proxy_request.py
+              tests/proxy_unit_tests/test_gemini_agents_endpoints.py
               tests/proxy_unit_tests/test_get_favicon.py
               tests/proxy_unit_tests/test_get_image.py
               tests/proxy_unit_tests/test_ui_path_detection.py

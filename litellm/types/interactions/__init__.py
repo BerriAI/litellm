@@ -37,6 +37,7 @@ from litellm.types.interactions.generated import (
     ImageContent,
     Interaction,
     InteractionEvent,
+    InteractionEnvironment,
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
     InteractionsAPIResponse,
@@ -115,6 +116,7 @@ __all__ = [
     "ResponseModality",
     "Annotation",
     # LiteLLM types
+    "InteractionEnvironment",
     "InteractionInput",
     "InteractionsAPIResponse",
     "InteractionsAPIStreamingResponse",

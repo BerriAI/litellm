@@ -228,6 +228,66 @@ class ListAgentsResponse(BaseModel):
     agents: List[AgentResponse]
 
 
+class AgentCreateResponse(LiteLLMPydanticObjectBase):
+    """
+    Response from a provider-side agent creation or get call (e.g. Gemini v1beta/agents).
+
+    Gemini returns ``"id"`` as the agent identifier; we surface both ``id``
+    (Gemini's value) and ``name`` (the user-supplied name, equal to ``id`` for
+    Gemini) so callers can use either.  All extra fields returned by the
+    provider (e.g. ``base_agent``, ``system_instruction``, ``base_environment``)
+    are preserved via extra="allow".
+    """
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentDeleteResult(LiteLLMPydanticObjectBase):
+    """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
+
+    Gemini returns an empty body ``{}`` on success; we synthesise ``name`` and
+    ``deleted`` so callers always get a consistent response object.
+    """
+
+    name: str
+    deleted: bool = True
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentListResponse(LiteLLMPydanticObjectBase):
+    """Response from listing agents on the provider side (e.g. Gemini GET /v1beta/agents).
+
+    Gemini returns ``{"agents": [{"id": "..."}, ...]}``; each item is kept as
+    a plain dict so no fields are silently dropped.
+    """
+
+    agents: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentVersionsResponse(LiteLLMPydanticObjectBase):
+    """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
+
+    Gemini returns ``{"agentVersions": [...]}``; each version has a ``name``
+    field of the form ``agents/{agent_id}/versions/{uuid}``.
+    """
+
+    agent_versions: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
 class AgentMakePublicResponse(BaseModel):
     message: str
     public_agent_groups: List[str]
