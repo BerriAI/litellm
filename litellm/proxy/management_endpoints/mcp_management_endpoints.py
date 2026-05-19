@@ -2009,15 +2009,25 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        await store_user_oauth_credential(
-            prisma_client,
-            user_id,
-            server_id,
-            payload.access_token,
-            refresh_token=payload.refresh_token,
-            expires_in=payload.expires_in,
-            scopes=payload.scopes,
-        )
+        try:
+            await store_user_oauth_credential(
+                prisma_client,
+                user_id,
+                server_id,
+                payload.access_token,
+                refresh_token=payload.refresh_token,
+                expires_in=payload.expires_in,
+                scopes=payload.scopes,
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "credential_conflict",
+                    "message": str(e),
+                    "server_id": server_id,
+                },
+            )
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
