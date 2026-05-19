@@ -270,19 +270,19 @@ local counter_key = KEYS[1]
 
 -- Get current counter value
 local current = redis.call('GET', counter_key)
-local current_count = 0
-if current then
-    current_count = tonumber(current)
+if not current then
+    return {-1, -1}
+end
+
+local current_count = tonumber(current)
+if current_count <= 0 then
+    return {current_count, current_count}
 end
 
 -- Only decrement if counter is positive (avoid negative values)
 -- Negative counters don't make sense for "parallel requests"
 local previous_count = current_count
-if current_count > 0 then
-    current_count = redis.call('DECR', counter_key)
-else
-    current_count = 0
-end
+current_count = redis.call('DECR', counter_key)
 
 -- Return: previous_count, current_count
 return {previous_count, current_count}
@@ -2271,6 +2271,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 verbose_proxy_logger.debug(
                     f"max_parallel_requests decremented for {api_key}: previous={previous_count}, current={current_count}"
                 )
+                if previous_count == -1 and current_count == -1:
+                    verbose_proxy_logger.debug(
+                        "max_parallel_requests decrement skipped because counter key expired or does not exist: "
+                        "api_key=%s, counter_key=%s",
+                        api_key,
+                        counter_key,
+                    )
                 # Emit Prometheus metric
                 if user_api_key_dict:
                     await self._emit_parallel_requests_metric(
