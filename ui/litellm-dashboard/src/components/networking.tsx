@@ -10156,3 +10156,140 @@ export const deleteMemory = async (
     throw new Error(errorData);
   }
 };
+
+
+// ============================================================================
+// XCT capability provider — frontend networking helpers
+// Stories: S2-08/09 (skills), S4-09 (apps), S6-03 (by-app usage)
+// ============================================================================
+
+
+const _xctUrl = (path: string) =>
+  proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
+
+
+const _xctHeaders = (accessToken: string, contentType: string = "application/json") => ({
+  [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+  ...(contentType ? { "Content-Type": contentType } : {}),
+});
+
+
+async function _xctJson(
+  accessToken: string,
+  path: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  body?: any,
+) {
+  const init: RequestInit = {
+    method,
+    headers: _xctHeaders(accessToken),
+  };
+  if (body !== undefined && method !== "GET") {
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(_xctUrl(path), init);
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(errorData);
+  }
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+
+// ---- S2-08 / S2-09 ---- xct-skills CRUD + upload ----------------------------
+
+export const listXCTSkills = (accessToken: string, params: { q?: string; team_id?: string; cursor?: string; limit?: number } = {}) => {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") search.set(k, String(v));
+  });
+  const qs = search.toString();
+  return _xctJson(accessToken, `/v1/xct-skills${qs ? `?${qs}` : ""}`, "GET");
+};
+
+export const getXCTSkill = (accessToken: string, skillId: string) =>
+  _xctJson(accessToken, `/v1/xct-skills/${encodeURIComponent(skillId)}`, "GET");
+
+export const createXCTSkill = (accessToken: string, payload: any) =>
+  _xctJson(accessToken, "/v1/xct-skills", "POST", payload);
+
+export const patchXCTSkill = (accessToken: string, skillId: string, payload: any) =>
+  _xctJson(accessToken, `/v1/xct-skills/${encodeURIComponent(skillId)}`, "PATCH", payload);
+
+export const deleteXCTSkill = (accessToken: string, skillId: string) =>
+  _xctJson(accessToken, `/v1/xct-skills/${encodeURIComponent(skillId)}`, "DELETE");
+
+export const publishXCTSkill = (accessToken: string, skillId: string) =>
+  _xctJson(accessToken, `/v1/xct-skills/${encodeURIComponent(skillId)}/publish`, "POST", {});
+
+export const uploadXCTSkillZip = async (
+  accessToken: string,
+  file: File,
+  extra: { team_id?: string; is_public_override?: boolean } = {},
+) => {
+  const form = new FormData();
+  form.append("file", file);
+  if (extra.team_id) form.append("team_id", extra.team_id);
+  if (extra.is_public_override !== undefined) {
+    form.append("is_public_override", String(extra.is_public_override));
+  }
+  const response = await fetch(_xctUrl("/v1/xct-skills/upload"), {
+    method: "POST",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },  // NO content-type — let the browser set the multipart boundary
+    body: form,
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+
+// ---- S4-09 ---- xct-apps CRUD ---------------------------------------------
+
+export const listXCTApps = (accessToken: string, params: { is_active?: boolean; limit?: number } = {}) => {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) search.set(k, String(v));
+  });
+  const qs = search.toString();
+  return _xctJson(accessToken, `/v1/xct-apps${qs ? `?${qs}` : ""}`, "GET");
+};
+
+export const getXCTApp = (accessToken: string, appId: string) =>
+  _xctJson(accessToken, `/v1/xct-apps/${encodeURIComponent(appId)}`, "GET");
+
+export const createXCTApp = (accessToken: string, payload: any) =>
+  _xctJson(accessToken, "/v1/xct-apps", "POST", payload);
+
+export const patchXCTApp = (accessToken: string, appId: string, payload: any) =>
+  _xctJson(accessToken, `/v1/xct-apps/${encodeURIComponent(appId)}`, "PATCH", payload);
+
+export const deleteXCTApp = (accessToken: string, appId: string) =>
+  _xctJson(accessToken, `/v1/xct-apps/${encodeURIComponent(appId)}`, "DELETE");
+
+export const rotateXCTAppSecret = (accessToken: string, appId: string) =>
+  _xctJson(accessToken, `/v1/xct-apps/${encodeURIComponent(appId)}/rotate-secret`, "POST", {});
+
+
+// ---- S6-03 ---- by-app usage view -----------------------------------------
+// Reads from the existing /global/spend/logs endpoint, GROUPed by the
+// new spend_logs.app_id column (added in S6-01). Backend tweak deferred to
+// the dashboard endpoint follow-up; this helper consumes whatever shape
+// /global/activity/app returns when it lands.
+
+export const getUsageByApp = async (
+  accessToken: string,
+  params: { start_date?: string; end_date?: string; limit?: number } = {},
+) => {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) search.set(k, String(v));
+  });
+  const qs = search.toString();
+  return _xctJson(accessToken, `/global/activity/app${qs ? `?${qs}` : ""}`, "GET");
+};
