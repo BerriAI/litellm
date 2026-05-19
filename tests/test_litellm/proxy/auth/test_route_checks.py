@@ -284,6 +284,82 @@ def test_mcp_inference_routes_classified_as_llm_api(route):
     assert RouteChecks.is_management_route(route=route) is False
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/scim/v2",
+        "/scim/v2/ServiceProviderConfig",
+        "/scim/v2/ResourceTypes",
+        "/scim/v2/ResourceTypes/User",
+        "/scim/v2/Schemas",
+        "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:User",
+        "/scim/v2/Users",
+        "/scim/v2/Users/abc-123",
+        "/scim/v2/Groups",
+        "/scim/v2/Groups/team-uuid-abc-123",
+    ],
+)
+def test_virtual_key_scim_routes_allows_all_scim_endpoints(route):
+    """A key minted for an IdP's SCIM connector with allowed_routes=['scim_routes']
+    must be able to call every endpoint registered on the SCIM v2 router —
+    discovery, users, and groups, including templated paths with {user_id} /
+    {group_id} / {resource_type_id} / {schema_id:path}.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="scim_service_account",
+        allowed_routes=["scim_routes"],
+    )
+
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route, valid_token=valid_token
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "blocked_route",
+    [
+        # llm api surfaces — the whole point of a SCIM-only key is "no model access"
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/completions",
+        "/v1/completions",
+        "/embeddings",
+        "/v1/embeddings",
+        "/v1/messages",
+        "/anthropic/v1/messages",
+        # other management surfaces a SCIM connector has no business hitting
+        "/key/generate",
+        "/team/new",
+        "/user/new",
+        "/model/new",
+    ],
+)
+def test_virtual_key_scim_routes_blocks_non_scim_routes(blocked_route):
+    """A key with allowed_routes=['scim_routes'] must NOT be able to call
+    /chat/completions, /v1/messages, or any non-SCIM route — even though the
+    key's `models` list may be empty (which otherwise means 'all models').
+    Route-level restriction is what enforces 'no model access'.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="scim_service_account",
+        allowed_routes=["scim_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=blocked_route, valid_token=valid_token
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
+    assert f"Tried to call route: {blocked_route}" in str(exc_info.value.detail)
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 

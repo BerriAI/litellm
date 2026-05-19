@@ -457,6 +457,32 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
+    # SCIM v2 (Enterprise) — provisioning routes for users and groups. Used by
+    # virtual keys minted exclusively for an IdP's SCIM connector, e.g.
+    # `allowed_routes=["scim_routes"]` with no models attached so the key
+    # cannot call /chat/completions or any other LLM surface.
+    # Keep in sync with the FastAPI routes registered on `scim_router` in
+    # litellm/proxy/management_endpoints/scim/scim_v2.py.
+    scim_routes = [
+        # discovery / config
+        "/scim/v2",
+        "/scim/v2/ResourceTypes",
+        "/scim/v2/ResourceTypes/{resource_type_id}",
+        "/scim/v2/Schemas",
+        # SCIM schema IDs are URNs (e.g. urn:ietf:params:scim:schemas:core:2.0:User)
+        # whose ':' characters defeat the `{var:path}` placeholder regex used by
+        # RouteChecks._route_matches_pattern. Use a wildcard so every schema id
+        # — including URN-style ones — is accepted by check_route_access.
+        "/scim/v2/Schemas/*",
+        "/scim/v2/ServiceProviderConfig",
+        # users
+        "/scim/v2/Users",
+        "/scim/v2/Users/{user_id}",
+        # groups
+        "/scim/v2/Groups",
+        "/scim/v2/Groups/{group_id}",
+    ]
+
     agent_routes = [
         "/v1/agents",
         "/v1/agents/{agent_id}",
