@@ -332,7 +332,7 @@ def handle_generic_response(
     elif oci_finish_reason == "TOOL_CALLS":
         model_response.choices[0].finish_reason = "tool_calls"  # type: ignore[union-attr]
     elif oci_finish_reason is not None:
-        model_response.choices[0].finish_reason = oci_finish_reason  # type: ignore[union-attr]
+        model_response.choices[0].finish_reason = oci_finish_reason  # type: ignore[union-attr,assignment]
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
