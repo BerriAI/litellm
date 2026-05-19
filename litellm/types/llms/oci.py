@@ -215,6 +215,7 @@ class CohereStreamChunk(BaseModel):
     text: Optional[str] = None
     chatHistory: Optional[List[CohereMessage]] = None
     finishReason: Optional[str] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
     pad: Optional[str] = None
     index: Optional[int] = None
 

@@ -215,12 +215,14 @@ def handle_cohere_response(
             for tc in cohere_response.chatResponse.toolCalls
         ]
 
+    content: Optional[str] = response_text if response_text else None
+
     model_response.choices = [
         Choices(
             index=0,
             message={
                 "role": "assistant",
-                "content": response_text,
+                "content": content,
                 "tool_calls": tool_calls,
             },
             finish_reason=finish_reason,
@@ -264,6 +266,27 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     )
     text = "" if is_terminal_consolidation else (typed_chunk.text or "")
 
+    cohere_tool_calls = typed_chunk.toolCalls
+    if cohere_tool_calls is None and is_terminal_consolidation:
+        for history_msg in typed_chunk.chatHistory or []:
+            if history_msg.role == "CHATBOT" and history_msg.toolCalls:
+                cohere_tool_calls = history_msg.toolCalls
+                break
+
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    if cohere_tool_calls:
+        tool_calls = [
+            {
+                "id": f"call_{uuid.uuid4().hex[:24]}",
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": json.dumps(tc.parameters),
+                },
+            }
+            for tc in cohere_tool_calls
+        ]
+
     finish_reason = typed_chunk.finishReason
     if finish_reason == "COMPLETE":
         finish_reason = "stop"
@@ -278,7 +301,7 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
                 index=typed_chunk.index if typed_chunk.index else 0,
                 delta=Delta(
                     content=text,
-                    tool_calls=None,
+                    tool_calls=tool_calls,
                     provider_specific_fields=None,
                     thinking_blocks=None,
                     reasoning_content=None,
