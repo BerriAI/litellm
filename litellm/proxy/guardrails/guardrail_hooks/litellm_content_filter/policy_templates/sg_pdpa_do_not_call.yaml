@@ -1,0 +1,85 @@
+# Singapore PDPA Part IX — Do Not Call (DNC) Registry
+# Blocks requests to generate unsolicited marketing contact lists
+# targeting Singapore numbers without DNC checks.
+# Reference: https://www.pdpc.gov.sg/overview-of-pdpa/the-legislation/personal-data-protection-act
+category_name: "sg_pdpa_do_not_call"
+description: "PDPA Part IX — Blocks generation of unsolicited marketing lists and DNC Registry bypass attempts for Singapore phone numbers"
+default_action: "BLOCK"
+
+identifier_words:
+  # Singapore phone context
+  - "Singapore phone number"
+  - "SG mobile"
+  - "+65"
+  - "local number"
+  - "Singapore contact"
+
+  # Marketing lists
+  - "SMS list"
+  - "telemarketing list"
+  - "cold call list"
+  - "contact list Singapore"
+  - "marketing list"
+  - "call list"
+  - "phone list"
+
+  # Messaging platforms
+  - "WhatsApp blast"
+  - "Telegram blast"
+  - "SMS blast"
+  - "mass SMS"
+
+additional_block_words:
+  # List generation
+  - "generate"
+  - "compile"
+  - "create"
+  - "build"
+
+  # Data harvesting
+  - "scrape"
+  - "harvest"
+  - "crawl"
+  - "buy"
+  - "sell"
+  - "trade"
+
+  # Mass outreach
+  - "mass message"
+  - "bulk SMS"
+  - "bulk send"
+  - "blast to"
+  - "spam"
+
+  # DNC bypass
+  - "without checking DNC"
+  - "bypass DNC"
+  - "ignore DNC"
+  - "skip DNC"
+  - "unsolicited"
+
+always_block_keywords:
+  - keyword: "bypass DNC registry"
+    severity: "high"
+  - keyword: "ignore do not call Singapore"
+    severity: "high"
+  - keyword: "bulk SMS without consent Singapore"
+    severity: "high"
+  - keyword: "harvest Singapore phone numbers"
+    severity: "high"
+  - keyword: "spam Singapore numbers"
+    severity: "high"
+  - keyword: "buy Singapore phone list"
+    severity: "high"
+
+exceptions:
+  - "DNC check"
+  - "opted in"
+  - "consent obtained"
+  - "existing customer"
+  - "legitimate interest"
+  - "DNC registry lookup"
+  - "DNC compliance"
+  - "explain"
+  - "what is"
+  - "how to comply"

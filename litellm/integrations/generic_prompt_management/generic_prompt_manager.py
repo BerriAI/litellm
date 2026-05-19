@@ -120,7 +120,6 @@ class GenericPromptManager(CustomPromptManagement):
         http_client = _get_httpx_client()
 
         try:
-
             response = http_client.get(
                 url,
                 params=params,
@@ -325,7 +324,6 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
-
         # Check cache first
         cached_prompt = self._common_caching_logic(
             prompt_id=prompt_id,

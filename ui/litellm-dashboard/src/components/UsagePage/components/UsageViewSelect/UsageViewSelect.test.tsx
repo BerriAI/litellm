@@ -79,6 +79,7 @@ vi.mock("@ant-design/icons", async () => {
     ShoppingCartOutlined: Icon,
     TagsOutlined: Icon,
     RobotOutlined: Icon,
+    UserOutlined: Icon,
     LineChartOutlined: Icon,
     BarChartOutlined: Icon,
   };
@@ -108,5 +109,17 @@ describe("UsageViewSelect", () => {
     });
 
     expect(mockOnChange).toHaveBeenCalledWith("team");
+  });
+
+  it("should show Tag Usage for non-admin users with tag usage permission", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} canViewTagUsage={true} />);
+
+    expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+  });
+
+  it("should hide Tag Usage for non-admin users without tag usage permission", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
+
+    expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
   });
 });

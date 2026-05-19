@@ -11,12 +11,14 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { PolicyAttachment } from "./types";
+import ImpactPopover from "./impact_popover";
 
 interface AttachmentTableProps {
   attachments: PolicyAttachment[];
   isLoading: boolean;
   onDeleteClick: (attachmentId: string) => void;
   isAdmin: boolean;
+  accessToken: string | null;
 }
 
 const AttachmentTable: React.FC<AttachmentTableProps> = ({
@@ -24,6 +26,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
   isLoading,
   onDeleteClick,
   isAdmin,
+  accessToken,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
@@ -153,6 +156,31 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
       },
     },
     {
+      header: "Tags",
+      accessorKey: "tags",
+      cell: ({ row }) => {
+        const attachment = row.original;
+        const tags = attachment.tags || [];
+        if (tags.length === 0) {
+          return <span className="text-xs text-gray-400">-</span>;
+        }
+        return (
+          <div className="flex flex-wrap gap-1">
+            {tags.slice(0, 2).map((t, i) => (
+              <Tag key={i} color="orange" className="text-xs">
+                {t}
+              </Tag>
+            ))}
+            {tags.length > 2 && (
+              <Tooltip title={tags.slice(2).join(", ")}>
+                <Tag className="text-xs">+{tags.length - 2}</Tag>
+              </Tooltip>
+            )}
+          </div>
+        );
+      },
+    },
+    {
       header: "Created At",
       accessorKey: "created_at",
       cell: ({ row }) => {
@@ -171,6 +199,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
         const attachment = row.original;
         return (
           <div className="flex space-x-2">
+            <ImpactPopover attachment={attachment} accessToken={accessToken} />
             {isAdmin && (
               <Tooltip title="Delete attachment">
                 <Icon

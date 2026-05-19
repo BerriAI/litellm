@@ -27,6 +27,7 @@ class TestXAICostCalculator:
         """Set up test environment."""
         # Load the main model cost map directly to ensure we have the latest pricing
         import json
+
         try:
             with open("model_prices_and_context_window.json", "r") as f:
                 model_cost_map = json.load(f)
@@ -109,7 +110,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=200,
-            total_tokens=210,
+            total_tokens=360,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -135,7 +136,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=20,
             completion_tokens=300,
-            total_tokens=320,
+            total_tokens=520,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -176,7 +177,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=12,
             completion_tokens=50,  # Less than reasoning_tokens
-            total_tokens=62,
+            total_tokens=162,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -203,7 +204,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=100000,  # Above 128k threshold
-            total_tokens=250000,
+            total_tokens=300000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -213,7 +214,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with tiered pricing:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -230,7 +233,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=100000,  # Below 128k threshold
             completion_tokens=50000,
-            total_tokens=150000,
+            total_tokens=160000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -240,7 +243,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with regular pricing:
         # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
@@ -256,7 +261,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=200000,  # Above 128k threshold
             completion_tokens=100000,
-            total_tokens=300000,
+            total_tokens=350000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -266,7 +271,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-latest", usage=usage
+        )
 
         # Expected costs for grok-4-latest with tiered pricing:
         # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
@@ -282,7 +289,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=50000,  # Below 128k threshold
-            total_tokens=200000,
+            total_tokens=210000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -292,7 +299,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -322,6 +331,29 @@ class TestXAICostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
+    def test_already_normalised_usage_does_not_double_count_reasoning(self):
+        """Cost calc must not double-bill when Usage is already OpenAI-normalised."""
+        usage = Usage(
+            prompt_tokens=12,
+            completion_tokens=200,
+            total_tokens=212,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                accepted_prediction_tokens=0,
+                audio_tokens=0,
+                reasoning_tokens=100,
+                rejected_prediction_tokens=0,
+                text_tokens=None,
+            ),
+        )
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+
+        expected_prompt_cost = 12 * 3e-7
+        expected_completion_cost = 200 * 5e-7
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
     def test_web_search_cost_calculation(self):
         """Test web search cost calculation for X.AI models."""
         # Test with web_search_requests in prompt_tokens_details (primary path)
@@ -332,14 +364,14 @@ class TestXAICostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=100,
                 web_search_requests=3,  # 3 sources used
-            )
+            ),
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 3 sources * $0.025 per source = $0.075
         expected_cost = 3 * (25.0 / 1000.0)  # 3 * $0.025
-        
+
         assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
         assert math.isclose(web_search_cost, 0.075, rel_tol=1e-10)
 
@@ -353,12 +385,12 @@ class TestXAICostCalculator:
         )
         # Manually set num_sources_used (as done by transformation layer)
         setattr(usage, "num_sources_used", 5)
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 5 sources * $0.025 per source = $0.125
         expected_cost = 5 * (25.0 / 1000.0)  # 5 * $0.025
-        
+
         assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
         assert math.isclose(web_search_cost, 0.125, rel_tol=1e-10)
 
@@ -371,11 +403,11 @@ class TestXAICostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=100,
                 web_search_requests=0,  # No web search
-            )
+            ),
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: 0 sources * $0.025 per source = $0.0
         assert web_search_cost == 0.0
 
@@ -386,8 +418,56 @@ class TestXAICostCalculator:
             completion_tokens=50,
             total_tokens=150,
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: No web search data = $0.0
         assert web_search_cost == 0.0
+
+    def test_grok_4_20_beta_reasoning_cost_calculation(self):
+        """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-beta-0309-reasoning", usage=usage
+        )
+
+        # Input: 100 tokens * $2e-6 = $0.0002
+        # Output: 200 tokens * $6e-6 = $0.0012
+        expected_prompt_cost = 100 * 2e-6
+        expected_completion_cost = 200 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_beta_non_reasoning_cost_calculation(self):
+        """Test cost calculation for grok-4.20-beta-0309-non-reasoning model."""
+        usage = Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-beta-0309-non-reasoning", usage=usage
+        )
+
+        # Input: 50 tokens * $2e-6 = $0.0001
+        # Output: 100 tokens * $6e-6 = $0.0006
+        expected_prompt_cost = 50 * 2e-6
+        expected_completion_cost = 100 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_multi_agent_cost_calculation(self):
+        """Test cost calculation for grok-4.20-multi-agent-beta-0309 model."""
+        usage = Usage(prompt_tokens=200, completion_tokens=300, total_tokens=500)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-multi-agent-beta-0309", usage=usage
+        )
+
+        # Input: 200 tokens * $2e-6 = $0.0004
+        # Output: 300 tokens * $6e-6 = $0.0018
+        expected_prompt_cost = 200 * 2e-6
+        expected_completion_cost = 300 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)

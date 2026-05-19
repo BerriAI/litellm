@@ -132,9 +132,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         Get the complete URL for the Stability AI API request.
         """
         base_url: str = (
-            api_base
-            or get_secret_str("STABILITY_API_BASE")
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("STABILITY_API_BASE") or self.DEFAULT_BASE_URL
         )
         base_url = base_url.rstrip("/")
 

@@ -59,12 +59,12 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
                 "properties": {
                     "sentiment": {
                         "type": "string",
-                        "enum": ["positive", "negative", "neutral"]
+                        "enum": ["positive", "negative", "neutral"],
                     }
                 },
                 "required": ["sentiment"],
-                "additionalProperties": False
-            }
+                "additionalProperties": False,
+            },
         }
 
     def get_test_messages(self) -> List[Dict[str, Any]]:
@@ -74,7 +74,7 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
         return [
             {
                 "role": "user",
-                "content": "What is the sentiment of this text: 'This product is amazing!' Return only the sentiment."
+                "content": "What is the sentiment of this text: 'This product is amazing!' Return only the sentiment.",
             }
         ]
 
@@ -118,7 +118,7 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
         assert len(content_list) > 0
 
         content = content_list[0]
-        
+
         # Handle both dict and object content blocks
         if isinstance(content, dict):
             assert "text" in content

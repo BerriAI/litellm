@@ -53,30 +53,32 @@ class PromptCachingCache:
         return str(obj)
 
     @staticmethod
-    def extract_cacheable_prefix(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def extract_cacheable_prefix(
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
         """
         Extract the cacheable prefix from messages.
-        
+
         The cacheable prefix is everything UP TO AND INCLUDING the LAST content block
         (across all messages) that has cache_control. This includes ALL blocks before
         the last cacheable block (even if they don't have cache_control).
-        
+
         Args:
             messages: List of messages to extract cacheable prefix from
-            
+
         Returns:
             List of messages containing only the cacheable prefix
         """
         if not messages:
             return messages
-        
+
         # Find the last content block (across all messages) that has cache_control
         last_cacheable_message_idx = None
         last_cacheable_content_idx = None
-        
+
         for msg_idx, message in enumerate(messages):
             content = message.get("content")
-            
+
             # Check for cache_control at message level (when content is a string)
             # This handles the case where cache_control is a sibling of string content:
             # {"role": "user", "content": "...", "cache_control": {"type": "ephemeral"}}
@@ -90,11 +92,11 @@ class PromptCachingCache:
                 # Set to None to indicate the entire message content is cacheable
                 # (not a specific content block index within a list)
                 last_cacheable_content_idx = None
-            
+
             # Also check for cache_control within content blocks (when content is a list)
             if not isinstance(content, list):
                 continue
-            
+
             for content_idx, content_block in enumerate(content):
                 if isinstance(content_block, dict):
                     cache_control = content_block.get("cache_control")
@@ -105,14 +107,14 @@ class PromptCachingCache:
                     ):
                         last_cacheable_message_idx = msg_idx
                         last_cacheable_content_idx = content_idx
-        
+
         # If no cacheable block found, return empty list (no cacheable prefix)
         if last_cacheable_message_idx is None:
             return []
-        
+
         # Build the cacheable prefix: all messages up to and including the last cacheable message
         cacheable_prefix = []
-        
+
         for msg_idx, message in enumerate(messages):
             if msg_idx < last_cacheable_message_idx:
                 # Include entire message (comes before last cacheable block)
@@ -124,7 +126,10 @@ class PromptCachingCache:
                     # Create a copy of the message with only cacheable content blocks
                     message_copy = cast(
                         AllMessageValues,
-                        {**message, "content": content[: last_cacheable_content_idx + 1]},
+                        {
+                            **message,
+                            "content": content[: last_cacheable_content_idx + 1],
+                        },
                     )
                     cacheable_prefix.append(message_copy)
                 else:
@@ -133,7 +138,7 @@ class PromptCachingCache:
             else:
                 # Message comes after last cacheable block, don't include
                 break
-        
+
         return cacheable_prefix
 
     @staticmethod
@@ -143,7 +148,7 @@ class PromptCachingCache:
     ) -> Optional[str]:
         if messages is None and tools is None:
             return None
-        
+
         # Extract cacheable prefix from messages (only include up to last cache_control block)
         cacheable_messages = None
         if messages is not None:
@@ -151,11 +156,13 @@ class PromptCachingCache:
             # If no cacheable prefix found, return None (can't cache)
             if not cacheable_messages:
                 return None
-        
+
         # Use serialize_object for consistent and stable serialization
         data_to_hash = {}
         if cacheable_messages is not None:
-            serialized_messages = PromptCachingCache.serialize_object(cacheable_messages)
+            serialized_messages = PromptCachingCache.serialize_object(
+                cacheable_messages
+            )
             data_to_hash["messages"] = serialized_messages
         if tools is not None:
             serialized_tools = PromptCachingCache.serialize_object(tools)
@@ -219,7 +226,7 @@ class PromptCachingCache:
     ) -> Optional[PromptCachingCacheValue]:
         """
         Get model ID from cache using the cacheable prefix.
-        
+
         The cache key is based on the cacheable prefix (everything up to and including
         the last cache_control block), so requests with the same cacheable prefix but
         different user messages will have the same cache key.

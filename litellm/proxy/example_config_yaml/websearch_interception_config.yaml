@@ -1,7 +1,7 @@
 model_list:
   - model_name: claude-3-5-sonnet
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
 
 # Search tools configuration
 search_tools:
@@ -10,7 +10,7 @@ search_tools:
       search_provider: "perplexity"
 
 litellm_settings:
-  success_callback: ["websearch_interception"]
+  callbacks: ["websearch_interception"]
   websearch_interception_params:
     enabled_providers: ["bedrock"]
     search_tool_name: "my-perplexity-search"

@@ -25,8 +25,8 @@ class TestS3V2UnitTests:
             "json.dumps(" not in source_code
         ), "S3 v2 should not use json.dumps directly"
 
-    @patch('asyncio.create_task')
-    @patch('litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush')
+    @patch("asyncio.create_task")
+    @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
     def test_s3_v2_endpoint_url(self, mock_periodic_flush, mock_create_task):
         """testing s3 endpoint url"""
         from unittest.mock import AsyncMock, MagicMock
@@ -46,7 +46,7 @@ class TestS3V2UnitTests:
         test_element = s3BatchLoggingElement(
             s3_object_key="2025-09-14/test-key.json",
             payload={"test": "data"},
-            s3_object_download_filename="test-file.json"
+            s3_object_download_filename="test-file.json",
         )
 
         # Test 1: Custom endpoint URL with bucket name
@@ -55,7 +55,7 @@ class TestS3V2UnitTests:
             s3_endpoint_url="https://s3.amazonaws.com",
             s3_aws_access_key_id="test-key",
             s3_aws_secret_access_key="test-secret",
-            s3_region_name="us-east-1"
+            s3_region_name="us-east-1",
         )
 
         s3_logger.async_httpx_client = AsyncMock()
@@ -75,7 +75,7 @@ class TestS3V2UnitTests:
             s3_endpoint_url="https://minio.example.com:9000",
             s3_aws_access_key_id="minio-key",
             s3_aws_secret_access_key="minio-secret",
-            s3_region_name="us-east-1"
+            s3_region_name="us-east-1",
         )
 
         s3_logger_minio.async_httpx_client = AsyncMock()
@@ -86,15 +86,19 @@ class TestS3V2UnitTests:
         call_args_minio = s3_logger_minio.async_httpx_client.put.call_args
         assert call_args_minio is not None
         url_minio = call_args_minio[0][0]
-        expected_minio_url = "https://minio.example.com:9000/litellm-logs/2025-09-14/test-key.json"
-        assert url_minio == expected_minio_url, f"Expected MinIO URL {expected_minio_url}, got {url_minio}"
+        expected_minio_url = (
+            "https://minio.example.com:9000/litellm-logs/2025-09-14/test-key.json"
+        )
+        assert (
+            url_minio == expected_minio_url
+        ), f"Expected MinIO URL {expected_minio_url}, got {url_minio}"
 
         # Test 3: Custom endpoint without bucket name (should fall back to default)
         s3_logger_no_bucket = S3Logger(
             s3_endpoint_url="https://s3.amazonaws.com",
             s3_aws_access_key_id="test-key",
             s3_aws_secret_access_key="test-secret",
-            s3_region_name="us-east-1"
+            s3_region_name="us-east-1",
         )
 
         s3_logger_no_bucket.async_httpx_client = AsyncMock()
@@ -117,20 +121,27 @@ class TestS3V2UnitTests:
             s3_endpoint_url="https://custom.s3.endpoint.com",
             s3_aws_access_key_id="sync-key",
             s3_aws_secret_access_key="sync-secret",
-            s3_region_name="us-east-1"
+            s3_region_name="us-east-1",
         )
 
         mock_sync_client = MagicMock()
         mock_sync_client.put.return_value = mock_response
 
-        with patch('litellm.integrations.s3_v2._get_httpx_client', return_value=mock_sync_client):
+        with patch(
+            "litellm.integrations.s3_v2._get_httpx_client",
+            return_value=mock_sync_client,
+        ):
             s3_logger_sync.upload_data_to_s3(test_element)
 
             call_args_sync = mock_sync_client.put.call_args
             assert call_args_sync is not None
             url_sync = call_args_sync[0][0]
-            expected_sync_url = "https://custom.s3.endpoint.com/sync-bucket/2025-09-14/test-key.json"
-            assert url_sync == expected_sync_url, f"Expected sync URL {expected_sync_url}, got {url_sync}"
+            expected_sync_url = (
+                "https://custom.s3.endpoint.com/sync-bucket/2025-09-14/test-key.json"
+            )
+            assert (
+                url_sync == expected_sync_url
+            ), f"Expected sync URL {expected_sync_url}, got {url_sync}"
 
         # Test 5: Download method with custom endpoint
         s3_logger_download = S3Logger(
@@ -138,7 +149,7 @@ class TestS3V2UnitTests:
             s3_endpoint_url="https://download.s3.endpoint.com",
             s3_aws_access_key_id="download-key",
             s3_aws_secret_access_key="download-secret",
-            s3_region_name="us-east-1"
+            s3_region_name="us-east-1",
         )
 
         mock_download_response = MagicMock()
@@ -147,15 +158,478 @@ class TestS3V2UnitTests:
         s3_logger_download.async_httpx_client = AsyncMock()
         s3_logger_download.async_httpx_client.get.return_value = mock_download_response
 
-        result = asyncio.run(s3_logger_download._download_object_from_s3("2025-09-14/download-test-key.json"))
+        result = asyncio.run(
+            s3_logger_download._download_object_from_s3(
+                "2025-09-14/download-test-key.json"
+            )
+        )
 
         call_args_download = s3_logger_download.async_httpx_client.get.call_args
         assert call_args_download is not None
         url_download = call_args_download[0][0]
         expected_download_url = "https://download.s3.endpoint.com/download-bucket/2025-09-14/download-test-key.json"
-        assert url_download == expected_download_url, f"Expected download URL {expected_download_url}, got {url_download}"
+        assert (
+            url_download == expected_download_url
+        ), f"Expected download URL {expected_download_url}, got {url_download}"
 
         assert result == {"downloaded": "data"}
+
+    @patch("asyncio.create_task")
+    @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
+    def test_s3_v2_virtual_hosted_style(self, mock_periodic_flush, mock_create_task):
+        """Test s3_use_virtual_hosted_style parameter for virtual-hosted-style URLs"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+        # Mock periodic_flush and create_task to prevent async task creation during init
+        mock_periodic_flush.return_value = None
+        mock_create_task.return_value = None
+
+        # Mock response for all tests
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        # Create a test batch logging element
+        test_element = s3BatchLoggingElement(
+            s3_object_key="2025-09-14/test-key.json",
+            payload={"test": "data"},
+            s3_object_download_filename="test-file.json",
+        )
+
+        # Test 1: Virtual-hosted-style with custom endpoint
+        s3_logger_virtual = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.custom-endpoint.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True,
+        )
+
+        s3_logger_virtual.async_httpx_client = AsyncMock()
+        s3_logger_virtual.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_virtual.async_upload_data_to_s3(test_element))
+
+        call_args = s3_logger_virtual.async_httpx_client.put.call_args
+        assert call_args is not None
+        url = call_args[0][0]
+        expected_url = (
+            "https://test-bucket.s3.custom-endpoint.com/2025-09-14/test-key.json"
+        )
+        assert (
+            url == expected_url
+        ), f"Expected virtual-hosted-style URL {expected_url}, got {url}"
+
+        # Test 2: Path-style (default behavior with s3_use_virtual_hosted_style=False)
+        s3_logger_path = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.custom-endpoint.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=False,
+        )
+
+        s3_logger_path.async_httpx_client = AsyncMock()
+        s3_logger_path.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_path.async_upload_data_to_s3(test_element))
+
+        call_args_path = s3_logger_path.async_httpx_client.put.call_args
+        assert call_args_path is not None
+        url_path = call_args_path[0][0]
+        expected_path_url = (
+            "https://s3.custom-endpoint.com/test-bucket/2025-09-14/test-key.json"
+        )
+        assert (
+            url_path == expected_path_url
+        ), f"Expected path-style URL {expected_path_url}, got {url_path}"
+
+        # Test 3: Virtual-hosted-style with http protocol
+        s3_logger_http = S3Logger(
+            s3_bucket_name="http-bucket",
+            s3_endpoint_url="http://minio.local:9000",
+            s3_aws_access_key_id="minio-key",
+            s3_aws_secret_access_key="minio-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True,
+        )
+
+        s3_logger_http.async_httpx_client = AsyncMock()
+        s3_logger_http.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger_http.async_upload_data_to_s3(test_element))
+
+        call_args_http = s3_logger_http.async_httpx_client.put.call_args
+        assert call_args_http is not None
+        url_http = call_args_http[0][0]
+        expected_http_url = (
+            "http://http-bucket.minio.local:9000/2025-09-14/test-key.json"
+        )
+        assert (
+            url_http == expected_http_url
+        ), f"Expected virtual-hosted-style URL with http {expected_http_url}, got {url_http}"
+
+        # Test 4: Sync upload method with virtual-hosted-style
+        s3_logger_sync_virtual = S3Logger(
+            s3_bucket_name="sync-bucket",
+            s3_endpoint_url="https://storage.example.com",
+            s3_aws_access_key_id="sync-key",
+            s3_aws_secret_access_key="sync-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True,
+        )
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.put.return_value = mock_response
+
+        with patch(
+            "litellm.integrations.s3_v2._get_httpx_client",
+            return_value=mock_sync_client,
+        ):
+            s3_logger_sync_virtual.upload_data_to_s3(test_element)
+
+            call_args_sync = mock_sync_client.put.call_args
+            assert call_args_sync is not None
+            url_sync = call_args_sync[0][0]
+            expected_sync_url = (
+                "https://sync-bucket.storage.example.com/2025-09-14/test-key.json"
+            )
+            assert (
+                url_sync == expected_sync_url
+            ), f"Expected virtual-hosted-style sync URL {expected_sync_url}, got {url_sync}"
+
+        # Test 5: Download method with virtual-hosted-style
+        s3_logger_download_virtual = S3Logger(
+            s3_bucket_name="download-bucket",
+            s3_endpoint_url="https://download.endpoint.com",
+            s3_aws_access_key_id="download-key",
+            s3_aws_secret_access_key="download-secret",
+            s3_region_name="us-east-1",
+            s3_use_virtual_hosted_style=True,
+        )
+
+        mock_download_response = MagicMock()
+        mock_download_response.status_code = 200
+        mock_download_response.json = MagicMock(return_value={"downloaded": "data"})
+        s3_logger_download_virtual.async_httpx_client = AsyncMock()
+        s3_logger_download_virtual.async_httpx_client.get.return_value = (
+            mock_download_response
+        )
+
+        result = asyncio.run(
+            s3_logger_download_virtual._download_object_from_s3(
+                "2025-09-14/download-test-key.json"
+            )
+        )
+
+        call_args_download = s3_logger_download_virtual.async_httpx_client.get.call_args
+        assert call_args_download is not None
+        url_download = call_args_download[0][0]
+        expected_download_url = "https://download-bucket.download.endpoint.com/2025-09-14/download-test-key.json"
+        assert (
+            url_download == expected_download_url
+        ), f"Expected virtual-hosted-style download URL {expected_download_url}, got {url_download}"
+
+        assert result == {"downloaded": "data"}
+
+    @patch("asyncio.create_task")
+    @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
+    def test_s3_v2_put_url_encodes_spaces_in_object_key(
+        self, mock_periodic_flush, mock_create_task
+    ):
+        import requests
+        from unittest.mock import AsyncMock
+
+        from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+        mock_periodic_flush.return_value = None
+        mock_create_task.return_value = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        s3_object_key = "My Team/2025-09-14/test-key.json"
+        test_element = s3BatchLoggingElement(
+            s3_object_key=s3_object_key,
+            payload={"test": "data"},
+            s3_object_download_filename="test-file.json",
+        )
+
+        s3_logger = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.amazonaws.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+        )
+        s3_logger.async_httpx_client = AsyncMock()
+        s3_logger.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger.async_upload_data_to_s3(test_element))
+
+        call_args = s3_logger.async_httpx_client.put.call_args
+        assert call_args is not None
+        actual_url = call_args[0][0]
+        raw_url = f"https://s3.amazonaws.com/test-bucket/{s3_object_key}"
+        expected_url = requests.Request("PUT", raw_url).prepare().url
+        assert actual_url == expected_url
+        assert " " not in actual_url
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_on_s3_503():
+    """
+    Test that async_upload_data_to_s3 retries on transient S3 503 Slow Down
+    and succeeds on the second attempt.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-retry.json",
+        payload={"test": "retry"},
+        s3_object_download_filename="test-retry.json",
+    )
+
+    # First call returns 503, second call returns 200
+    response_503 = MagicMock()
+    response_503.status_code = 503
+    response_200 = MagicMock()
+    response_200.status_code = 200
+    response_200.raise_for_status = MagicMock()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(side_effect=[response_503, response_200])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await logger.async_upload_data_to_s3(test_element)
+
+    # Verify PUT was called twice (retry after 503)
+    assert logger.async_httpx_client.put.call_count == 2
+    # Verify sleep was called with the backoff delay
+    mock_sleep.assert_called_once_with(1)  # 2**0 = 1s
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_on_s3_500():
+    """
+    Test that async_upload_data_to_s3 retries on transient S3 500 errors.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-retry-500.json",
+        payload={"test": "retry-500"},
+        s3_object_download_filename="test-retry-500.json",
+    )
+
+    response_500 = MagicMock()
+    response_500.status_code = 500
+    response_200 = MagicMock()
+    response_200.status_code = 200
+    response_200.raise_for_status = MagicMock()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(side_effect=[response_500, response_200])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await logger.async_upload_data_to_s3(test_element)
+
+    assert logger.async_httpx_client.put.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_async_upload_exhausts_retries_on_persistent_503():
+    """
+    Test that async_upload_data_to_s3 raises after exhausting all retries
+    on persistent S3 503.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-exhaust.json",
+        payload={"test": "exhaust"},
+        s3_object_download_filename="test-exhaust.json",
+    )
+
+    # All 3 attempts return 503
+    response_503 = MagicMock()
+    response_503.status_code = 503
+    response_503.raise_for_status = MagicMock(
+        side_effect=Exception("503 Service Unavailable")
+    )
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(return_value=response_503)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch.object(logger, "handle_callback_failure") as mock_failure:
+            await logger.async_upload_data_to_s3(test_element)
+
+    # 3 PUT attempts total
+    assert logger.async_httpx_client.put.call_count == 3
+    # 2 sleeps (between attempts 1-2 and 2-3)
+    assert mock_sleep.call_count == 2
+    # Callback failure handler called after exhausting retries
+    mock_failure.assert_called_once_with(callback_name="S3Logger")
+
+
+@pytest.mark.asyncio
+async def test_async_upload_no_retry_on_4xx():
+    """
+    Test that async_upload_data_to_s3 does NOT retry on 4xx errors (client errors).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-no-retry.json",
+        payload={"test": "no-retry"},
+        s3_object_download_filename="test-no-retry.json",
+    )
+
+    response_403 = MagicMock()
+    response_403.status_code = 403
+    response_403.raise_for_status = MagicMock(side_effect=Exception("403 Forbidden"))
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(return_value=response_403)
+
+    with patch.object(logger, "handle_callback_failure") as mock_failure:
+        await logger.async_upload_data_to_s3(test_element)
+
+    # Only 1 attempt — no retry for 4xx
+    assert logger.async_httpx_client.put.call_count == 1
+    mock_failure.assert_called_once_with(callback_name="S3Logger")
+
+
+def test_sync_upload_retries_on_s3_503():
+    """
+    Test that the sync upload_data_to_s3 retries on transient S3 503.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-retry.json",
+        payload={"test": "sync-retry"},
+        s3_object_download_filename="test-sync-retry.json",
+    )
+
+    response_503 = MagicMock()
+    response_503.status_code = 503
+    response_200 = MagicMock()
+    response_200.status_code = 200
+    response_200.raise_for_status = MagicMock()
+
+    mock_sync_client = MagicMock()
+    mock_sync_client.put = MagicMock(side_effect=[response_503, response_200])
+
+    with patch(
+        "litellm.integrations.s3_v2._get_httpx_client",
+        return_value=mock_sync_client,
+    ):
+        with patch("time.sleep") as mock_sleep:
+            logger.upload_data_to_s3(test_element)
+
+    assert mock_sync_client.put.call_count == 2
+    mock_sleep.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_async_log_event_skips_when_standard_logging_object_missing():
+    """
+    Reproduces the bug where _async_log_event_base raises ValueError when
+    kwargs has no standard_logging_object (e.g. call_type=afile_delete).
+
+    The S3 logger should skip gracefully, not raise.
+    """
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_region_name="us-east-1",
+        s3_aws_access_key_id="fake",
+        s3_aws_secret_access_key="fake",
+    )
+
+    kwargs_without_slo = {
+        "call_type": "afile_delete",
+        "model": None,
+        "litellm_call_id": "test-call-id",
+    }
+
+    start_time = datetime.utcnow()
+    end_time = datetime.utcnow()
+
+    # Spy on handle_callback_failure — should NOT be called if we skip gracefully.
+    # Without the fix, the ValueError is caught by the except block which calls
+    # handle_callback_failure. With the fix, we return early and never hit except.
+    with patch.object(logger, "handle_callback_failure") as mock_failure:
+        await logger._async_log_event_base(
+            kwargs=kwargs_without_slo,
+            response_obj=None,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        assert not mock_failure.called, (
+            "handle_callback_failure should not be called — "
+            "missing standard_logging_object should be a graceful skip, not an error"
+        )
+
+    # Nothing should have been queued (catches the case where code falls
+    # through without returning and appends None to the queue)
+    assert (
+        len(logger.log_queue) == 0
+    ), "log_queue should be empty when standard_logging_object is missing"
+
 
 @pytest.mark.asyncio
 async def test_strip_base64_removes_file_and_nontext_entries():
@@ -167,15 +641,24 @@ async def test_strip_base64_removes_file_and_nontext_entries():
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Hello world"},
-                    {"type": "image", "file": {"file_data": "data:image/png;base64,AAAA"}},
-                    {"type": "file", "file": {"file_data": "data:application/pdf;base64,BBBB"}},
+                    {
+                        "type": "image",
+                        "file": {"file_data": "data:image/png;base64,AAAA"},
+                    },
+                    {
+                        "type": "file",
+                        "file": {"file_data": "data:application/pdf;base64,BBBB"},
+                    },
                 ],
             },
             {
                 "role": "assistant",
                 "content": [
                     {"type": "text", "text": "Response"},
-                    {"type": "audio", "file": {"file_data": "data:audio/wav;base64,CCCC"}},
+                    {
+                        "type": "audio",
+                        "file": {"file_data": "data:audio/wav;base64,CCCC"},
+                    },
                 ],
             },
         ]
@@ -271,7 +754,7 @@ async def test_strip_base64_mixed_nested_objects():
 async def test_s3_verify_false_handling():
     """
     Test that s3_verify=False is properly handled and not treated as None.
-    
+
     This is a regression test for the bug where s3_verify=False was being
     ignored because 'False or s3_verify' would evaluate to s3_verify (None).
     """
@@ -289,25 +772,35 @@ async def test_s3_verify_false_handling():
         "s3_verify": False,  # This should NOT be ignored
         "s3_use_ssl": False,  # This should also NOT be ignored
     }
-    
-    with patch('asyncio.create_task'):
-        with patch('litellm.integrations.s3_v2.get_async_httpx_client') as mock_get_client:
+
+    with patch("asyncio.create_task"):
+        with patch(
+            "litellm.integrations.s3_v2.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_get_client.return_value = mock_client
-            
+
             # Create logger
             logger = S3Logger()
-            
+
             # Verify s3_verify is False, not None
-            assert logger.s3_verify is False, f"Expected s3_verify=False, got {logger.s3_verify}"
-            assert logger.s3_use_ssl is False, f"Expected s3_use_ssl=False, got {logger.s3_use_ssl}"
-            
+            assert (
+                logger.s3_verify is False
+            ), f"Expected s3_verify=False, got {logger.s3_verify}"
+            assert (
+                logger.s3_use_ssl is False
+            ), f"Expected s3_use_ssl=False, got {logger.s3_use_ssl}"
+
             # Verify that get_async_httpx_client was called with ssl_verify=False
             mock_get_client.assert_called_once()
             call_kwargs = mock_get_client.call_args.kwargs
-            assert 'params' in call_kwargs, "params should be passed to get_async_httpx_client"
-            assert call_kwargs['params'] == {'ssl_verify': False}, f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
-    
+            assert (
+                "params" in call_kwargs
+            ), "params should be passed to get_async_httpx_client"
+            assert call_kwargs["params"] == {
+                "ssl_verify": False
+            }, f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
+
     # Clean up
     litellm.s3_callback_params = None
 
@@ -328,27 +821,31 @@ async def test_s3_verify_none_handling():
         "s3_aws_secret_access_key": "test-secret",
         "s3_region_name": "us-east-1",
     }
-    
-    with patch('asyncio.create_task'):
-        with patch('litellm.integrations.s3_v2.get_async_httpx_client') as mock_get_client:
+
+    with patch("asyncio.create_task"):
+        with patch(
+            "litellm.integrations.s3_v2.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_get_client.return_value = mock_client
-            
+
             # Create logger without explicit s3_verify
             logger = S3Logger()
-            
+
             # Verify s3_verify is None (default)
-            assert logger.s3_verify is None, f"Expected s3_verify=None, got {logger.s3_verify}"
-            
+            assert (
+                logger.s3_verify is None
+            ), f"Expected s3_verify=None, got {logger.s3_verify}"
+
             # Verify that get_async_httpx_client was called
             mock_get_client.assert_called_once()
             call_kwargs = mock_get_client.call_args.kwargs
             # When s3_verify is None, params={'ssl_verify': None} which is fine - uses default behavior
             # The important thing is it's not False
-            if 'params' in call_kwargs and call_kwargs['params'] is not None:
-                assert call_kwargs['params'].get('ssl_verify') is None
+            if "params" in call_kwargs and call_kwargs["params"] is not None:
+                assert call_kwargs["params"].get("ssl_verify") is None
             # Either params is None or params={'ssl_verify': None} is acceptable
-    
+
     # Clean up
     litellm.s3_callback_params = None
 
@@ -357,7 +854,7 @@ async def test_s3_verify_none_handling():
 async def test_s3_verify_false_creates_httpx_client_with_verify_false():
     """
     Test that when s3_verify=False, the actual httpx client has verify=False.
-    
+
     This validates that ssl_verify=False flows through to the httpx.AsyncClient.
     """
     from unittest.mock import patch
@@ -373,22 +870,24 @@ async def test_s3_verify_false_creates_httpx_client_with_verify_false():
         "s3_region_name": "us-east-1",
         "s3_verify": False,
     }
-    
-    with patch('asyncio.create_task'):
+
+    with patch("asyncio.create_task"):
         # Create logger - this creates the httpx client
         logger = S3Logger()
-        
+
         # Verify the logger has s3_verify=False
         assert logger.s3_verify is False
-        
+
         # Check the actual httpx client has verify=False
         # The async_httpx_client.client is the actual httpx.AsyncClient
-        if hasattr(logger.async_httpx_client, 'client'):
+        if hasattr(logger.async_httpx_client, "client"):
             httpx_client = logger.async_httpx_client.client
             # Check the _verify attribute (httpx internal)
-            if hasattr(httpx_client, '_verify'):
-                assert httpx_client._verify is False, f"Expected httpx client _verify=False, got {httpx_client._verify}"
-    
+            if hasattr(httpx_client, "_verify"):
+                assert (
+                    httpx_client._verify is False
+                ), f"Expected httpx client _verify=False, got {httpx_client._verify}"
+
     # Clean up
     litellm.s3_callback_params = None
 
@@ -412,38 +911,40 @@ async def test_s3_verify_false_async_client():
         "s3_region_name": "us-east-1",
         "s3_verify": False,
     }
-    
-    with patch('asyncio.create_task'):
+
+    with patch("asyncio.create_task"):
         logger = S3Logger()
-        
+
         # Verify s3_verify is False
         assert logger.s3_verify is False
-        
+
         # Create test element
         test_element = s3BatchLoggingElement(
             s3_object_key="2025-11-03/test-key.json",
             payload={"test": "data"},
-            s3_object_download_filename="test-file.json"
+            s3_object_download_filename="test-file.json",
         )
-        
+
         # Mock the async httpx client's put method
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
         logger.async_httpx_client.put = AsyncMock(return_value=mock_response)
-        
+
         # Call async upload
         await logger.async_upload_data_to_s3(test_element)
-        
+
         # Verify put was called
         assert logger.async_httpx_client.put.called
-        
+
         # Check that the async httpx client was created with verify=False
-        if hasattr(logger.async_httpx_client, 'client'):
+        if hasattr(logger.async_httpx_client, "client"):
             httpx_client = logger.async_httpx_client.client
-            if hasattr(httpx_client, '_verify'):
-                assert httpx_client._verify is False, f"Expected async httpx client _verify=False, got {httpx_client._verify}"
-    
+            if hasattr(httpx_client, "_verify"):
+                assert (
+                    httpx_client._verify is False
+                ), f"Expected async httpx client _verify=False, got {httpx_client._verify}"
+
     # Clean up
     litellm.s3_callback_params = None
 
@@ -456,8 +957,14 @@ async def test_strip_base64_recursive_redaction():
             {
                 "content": [
                     {"type": "text", "text": "normal text"},
-                    {"type": "text", "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg"},
-                    {"type": "text", "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}"},
+                    {
+                        "type": "text",
+                        "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg",
+                    },
+                    {
+                        "type": "text",
+                        "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}",
+                    },
                     {"file": {"file_data": "data:application/pdf;base64,AAAA"}},
                     {"metadata": {"preview": "data:audio/mp3;base64,AAAAA=="}},
                 ]
@@ -473,12 +980,12 @@ async def test_strip_base64_recursive_redaction():
 
     # Base64 redacted globally
     import json
+
     for c in content:
         if isinstance(c, dict):
             s = json.dumps(c).lower()
             # "[base64_redacted]" is fine, but raw base64 is not
             assert "base64," not in s, f"Found real base64 blob in: {s}"
-
 
 
 # --------------------------------------------------------------
@@ -507,7 +1014,7 @@ def patch_asyncio_create_task():
     ],
 )
 def test_s3_object_key_prefix_combinations(
-        use_team_prefix, use_key_prefix, team_alias, key_alias, expected_prefix
+    use_team_prefix, use_key_prefix, team_alias, key_alias, expected_prefix
 ):
     """
     Validate correct S3 prefix composition for team alias + key alias combinations.
@@ -616,3 +1123,74 @@ async def test_combined_prefix_reflects_in_s3_object_key():
     result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
     key = result.s3_object_key
     assert "myteam/apikey/" in key, f"Expected both prefixes in key: {key}"
+
+
+# --------------------------------------------------------------
+# params_source / s3_callback_params_override (audit-log decoupling)
+# --------------------------------------------------------------
+def test_s3_callback_params_override_uses_alternate_dict():
+    """`s3_callback_params_override` makes the logger read its config from
+    the override dict instead of `litellm.s3_callback_params`."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "normal-bucket"}
+    try:
+        logger = S3Logger(
+            s3_callback_params_override={
+                "s3_bucket_name": "audit-bucket",
+                "s3_path": "audit-prefix",
+                "s3_region_name": "us-west-2",
+            }
+        )
+        assert logger.s3_bucket_name == "audit-bucket"
+        assert logger.s3_path == "audit-prefix"
+        assert logger.s3_region_name == "us-west-2"
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_s3_callback_params_override_does_not_mutate_inputs(monkeypatch):
+    """Resolving `os.environ/X` markers must not mutate the override dict
+    or `litellm.s3_callback_params`."""
+    import litellm
+
+    monkeypatch.setenv("MY_AUDIT_BUCKET", "resolved-bucket")
+    override = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
+    original_global = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
+    try:
+        logger = S3Logger(s3_callback_params_override=override)
+        assert logger.s3_bucket_name == "resolved-bucket"
+        assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+        assert (
+            litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+        )
+    finally:
+        litellm.s3_callback_params = original_global
+
+
+def test_s3_callback_params_override_none_falls_back_to_global():
+    """No override → behaves exactly as today (reads `litellm.s3_callback_params`)."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
+    try:
+        logger = S3Logger()
+        assert logger.s3_bucket_name == "from-global"
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_s3_callback_params_override_empty_dict_is_opt_in():
+    """An empty override dict skips the global entirely (env/IAM-only config)."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
+    try:
+        logger = S3Logger(s3_callback_params_override={})
+        assert logger.s3_bucket_name is None
+    finally:
+        litellm.s3_callback_params = original

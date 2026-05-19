@@ -34,7 +34,7 @@ async def test_openai_moderation_error_raising(monkeypatch):
     """
     from unittest.mock import AsyncMock, MagicMock
     from litellm.types.llms.openai import OpenAIModerationResponse
-    
+
     litellm.openai_moderations_model_name = "text-moderation-latest"
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
     _api_key = "sk-12345"
@@ -59,10 +59,10 @@ async def test_openai_moderation_error_raising(monkeypatch):
     # Mock the amoderation call to return a flagged response
     mock_response = MagicMock(spec=OpenAIModerationResponse)
     mock_response.results = [MagicMock(flagged=True)]
-    
+
     async def mock_amoderation(*args, **kwargs):
         return mock_response
-    
+
     llm_router.amoderation = mock_amoderation
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
@@ -90,13 +90,12 @@ async def test_openai_moderation_error_raising(monkeypatch):
 @pytest.mark.asyncio
 async def test_openai_moderation_responses_api_input_field():
     """
-    Tests that OpenAI Moderation works with Responses API input field.
-    
-    This test verifies the fix for the issue where moderation was skipped
-    for Responses API because it only checked for 'messages' field but
-    Responses API uses 'input' field instead.
+    Tests that OpenAI Moderation works with Responses API input field via apply_guardrail.
+
+    This test verifies that the unified guardrail interface (apply_guardrail) correctly
+    handles different input types: plain text strings, structured messages, and lists.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
     from litellm.types.llms.openai import (
         OpenAIModerationResponse,
         OpenAIModerationResult,
@@ -104,18 +103,15 @@ async def test_openai_moderation_responses_api_input_field():
     from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
         OpenAIModerationGuardrail,
     )
-    
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
     # Initialize the open-source OpenAI Moderation guardrail
     openai_mod = OpenAIModerationGuardrail(
         guardrail_name="openai-moderation-test",
         api_key="fake-key-for-testing",
         model="omni-moderation-latest",
     )
-    
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
-    
+
     # Mock the async_make_request to return a flagged response
     mock_moderation_response = OpenAIModerationResponse(
         id="modr-123",
@@ -129,57 +125,61 @@ async def test_openai_moderation_responses_api_input_field():
             )
         ],
     )
-    
+
     with patch.object(
         openai_mod, "async_make_request", return_value=mock_moderation_response
     ):
-        # Test 1: Responses API with input as string
+        # Test 1: Responses API / Embeddings with texts (string input)
         try:
-            await openai_mod.async_moderation_hook(
-                data={
-                    "model": "gpt-4o",
-                    "input": "I want to hurt people",
-                },
-                user_api_key_dict=user_api_key_dict,
-                call_type="responses",
+            inputs = GenericGuardrailAPIInputs(texts=["I want to hurt people"])
+            await openai_mod.apply_guardrail(
+                inputs=inputs,
+                request_data={"model": "gpt-4o", "input": "I want to hurt people"},
+                input_type="request",
             )
             pytest.fail("Should have raised HTTPException for flagged content")
         except Exception as e:
-            print("Got exception for string input: ", e)
+            print("Got exception for texts input: ", e)
             assert "Violated OpenAI moderation policy" in str(e)
-        
-        # Test 2: Responses API with input as list of messages
+
+        # Test 2: Responses API with structured_messages (list of message objects)
         try:
-            await openai_mod.async_moderation_hook(
-                data={
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "I want to hurt people"}
+                ]
+            )
+            await openai_mod.apply_guardrail(
+                inputs=inputs,
+                request_data={
                     "model": "gpt-4o",
-                    "input": [
-                        {"role": "user", "content": "I want to hurt people"}
-                    ],
+                    "input": [{"role": "user", "content": "I want to hurt people"}],
                 },
-                user_api_key_dict=user_api_key_dict,
-                call_type="responses",
+                input_type="request",
             )
             pytest.fail("Should have raised HTTPException for flagged content")
         except Exception as e:
-            print("Got exception for list input: ", e)
+            print("Got exception for structured_messages input: ", e)
             assert "Violated OpenAI moderation policy" in str(e)
-        
-        # Test 3: Verify it still works with messages field (Chat Completions)
+
+        # Test 3: Chat Completions with structured_messages
         try:
-            await openai_mod.async_moderation_hook(
-                data={
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "I want to hurt people"}
+                ]
+            )
+            await openai_mod.apply_guardrail(
+                inputs=inputs,
+                request_data={
                     "model": "gpt-4o",
-                    "messages": [
-                        {"role": "user", "content": "I want to hurt people"}
-                    ],
+                    "messages": [{"role": "user", "content": "I want to hurt people"}],
                 },
-                user_api_key_dict=user_api_key_dict,
-                call_type="completion",
+                input_type="request",
             )
             pytest.fail("Should have raised HTTPException for flagged content")
         except Exception as e:
-            print("Got exception for messages field: ", e)
+            print("Got exception for chat completions input: ", e)
             assert "Violated OpenAI moderation policy" in str(e)
-    
+
     print("✓ All Responses API moderation tests passed!")

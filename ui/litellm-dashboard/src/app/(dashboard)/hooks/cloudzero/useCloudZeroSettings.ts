@@ -53,7 +53,7 @@ export const useCloudZeroSettings = (accessToken: string) => {
   return useQuery<CloudZeroSettings | null>({
     queryKey: cloudZeroSettingsKeys.list({}),
     queryFn: async () => await getCloudZeroSettings(accessToken),
-    enabled: !!accessToken && !!getProxyBaseUrl(),
+    enabled: !!accessToken,
     staleTime: 60 * 60 * 1000, // 1 hour - data rarely changes
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour
   });

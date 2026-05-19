@@ -1,7 +1,7 @@
 import React from "react";
-import { Modal, Typography } from "antd";
+import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text, Button } from "@tremor/react";
+import { Text } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";
 
 export interface InvitationLink {
@@ -86,7 +86,7 @@ export default function OnboardingModal({
       </div>
       <div className="flex justify-end mt-5">
         <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
-          <Button variant="primary">
+          <Button type="primary">
             {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
           </Button>
         </CopyToClipboard>

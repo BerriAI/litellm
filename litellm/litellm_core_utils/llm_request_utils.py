@@ -56,8 +56,8 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = model_info.get("input_cost_per_token", 0) + model_info.get(
-            "output_cost_per_token", 0
+        _cost = (model_info.get("input_cost_per_token") or 0.0) + (
+            model_info.get("output_cost_per_token") or 0.0
         )
         model_costs.append((model, _cost))
 
@@ -66,6 +66,7 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
     # Return the top n cheapest models
     return [model for model, _ in model_costs[:n]]
+
 
 def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     """
@@ -76,8 +77,8 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-    )
+    proxy_request_headers = (litellm_params.get("proxy_server_request") or {}).get(
+        "headers"
+    ) or {}
 
     return proxy_request_headers

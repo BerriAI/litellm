@@ -12,6 +12,7 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
+
 class BaseAnthropicMessagesStreamingIterator:
     """
     Base class for Anthropic Messages streaming iterators that provides common logic
@@ -26,7 +27,7 @@ class BaseAnthropicMessagesStreamingIterator:
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
-
+        self.completion_start_time: datetime | None = None
 
     async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
         """Handle the logging after all chunks have been collected."""
@@ -35,6 +36,13 @@ class BaseAnthropicMessagesStreamingIterator:
         )
 
         end_time = datetime.now()
+        # Set completion_start_time so TTFT is calculated from the first
+        # chunk rather than falling back to end_time in async_success_handler.
+        if self.completion_start_time is not None:
+            self.litellm_logging_obj.completion_start_time = self.completion_start_time
+            self.litellm_logging_obj.model_call_details["completion_start_time"] = (
+                self.completion_start_time
+            )
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
@@ -47,7 +55,7 @@ class BaseAnthropicMessagesStreamingIterator:
                 end_time=end_time,
             )
         )
-    
+
     def get_async_streaming_response_iterator(
         self,
         httpx_response,
@@ -73,7 +81,7 @@ class BaseAnthropicMessagesStreamingIterator:
     def _convert_chunk_to_sse_format(self, chunk: Union[dict, Any]) -> bytes:
         """
         Convert a chunk to Server-Sent Events format.
-        
+
         This method should be overridden by subclasses if they need custom
         chunk formatting logic.
         """
@@ -94,15 +102,17 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format
         and handles logging.
-        
+
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
         collected_chunks = []
-        
+
         async for chunk in completion_stream:
+            if self.completion_start_time is None:
+                self.completion_start_time = datetime.now()
             encoded_chunk = self._convert_chunk_to_sse_format(chunk)
             collected_chunks.append(encoded_chunk)
             yield encoded_chunk
-        
+
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)

@@ -1,7 +1,6 @@
 "use client";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
-import { Typography } from "antd";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
@@ -14,9 +13,9 @@ import {
   keyInfoCall,
   modelAvailableCall,
   Organization,
-  userInfoCall,
+  userGetInfoV2,
 } from "./networking";
-import CreateKey from "./organisms/create_key_button";
+import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
@@ -35,12 +34,6 @@ export type UserInfo = {
   spend: number;
 };
 
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie);
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
-
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
@@ -55,6 +48,8 @@ interface UserDashboardProps {
   organizations: Organization[] | null;
   addKey: (data: any) => void;
   createClicked: boolean;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 type TeamInterface = {
@@ -77,6 +72,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   organizations,
   addKey,
   createClicked,
+  autoOpenCreate,
+  prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -93,15 +90,21 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
+
+  // Clear session storage on page unload so next load fetches fresh data.
+  // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+  // They are only cleared on logout
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const token = sessionStorage.getItem("token");
       sessionStorage.clear();
-      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-      // They are only cleared on logout
-    });
-  }
+      if (token) {
+        sessionStorage.setItem("token", token);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -159,7 +162,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         }
       }
     }
-    if (userID && accessToken && userRole && !keys && !userSpendData) {
+    if (userID && accessToken && userRole && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
@@ -170,26 +173,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
-            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
+            const response = await userGetInfoV2(accessToken, userID);
 
-            setUserSpendData(response["user_info"]);
-            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`);
+            setUserSpendData(response);
 
-            // set keys for admin and users
-            if (!response?.teams[0].keys) {
-              setKeys(response["keys"]);
-            } else {
-              setKeys(
-                response["keys"].concat(
-                  response.teams
-                    .filter((team: any) => userRole === "Admin" || team.user_id === userID)
-                    .flatMap((team: any) => team.keys),
-                ),
-              );
-            }
-
-            sessionStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
-            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response["user_info"]));
+            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response));
 
             const model_available = await modelAvailableCall(accessToken, userID, userRole);
             // loop through model_info["data"] and create an array of element.model_name
@@ -212,7 +200,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
       }
     }
-  }, [userID, token, accessToken, keys, userRole]);
+  }, [userID, token, accessToken, userRole]);
 
   useEffect(() => {
     // check key health - if it's invalid, redirect to login
@@ -328,15 +316,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     setUserRole("App Owner");
   }
 
-  if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
-    return (
-      <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to create keys</Paragraph>
-      </div>
-    );
-  }
+  // Admin Viewer can view keys read-only — gate "Create Key" but render the
+  // virtual-keys table the same as for Proxy Admin (read parity). Every
+  // other role keeps its existing ability to create keys.
+  const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   console.log("inside user dashboard, selected team", selectedTeam);
   console.log("All cookies after redirect:", document.cookie);
@@ -344,13 +327,17 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          <CreateKey
-            key={selectedTeam ? selectedTeam.team_id : null}
-            team={selectedTeam as Team | null}
-            teams={teams as Team[]}
-            data={keys}
-            addKey={addKey}
-          />
+          {canCreateKey && (
+            <CreateKey
+              key={selectedTeam ? selectedTeam.team_id : null}
+              team={selectedTeam as Team | null}
+              teams={teams as Team[]}
+              data={keys}
+              addKey={addKey}
+              autoOpenCreate={autoOpenCreate}
+              prefillData={prefillData}
+            />
+          )}
           <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>
       </Grid>

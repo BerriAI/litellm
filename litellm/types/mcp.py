@@ -35,6 +35,9 @@ class MCPAuth(str, enum.Enum):
     basic = "basic"
     authorization = "authorization"
     oauth2 = "oauth2"
+    aws_sigv4 = "aws_sigv4"
+    token = "token"
+    oauth2_token_exchange = "oauth2_token_exchange"
 
 
 # MCP Literals
@@ -50,6 +53,9 @@ MCPAuthType = Optional[
         MCPAuth.basic,
         MCPAuth.authorization,
         MCPAuth.oauth2,
+        MCPAuth.aws_sigv4,
+        MCPAuth.token,
+        MCPAuth.oauth2_token_exchange,
     ]
 ]
 
@@ -89,6 +95,44 @@ class MCPCredentials(TypedDict, total=False):
     scopes: Optional[List[str]]
     """
     OAuth 2.0 scopes to request when exchanging the client credentials
+    """
+
+    # AWS SigV4 fields
+    aws_access_key_id: Optional[str]
+    """AWS access key ID for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_secret_access_key: Optional[str]
+    """AWS secret access key for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_session_token: Optional[str]
+    """AWS session token for temporary STS credentials. Optional."""
+
+    aws_region_name: Optional[str]
+    """AWS region for SigV4 signing (e.g., 'us-east-1'). Not a secret — stored unencrypted."""
+
+    aws_service_name: Optional[str]
+    """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
+
+    aws_role_name: Optional[str]
+    """IAM role ARN for STS AssumeRole (e.g., 'arn:aws:iam::123456789012:role/MyRole'). Not a secret — stored unencrypted."""
+
+    aws_session_name: Optional[str]
+    """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
+
+    audience: Optional[str]
+    """
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    token_exchange_endpoint: Optional[str]
+    """
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    subject_token_type: Optional[str]
+    """
+    Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
+    Default: urn:ietf:params:oauth:token-type:access_token
     """
 
 

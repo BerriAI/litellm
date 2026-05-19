@@ -1,9 +1,10 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
-import { Tooltip, Checkbox } from "antd";
+import { Tooltip, Checkbox, Tag } from "antd";
 import { UserInfo } from "./types";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { CopyOutlined } from "@ant-design/icons";
+import { formatNumberWithCommas, copyToClipboard } from "@/utils/dataUtils";
 
 interface SelectionOptions {
   selectedUsers: UserInfo[];
@@ -29,9 +30,22 @@ export const columns = (
       accessorKey: "user_id",
       enableSorting: true,
       cell: ({ row }) => (
-        <Tooltip title={row.original.user_id}>
-          <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 7)}...` : "-"}</span>
-        </Tooltip>
+        <div className="flex items-center space-x-2">
+          <Tooltip title={row.original.user_id}>
+            <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 7)}...` : "-"}</span>
+          </Tooltip>
+          {row.original.user_id && (
+            <Tooltip title="Copy User ID">
+              <CopyOutlined
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyToClipboard(row.original.user_id, "User ID copied to clipboard");
+                }}
+                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
+              />
+            </Tooltip>
+          )}
+        </div>
       ),
     },
     {
@@ -39,6 +53,30 @@ export const columns = (
       accessorKey: "user_email",
       enableSorting: true,
       cell: ({ row }) => <span className="text-xs">{row.original.user_email || "-"}</span>,
+    },
+    {
+      id: "status",
+      header: "Status",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const isScimInactive =
+          (row.original.metadata as Record<string, unknown> | null | undefined)
+            ?.scim_active === false;
+        if (isScimInactive) {
+          return (
+            <Tooltip title="Deactivated via SCIM (external identity provider). The user's virtual keys are blocked.">
+              <Tag color="red" data-testid={`user-status-${row.original.user_id}`}>
+                Inactive
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tag color="green" data-testid={`user-status-${row.original.user_id}`}>
+            Active
+          </Tag>
+        );
+      },
     },
     {
       header: "Global Proxy Role",

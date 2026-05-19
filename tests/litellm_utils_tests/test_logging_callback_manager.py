@@ -174,7 +174,7 @@ def test_remove_callback_from_list_by_object():
             manager.add_litellm_async_failure_callback(self.callback)
 
         def callback(self):
-            pass    
+            pass
 
     obj = TestObject()
 
@@ -190,7 +190,6 @@ def test_remove_callback_from_list_by_object():
     assert len(litellm.failure_callback) == 0
     assert len(litellm._async_success_callback) == 0
     assert len(litellm._async_failure_callback) == 0
-
 
 
 def test_reset_callbacks(callback_manager):
@@ -224,59 +223,55 @@ async def test_slack_alerting_callback_registration(callback_manager):
     from unittest.mock import AsyncMock, patch
 
     # Mock the async HTTP handler
-    with patch('litellm.integrations.SlackAlerting.slack_alerting.get_async_httpx_client') as mock_http:
+    with patch(
+        "litellm.integrations.SlackAlerting.slack_alerting.get_async_httpx_client"
+    ) as mock_http:
         mock_http.return_value = AsyncMock()
-        
+
         # Create a fresh ProxyLogging instance
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        
+
         # Test 1: No callbacks should be added when alerting is None
         proxy_logging.update_values(
-            alerting=None,
-            alert_types=["outage_alerts", "region_outage_alerts"]
+            alerting=None, alert_types=["outage_alerts", "region_outage_alerts"]
         )
         assert len(litellm.callbacks) == 0
-        
+
         # Test 2: Callbacks should be added when slack alerting is enabled with outage alerts
-        proxy_logging.update_values(
-            alerting=["slack"],
-            alert_types=["outage_alerts"]
-        )
+        proxy_logging.update_values(alerting=["slack"], alert_types=["outage_alerts"])
         assert len(litellm.callbacks) == 1
         assert isinstance(litellm.callbacks[0], SlackAlerting)
-        
+
         # Test 3: Callbacks should be added when slack alerting is enabled with region outage alerts
         callback_manager._reset_all_callbacks()  # Reset callbacks
         proxy_logging.update_values(
-            alerting=["slack"],
-            alert_types=["region_outage_alerts"]
+            alerting=["slack"], alert_types=["region_outage_alerts"]
         )
         assert len(litellm.callbacks) == 1
         assert isinstance(litellm.callbacks[0], SlackAlerting)
-        
+
         # Test 4: No callbacks should be added for other alert types
         callback_manager._reset_all_callbacks()  # Reset callbacks
         proxy_logging.update_values(
-            alerting=["slack"],
-            alert_types=["budget_alerts"]  # Some other alert type
+            alerting=["slack"], alert_types=["budget_alerts"]  # Some other alert type
         )
         assert len(litellm.callbacks) == 0
 
         # Test 5: Both success and regular callbacks should be added
         callback_manager._reset_all_callbacks()  # Reset callbacks
-        proxy_logging.update_values(
-            alerting=["slack"],
-            alert_types=["outage_alerts"]
-        )
+        proxy_logging.update_values(alerting=["slack"], alert_types=["outage_alerts"])
         assert len(litellm.callbacks) == 1  # Regular callback for outage alerts
-        assert len(litellm.success_callback) == 1  # Success callback for response_taking_too_long
         assert isinstance(litellm.callbacks[0], SlackAlerting)
-        # Get the method reference for comparison
-        response_taking_too_long_callback = proxy_logging.slack_alerting_instance.response_taking_too_long_callback
-        assert litellm.success_callback[0] == response_taking_too_long_callback
+        # response_taking_too_long_callback is async, so it should be in the async success callback list
+        response_taking_too_long_callback = (
+            proxy_logging.slack_alerting_instance.response_taking_too_long_callback
+        )
+        assert len(litellm._async_success_callback) == 1
+        assert litellm._async_success_callback[0] == response_taking_too_long_callback
 
         # Cleanup
         callback_manager._reset_all_callbacks()
+
 
 @pytest.mark.asyncio
 async def test_generic_api_compatible_callbacks_json():
@@ -358,6 +353,7 @@ async def test_generic_api_compatible_callbacks_json_rubrik():
             "llm_api_success"
         ], "Rubrik should only log success events"
 
+
 def test_generic_api_compatible_callbacks_json_unknown_callback():
     """
     Test that unknown callbacks (not in JSON or callback_settings) are returned unchanged
@@ -371,3 +367,39 @@ def test_generic_api_compatible_callbacks_json_unknown_callback():
     assert result == "unknown_callback", "Unknown callback should be returned as-is"
     assert isinstance(result, str), "Unknown callback should remain a string"
 
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_settings_retry_config():
+    """
+    Test that generic_api callback_settings are passed to GenericAPILogger.
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        _generic_api_logger_cache,
+    )
+
+    callback_name = "test_generic_api_retry_config"
+    _generic_api_logger_cache.pop(callback_name, None)
+    litellm.callback_settings[callback_name] = {
+        "callback_type": "generic_api",
+        "endpoint": "https://example.com/api/logs",
+        "headers": {"Content-Type": "application/json"},
+        "max_retries": 2,
+        "retry_delay": 0.5,
+        "timeout": 3,
+    }
+
+    try:
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+            callback_name
+        )
+
+        assert isinstance(result, GenericAPILogger)
+        assert result.endpoint == "https://example.com/api/logs"
+        assert result.headers == {"Content-Type": "application/json"}
+        assert result.max_retries == 2
+        assert result.retry_delay == 0.5
+        assert result.timeout == 3
+    finally:
+        litellm.callback_settings.pop(callback_name, None)
+        _generic_api_logger_cache.pop(callback_name, None)

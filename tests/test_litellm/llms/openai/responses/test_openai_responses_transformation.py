@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -264,6 +265,24 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result == "https://custom-openai.example.com/v1/responses"
 
+    def test_response_id_path_requests_encode_response_id(self):
+        """Test response_id is treated as one upstream URL path segment."""
+        api_base = "https://custom-openai.example.com/v1/responses"
+        response_id = "../../files?x=1#frag"
+
+        url, data = self.config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
+        )
+        assert data["limit"] == 20
+
     def test_get_event_model_class_generic_event(self):
         """Test that get_event_model_class returns the correct event model class"""
         from litellm.types.llms.openai import GenericEvent
@@ -336,7 +355,9 @@ class TestOpenAIResponsesAPIConfig:
             )
 
             assert isinstance(result, ImageGenerationPartialImageEvent)
-            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            assert (
+                result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            )
             assert result.partial_image_index == idx
             assert result.b64_json == chunk["b64_json"]
 
@@ -417,6 +438,185 @@ class TestOpenAIResponsesAPIConfig:
         assert event.error.code == "unknown_error"
         assert event.error.message == "Something went wrong"
 
+    def test_transform_streaming_response_missing_required_fields_response_created(
+        self,
+    ):
+        """Test that ResponseCreatedEvent with missing required fields (created_at,
+        output) does not crash but falls back to model_construct.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import ResponseCreatedEvent
+
+        # Minimal payload an OpenAI-compatible provider might send,
+        # omitting `created_at` and `output` inside the response object.
+        parsed_chunk = {
+            "type": "response.created",
+            "response": {
+                "id": "resp_q7BOLpck7clq",
+                "model": "gpt-oss-120b",
+                "status": "in_progress",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, ResponseCreatedEvent)
+        assert result.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+        assert result.response["id"] == "resp_q7BOLpck7clq"
+
+    def test_transform_streaming_response_missing_required_fields_output_text_delta(
+        self,
+    ):
+        """Test that OutputTextDeltaEvent with missing output_index and
+        content_index falls back to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import OutputTextDeltaEvent
+
+        # Provider omits output_index and content_index
+        parsed_chunk = {
+            "type": "response.output_text.delta",
+            "item_id": "item_456",
+            "delta": "Hello",
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputTextDeltaEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        assert result.delta == "Hello"
+        assert result.item_id == "item_456"
+
+    def test_transform_streaming_response_missing_required_fields_content_part_added(
+        self,
+    ):
+        """Test that ContentPartAddedEvent with missing output_index and
+        content_index falls back to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import ContentPartAddedEvent
+
+        # Provider omits output_index and content_index
+        parsed_chunk = {
+            "type": "response.content_part.added",
+            "item_id": "item_789",
+            "part": {"type": "output_text", "text": ""},
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, ContentPartAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+        assert result.item_id == "item_789"
+
+    def test_transform_streaming_response_missing_required_fields_output_item_added(
+        self,
+    ):
+        """Test that OutputItemAddedEvent with missing output_index falls back
+        to model_construct without crashing.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/20570
+        """
+        from litellm.types.llms.openai import OutputItemAddedEvent
+
+        # Provider omits output_index
+        parsed_chunk = {
+            "type": "response.output_item.added",
+            "item": {"type": "message", "id": "msg_001", "role": "assistant"},
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+
+    def test_transform_streaming_response_valid_chunk_still_works(self):
+        """Ensure that fully valid chunks still go through normal Pydantic
+        validation (not model_construct) and work correctly."""
+        parsed_chunk = {
+            "type": "response.output_text.delta",
+            "item_id": "item_123",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "World",
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=parsed_chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputTextDeltaEvent)
+        assert result.delta == "World"
+        assert result.output_index == 0
+        assert result.content_index == 0
+
+    def test_base_strip_custom_tool_call_namespace_all_providers(self):
+        """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
+        inp = [
+            {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "b",
+                "name": "c",
+                "namespace": "drop",
+            },
+        ]
+        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
+            inp
+        )
+        assert out[0]["namespace"] == "keep"
+        assert "namespace" not in out[1]
+
+        body = {"model": "x", "input": inp}
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0]["namespace"] == "keep"
+        assert "namespace" not in norm["input"][1]
+
+    def test_openai_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """``transform_responses_api_request`` leaves input as validated; HTTP layer ``normalize_*`` strips."""
+        input_items = [
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "t",
+                "arguments": "{}",
+                "namespace": "my_tools",
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "c2",
+                "name": "agent",
+                "input": "x",
+                "namespace": "None",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][0].get("namespace") == "my_tools"
+        assert body["input"][1].get("namespace") == "None"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0].get("namespace") == "my_tools"
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
@@ -457,6 +657,50 @@ class TestAzureResponsesAPIConfig:
             result_date
             == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
         )
+
+    def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """Same as OpenAI path: ``normalize_responses_api_request_dict`` strips custom_tool_call only."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "input": "do thing",
+                "name": "my_tool",
+                "id": "ctc_1",
+                "namespace": "None",
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "get_weather",
+                "arguments": "{}",
+                "id": "fc_1",
+                "namespace": "tools",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][1].get("namespace") == "None"
+        assert body["input"][2].get("namespace") == "tools"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+        assert norm["input"][2]["type"] == "function_call"
+        assert norm["input"][2].get("namespace") == "tools"
+        assert norm["input"][2]["name"] == "get_weather"
 
 
 class TestTransformListInputItemsRequest:
@@ -563,15 +807,55 @@ class TestTransformListInputItemsRequest:
         # Assert
         assert "include" not in params  # Empty list should not be included
 
+    def test_openai_transform_compact_response_api_request_query_params_preserved(self):
+        """Test compact URL construction preserves query params and appends path."""
+        # Setup
+        azure_style_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+
+        # Execute
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="gpt-5.2-codex",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base=azure_style_api_base,
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        assert (
+            url
+            == "https://test.openai.azure.com/openai/responses/compact?api-version=2024-05-01-preview"
+        )
+        assert data["model"] == "gpt-5.2-codex"
+        assert data["input"] == "hello"
+
+    def test_openai_transform_compact_response_api_request_path_without_query(self):
+        """Test compact URL construction for base URL without query params."""
+        # Execute
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="gpt-4o",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        # Assert
+        assert url == "https://api.openai.com/v1/responses/compact"
+        assert data["model"] == "gpt-4o"
+        assert data["input"] == "hello"
+
     def test_azure_transform_list_input_items_request_minimal(self):
         """Test Azure implementation with minimal parameters"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
         )
@@ -584,12 +868,12 @@ class TestTransformListInputItemsRequest:
     def test_azure_transform_list_input_items_request_url_construction(self):
         """Test Azure implementation URL construction with response_id in path"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
         )
@@ -603,12 +887,12 @@ class TestTransformListInputItemsRequest:
     def test_azure_transform_list_input_items_request_with_all_params(self):
         """Test Azure implementation with all optional parameters"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
             after="cursor_after_123",
@@ -803,3 +1087,317 @@ def test_get_supported_openai_params():
     assert "stream" in params
     assert "background" in params
     assert "stream" in params
+
+
+class TestPhaseParameter:
+    """Tests for the `phase` parameter on assistant output items (gpt-5.3-codex)."""
+
+    def setup_method(self):
+        self.config = OpenAIResponsesAPIConfig()
+        self.model = "gpt-5.3-codex"
+        self.logging_obj = MagicMock()
+
+    @staticmethod
+    def _make_output_text(text: str):
+        from litellm.types.responses.main import OutputText
+
+        return OutputText(type="output_text", text=text, annotations=[])
+
+    def test_generic_response_output_item_accepts_phase_commentary(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_001",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("Thinking...")],
+            phase="commentary",
+        )
+        assert item.phase == "commentary"
+
+    def test_generic_response_output_item_accepts_phase_final_answer(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_002",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("The answer is 42.")],
+            phase="final_answer",
+        )
+        assert item.phase == "final_answer"
+
+    def test_generic_response_output_item_phase_defaults_to_none(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_003",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("Hello")],
+        )
+        assert item.phase is None
+
+    def test_output_function_tool_call_accepts_phase(self):
+        from litellm.types.responses.main import OutputFunctionToolCall
+
+        item = OutputFunctionToolCall(
+            type="function_call",
+            id="fc_001",
+            arguments='{"query": "test"}',
+            call_id="call_001",
+            name="search",
+            status="completed",
+            phase="commentary",
+        )
+        assert item.phase == "commentary"
+
+    def test_input_passthrough_dict_preserves_phase(self):
+        """Dict input items (the normal HTTP flow) must preserve phase verbatim."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Preamble..."}],
+                "phase": "commentary",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done."}],
+                "phase": "final_answer",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Neutral."}],
+                "phase": None,
+            },
+        ]
+
+        result = self.config._validate_input_param(input_items)
+        assert isinstance(result, list)
+
+        assert "phase" not in result[0]
+        assert result[1]["phase"] == "commentary"
+        assert result[2]["phase"] == "final_answer"
+        assert result[3]["phase"] is None
+
+    def test_input_passthrough_pydantic_preserves_non_null_phase(self):
+        """Pydantic input items must preserve non-null phase values."""
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_010",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("commentary")],
+            phase="commentary",
+        )
+
+        result = self.config._validate_input_param([item])
+        assert isinstance(result, list)
+        assert result[0]["phase"] == "commentary"
+
+    def test_response_parsing_preserves_phase_on_output(self):
+        """Non-streaming response must preserve phase on output items."""
+        raw_json = {
+            "id": "resp_001",
+            "created_at": 1700000000,
+            "model": "gpt-5.3-codex",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_001",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "preamble"}],
+                    "phase": "commentary",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_002",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                    "phase": "final_answer",
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        }
+
+        response = ResponsesAPIResponse(**raw_json)
+        assert len(response.output) == 2
+
+        for idx, output_item in enumerate(response.output):
+            if isinstance(output_item, dict):
+                phase = output_item.get("phase")
+            else:
+                phase = getattr(output_item, "phase", None)
+
+            expected = "commentary" if idx == 0 else "final_answer"
+            assert (
+                phase == expected
+            ), f"output[{idx}] phase={phase!r}, expected {expected!r}"
+
+    def test_streaming_output_item_done_preserves_phase(self):
+        """OutputItemDoneEvent must preserve phase on its item."""
+        from litellm.types.llms.openai import (
+            OutputItemDoneEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        chunk = {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 3,
+            "item": {
+                "type": "message",
+                "id": "msg_100",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+                "phase": "final_answer",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemDoneEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        assert getattr(result.item, "phase", None) == "final_answer"
+
+    def test_streaming_output_item_added_preserves_phase(self):
+        """OutputItemAddedEvent must preserve phase on its item."""
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        chunk = {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_200",
+                "role": "assistant",
+                "phase": "commentary",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        assert getattr(result.item, "phase", None) == "commentary"
+
+    def test_streaming_response_completed_preserves_phase(self):
+        """ResponseCompletedEvent must preserve phase on output items inside the response."""
+        completed_chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_300",
+                "created_at": 1700000000,
+                "model": "gpt-5.3-codex",
+                "object": "response",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_300",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "final"}],
+                        "phase": "final_answer",
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 10,
+                    "total_tokens": 15,
+                },
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model,
+            parsed_chunk=completed_chunk,
+            logging_obj=self.logging_obj,
+        )
+
+        assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        output_item = result.response.output[0]
+        if isinstance(output_item, dict):
+            assert output_item["phase"] == "final_answer"
+        else:
+            assert getattr(output_item, "phase", None) == "final_answer"
+
+    def test_phase_roundtrip_output_to_input(self):
+        """Simulate full round-trip: parse response output, then send items back as input."""
+        raw_json = {
+            "id": "resp_rt",
+            "created_at": 1700000000,
+            "model": "gpt-5.3-codex",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_rt1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "preamble"}],
+                    "phase": "commentary",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_rt2",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                    "phase": "final_answer",
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        }
+
+        response = ResponsesAPIResponse(**raw_json)
+
+        input_items = []
+        for item in response.output:
+            if isinstance(item, dict):
+                input_items.append(item)
+            else:
+                input_items.append(
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+
+        input_items.append(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "next question"}],
+            }
+        )
+
+        validated = self.config._validate_input_param(input_items)
+        assert isinstance(validated, list)
+
+        assert validated[0]["phase"] == "commentary"
+        assert validated[1]["phase"] == "final_answer"
+        assert "phase" not in validated[2]

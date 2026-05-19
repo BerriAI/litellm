@@ -7,11 +7,20 @@ Thank you for your interest in contributing to LiteLLM! We welcome contributions
 Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
+- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### Proxy (Backend) PRs
+
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
-- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### UI PRs
+
+- [ ] **Ensure the UI builds successfully** - `npm run build`
+- [ ] **Ensure all UI unit tests pass** - `npm run test`
+- [ ] **Add tests for new components or logic** - If you are adding a new component or new logic, add corresponding tests
 
 ## **Contributor License Agreement (CLA)**
 
@@ -113,9 +122,17 @@ Run all unit tests (uses parallel execution for speed):
 make test-unit
 ```
 
+If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
+
+```bash
+make install-test-deps
+```
+
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+
 Run specific test files:
 ```bash
-poetry run pytest tests/test_litellm/test_your_file.py -v
+uv run pytest tests/test_litellm/test_your_file.py -v
 ```
 
 ### Running Linting and Formatting Checks
@@ -140,6 +157,19 @@ Apply formatting (auto-fixes issues):
 make format
 ```
 
+> **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
+>
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
+> - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
+>   ```json
+>   {
+>     "[python]": {
+>       "editor.defaultFormatter": "ms-python.black-formatter",
+>       "editor.formatOnSave": true
+>     }
+>   }
+>   ```
+
 ### CI Compatibility
 
 To ensure your changes will pass CI, run the exact same checks locally:
@@ -163,7 +193,7 @@ Run `make help` to see all available commands:
 make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
-make install-test-deps         # Install test dependencies (for running tests)
+make install-test-deps         # Install the full local test environment
 make format                    # Apply Black code formatting
 make format-check              # Check Black formatting (matches CI)
 make lint                      # Run all linting checks
@@ -225,7 +255,7 @@ To run the proxy server locally:
 make install-proxy-dev
 
 # Start the proxy server
-poetry run litellm --config your_config.yaml
+uv run litellm --config your_config.yaml
 ```
 
 ### Docker Development
@@ -243,6 +273,43 @@ docker run \
     -p 4000:4000 \
     litellm_dev \
     --config /app/config.yaml --detailed_debug
+```
+
+## UI Development
+
+### 1. Setup Your Local UI Development Environment
+
+```bash
+# Clone the repo (if you haven't already)
+git clone https://github.com/YOUR_USERNAME/litellm.git
+cd litellm
+
+# Navigate to the UI dashboard directory
+cd ui/litellm-dashboard
+
+# Install dependencies
+npm install
+
+# Start the development server
+npm run dev
+```
+
+### 2. Adding UI Tests
+
+If you are adding a **new component** or **new logic**, you must add corresponding tests.
+
+### 3. Running UI Unit Tests
+
+```bash
+npm run test
+```
+
+### 4. Building the UI
+
+Ensure the UI builds successfully before submitting your PR:
+
+```bash
+npm run build
 ```
 
 ## Submitting Your PR

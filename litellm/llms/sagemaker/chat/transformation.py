@@ -160,7 +160,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
-            custom_llm_provider="sagemaker_chat",
+            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
         )
         return streaming_response
@@ -180,9 +180,11 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, HTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=LlmProviders.SAGEMAKER_CHAT, params={}
-            )
+            try:
+                llm_provider = LlmProviders(custom_llm_provider)
+            except ValueError:
+                llm_provider = LlmProviders.SAGEMAKER_CHAT
+            client = get_async_httpx_client(llm_provider=llm_provider, params={})
 
         try:
             response = await client.post(
@@ -210,7 +212,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
-            custom_llm_provider="sagemaker_chat",
+            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
         )
         return streaming_response

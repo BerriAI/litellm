@@ -11,7 +11,11 @@ import litellm
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
-from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIRequestWrapper, version
+from litellm.llms.oci.chat.transformation import (
+    OCIChatConfig,
+    OCIRequestWrapper,
+    version,
+)
 
 TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
@@ -34,6 +38,7 @@ TEST_OCI_PARAMS_KEY_FILE = {
     **BASE_OCI_PARAMS,
     "oci_key_file": "<private_key.pem as a Path>",
 }
+
 
 @pytest.fixture(params=[TEST_OCI_PARAMS_KEY, TEST_OCI_PARAMS_KEY_FILE])
 def supplied_params(request):
@@ -87,7 +92,7 @@ class TestOCIChatConfig:
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -139,15 +144,21 @@ class TestOCIChatConfig:
         }
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
         assert "tools" in transformed_request["chatRequest"]
-        assert transformed_request["chatRequest"]["tools"][0]["name"] == "get_current_weather"
+        assert (
+            transformed_request["chatRequest"]["tools"][0]["name"]
+            == "get_current_weather"
+        )
         assert transformed_request["chatRequest"]["tools"][0]["type"] == "FUNCTION"
-        assert transformed_request["chatRequest"]["tools"][0]["description"] == "Get the current weather in a given location"
+        assert (
+            transformed_request["chatRequest"]["tools"][0]["description"]
+            == "Get the current weather in a given location"
+        )
         assert transformed_request["chatRequest"]["tools"][0]["parameters"] is not None
 
     def test_transform_request_dedicated_mode_with_endpoint_id(self):
@@ -163,7 +174,7 @@ class TestOCIChatConfig:
         }
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -187,7 +198,7 @@ class TestOCIChatConfig:
         }
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -212,7 +223,7 @@ class TestOCIChatConfig:
         }
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -238,7 +249,7 @@ class TestOCIChatConfig:
         with pytest.raises(Exception) as excinfo:
             config.transform_request(
                 model=TEST_MODEL_NAME,
-                messages=TEST_MESSAGES, # type: ignore
+                messages=TEST_MESSAGES,  # type: ignore
                 optional_params=optional_params,
                 litellm_params={},
                 headers={},
@@ -266,7 +277,7 @@ class TestOCIChatConfig:
 
         transformed_request = config.transform_request(
             model=cohere_model,
-            messages=messages, # type: ignore
+            messages=messages,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -281,18 +292,87 @@ class TestOCIChatConfig:
 
         # Verify Cohere-specific request structure
         assert "message" in transformed_request["chatRequest"]  # Cohere uses "message"
-        assert "chatHistory" in transformed_request["chatRequest"]  # Cohere uses "chatHistory"
-        assert "messages" not in transformed_request["chatRequest"]  # Generic uses "messages"
+        assert (
+            "chatHistory" in transformed_request["chatRequest"]
+        )  # Cohere uses "chatHistory"
+        assert (
+            "messages" not in transformed_request["chatRequest"]
+        )  # Generic uses "messages"
 
         # Verify the message content
-        assert transformed_request["chatRequest"]["message"] == "What is quantum computing?"
+        assert (
+            transformed_request["chatRequest"]["message"]
+            == "What is quantum computing?"
+        )
 
-    def test_transform_response_simple_text(self):
+    def test_transform_request_response_format_json_object(self):
         """
-        Tests if a simple text response is transformed correctly.
+        Tests that response_format type 'json_object' is uppercased to 'JSON_OBJECT' for generic OCI models.
         """
         config = OCIChatConfig()
-        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_object"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_request_response_format_text(self):
+        """
+        Tests that response_format type 'text' is uppercased to 'TEXT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "text"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "TEXT"
+
+    def test_transform_request_response_format_json_shorthand(self):
+        """
+        Tests that response_format type 'json' is mapped to 'JSON_OBJECT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_response_without_token_details(self):
+        """
+        Tests that responses missing completionTokensDetails and promptTokensDetails
+        are handled correctly (fields are optional).
+        """
+        config = OCIChatConfig()
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -303,7 +383,65 @@ class TestOCIChatConfig:
                         "index": 0,
                         "message": {
                             "role": "ASSISTANT",
-                            "content": [{"type": "TEXT", "text": "I am doing well, thank you!"}],
+                            "content": [{"type": "TEXT", "text": "Hello!"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 10,
+                    "totalTokens": 15,
+                },
+            },
+        }
+        response = httpx.Response(
+            status_code=200,
+            json=mock_oci_response,
+            headers={"Content-Type": "application/json"},
+        )
+        result = config.transform_response(
+            model=TEST_MODEL_NAME,
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "Hello!"
+        assert result.usage.prompt_tokens == 5  # type: ignore
+        assert result.usage.completion_tokens == 10  # type: ignore
+        assert result.usage.total_tokens == 15  # type: ignore
+
+    def test_transform_response_simple_text(self):
+        """
+        Tests if a simple text response is transformed correctly.
+        """
+        config = OCIChatConfig()
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        mock_oci_response = {
+            "modelId": TEST_MODEL_NAME,
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [
+                                {"type": "TEXT", "text": "I am doing well, thank you!"}
+                            ],
                         },
                         "finishReason": "STOP",
                     }
@@ -324,7 +462,9 @@ class TestOCIChatConfig:
             },
         }
         response = httpx.Response(
-            status_code=200, json=mock_oci_response, headers={"Content-Type": "application/json"}
+            status_code=200,
+            json=mock_oci_response,
+            headers={"Content-Type": "application/json"},
         )
         result = config.transform_response(
             model=TEST_MODEL_NAME,
@@ -346,10 +486,10 @@ class TestOCIChatConfig:
         assert result.choices[0].finish_reason == "stop"
         assert result.model == TEST_MODEL_NAME
         assert hasattr(result, "usage")
-        assert isinstance(result.usage, litellm.Usage) # type: ignore
-        assert result.usage.prompt_tokens == 10 # type: ignore
-        assert result.usage.completion_tokens == 20 # type: ignore
-        assert result.usage.total_tokens == 30 # type: ignore
+        assert isinstance(result.usage, litellm.Usage)  # type: ignore
+        assert result.usage.prompt_tokens == 10  # type: ignore
+        assert result.usage.completion_tokens == 20  # type: ignore
+        assert result.usage.total_tokens == 30  # type: ignore
         # These are not handled in the transformer, TBH no idea why they are here
         # but, for now, they seem to be always None
         assert result.usage.completion_tokens_details is None
@@ -360,7 +500,11 @@ class TestOCIChatConfig:
         Tests if a response with tool calls is transformed correctly.
         """
         config = OCIChatConfig()
-        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -441,11 +585,11 @@ class TestOCIChatConfig:
 
         # Usage assertions
         assert hasattr(result, "usage")
-        usage = result.usage # type: ignore
-        assert isinstance(usage, litellm.Usage) # type: ignore
-        assert usage.prompt_tokens == 10 # type: ignore
-        assert usage.completion_tokens == 20 # type: ignore
-        assert usage.total_tokens == 30 # type: ignore
+        usage = result.usage  # type: ignore
+        assert isinstance(usage, litellm.Usage)  # type: ignore
+        assert usage.prompt_tokens == 10  # type: ignore
+        assert usage.completion_tokens == 20  # type: ignore
+        assert usage.total_tokens == 30  # type: ignore
 
 
 class TestOCISignerSupport:
@@ -459,12 +603,9 @@ class TestOCISignerSupport:
         # Mock signer object
         class MockSigner:
             def do_request_sign(self, request, enforce_content_headers=True):
-                request.headers["authorization"] = "Signature version=\"1\""
+                request.headers["authorization"] = 'Signature version="1"'
 
-        optional_params = {
-            "oci_signer": MockSigner(),
-            "oci_region": "us-ashburn-1"
-        }
+        optional_params = {"oci_signer": MockSigner(), "oci_region": "us-ashburn-1"}
 
         result = config.validate_environment(
             headers=headers,
@@ -484,12 +625,9 @@ class TestOCISignerSupport:
 
         class MockSigner:
             def do_request_sign(self, request, enforce_content_headers=True):
-                request.headers["authorization"] = "Signature version=\"1\""
+                request.headers["authorization"] = 'Signature version="1"'
 
-        optional_params = {
-            "oci_signer": MockSigner(),
-            "oci_region": "us-phoenix-1"
-        }
+        optional_params = {"oci_signer": MockSigner(), "oci_region": "us-phoenix-1"}
 
         # Should not raise an exception even without oci_compartment_id
         result = config.validate_environment(
@@ -508,19 +646,16 @@ class TestOCISignerSupport:
 
         class MockSigner:
             def do_request_sign(self, request, enforce_content_headers=True):
-                request.headers["authorization"] = "Signature version=\"1\""
+                request.headers["authorization"] = 'Signature version="1"'
                 request.headers["date"] = "Mon, 01 Jan 2024 00:00:00 GMT"
 
-        optional_params = {
-            "oci_signer": MockSigner(),
-            "method": "POST"
-        }
+        optional_params = {"oci_signer": MockSigner(), "method": "POST"}
 
         headers, body = config.sign_request(
             headers={},
             optional_params=optional_params,
             request_data={"test": "data"},
-            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat",
         )
 
         assert "authorization" in headers
@@ -542,7 +677,7 @@ class TestOCISignerSupport:
                 assert hasattr(request, "path_url")
 
                 # Add signature headers
-                request.headers["authorization"] = "Signature keyId=\"test\""
+                request.headers["authorization"] = 'Signature keyId="test"'
                 request.headers["date"] = "Mon, 01 Jan 2024 00:00:00 GMT"
                 request.headers["x-content-sha256"] = "test-hash"
 
@@ -554,11 +689,11 @@ class TestOCISignerSupport:
             headers={"custom-header": "custom-value"},
             optional_params=optional_params,
             request_data={"message": "Hello"},
-            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat",
         )
 
         # Check that all signer-added headers are present
-        assert headers["authorization"] == "Signature keyId=\"test\""
+        assert headers["authorization"] == 'Signature keyId="test"'
         assert headers["date"] == "Mon, 01 Jan 2024 00:00:00 GMT"
         assert headers["x-content-sha256"] == "test-hash"
         # Original headers should be preserved
@@ -583,7 +718,7 @@ class TestOCISignerSupport:
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
-                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat",
             )
 
         assert "Failed to sign request with provided oci_signer" in str(excinfo.value)
@@ -597,17 +732,14 @@ class TestOCISignerSupport:
             def do_request_sign(self, request, enforce_content_headers=True):
                 pass
 
-        optional_params = {
-            "oci_signer": MockSigner(),
-            "method": "INVALID"
-        }
+        optional_params = {"oci_signer": MockSigner(), "method": "INVALID"}
 
         with pytest.raises(ValueError) as excinfo:
             config.sign_request(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
-                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat",
             )
 
         assert "Unsupported HTTP method: INVALID" in str(excinfo.value)
@@ -618,7 +750,7 @@ class TestOCISignerSupport:
             method="POST",
             url="https://example.com/api/v1/chat?param1=value1&param2=value2",
             headers={},
-            body=b"test"
+            body=b"test",
         )
 
         assert wrapper.path_url == "/api/v1/chat?param1=value1&param2=value2"
@@ -629,7 +761,7 @@ class TestOCISignerSupport:
             method="POST",
             url="https://example.com/api/v1/chat",
             headers={},
-            body=b"test"
+            body=b"test",
         )
 
         assert wrapper.path_url == "/api/v1/chat"

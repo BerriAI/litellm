@@ -1,0 +1,93 @@
+name: "Unit Tests: Proxy Legacy Tests"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "auth-and-jwt"
+            path: "tests/proxy_unit_tests/test_[a-j]*.py"
+          - name: "key-generation"
+            path: "tests/proxy_unit_tests/test_[k-o]*.py"
+          - name: "proxy-config"
+            path: "tests/proxy_unit_tests/test_prisma*.py tests/proxy_unit_tests/test_prompt*.py tests/proxy_unit_tests/test_proxy_[c-r]*.py"
+          - name: "proxy-server"
+            path: "tests/proxy_unit_tests/test_proxy_server.py"
+          - name: "proxy-server-extras"
+            path: "tests/proxy_unit_tests/test_proxy_server_*.py tests/proxy_unit_tests/test_proxy_setting_guardrails.py"
+          - name: "proxy-utils"
+            path: "tests/proxy_unit_tests/test_proxy_utils.py"
+          - name: "proxy-token-counter"
+            path: "tests/proxy_unit_tests/test_proxy_token_counter.py"
+          - name: "proxy-response-and-misc"
+            path: "tests/proxy_unit_tests/test_[r-t]*.py"
+          - name: "proxy-user-auth-and-spend"
+            path: "tests/proxy_unit_tests/test_[u-z]*.py"
+
+    name: ${{ matrix.test-group.name }}
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run tests - ${{ matrix.test-group.name }}
+        env:
+          TEST_PATH: ${{ matrix.test-group.path }}
+        run: |
+          uv run --no-sync pytest ${TEST_PATH} \
+            --tb=short -vv \
+            --maxfail=10 \
+            -n 2 \
+            --reruns 1 \
+            --reruns-delay 1 \
+            --dist=loadscope \
+            --durations=20

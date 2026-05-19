@@ -97,6 +97,54 @@ class TestJSONProviderLoader:
         assert isinstance(supported, list)
         assert len(supported) > 0
 
+    def test_tool_params_excluded_when_function_calling_not_supported(self):
+        """Test that tool-related params are excluded for models that don't support
+        function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125
+        """
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("publicai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        # Mock supports_function_calling to return False
+        with patch("litellm.utils.supports_function_calling", return_value=False):
+            supported = config.get_supported_openai_params("some-model-without-fc")
+
+        tool_params = [
+            "tools",
+            "tool_choice",
+            "function_call",
+            "functions",
+            "parallel_tool_calls",
+        ]
+        for param in tool_params:
+            assert (
+                param not in supported
+            ), f"'{param}' should not be in supported params when function calling is not supported"
+
+        # Non-tool params should still be present
+        assert "temperature" in supported
+        assert "max_tokens" in supported
+        assert "stop" in supported
+
+    def test_tool_params_included_when_function_calling_supported(self):
+        """Test that tool-related params are included for models that support function calling."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("publicai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        # Mock supports_function_calling to return True
+        with patch("litellm.utils.supports_function_calling", return_value=True):
+            supported = config.get_supported_openai_params("some-model-with-fc")
+
+        assert "tools" in supported
+        assert "tool_choice" in supported
+
     def test_provider_resolution(self):
         """Test that provider resolution finds JSON providers"""
         from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -141,7 +189,12 @@ class TestPublicAIIntegration:
         try:
             response = litellm.completion(
                 model="publicai/swiss-ai/apertus-8b-instruct",
-                messages=[{"role": "user", "content": "Say 'test successful' and nothing else"}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Say 'test successful' and nothing else",
+                    }
+                ],
                 max_tokens=10,
             )
 
@@ -157,7 +210,9 @@ class TestPublicAIIntegration:
             content = response.choices[0].message.content.lower()
             assert len(content) > 0
 
-            print(f"✓ PublicAI completion successful: {response.choices[0].message.content}")
+            print(
+                f"✓ PublicAI completion successful: {response.choices[0].message.content}"
+            )
 
         except Exception as e:
             if pytest:
@@ -244,12 +299,7 @@ class TestPublicAIIntegration:
             response = litellm.completion(
                 model="publicai/swiss-ai/apertus-8b-instruct",
                 messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Say hello"}
-                        ]
-                    }
+                    {"role": "user", "content": [{"type": "text", "text": "Say hello"}]}
                 ],
                 max_tokens=10,
             )
@@ -269,50 +319,50 @@ class TestPublicAIIntegration:
 if __name__ == "__main__":
     # Run basic tests
     print("Testing JSON Provider System...")
-    
+
     test_loader = TestJSONProviderLoader()
     print("\n1. Testing JSON provider loading...")
     test_loader.test_load_json_providers()
     print("   ✓ JSON providers loaded")
-    
+
     print("\n2. Testing dynamic config generation...")
     test_loader.test_dynamic_config_generation()
     print("   ✓ Dynamic config works")
-    
+
     print("\n3. Testing parameter mapping...")
     test_loader.test_parameter_mapping()
     print("   ✓ Parameter mapping works")
-    
+
     print("\n4. Testing excluded params...")
     test_loader.test_excluded_params()
     print("   ✓ Excluded params work")
-    
+
     print("\n5. Testing provider resolution...")
     test_loader.test_provider_resolution()
     print("   ✓ Provider resolution works")
-    
+
     print("\n6. Testing provider config manager...")
     test_loader.test_provider_config_manager()
     print("   ✓ Config manager works")
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("PublicAI Integration Tests...")
-    print("="*50)
-    
+    print("=" * 50)
+
     test_integration = TestPublicAIIntegration()
-    
+
     print("\n7. Testing basic completion...")
     test_integration.test_publicai_completion_basic()
-    
+
     print("\n8. Testing streaming...")
     test_integration.test_publicai_completion_with_streaming()
-    
+
     print("\n9. Testing parameter mapping...")
     test_integration.test_publicai_parameter_mapping()
-    
+
     print("\n10. Testing content list conversion...")
     test_integration.test_publicai_content_list_conversion()
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("✓ All tests passed!")
-    print("="*50)
+    print("=" * 50)

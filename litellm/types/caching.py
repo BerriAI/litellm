@@ -52,6 +52,24 @@ class RedisPipelineSetOperation(TypedDict):
     ttl: Optional[int]
 
 
+class RedisPipelineRpushOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline RPUSH Operation
+    """
+
+    key: str
+    values: List[Any]
+
+
+class RedisPipelineLpopOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline LPOP Operation
+    """
+
+    key: str
+    count: Optional[int]
+
+
 DynamicCacheControl = TypedDict(
     "DynamicCacheControl",
     {
@@ -95,7 +113,9 @@ class HealthCheckCacheParams(BaseModel):
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
+
     embedding: Optional[List[float]]
     index: Optional[int]
     object: Optional[str]
     model: Optional[str]
+    prompt_tokens_details: Optional[dict]

@@ -118,7 +118,7 @@ export const buildDynamicAgentData = (
     litellmParams.model = model;
   }
 
-  return {
+  const agentData: Record<string, any> = {
     agent_name: values.agent_name,
     agent_card_params: {
       protocolVersion: "1.0",
@@ -140,6 +140,13 @@ export const buildDynamicAgentData = (
     },
     litellm_params: litellmParams,
   };
+
+  if (values.tpm_limit != null) agentData.tpm_limit = values.tpm_limit;
+  if (values.rpm_limit != null) agentData.rpm_limit = values.rpm_limit;
+  if (values.session_tpm_limit != null) agentData.session_tpm_limit = values.session_tpm_limit;
+  if (values.session_rpm_limit != null) agentData.session_rpm_limit = values.session_rpm_limit;
+
+  return agentData;
 };
 
 export default DynamicAgentFormFields;

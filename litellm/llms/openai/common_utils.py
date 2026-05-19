@@ -3,9 +3,21 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import hashlib
+import inspect
 import json
+import os
 import ssl
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 import openai
@@ -21,6 +33,15 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
+
+
+def _get_client_init_params(cls: type) -> Tuple[str, ...]:
+    """Extract __init__ parameter names (excluding 'self') from a class."""
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
+
+
+_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
 
 
 class OpenAIError(BaseLLMException):
@@ -159,12 +180,12 @@ class BaseOpenAILLM:
             f"is_async={client_initialization_params.get('is_async')}",
         ]
 
-        LITELLM_CLIENT_SPECIFIC_PARAMS = [
+        LITELLM_CLIENT_SPECIFIC_PARAMS = (
             "timeout",
             "max_retries",
             "organization",
             "api_base",
-        ]
+        )
         openai_client_fields = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(
                 client_type=client_type
@@ -181,20 +202,12 @@ class BaseOpenAILLM:
     @staticmethod
     def get_openai_client_initialization_param_fields(
         client_type: Literal["openai", "azure"]
-    ) -> List[str]:
-        """Returns a list of fields that are used to initialize the OpenAI client"""
-        import inspect
-
-        from openai import AzureOpenAI, OpenAI
-
+    ) -> Tuple[str, ...]:
+        """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
-            signature = inspect.signature(OpenAI.__init__)
+            return _OPENAI_INIT_PARAMS
         else:
-            signature = inspect.signature(AzureOpenAI.__init__)
-
-        # Extract parameter names, excluding 'self'
-        param_names = [param for param in signature.parameters if param != "self"]
-        return param_names
+            return _AZURE_OPENAI_INIT_PARAMS
 
     @staticmethod
     def _get_async_http_client(
@@ -203,15 +216,20 @@ class BaseOpenAILLM:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
+        if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
+            return httpx.AsyncClient(transport=MockOpenAITransport())
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
 
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config
-                if isinstance(ssl_config, ssl.SSLContext)
-                else None,
+                ssl_context=(
+                    ssl_config if isinstance(ssl_config, ssl.SSLContext) else None
+                ),
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 shared_session=shared_session,
             ),
@@ -223,6 +241,11 @@ class BaseOpenAILLM:
         if litellm.client_session is not None:
             return litellm.client_session
 
+        if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
+            return httpx.Client(transport=MockOpenAITransport())
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
 
@@ -230,3 +253,38 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
         )
+
+
+class OpenAICredentials(NamedTuple):
+    api_base: str
+    api_key: Optional[str]
+    organization: Optional[str]
+
+
+def get_openai_credentials(
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    organization: Optional[str] = None,
+) -> OpenAICredentials:
+    """Resolve OpenAI credentials from params, litellm globals, and env vars."""
+    resolved_api_base = (
+        api_base
+        or litellm.api_base
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_API_BASE")
+        or "https://api.openai.com/v1"
+    )
+    resolved_organization = (
+        organization
+        or litellm.organization
+        or os.getenv("OPENAI_ORGANIZATION", None)
+        or None
+    )
+    resolved_api_key = (
+        api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
+    )
+    return OpenAICredentials(
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        organization=resolved_organization,
+    )

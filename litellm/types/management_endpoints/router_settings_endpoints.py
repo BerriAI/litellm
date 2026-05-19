@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 # Fallback Management Types
 
+
 class FallbackCreateRequest(BaseModel):
     """Request model for creating/updating fallbacks"""
 
@@ -74,7 +75,9 @@ class RouterSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = None  # For fields with predefined options/enum values
+    options: Optional[List[str]] = (
+        None  # For fields with predefined options/enum values
+    )
     ui_field_name: str  # User-friendly display name
     link: Optional[str] = None  # Documentation link for the field
 
@@ -108,6 +111,14 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_description="Arguments to pass to the routing strategy (e.g., ttl, lowest_latency_buffer for latency-based-routing)",
         field_default={},
         ui_field_name="Routing Strategy Args",
+    ),
+    RouterSettingsField(
+        field_name="routing_groups",
+        field_type="List",
+        field_value=None,
+        field_description="Named subsets of model_names that share a routing strategy. Models not claimed by an explicit group fall through to the top-level routing_strategy.",
+        field_default=[],
+        ui_field_name="Routing Groups",
     ),
     RouterSettingsField(
         field_name="num_retries",
@@ -245,7 +256,7 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_default=False,
         ui_field_name="Enable Tag Filtering",
         link="https://docs.litellm.ai/docs/proxy/tag_routing",
-    ),    
+    ),
     RouterSettingsField(
         field_name="tag_filtering_match_any",
         field_type="Boolean",
@@ -263,4 +274,3 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         ui_field_name="Disable Cooldowns",
     ),
 ]
-

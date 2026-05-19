@@ -51,13 +51,15 @@ class JinaAIRerankConfig(BaseRerankConfig):
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
-        return dict(OptionalRerankParams(
-            **optional_params,
-        ))
+        return dict(
+            OptionalRerankParams(
+                **optional_params,
+            )
+        )
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -72,7 +74,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return cleaned_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: Dict, headers: Dict
+        self,
+        model: str,
+        optional_rerank_params: Dict,
+        headers: Dict,
+        litellm_params: Optional[dict] = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
@@ -127,9 +133,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
         )  # Return response
 
     def validate_environment(
-        self, 
-        headers: Dict, 
-        model: str, 
+        self,
+        headers: Dict,
+        model: str,
         api_key: Optional[str] = None,
         optional_params: Optional[dict] = None,
     ) -> Dict:

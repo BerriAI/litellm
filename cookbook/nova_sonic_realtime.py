@@ -16,9 +16,13 @@ Usage:
 import asyncio
 import base64
 import json
+import os
 import pyaudio
 import websockets
 from typing import Optional
+
+# Bounded queue size for audio chunks (configurable via env to avoid unbounded memory)
+AUDIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 10_000))
 
 # Audio configuration (matching Nova Sonic requirements)
 INPUT_SAMPLE_RATE = 16000  # Nova Sonic expects 16kHz input
@@ -40,7 +44,7 @@ class RealtimeClient:
         self.api_key = api_key
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_active = False
-        self.audio_queue = asyncio.Queue()
+        self.audio_queue = asyncio.Queue(maxsize=AUDIO_QUEUE_MAXSIZE)
         self.pyaudio = pyaudio.PyAudio()
         self.input_stream = None
         self.output_stream = None
@@ -48,11 +52,11 @@ class RealtimeClient:
     async def connect(self):
         """Connect to LiteLLM proxy realtime endpoint."""
         print(f"Connecting to {self.url}...")
-        
+
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        
+
         self.ws = await websockets.connect(
             self.url,
             additional_headers=headers,
@@ -171,7 +175,9 @@ class RealtimeClient:
 
         try:
             while self.is_active:
-                audio_data = self.input_stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                audio_data = self.input_stream.read(
+                    CHUNK_SIZE, exception_on_overflow=False
+                )
                 await self.send_audio_chunk(audio_data)
                 await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
         except Exception as e:
@@ -266,6 +272,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         await client.close()
@@ -277,7 +284,7 @@ if __name__ == "__main__":
     print("2. Bedrock is configured in proxy_server_config.yaml")
     print("3. AWS credentials are set")
     print()
-    
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -59,7 +59,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
+        self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
         self.api_base = (
@@ -150,9 +150,9 @@ class lakeraAI_Moderation(CustomGuardrail):
         text = ""
         _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
-            prompt_injection_obj: Optional[
-                GuardrailItem
-            ] = litellm.guardrail_name_config_map.get("prompt_injection")
+            prompt_injection_obj: Optional[GuardrailItem] = (
+                litellm.guardrail_name_config_map.get("prompt_injection")
+            )
             if prompt_injection_obj is not None:
                 enabled_roles = prompt_injection_obj.enabled_roles
             else:

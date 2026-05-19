@@ -4,7 +4,8 @@
  */
 
 import { useState } from 'react';
-import { Typography, message as antdMessage } from 'antd';
+import { Typography } from 'antd';
+import MessageManager from "@/components/molecules/message_manager";
 import { ParsedMessage } from './prettyMessagesTypes';
 import { SectionHeader } from './SectionHeader';
 import { SimpleMessageBlock } from './SimpleMessageBlock';
@@ -23,9 +24,9 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
   const handleCopy = () => {
     if (!message) return;
     
-    const content = JSON.stringify(message, null, 2);
+    const content = message.content || '';
     navigator.clipboard.writeText(content);
-    antdMessage.success('Output copied');
+    MessageManager.success('Output copied');
   };
 
   if (!message) {

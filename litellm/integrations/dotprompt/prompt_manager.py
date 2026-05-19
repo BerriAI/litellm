@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 
 class PromptTemplate:
@@ -59,7 +60,10 @@ class PromptManager:
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: Dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
-        self.jinja_env = Environment(
+        # Sandboxed env: templates can come from user input via /prompts/test,
+        # so we must block access to unsafe Python attributes and mutation of
+        # caller-supplied mutables.
+        self.jinja_env = ImmutableSandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Handlebars-style delimiters to match Dotprompt spec
@@ -205,7 +209,7 @@ class PromptManager:
         """
         # Get the template (versioned or base)
         template = self.get_prompt(prompt_id=prompt_id, version=version)
-        
+
         if template is None:
             available_prompts = list(self.prompts.keys())
             version_str = f" (version {version})" if version else ""
@@ -266,11 +270,11 @@ class PromptManager:
     ) -> Optional[PromptTemplate]:
         """
         Get a prompt template by ID and optional version.
-        
+
         Args:
             prompt_id: The base prompt ID
             version: Optional version number. If provided, looks for {prompt_id}.v{version}
-        
+
         Returns:
             The prompt template if found, None otherwise
         """
@@ -279,7 +283,7 @@ class PromptManager:
             versioned_id = f"{prompt_id}.v{version}"
             if versioned_id in self.prompts:
                 return self.prompts[versioned_id]
-        
+
         # Fall back to base prompt_id
         return self.prompts.get(prompt_id)
 

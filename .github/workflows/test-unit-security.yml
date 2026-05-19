@@ -1,0 +1,28 @@
+name: "Unit Tests: Security"
+
+# Kept push-only (was previously required by DATABASE_URL secret scoping;
+# now the postgres credentials are ephemeral localhost values but the
+# push-trigger stays to match the proxy-db workflow cadence).
+on:
+  push:
+    branches: [main, "litellm_**"]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: ./.github/workflows/_test-unit-services-base.yml
+    with:
+      test-path: "tests/proxy_security_tests/"
+      workers: 1
+      reruns: 2
+      timeout-minutes: 20
+      enable-postgres: true
+      artifact-name: security

@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
+from litellm.utils import get_optional_params
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -20,6 +21,7 @@ from litellm.llms.ovhcloud.chat.transformation import (
 
 config = OVHCloudChatConfig()
 model = "ovhcloud/Mistral-7B-Instruct-v0.3"
+
 
 class TestOvhCloudChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
@@ -58,7 +60,7 @@ class TestOvhCloudChatCompletionStreamingHandler:
             "error": {
                 "message": "test error",
                 "code": 400,
-            } 
+            }
         }
 
         with pytest.raises(OVHCloudException) as exc_info:
@@ -83,12 +85,10 @@ class TestOvhCloudChatCompletionStreamingHandler:
 
 class TestOVHCloudConfig:
     def test_transform_request_basic(self):
-        """Test basic request transformation"""        
+        """Test basic request transformation"""
         transformed_request = config.transform_request(
             model,
-            messages=[
-                {"role": "user", "content": "Hello, world!"}
-            ],
+            messages=[{"role": "user", "content": "Hello, world!"}],
             optional_params={},
             litellm_params={},
             headers={},
@@ -100,7 +100,7 @@ class TestOVHCloudConfig:
         ]
 
     def test_transform_request_with_extra_body(self):
-        """Test request transformation with extra_body parameters"""        
+        """Test request transformation with extra_body parameters"""
         transformed_request = config.transform_request(
             model,
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -115,59 +115,92 @@ class TestOVHCloudConfig:
         ]
 
     def test_map_openai_params(self):
-        """Test OpenAI parameter mapping"""        
+        """Test OpenAI parameter mapping"""
         non_default_params = {
             "temperature": 0.7,
             "max_tokens": 100,
             "top_p": 0.9,
         }
-        
+
         mapped_params = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model=model,
             drop_params=False,
         )
-        
+
         assert mapped_params["temperature"] == 0.7
         assert mapped_params["max_tokens"] == 100
         assert mapped_params["top_p"] == 0.9
 
     def test_get_error_class(self):
-        """Test error class creation"""        
+        """Test error class creation"""
         error = config.get_error_class(
             error_message="Test error",
             status_code=400,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
-        
+
         assert isinstance(error, OVHCloudException)
         assert error.message == "Test error"
         assert error.status_code == 400
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Meta-Llama-3_3-70B-Instruct",
+            "Meta-Llama-3_1-70B-Instruct",
+            "Mixtral-8x7B-Instruct-v0.1",
+            "gpt-oss-120b",
+            "some-model-not-in-the-cost-map",
+        ],
+    )
+    def test_tools_not_filtered_by_static_model_map(self, model):
+        """
+        OVHCloud AI Endpoints are OpenAI-compatible; tools/tool_choice must pass
+        through for any model. The server is responsible for rejecting unsupported
+        tool calls — LiteLLM must not strip them based on a stale static catalog.
+        """
+
+        params = get_optional_params(
+            model=model,
+            custom_llm_provider="ovhcloud",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "x", "parameters": {}},
+                }
+            ],
+            tool_choice="auto",
+        )
+
+        assert "tools" in params
+        assert "tool_choice" in params
 
 
 def test_ovhcloud_integration():
     import os
     from litellm import completion
-    
-    api_key = os.getenv("OVHCLOUD_API_KEY") 
-    
+
+    api_key = os.getenv("OVHCLOUD_API_KEY")
+
     if not api_key:
         pytest.skip("OVHCLOUD_API_KEY not set, skipping test")
-    
+
     response = completion(
         model,
         messages=[{"role": "user", "content": "Say hello in one word"}],
         api_key=api_key,
         max_tokens=10,
-        temperature=0.7
+        temperature=0.7,
     )
-    
+
     assert response.choices[0].message.content
     assert len(response.choices[0].message.content.strip()) > 0
     assert response.model
     assert response.usage
     assert response.usage.total_tokens > 0
+
 
 def test_OVHCloud_streaming_integration():
     """
@@ -176,22 +209,24 @@ def test_OVHCloud_streaming_integration():
     """
     import os
     from litellm import completion
-    
-    api_key = os.getenv("OVHCLOUD_API_KEY") 
-    
+
+    api_key = os.getenv("OVHCLOUD_API_KEY")
+
     if not api_key:
         pytest.skip("OVHCLOUD_API_KEY not set, skipping test")
-    
+
     try:
-        print(f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})")
+        print(
+            f"🔍 Testing streaming with API key: {api_key[:6]}...{api_key[-4:]} (length: {len(api_key)})"
+        )
         print(f"🔍 API base URL: {os.getenv('OVHCLOUD_API_BASE')}")
-        
+
         response = completion(
             model,
             messages=[{"role": "user", "content": "Count from 1 to 5"}],
             api_key=api_key,
             max_tokens=50,
-            stream=True
+            stream=True,
         )
 
         chunks = []
@@ -215,12 +250,13 @@ def test_OVHCloud_streaming_integration():
         print(f"❌ Streaming integration test error details:")
         print(f"   Error type: {type(e).__name__}")
         print(f"   Error message: {str(e)}")
-        if hasattr(e, 'status_code'):
+        if hasattr(e, "status_code"):
             print(f"   Status code: {e.status_code}")
-        if hasattr(e, 'response'):
+        if hasattr(e, "response"):
             print(f"   Response: {e.response}")
-            
+
         pytest.fail(f"Streaming integration test failed: {type(e).__name__}: {str(e)}")
+
 
 def test_ovhcloud_with_custom_base_url():
     """
@@ -228,29 +264,106 @@ def test_ovhcloud_with_custom_base_url():
     """
     import os
     from litellm import completion
-    
-    api_key = os.getenv("OVHCLOUD_API_KEY") 
-    
+
+    api_key = os.getenv("OVHCLOUD_API_KEY")
+
     if not api_key:
         pytest.skip("OVHCLOUD_API_KEY not set, skipping test")
 
-    custom_base_url = os.getenv("OVHCLOUD_API_BASE", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1")
-        
+    custom_base_url = os.getenv(
+        "OVHCLOUD_API_BASE", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+    )
+
     try:
         response = completion(
             model,
             messages=[{"role": "user", "content": "Hello"}],
             api_key=api_key,
             api_base=custom_base_url,
-            max_tokens=5
+            max_tokens=5,
         )
-        
+
         assert response.choices[0].message.content
         print(f"✅ Custom base URL test passed: {response.choices[0].message.content}")
-        
+
     except Exception as e:
         pytest.fail(f"Custom base URL test failed: {str(e)}")
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestOVHCloudReasoningFieldMigration:
+    """Tests for OVHCloud reasoning_content -> reasoning field migration."""
+
+    def test_streaming_new_reasoning_field(self):
+        """New `reasoning` field should be mapped to `reasoning_content`."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning": "Let me think...",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "Let me think..."
+
+    def test_streaming_legacy_reasoning_content_unchanged(self):
+        """Legacy `reasoning_content` field should pass through untouched."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "reasoning_content": "Already correct field.",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "Already correct field."
+
+    def test_streaming_both_fields_legacy_wins(self):
+        """When both fields present, existing `reasoning_content` is not overwritten."""
+        handler = OVHCloudChatCompletionStreamingHandler(
+            streaming_response=iter([]),
+                        sync_stream=True,
+        )
+        chunk = {
+            "id": "test-id",
+            "created": 1234567890,
+            "model": "test-model",
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning": "new field",
+                        "reasoning_content": "legacy field",
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["reasoning_content"] == "legacy field"
+
+

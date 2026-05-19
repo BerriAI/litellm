@@ -13,8 +13,8 @@ class CohereRerankV2Config(CohereRerankConfig):
         pass
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -55,20 +55,23 @@ class CohereRerankV2Config(CohereRerankConfig):
 
         No mapping required - returns all supported params
         """
-        return dict(OptionalRerankParams(
-            query=query,
-            documents=documents,
-            top_n=top_n,
-            rank_fields=rank_fields,
-            return_documents=return_documents,
-            max_tokens_per_doc=max_tokens_per_doc,
-        ))
+        return dict(
+            OptionalRerankParams(
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_tokens_per_doc=max_tokens_per_doc,
+            )
+        )
 
     def transform_rerank_request(
         self,
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Cohere rerank")

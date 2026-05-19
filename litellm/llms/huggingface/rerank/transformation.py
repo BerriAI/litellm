@@ -61,8 +61,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             return "https://api-inference.huggingface.co"
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -146,6 +146,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Union[OptionalRerankParams, dict],
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")

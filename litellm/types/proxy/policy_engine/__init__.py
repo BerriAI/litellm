@@ -10,6 +10,12 @@ Configuration:
 - `policy_attachments`: Define WHERE policies apply (teams, keys, models)
 """
 
+from litellm.types.proxy.policy_engine.pipeline_types import (
+    GuardrailPipeline,
+    PipelineExecutionResult,
+    PipelineStep,
+    PipelineStepResult,
+)
 from litellm.types.proxy.policy_engine.policy_types import (
     Policy,
     PolicyAttachment,
@@ -19,6 +25,8 @@ from litellm.types.proxy.policy_engine.policy_types import (
     PolicyScope,
 )
 from litellm.types.proxy.policy_engine.resolver_types import (
+    AttachmentImpactResponse,
+    PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
     PolicyAttachmentListResponse,
@@ -30,10 +38,17 @@ from litellm.types.proxy.policy_engine.resolver_types import (
     PolicyListDBResponse,
     PolicyListResponse,
     PolicyMatchContext,
+    PolicyMatchDetail,
+    PolicyResolveRequest,
+    PolicyResolveResponse,
     PolicyScopeResponse,
     PolicySummaryItem,
     PolicyTestResponse,
     PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest,
+    PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest,
     ResolvedPolicy,
 )
 from litellm.types.proxy.policy_engine.validation_types import (
@@ -44,6 +59,11 @@ from litellm.types.proxy.policy_engine.validation_types import (
 )
 
 __all__ = [
+    # Pipeline types
+    "GuardrailPipeline",
+    "PipelineStep",
+    "PipelineStepResult",
+    "PipelineExecutionResult",
     # Policy types
     "Policy",
     "PolicyConfig",
@@ -75,4 +95,16 @@ __all__ = [
     "PolicyAttachmentCreateRequest",
     "PolicyAttachmentDBResponse",
     "PolicyAttachmentListResponse",
+    # Pipeline test types
+    "PipelineTestRequest",
+    # Resolve types
+    "PolicyResolveRequest",
+    "PolicyResolveResponse",
+    "PolicyMatchDetail",
+    "AttachmentImpactResponse",
+    # Policy versioning
+    "PolicyVersionCreateRequest",
+    "PolicyVersionStatusUpdateRequest",
+    "PolicyVersionListResponse",
+    "PolicyVersionCompareResponse",
 ]

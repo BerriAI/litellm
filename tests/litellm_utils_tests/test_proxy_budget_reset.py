@@ -229,6 +229,16 @@ async def test_reset_budget_endusers_partial_failure():
     prisma_client.get_data.side_effect = get_data_mock
 
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_organizationtable.update_many (used by reset_budget_for_orgs_linked_to_budgets)
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_tagtable.update_many (used by reset_budget_for_tags_linked_to_budgets)
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -246,15 +256,18 @@ async def test_reset_budget_endusers_partial_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         await job.reset_budget_for_litellm_budget_table()
         await asyncio.sleep(0.1)
 
@@ -389,6 +402,16 @@ async def test_reset_budget_continues_other_categories_on_failure():
 
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_organizationtable.update_many (used by reset_budget_for_orgs_linked_to_budgets)
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_tagtable.update_many (used by reset_budget_for_tags_linked_to_budgets)
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -427,19 +450,25 @@ async def test_reset_budget_continues_other_categories_on_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
-    ) as mock_reset_key, patch.object(
-        ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
-    ) as mock_reset_user, patch.object(
-        ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
-    ) as mock_reset_team, patch.object(
-        ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
+        ) as mock_reset_key,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user
+        ) as mock_reset_user,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
+        ) as mock_reset_team,
+        patch.object(
+            ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         # Call the overall reset_budget method.
         await job.reset_budget()
         await asyncio.sleep(0.1)
@@ -863,6 +892,16 @@ async def test_service_logger_endusers_success():
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_organizationtable.update_many (used by reset_budget_for_orgs_linked_to_budgets)
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_tagtable.update_many (used by reset_budget_for_tags_linked_to_budgets)
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -878,15 +917,18 @@ async def test_service_logger_endusers_success():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
@@ -938,6 +980,16 @@ async def test_service_logger_endusers_failure():
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
+    # Mock db.litellm_verificationtoken.update_many (used by reset_budget_for_keys_linked_to_budgets)
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_organizationtable.update_many (used by reset_budget_for_orgs_linked_to_budgets)
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    # Mock db.litellm_tagtable.update_many (used by reset_budget_for_tags_linked_to_budgets)
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -955,15 +1007,18 @@ async def test_service_logger_endusers_failure():
     async def fake_reset_team_members(budgets_to_reset):
         return 1
 
-    with patch.object(
-        ResetBudgetJob,
-        "_reset_budget_for_enduser",
-        side_effect=fake_reset_enduser,
-    ) as mock_reset_enduser, patch.object(
-        ResetBudgetJob,
-        "reset_budget_for_litellm_team_members",
-        side_effect=fake_reset_team_members,
-    ) as mock_reset_team_members:
+    with (
+        patch.object(
+            ResetBudgetJob,
+            "_reset_budget_for_enduser",
+            side_effect=fake_reset_enduser,
+        ) as mock_reset_enduser,
+        patch.object(
+            ResetBudgetJob,
+            "reset_budget_for_litellm_team_members",
+            side_effect=fake_reset_team_members,
+        ) as mock_reset_team_members,
+    ):
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
@@ -1026,6 +1081,13 @@ async def test_reset_budget_for_litellm_team_members_called():
     prisma_client.db.litellm_teammembership.update_many = AsyncMock(
         return_value={"count": 2}
     )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 0}
+    )
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()

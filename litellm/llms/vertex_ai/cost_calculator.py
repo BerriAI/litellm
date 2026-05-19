@@ -203,7 +203,7 @@ def _handle_128k_pricing(
     ):
         prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
-        prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+        prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
     output_cost_per_token_above_128k_tokens = model_info.get(
@@ -215,7 +215,9 @@ def _handle_128k_pricing(
     ):
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
-        completion_cost = completion_tokens * model_info["output_cost_per_token"]
+        completion_cost = completion_tokens * (
+            model_info["output_cost_per_token"] or 0.0
+        )
 
     return prompt_cost, completion_cost
 
@@ -224,6 +226,7 @@ def cost_per_token(
     model: str,
     custom_llm_provider: str,
     usage: Usage,
+    service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -233,6 +236,8 @@ def cost_per_token(
         - custom_llm_provider: str, either "vertex_ai-*" or "gemini"
         - prompt_tokens: float, the number of input tokens
         - completion_tokens: float, the number of output tokens
+        - service_tier: optional tier derived from Gemini trafficType
+          ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -266,4 +271,5 @@ def cost_per_token(
         model=model,
         custom_llm_provider=custom_llm_provider,
         usage=usage,
+        service_tier=service_tier,
     )

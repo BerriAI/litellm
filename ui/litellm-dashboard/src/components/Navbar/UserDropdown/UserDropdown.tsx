@@ -1,5 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
+import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import {
   emitLocalStorageChange,
   getLocalStorageItem,
@@ -27,6 +30,9 @@ interface UserDropdownProps {
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
+  const disableUsageIndicator = useDisableUsageIndicator();
+  const disableBlogPosts = useDisableBlogPosts();
+  const disableBouncingIcon = useDisableBouncingIcon();
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
 
   useEffect(() => {
@@ -127,6 +133,57 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
             }
           }}
           aria-label="Toggle hide all prompts"
+        />
+      </Space>
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Text type="secondary">Hide Usage Indicator</Text>
+        <Switch
+          size="small"
+          checked={disableUsageIndicator}
+          onChange={(checked) => {
+            if (checked) {
+              setLocalStorageItem("disableUsageIndicator", "true");
+              emitLocalStorageChange("disableUsageIndicator");
+            } else {
+              removeLocalStorageItem("disableUsageIndicator");
+              emitLocalStorageChange("disableUsageIndicator");
+            }
+          }}
+          aria-label="Toggle hide usage indicator"
+        />
+      </Space>
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Text type="secondary">Hide Blog Posts</Text>
+        <Switch
+          size="small"
+          checked={disableBlogPosts}
+          onChange={(checked) => {
+            if (checked) {
+              setLocalStorageItem("disableBlogPosts", "true");
+              emitLocalStorageChange("disableBlogPosts");
+            } else {
+              removeLocalStorageItem("disableBlogPosts");
+              emitLocalStorageChange("disableBlogPosts");
+            }
+          }}
+          aria-label="Toggle hide blog posts"
+        />
+      </Space>
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Text type="secondary">Hide Bouncing Icon</Text>
+        <Switch
+          size="small"
+          checked={disableBouncingIcon}
+          onChange={(checked) => {
+            if (checked) {
+              setLocalStorageItem("disableBouncingIcon", "true");
+              emitLocalStorageChange("disableBouncingIcon");
+            } else {
+              removeLocalStorageItem("disableBouncingIcon");
+              emitLocalStorageChange("disableBouncingIcon");
+            }
+          }}
+          aria-label="Toggle hide bouncing icon"
         />
       </Space>
     </Space>

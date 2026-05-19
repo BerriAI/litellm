@@ -3,7 +3,6 @@ import collections
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
@@ -14,10 +13,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _user_has_admin_view,
-)
+
+# NOTE: Avoid module-level import from common_utils: proxy_server imports this
+# module while common_utils may pull proxy_server during init, which can leave
+# those names undefined. Import the helpers locally where they are used.
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
@@ -67,6 +66,15 @@ async def spend_key_fn():
         )
 
 
+def _strip_password_from_users(users) -> None:
+    """Strip password field from a list of user objects."""
+    for user in users if isinstance(users, list) else [users]:
+        if user and hasattr(user, "__dict__"):
+            user.__dict__.pop("password", None)
+        elif isinstance(user, dict):
+            user.pop("password", None)
+
+
 @router.get(
     "/spend/users",
     tags=["Budget & Spend Tracking"],
@@ -106,13 +114,15 @@ async def spend_user_fn(
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
             )
-            return [user_info]
+            result = [user_info]
         else:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_all"
             )
+            result = user_info
 
-        return user_info
+        _strip_password_from_users(result)
+        return result
 
     except Exception as e:
         raise HTTPException(
@@ -213,7 +223,8 @@ async def get_global_activity_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+    WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+      AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
     AND "user" = $3
     GROUP BY date_trunc('day', "startTime")
     """
@@ -272,8 +283,10 @@ async def get_global_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -297,7 +310,8 @@ async def get_global_activity(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             GROUP BY date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -356,7 +370,8 @@ async def get_global_activity_model_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+    WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+      AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
     AND "user" = $3
     GROUP BY model_group, date_trunc('day', "startTime")
     """
@@ -438,8 +453,10 @@ async def get_global_activity_model(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -464,7 +481,8 @@ async def get_global_activity_model(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             GROUP BY model_group, date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -590,8 +608,10 @@ async def get_global_activity_exceptions_per_deployment(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -609,7 +629,8 @@ async def get_global_activity_exceptions_per_deployment(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -722,8 +743,10 @@ async def get_global_activity_exceptions(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -740,7 +763,8 @@ async def get_global_activity_exceptions(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -827,8 +851,10 @@ async def get_global_spend_provider(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -853,7 +879,8 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') 
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND length(model_id) > 0
             AND "user" = $3
             GROUP BY model_id
@@ -867,7 +894,9 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND length(model_id) > 0
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+              AND length(model_id) > 0
             GROUP BY model_id
             """
             db_response = await prisma_client.db.query_raw(
@@ -986,8 +1015,10 @@ async def get_global_spend_report(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1003,7 +1034,9 @@ async def get_global_spend_report(
                 "/spend/report endpoint " + CommonProxyErrors.not_premium_user.value
             )
         if api_key is not None:
-            verbose_proxy_logger.debug("Getting /spend for api_key: %s", api_key)
+            verbose_proxy_logger.debug(
+                "Getting /spend for api_key: [set=%s]", api_key is not None
+            )
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
             sql_query = """
@@ -1017,7 +1050,9 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.api_key = $3
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                        AND sl.api_key = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1062,7 +1097,9 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.user = $3
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                        AND sl.user = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1116,7 +1153,8 @@ async def get_global_spend_report(
                 ON 
                     sl.team_id = tt.team_id
                 WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     tt.team_alias,
@@ -1175,7 +1213,8 @@ async def get_global_spend_report(
                 FROM
                     "LiteLLM_SpendLogs" sl
                 WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     customer,
@@ -1232,7 +1271,8 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1416,6 +1456,16 @@ async def _get_spend_report_for_time_range(
         )
         return None
 
+    # Normalize string inputs to tz-aware UTC datetimes so Prisma serializes
+    # them with an explicit +00:00 suffix. Raw strings get bound as untyped
+    # text, which forces Postgres to parse `::timestamptz` using the DB
+    # session timezone and drifts the window by the offset even with the
+    # AT TIME ZONE 'UTC' wrap below.
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
     try:
         sql_query = """
         SELECT
@@ -1426,27 +1476,31 @@ async def _get_spend_report_for_time_range(
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
+            s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND s."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         GROUP BY
             t.team_alias
         ORDER BY
             total_spend DESC;
         """
-        response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
+        response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
 
         # get spend per tag for today
         sql_query = """
-        SELECT 
+        SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+        WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+          AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         GROUP BY individual_request_tag
         ORDER BY total_spend DESC;
         """
 
         spend_per_tag = await prisma_client.db.query_raw(
-            sql_query, start_date, end_date
+            sql_query, start_date_obj, end_date_obj
         )
 
         return response, spend_per_tag
@@ -1462,11 +1516,21 @@ async def _get_spend_report_for_time_range(
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {
-            "cost": {
-                "description": "The calculated cost",
-                "example": 0.0,
-                "type": "float",
-            }
+            "description": "The calculated cost",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "cost": {
+                                "type": "number",
+                                "description": "The calculated cost",
+                                "example": 0.0,
+                            }
+                        },
+                    }
+                }
+            },
         }
     },
 )
@@ -1672,6 +1736,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    model_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter logs by model ID (litellm model deployment id)",
+    ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
     ),
@@ -1683,6 +1751,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     error_message: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
+    ),
+    sort_by: str = fastapi.Query(
+        default="startTime",
+        description="Sort logs by field: spend, total_tokens, startTime, endTime, request_duration_ms, model, or ttft_ms",
+    ),
+    sort_order: Optional[str] = fastapi.Query(
+        default="desc",
+        description="Sort order: asc or desc",
     ),
 ):
     """
@@ -1715,6 +1791,31 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             code=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Validate sort_by and sort_order
+    valid_sort_fields = {
+        "spend",
+        "total_tokens",
+        "startTime",
+        "endTime",
+        "request_duration_ms",
+        "model",
+        "ttft_ms",
+    }
+    if sort_by not in valid_sort_fields:
+        raise ProxyException(
+            message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
+            type="bad_request",
+            param="sort_by",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if sort_order is not None and sort_order.lower() not in {"asc", "desc"}:
+        raise ProxyException(
+            message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
+            type="bad_request",
+            param="sort_order",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
     try:
         is_v2 = "/spend/logs/v2" in request.url.path
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
@@ -1726,7 +1827,11 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                     return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
-            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+            expected = (
+                "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'"
+                if is_v2
+                else "'YYYY-MM-DD HH:MM:SS'"
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid date format: {date_str}. Expected: {expected}",
@@ -1763,25 +1868,34 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if model is not None:
             where_conditions["model"] = model
 
+        if model_id is not None:
+            where_conditions["model_id"] = model_id
+
         # Build metadata filters
         metadata_filters = []
         if key_alias is not None:
-            metadata_filters.append({
-                "path": ["user_api_key_alias"],
-                "string_contains": key_alias,
-            })
+            metadata_filters.append(
+                {
+                    "path": ["user_api_key_alias"],
+                    "string_contains": key_alias,
+                }
+            )
 
         if error_code is not None:
-            metadata_filters.append({
-                "path": ["error_information", "error_code"],
-                "equals": f'"{error_code}"',
-            })
+            metadata_filters.append(
+                {
+                    "path": ["error_information", "error_code"],
+                    "equals": f'"{error_code}"',
+                }
+            )
 
         if error_message is not None:
-            metadata_filters.append({
-                "path": ["error_information", "error_message"],
-                "string_contains": error_message,
-            })
+            metadata_filters.append(
+                {
+                    "path": ["error_information", "error_message"],
+                    "string_contains": error_message,
+                }
+            )
 
         if metadata_filters:
             if len(metadata_filters) == 1:
@@ -1800,6 +1914,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        permitted_team_ids: Optional[List[str]] = None
         if not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
@@ -1817,46 +1932,180 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                         },
                     )
                 where_conditions["team_id"] = team_id
+                where_conditions.pop("user", None)
             else:
                 if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
-                    where_conditions["user"] = user_api_key_dict.user_id
+                    try:
+                        permitted_team_ids = (
+                            await _get_permitted_team_ids_for_spend_logs(
+                                prisma_client=prisma_client,
+                                user_api_key_dict=user_api_key_dict,
+                            )
+                        )
+                    except Exception:
+                        permitted_team_ids = []
+                    if permitted_team_ids:
+                        where_conditions.pop("user", None)
+                        where_conditions["OR"] = [
+                            {"user": user_api_key_dict.user_id},
+                            {"team_id": {"in": permitted_team_ids}},
+                        ]
+                    else:
+                        where_conditions["user"] = user_api_key_dict.user_id
                     where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
+
+        # Build order clause from sort_by and sort_order
+        order_column = sort_by
+        order_direction = (sort_order or "desc").lower()
 
         # Get total count of records
         total_records = await prisma_client.db.litellm_spendlogs.count(
             where=where_conditions,
         )
 
-        # Get paginated data
-        data = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
-            skip=skip,
-            take=page_size,
+        # Build raw SQL to fetch paginated data WITHOUT heavy columns
+        # (messages, response, proxy_server_request can be hundreds of KB per row).
+        # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
+        sql_conditions: List[str] = []
+        sql_params: List[Any] = []
+        p = 1  # parameter index counter
+
+        # Date range (always present). Wrap the param side with
+        # `AT TIME ZONE 'UTC'` so comparison against the plain `timestamp`
+        # column does not depend on the DB session timezone (see #22529).
+        sql_conditions.append(
+            f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')"
         )
+        sql_params.append(start_date_obj)
+        p += 1
+        sql_conditions.append(
+            f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')"
+        )
+        sql_params.append(end_date_obj)
+        p += 1
+
+        # Equality filters - read effective values from where_conditions (post-authorization)
+        for sql_col, wc_key in [
+            ("team_id", "team_id"),
+            ('"user"', "user"),
+            ("api_key", "api_key"),
+            ("request_id", "request_id"),
+            ("model", "model"),
+            ("model_id", "model_id"),
+            ("end_user", "end_user"),
+        ]:
+            val = where_conditions.get(wc_key)
+            if val is not None and isinstance(val, str):
+                sql_conditions.append(f"{sql_col} = ${p}")
+                sql_params.append(val)
+                p += 1
+
+        # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
+        if permitted_team_ids is not None and len(permitted_team_ids) > 0:
+            or_clause = f'("user" = ${p} OR team_id = ANY(${p + 1}::text[]))'
+            sql_params.append(user_api_key_dict.user_id)
+            sql_params.append(permitted_team_ids)
+            p += 2
+            sql_conditions.append(or_clause)
+
+        # Status filter
+        if status_filter is not None:
+            if status_filter == "success":
+                sql_conditions.append("(status = 'success' OR status IS NULL)")
+            else:
+                sql_conditions.append(f"status = ${p}")
+                sql_params.append(status_filter)
+                p += 1
+
+        # Spend range
+        if min_spend is not None:
+            sql_conditions.append(f"spend >= ${p}")
+            sql_params.append(min_spend)
+            p += 1
+        if max_spend is not None:
+            sql_conditions.append(f"spend <= ${p}")
+            sql_params.append(max_spend)
+            p += 1
+
+        # Metadata JSON filters (PostgreSQL JSONB operators)
+        if key_alias is not None:
+            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
+            sql_params.append(f"%{key_alias}%")
+            p += 1
+        if error_code is not None:
+            sql_conditions.append(
+                f"metadata->'error_information'->>'error_code' = ${p}"
+            )
+            sql_params.append(error_code)
+            p += 1
+        if error_message is not None:
+            sql_conditions.append(
+                f"metadata->'error_information'->>'error_message' LIKE ${p}"
+            )
+            sql_params.append(f"%{error_message}%")
+            p += 1
+
+        # Build the ORDER BY expression. ttft_ms is computed from
+        # completionStartTime - startTime; non-streaming rows (where
+        # completionStartTime is null or equals endTime) yield NULL, so we
+        # append NULLS LAST in that case to keep them at the bottom regardless
+        # of direction. The other sort columns are non-null in the result set,
+        # so we leave the NULLS clause off and preserve their existing DESC
+        # semantics.
+        _sql_dir = "ASC" if order_direction == "asc" else "DESC"
+        _nulls_clause = ""
+        if order_column == "ttft_ms":
+            _order_expr = (
+                'CASE WHEN "completionStartTime" IS NULL '
+                'OR "completionStartTime" = "endTime" THEN NULL '
+                'ELSE (EXTRACT(EPOCH FROM ("completionStartTime" - "startTime")) * 1000) END'
+            )
+            _nulls_clause = " NULLS LAST"
+        elif order_column in ("startTime", "endTime"):
+            _order_expr = f'"{order_column}"'
+        else:
+            _order_expr = order_column
+
+        sql_query = f"""
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id,
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE {" AND ".join(sql_conditions)}
+            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+            LIMIT ${p} OFFSET ${p + 1}
+        """
+        sql_params.extend([page_size, skip])
+
+        data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        return {
-            "data": data,
-            "total": total_records,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-        }
+        return await _build_ui_spend_logs_response(
+            prisma_client,
+            data,
+            total_records,
+            page,
+            page_size,
+            total_pages,
+            enrich_session_counts=not is_v2,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)
 
 
-@lru_cache(maxsize=128)
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
@@ -1873,6 +2122,7 @@ async def ui_view_request_response_for_request_id(
         default=None,
         description="Time till which to view key spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View request / response for a specific request_id
@@ -1880,6 +2130,25 @@ async def ui_view_request_response_for_request_id(
     - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
     - if so, it will return the request and response payload
     """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Cannot authorize spend log access without a database "
+                        "connection. Connect a database or use a proxy admin key."
+                    )
+                },
+            )
+        await _assert_user_can_view_request_id(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            request_id=request_id,
+        )
+
     custom_loggers = (
         litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     )
@@ -1902,6 +2171,27 @@ async def ui_view_request_response_for_request_id(
         )
         if payload is not None:
             return payload
+
+    # Fallback: fetch heavy columns directly from the database.
+    # The list endpoint (/spend/logs/ui) intentionally excludes messages,
+    # response, and proxy_server_request for performance. When no custom
+    # logger (S3, GCS, etc.) is configured, we still need to serve these
+    # fields from the DB for the detail/drawer view.
+    if prisma_client is not None:
+        sql_query = """
+            SELECT messages, response, proxy_server_request
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_id = $1
+            LIMIT 1
+        """
+        db_result = await prisma_client.db.query_raw(sql_query, request_id)
+        if db_result and len(db_result) > 0:
+            row = db_result[0]
+            return {
+                "messages": row.get("messages"),
+                "response": row.get("response"),
+                "proxy_server_request": row.get("proxy_server_request"),
+            }
 
     return None
 
@@ -2022,10 +2312,13 @@ async def view_spend_logs(  # noqa: PLR0915
             }
 
             if api_key is not None and isinstance(api_key, str):
-                filter_query["api_key"] = api_key  # type: ignore
-            elif request_id is not None and isinstance(request_id, str):
+                if api_key.startswith("sk-"):
+                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)  # type: ignore
+                else:
+                    filter_query["api_key"] = api_key  # type: ignore
+            if request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id  # type: ignore
-            elif user_id is not None and isinstance(user_id, str):
+            if user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id  # type: ignore
 
             # Check if user wants unsummarized data
@@ -2100,49 +2393,30 @@ async def view_spend_logs(  # noqa: PLR0915
 
             return response
 
-        elif api_key is not None and isinstance(api_key, str):
-            if api_key.startswith("sk-"):
-                hashed_token = prisma_client.hash_token(token=api_key)
-            else:
-                hashed_token = api_key
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_all",
-                key_val={"key": "api_key", "value": hashed_token},
-            )
-            if spend_log is None:
-                return []
-            if isinstance(spend_log, list):
-                return spend_log
-            else:
-                return [spend_log]
-        elif request_id is not None:
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_unique",
-                key_val={"key": "request_id", "value": request_id},
-            )
-            if spend_log is None:
-                return []
-            return [spend_log]
-        elif user_id is not None:
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_all",
-                key_val={"key": "user", "value": user_id},
-            )
-            if spend_log is None:
-                return []
-            if isinstance(spend_log, list):
-                return spend_log
-            else:
-                return [spend_log]
         else:
-            spend_logs = await prisma_client.get_data(
-                table_name="spend", query_type="find_all"
-            )
+            scoped_filter: Dict[str, Any] = {}
+            if api_key is not None and isinstance(api_key, str):
+                if api_key.startswith("sk-"):
+                    hashed_token = prisma_client.hash_token(token=api_key)
+                else:
+                    hashed_token = api_key
+                scoped_filter["api_key"] = hashed_token
+            if request_id is not None and isinstance(request_id, str):
+                scoped_filter["request_id"] = request_id
+            if user_id is not None and isinstance(user_id, str):
+                scoped_filter["user"] = user_id
 
-            return spend_logs
+            if not scoped_filter:
+                spend_logs = await prisma_client.get_data(
+                    table_name="spend", query_type="find_all"
+                )
+                return spend_logs
+
+            data = await prisma_client.db.litellm_spendlogs.find_many(
+                where=scoped_filter,  # type: ignore
+                order={"startTime": "desc"},
+            )
+            return data
 
         return None
 
@@ -2714,8 +2988,8 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     sql_query = """
 SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
 FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamptz
-  AND "startTime" < $2::timestamptz
+WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND "startTime" <  ($2::timestamptz AT TIME ZONE 'UTC')
   AND (
     CASE
       WHEN $3::TEXT IS NULL THEN TRUE
@@ -2805,7 +3079,11 @@ async def global_spend_models(
     return response
 
 
-@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+@router.get(
+    "/provider/budgets",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ProviderBudgetResponse,
+)
 async def provider_budgets() -> ProviderBudgetResponse:
     """
     Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
@@ -3068,12 +3346,23 @@ async def ui_view_session_spend_logs(
             where=where_conditions
         )
 
-        # Query the database with pagination
-        result = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={"startTime": "asc"},
-            skip=skip,
-            take=page_size,
+        # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
+        sql_query = """
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE session_id = $1
+            ORDER BY "startTime" ASC
+            LIMIT $2 OFFSET $3
+        """
+        result = await prisma_client.db.query_raw(
+            sql_query, session_id, page_size, skip
         )
 
         total_pages = (total_records + page_size - 1) // page_size
@@ -3093,6 +3382,99 @@ async def ui_view_session_spend_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
             )
+
+
+async def _build_ui_spend_logs_response(
+    prisma_client: "PrismaClient",
+    data: list,
+    total_records: int,
+    page: int,
+    page_size: int,
+    total_pages: int,
+    enrich_session_counts: bool = True,
+) -> dict:
+    """
+    Build the paginated response for the UI spend-logs endpoint.
+
+    When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
+    endpoint), each row is enriched with ``session_total_count`` so the
+    frontend knows which sessions are expandable (multi-call sessions).
+    For every row that carries a ``session_id``, a single ``GROUP BY`` query
+    fetches the total number of logs in each referenced session.  Rows without
+    a ``session_id`` default to ``1``.
+
+    When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
+    serialised without the extra query.
+
+    Args:
+        prisma_client: The connected Prisma client instance.
+        data: A list of Prisma model instances (must support ``.model_dump()``
+              and have a ``session_id`` attribute).
+        total_records: Total number of matching records (for pagination).
+        page: Current page number.
+        page_size: Number of items per page.
+        total_pages: Total number of pages.
+        enrich_session_counts: Whether to add ``session_total_count`` to each
+            row.  Defaults to ``True``.
+
+    Returns:
+        A dict with ``data`` (enriched rows), ``total``, ``page``,
+        ``page_size``, and ``total_pages``.
+    """
+    count_map: dict[str, int] = {}
+    if enrich_session_counts:
+        session_ids = list(
+            {
+                (
+                    row.get("session_id")
+                    if isinstance(row, dict)
+                    else getattr(row, "session_id", None)
+                )
+                for row in data
+                if (
+                    row.get("session_id")
+                    if isinstance(row, dict)
+                    else getattr(row, "session_id", None)
+                )
+            }
+        )
+        if session_ids:
+            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
+            # is bounded by page_size (typically 25-50 distinct session IDs).
+            # If performance degrades at scale, consider short-lived caching or
+            # folding the count into the main query via a window function.
+            counts = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["session_id"],
+                where={"session_id": {"in": session_ids}},
+                count={"session_id": True},
+            )
+            count_map = {
+                r["session_id"]: r["_count"]["session_id"]
+                for r in counts
+                if r.get("session_id")
+            }
+
+    if enrich_session_counts:
+        enriched: List[dict] = []
+        for row in data:
+            row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
+            sid = row_dict.get("session_id")
+            row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
+            enriched.append(row_dict)
+        response_data: list = enriched
+    else:
+        # v2 path: return raw Prisma model instances so FastAPI applies its
+        # own Pydantic-aware serialisation (preserves alias handling, custom
+        # serializers, etc.).
+        response_data = data  # type: ignore[assignment]
+
+    return {
+        "data": response_data,
+        "total": total_records,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
@@ -3117,10 +3499,16 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Safely determine if the current user has admin view permissions.
-    Wraps the underlying check and defaults to False on any exception.
+    Defaults to False on any exception.
     """
     try:
-        return _user_has_admin_view(user_api_key_dict=user_api_key_dict)
+        user_role = getattr(user_api_key_dict, "user_role", None)
+        if user_role is None:
+            return False
+        return user_role in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        )
     except Exception:
         return False
 
@@ -3132,16 +3520,29 @@ async def _can_team_member_view_log(
 ) -> bool:
     """
     Check if the requesting user can view spend logs for the given team.
-    Returns True only if the team exists and the user is a team admin.
+    Returns True if the team exists and the user is either a team admin or
+    a team member with the ``/spend/logs`` permission.
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
+
     if team_id is None:
         return False
-    team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
-    if team_obj is None:
+    if team_row is None:
         return False
-    return _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+    return _team_member_has_permission(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_obj,
+        permission=KeyManagementRoutes.SPEND_LOGS.value,
+    )
 
 
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -3150,7 +3551,95 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     user_role = user_api_key_dict.user_role
     user_id = user_api_key_dict.user_id
-    return user_role in (
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ) and user_id is not None
+    return (
+        user_role
+        in (
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        )
+        and user_id is not None
+    )
+
+
+async def _assert_user_can_view_request_id(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: str,
+) -> None:
+    """
+    Verify the requesting non-admin user is allowed to view this spend-log row.
+    Allowed when the log belongs to the user directly, or to one of their
+    permitted teams (admin or ``/spend/logs`` permission).
+    Raises HTTP 403 if not.
+    """
+    row = await prisma_client.db.litellm_spendlogs.find_unique(
+        where={"request_id": request_id},
+        include=None,
+    )
+    if row is None:
+        return
+
+    if row.user is not None and row.user == user_api_key_dict.user_id:
+        return
+
+    if row.team_id:
+        can_view = await _can_team_member_view_log(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            team_id=row.team_id,
+        )
+        if can_view:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Not authorized to view spend log for request_id={}".format(
+                request_id
+            )
+        },
+    )
+
+
+async def _get_permitted_team_ids_for_spend_logs(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    """
+    Return team IDs where the user is either a team admin or has the
+    ``/spend/logs`` permission, allowing them to view team-wide spend logs.
+    """
+    # Imported here to avoid circular import: proxy_server imports this module.
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    user_obj = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if user_obj is None or not user_obj.teams:
+        return []
+
+    team_rows = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": user_obj.teams}}
+    )
+
+    permitted: List[str] = []
+    for team_row in team_rows:
+        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+            permitted.append(team_obj.team_id)
+        elif _team_member_has_permission(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_obj,
+            permission=KeyManagementRoutes.SPEND_LOGS.value,
+        ):
+            permitted.append(team_obj.team_id)
+    return permitted

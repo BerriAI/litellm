@@ -72,6 +72,10 @@ async def call_spend_logs_endpoint():
     response = requests.get(url, headers=headers)
     print("response from call_spend_logs_endpoint", response)
 
+    if response.status_code != 200:
+        print(f"spend logs endpoint returned {response.status_code}: {response.text}")
+        return None
+
     json_response = response.json()
 
     # get spend for today
@@ -98,7 +102,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
@@ -109,16 +113,24 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     print("response", response)
 
-    await asyncio.sleep(20)
-    spend_after = await call_spend_logs_endpoint()
-    print("spend_after", spend_after)
+    # Poll for spend update instead of fixed sleep - spend logging is async/batched
+    max_wait = 120  # total seconds to wait
+    poll_interval = 10  # seconds between checks
+    elapsed = 0
+    spend_after = spend_before
+    while elapsed < max_wait:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+        spend_after = await call_spend_logs_endpoint() or 0.0
+        print(f"spend_after (elapsed={elapsed}s)", spend_after)
+        if spend_after > spend_before:
+            break
+
     assert (
         spend_after > spend_before
-    ), "Spend should be greater than before. spend_before: {}, spend_after: {}".format(
-        spend_before, spend_after
+    ), "Spend should be greater than before after {}s. spend_before: {}, spend_after: {}".format(
+        elapsed, spend_before, spend_after
     )
-
-    pass
 
 
 @pytest.mark.asyncio()
@@ -130,7 +142,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
@@ -169,7 +181,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
     # load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",

@@ -2,7 +2,8 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Dict, List, Optional, Union
+import copy
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -22,6 +23,25 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 
 
+def is_anthropic_oauth_key(value: Optional[str]) -> bool:
+    """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
+    if value is None:
+        return False
+    # Handle both raw token and "Bearer <token>" format
+    if value.startswith("Bearer "):
+        value = value[7:]
+    return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+
+
+def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
+    """Merge a new beta value into an existing comma-separated anthropic-beta header."""
+    if not existing:
+        return new_beta
+    betas = {b.strip() for b in existing.split(",") if b.strip()}
+    betas.add(new_beta)
+    return ",".join(sorted(betas))
+
+
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
@@ -38,10 +58,23 @@ def optionally_handle_anthropic_oauth(
     Returns:
         Tuple of (updated headers, api_key)
     """
+    # Check Authorization header (passthrough / forwarded requests)
     auth_header = headers.get("authorization", "")
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers.pop("x-api-key", None)
+        headers["anthropic-beta"] = _merge_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
+        return headers, api_key
+    # Check api_key directly (standard chat/completion flow)
+    if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+        headers.pop("x-api-key", None)
+        headers["authorization"] = f"Bearer {api_key}"
+        headers["anthropic-beta"] = _merge_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
 
@@ -108,7 +141,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if tools is None:
             return False
         for tool in tools:
-            if "type" in tool and tool["type"].startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+            if "type" in tool and tool["type"].startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
+            ):
                 return True
         return False
 
@@ -134,111 +169,182 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             tool_type = tool.get("type", "")
-            if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
+            if tool_type in [
+                "tool_search_tool_regex_20251119",
+                "tool_search_tool_bm25_20251119",
+            ]:
                 return True
         return False
-    
+
     def is_programmatic_tool_calling_used(self, tools: Optional[List]) -> bool:
         """
         Check if programmatic tool calling is being used (tools with allowed_callers field).
-        
+
         Returns True if any tool has allowed_callers containing 'code_execution_20250825'.
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             # Check top-level allowed_callers
             allowed_callers = tool.get("allowed_callers", None)
             if allowed_callers and isinstance(allowed_callers, list):
                 if "code_execution_20250825" in allowed_callers:
                     return True
-            
+
             # Check function.allowed_callers for OpenAI format tools
             function = tool.get("function", {})
             if isinstance(function, dict):
                 function_allowed_callers = function.get("allowed_callers", None)
-                if function_allowed_callers and isinstance(function_allowed_callers, list):
+                if function_allowed_callers and isinstance(
+                    function_allowed_callers, list
+                ):
                     if "code_execution_20250825" in function_allowed_callers:
                         return True
-        
+
         return False
-    
+
     def is_input_examples_used(self, tools: Optional[List]) -> bool:
         """
         Check if input_examples is being used in any tools.
-        
+
         Returns True if any tool has input_examples field.
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             # Check top-level input_examples
             input_examples = tool.get("input_examples", None)
-            if input_examples and isinstance(input_examples, list) and len(input_examples) > 0:
+            if (
+                input_examples
+                and isinstance(input_examples, list)
+                and len(input_examples) > 0
+            ):
                 return True
-            
+
             # Check function.input_examples for OpenAI format tools
             function = tool.get("function", {})
             if isinstance(function, dict):
                 function_input_examples = function.get("input_examples", None)
-                if function_input_examples and isinstance(function_input_examples, list) and len(function_input_examples) > 0:
+                if (
+                    function_input_examples
+                    and isinstance(function_input_examples, list)
+                    and len(function_input_examples) > 0
+                ):
                     return True
-        
+
         return False
-    
-    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
+
+    @staticmethod
+    def _is_claude_4_6_model(model: str) -> bool:
+        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-6",
+                "opus_4_6",
+                "opus-4.6",
+                "opus_4.6",
+                "sonnet-4-6",
+                "sonnet_4_6",
+                "sonnet-4.6",
+                "sonnet_4.6",
+            )
+        )
+
+    @staticmethod
+    def _is_claude_4_7_model(model: str) -> bool:
+        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+            )
+        )
+
+    @staticmethod
+    def _is_adaptive_thinking_model(model: str) -> bool:
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider=None,
+                key="supports_adaptive_thinking",
+            ):
+                return True
+        except Exception:
+            pass
+        return AnthropicModelInfo._is_claude_4_6_model(
+            model
+        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+
+    def is_effort_used(
+        self, optional_params: Optional[dict], model: Optional[str] = None
+    ) -> bool:
         """
-        Check if effort parameter is being used.
-        
-        Returns True if effort-related parameters are present.
+        Check if effort parameter is being used and requires a beta header.
+
+        Returns True if effort-related parameters are present and
+        the model requires the effort beta header. Claude 4.6+ models
+        use output_config as a stable API feature — no beta header needed.
         """
         if not optional_params:
             return False
-        
+
+        # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
+        if model and self._is_adaptive_thinking_model(model):
+            return False
+
         # Check if reasoning_effort is provided for Claude Opus 4.5
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
-        
-        # Check if output_config is directly provided
+
+        # Check if output_config is directly provided (for non-4.6 models)
         output_config = optional_params.get("output_config")
         if output_config and isinstance(output_config, dict):
             effort = output_config.get("effort")
             if effort and isinstance(effort, str):
                 return True
-        
+
         return False
 
     def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:
         """
         Check if code execution tool is being used.
-        
+
         Returns True if any tool has type "code_execution_20250825".
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             tool_type = tool.get("type", "")
             if tool_type == "code_execution_20250825":
                 return True
         return False
-    
+
     def is_container_with_skills_used(self, optional_params: Optional[dict]) -> bool:
         """
         Check if container with skills is being used.
-        
+
         Returns True if optional_params contains container with skills.
         """
         if not optional_params:
             return False
-        
+
         container = optional_params.get("container")
         if container and isinstance(container, dict):
             skills = container.get("skills")
@@ -256,10 +362,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
         """
         Get the appropriate beta header for a given computer tool version.
-        
+
         Args:
             computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
-            
+
         Returns:
             The corresponding beta header string
         """
@@ -282,42 +388,41 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> List[str]:
         """
         Get list of common beta headers based on the features that are active.
-        
+
         Returns:
             List of beta header strings
         """
-        from litellm.types.llms.anthropic import (
-            ANTHROPIC_EFFORT_BETA_HEADER,
-        )
-        
+        from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+
         betas = []
-        
+
         # Detect features
         effort_used = self.is_effort_used(optional_params, model)
-        
+
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
-        
+
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
-        
+
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-        
+
         if file_id_used:
             betas.append("files-api-2025-04-14")
             betas.append("code-execution-2025-05-22")
-        
+
         if mcp_server_used:
             betas.append("mcp-client-2025-04-04")
-        
+
         return list(set(betas))
 
     def get_anthropic_headers(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
+        auth_token: Optional[str] = None,
         anthropic_version: Optional[str] = None,
         computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
@@ -351,27 +456,37 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Tool search, programmatic tool calling, and input_examples all use the same beta header
         if tool_search_used or programmatic_tool_calling_used or input_examples_used:
             from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+
             betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-        
+
         # Effort parameter uses a separate beta header
         if effort_used:
             from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+
             betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
-        
+
         # Code execution tool uses a separate beta header
         if code_execution_tool_used:
             betas.add("code-execution-2025-08-25")
-        
+
         # Container with skills uses a separate beta header
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
 
+        _is_oauth = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
-            "x-api-key": api_key,
             "accept": "application/json",
             "content-type": "application/json",
         }
+        if _is_oauth:
+            headers["authorization"] = f"Bearer {api_key}"
+            headers["anthropic-dangerous-direct-browser-access"] = "true"
+            betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
+        elif auth_token and not api_key:
+            headers["authorization"] = f"Bearer {auth_token}"
+        elif api_key:
+            headers["x-api-key"] = api_key
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -381,7 +496,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+
+                headers["anthropic-beta"] = (
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -398,10 +516,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: Optional[str] = None,
     ) -> Dict:
         # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers, api_key=api_key
+        )
+        api_key = AnthropicModelInfo.get_api_key(api_key)
+        # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
+        auth_token: Optional[str] = None
         if api_key is None:
+            auth_token = AnthropicModelInfo.get_auth_token()
+        if api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
-                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
                 llm_provider="anthropic",
                 model=model,
             )
@@ -416,11 +541,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_id_used = self.is_file_id_used(messages=messages)
         web_search_tool_used = self.is_web_search_tool_used(tools=tools)
         tool_search_used = self.is_tool_search_used(tools=tools)
-        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(
+            tools=tools
+        )
         input_examples_used = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
         code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
-        container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
+        container_with_skills_used = self.is_container_with_skills_used(
+            optional_params=optional_params
+        )
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -429,6 +558,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
+            auth_token=auth_token,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
@@ -453,6 +583,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
             or "https://api.anthropic.com"
         )
 
@@ -463,6 +594,35 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
+    def get_auth_token(auth_token: Optional[str] = None) -> Optional[str]:
+        """Get auth token from ANTHROPIC_AUTH_TOKEN env var.
+
+        Unlike api_key (which uses X-Api-Key header), auth_token uses
+        Authorization: Bearer header, matching the official Anthropic SDK behavior.
+        """
+        from litellm.secret_managers.main import get_secret_str
+
+        return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
+
+    @staticmethod
+    def get_auth_header(api_key: Optional[str] = None) -> Optional[dict]:
+        """Resolve Anthropic credentials and return the appropriate auth header dict.
+
+        Checks ANTHROPIC_API_KEY first (-> x-api-key), then
+        ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
+        Returns None if neither is available.
+        """
+        resolved_key = AnthropicModelInfo.get_api_key(api_key)
+        if resolved_key is not None:
+            if is_anthropic_oauth_key(resolved_key):
+                return {"authorization": f"Bearer {resolved_key}"}
+            return {"x-api-key": resolved_key}
+        auth_token = AnthropicModelInfo.get_auth_token()
+        if auth_token is not None:
+            return {"authorization": f"Bearer {auth_token}"}
+        return None
+
+    @staticmethod
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model.replace("anthropic/", "") if model else None
 
@@ -470,14 +630,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        if api_base is None or api_key is None:
+        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        if api_base is None or auth_header is None:
             raise ValueError(
-                "ANTHROPIC_API_BASE or ANTHROPIC_API_KEY is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
+                "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
             )
+        headers = {"anthropic-version": "2023-06-01"}
+        headers.update(auth_header)
         response = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            headers=headers,
         )
 
         try:
@@ -499,7 +661,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create an Anthropic token counter.
-        
+
         Returns:
             AnthropicTokenCounter instance for this provider.
         """
@@ -508,6 +670,209 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
         return AnthropicTokenCounter()
+
+
+def strip_advisor_blocks_from_messages(
+    messages: List[Any], replace_with_text: bool = False
+) -> List[Any]:
+    """
+    Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
+    from assistant message content.
+
+    Prevents Anthropic 400 invalid_request_error: if advisor_tool_result blocks
+    exist in history but the advisor tool is not in the tools array, the API rejects
+    the request. This happens when the user has removed the advisor tool for cost
+    control or on a follow-up turn.
+
+    Args:
+        messages: Conversation history to process (mutated in-place).
+        replace_with_text: When True, replace the advisor exchange with an
+            <advisor_feedback> text block so the executor retains the semantic
+            context of what the advisor said.  When False (default), strip silently.
+    """
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        # Collect advisor server_tool_use ids and their advice text (for replace mode).
+        advisor_id_to_text: dict = {}
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+            ):
+                bid = block.get("id")
+                if bid:
+                    advisor_id_to_text[bid] = None  # text filled in below
+
+        if not advisor_id_to_text:
+            continue
+
+        # If replacing, collect the advisor response text from advisor_tool_result blocks.
+        if replace_with_text:
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "advisor_tool_result"
+                    and block.get("tool_use_id") in advisor_id_to_text
+                ):
+                    raw = block.get("content") or ""
+                    text = (
+                        raw
+                        if isinstance(raw, str)
+                        else next(
+                            (
+                                b.get("text", "")
+                                for b in raw
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            ),
+                            "",
+                        )
+                    )
+                    advisor_id_to_text[block["tool_use_id"]] = text
+
+        new_content = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+            is_advisor_use = (
+                block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+                and block.get("id") in advisor_id_to_text
+            )
+            is_advisor_result = (
+                block.get("type") == "advisor_tool_result"
+                and block.get("tool_use_id") in advisor_id_to_text
+            )
+            if is_advisor_use:
+                if replace_with_text:
+                    advice = advisor_id_to_text.get(block.get("id")) or ""
+                    if advice:
+                        new_content.append(
+                            {
+                                "type": "text",
+                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
+                            }
+                        )
+                # else: drop silently
+            elif is_advisor_result:
+                pass  # always drop — replaced above (or stripped)
+            else:
+                new_content.append(block)
+
+        message["content"] = new_content
+    return messages
+
+
+def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
+    """
+    Detect Anthropic 400 when encrypted thinking signatures in history do not match
+    the current deployment (e.g. user rotated API key or switched model endpoint).
+
+    Example API message:
+    messages.N.content.M: Invalid `signature` in `thinking` block
+    """
+    if not error_text:
+        return False
+    lower = error_text.lower()
+    return (
+        "invalid" in lower
+        and "signature" in lower
+        and "thinking" in lower
+        and "block" in lower
+    )
+
+
+def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
+    """
+    Return a new message list with thinking / redacted_thinking content blocks removed
+    from each message. Used to recover from invalid thinking signatures on retry.
+
+    Messages whose content is a list and becomes empty after stripping are omitted,
+    since Anthropic rejects empty content arrays.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        mm = copy.deepcopy(m)
+        content = mm.get("content")
+        if isinstance(content, list):
+            filtered = [
+                b
+                for b in content
+                if not (
+                    isinstance(b, dict)
+                    and b.get("type") in ("thinking", "redacted_thinking")
+                )
+            ]
+            if not filtered:
+                continue
+            mm["content"] = filtered
+        out.append(mm)
+    return out
+
+
+def strip_thinking_blocks_from_anthropic_messages_request_dict(
+    data: Dict[str, Any],
+) -> None:
+    """
+    Mutate an Anthropic Messages-style request dict: strip thinking blocks from
+    ``messages`` and remove the top-level ``thinking`` extended-thinking param.
+    """
+    msgs = data.get("messages")
+    if isinstance(msgs, list):
+        data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
+    data.pop("thinking", None)
+
+
+def strip_empty_text_blocks_from_anthropic_messages(
+    messages: List[Any],
+) -> List[Any]:
+    """
+    Return a new message list with empty or whitespace-only ``{"type": "text"}``
+    content blocks removed.
+
+    Anthropic's API rejects requests containing such blocks with
+    ``"messages: text content blocks must be non-empty"``, but assistant
+    messages from Anthropic routinely arrive with ``{"type": "text", "text": ""}``
+    alongside ``tool_use`` blocks (see anthropics/anthropic-sdk-python#461).
+    Multi-turn tool-use clients (e.g. Claude Code) loop these prior responses
+    back as conversation history, which then causes the next request to 400
+    on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
+    handles this in ``anthropic_messages_pt``; this helper provides the
+    equivalent guarantee for the native Anthropic Messages path.
+
+    Messages whose content is a list and becomes empty after stripping are
+    omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
+    The caller's list and its content blocks are never mutated; modified
+    messages are returned as shallow copies with a fresh content list.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        filtered = [b for b in content if not _is_empty_text_block(b)]
+        if len(filtered) == len(content):
+            out.append(m)
+        elif filtered:
+            out.append({**m, "content": filtered})
+    return out
+
+
+def _is_empty_text_block(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return False
+    text = block.get("text")
+    return not isinstance(text, str) or not text.strip()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

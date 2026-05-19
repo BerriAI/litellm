@@ -31,9 +31,6 @@ vi.mock("../networking", async () => {
     vectorStoreListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
-    mcpToolsCall: vi.fn().mockResolvedValue({
-      data: [],
-    }),
     agentListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
@@ -54,6 +51,37 @@ vi.mock("../networking", async () => {
 
 vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      { organization_id: "org-1", organization_alias: "Engineering" },
+      { organization_id: "org-2", organization_alias: "Sales" },
+    ],
+    isLoading: false,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("../common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <input
+      data-testid="access-group-selector"
+      value={Array.isArray(value) ? value.join(",") : ""}
+      onChange={(e) => onChange?.(e.target.value ? e.target.value.split(",").map((s) => s.trim()) : [])}
+    />
+  ),
 }));
 
 describe("KeyEditView", () => {
@@ -130,8 +158,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -148,8 +176,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -166,8 +194,8 @@ describe("KeyEditView", () => {
     const { getByLabelText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -191,7 +219,7 @@ describe("KeyEditView", () => {
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={onCancelMock}
-        onSubmit={async () => { }}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -213,8 +241,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -231,8 +259,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -249,8 +277,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -267,8 +295,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -286,7 +314,7 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -316,8 +344,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={keyDataWithManagementRoutes}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -339,8 +367,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={keyDataWithInfoRoutes}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -353,12 +381,12 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable guardrails selector when user is not premium", async () => {
+  it("should disable guardrails selector when user is not premium and has no write access role", async () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={"test-token"}
         userID={""}
         userRole={""}
@@ -376,7 +404,7 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -406,10 +434,14 @@ describe("KeyEditView", () => {
 
   it("should handle empty allowed routes string on submit", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
     renderWithProviders(
       <KeyEditView
-        keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        keyData={keyDataWithRoutes}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -435,19 +467,193 @@ describe("KeyEditView", () => {
     });
   });
 
-
-  it("should disable cancel button during submission", async () => {
-    const onSubmitMock = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        }),
+  it("should omit allowed_routes from submit when value is unchanged", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const aiApisKeyData = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={aiApisKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
     );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  it("should omit allowed_routes from submit when keyData.allowed_routes is null and form is untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataNullRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: null as unknown as string[],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataNullRoutes}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  it("should omit allowed_routes from submit when server returned routes in a different order", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataReordered = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["beta_routes", "alpha_routes"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataReordered}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  it("should pass access_group_ids to onSubmit when saving key with access groups", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithAccessGroups = {
+      ...MOCK_KEY_DATA,
+      access_group_ids: ["ag-1"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithAccessGroups}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
+    });
+
+    const accessGroupInput = screen.getByTestId("access-group-selector");
+    await userEvent.clear(accessGroupInput);
+    await userEvent.type(accessGroupInput, "ag-1,ag-2");
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.access_group_ids).toEqual(["ag-1", "ag-2"]);
+    });
+  });
+
+  it("should display 'AI APIs' label for the llm_api key type option", async () => {
+    const keyDataWithLlmApiRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithLlmApiRoutes}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Type")).toBeInTheDocument();
+    });
+
+    // The selected key type label should show "AI APIs" (not "LLM API")
+    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
+    expect(keyTypeSection).toBeInTheDocument();
+
+    // Open the dropdown to see all options
+    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
+    await userEvent.click(selectElement);
+
+    await waitFor(() => {
+      // Verify "AI APIs" appears as an option label
+      const options = document.querySelectorAll(".ant-select-item-option");
+      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
+      expect(hasAIAPIs).toBe(true);
+
+      // Verify old "LLM API" label does NOT appear
+      const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
+      expect(hasLLMAPI).toBe(false);
+    });
+  });
+
+  it("should display cancel button during submission", async () => {
+    let resolveSubmit: (() => void) | undefined;
+    const submitPromise = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const onSubmitMock = vi.fn(() => submitPromise);
 
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -463,9 +669,110 @@ describe("KeyEditView", () => {
     const submitButton = screen.getByRole("button", { name: /save changes/i });
     await userEvent.click(submitButton);
 
+    // Wait for onSubmit to be called, which means handleSubmit has started and isKeySaving should be true
     await waitFor(() => {
-      const cancelButton = screen.getByRole("button", { name: /cancel/i });
-      expect(cancelButton).toBeDisabled();
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+
+    // Wait for the cancel button to actually be disabled (state update may take a moment)
+    await waitFor(
+      () => {
+        const cancelButton = screen.getByRole("button", { name: /cancel/i });
+        expect(cancelButton).toBeDisabled();
+      },
+      { timeout: 3000 },
+    );
+
+    // Clean up: resolve the promise to allow the form to complete
+    if (resolveSubmit) {
+      resolveSubmit();
+    }
+  });
+
+  describe("organization dropdown", () => {
+    it("should render the organization dropdown", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+    });
+
+    it("should disable the organization dropdown for non-admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeTruthy();
+    });
+
+    it("should not disable the organization dropdown for admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeFalsy();
+    });
+
+    it("should initialize organization from keyData", async () => {
+      const keyWithOrg = {
+        ...MOCK_KEY_DATA,
+        organization_id: "org-1",
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyWithOrg}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Engineering")).toBeInTheDocument();
+      });
     });
   });
 });

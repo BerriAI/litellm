@@ -16,16 +16,19 @@ import httpx
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
     LiteLLM_UserTable,
     LiteLLM_TeamTable,
+    Litellm_EntityType,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     _virtual_key_soft_budget_check,
+    _team_soft_budget_check,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
@@ -46,9 +49,15 @@ async def test_get_end_user_object(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    _cache = DualCache()
+    # UserApiKeyCache applies model_type on get/set; plain DualCache returns raw dicts
+    # and breaks get_end_user_object's typed async_get_cache path.
+    _cache = UserApiKeyCache()
     _key = "end_user_id:{}".format(end_user_id)
-    _cache.set_cache(key=_key, value=end_user_obj.model_dump())
+    await _cache.async_set_cache(
+        key=_key,
+        value=end_user_obj,
+        model_type=LiteLLM_EndUserTable,
+    )
     try:
         await get_end_user_object(
             end_user_id=end_user_id,
@@ -259,6 +268,132 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
             print(e)
 
 
+@pytest.mark.parametrize(
+    "key_models, model, expect_to_work",
+    [
+        # After a cost-map reload, add_known_models() updates anthropic_models so
+        # the anthropic/* wildcard can match a newly-added Anthropic model.
+        (["anthropic/*"], "claude-brand-new-model-reload-test", True),
+        # Wrong provider wildcard must still be denied even after reload.
+        (["openai/*"], "claude-brand-new-model-reload-test", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_to_work):
+    """
+    Regression test: after a cost-map hot-reload, calling
+    add_known_models(model_cost_map=new_map) must update litellm.anthropic_models
+    so that the anthropic/* wildcard correctly grants (or denies) access to
+    newly-added models.
+
+    Root cause: both reload paths in proxy_server.py only updated
+    litellm.model_cost but never re-ran add_known_models(), so the provider sets
+    stayed stale and wildcard matching failed for new models.
+
+    Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
+    with the fetched map passed explicitly to avoid any reference ambiguity.
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    # Build a new cost map that includes the brand-new model — exactly what
+    # proxy_server.py receives from get_model_cost_map() during a reload.
+    new_cost_map = dict(litellm.model_cost)
+    new_cost_map[model] = {
+        "litellm_provider": "anthropic",
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+    }
+
+    original_model_cost = litellm.model_cost
+    litellm.model_cost = new_cost_map
+
+    # Confirm the model is NOT yet in the provider set before reload propagation.
+    assert model not in litellm.anthropic_models
+
+    # Simulate what proxy_server.py now does after every reload.
+    litellm.add_known_models(model_cost_map=new_cost_map)
+
+    # After add_known_models(), the model must be in the set.
+    assert model in litellm.anthropic_models
+
+    llm_model_list = [
+        {
+            "model_name": "anthropic/*",
+            "litellm_params": {"model": "anthropic/*", "api_key": "test-api-key"},
+            "model_info": {"id": "test-id-anthropic-wildcard", "db_model": False},
+        },
+        {
+            "model_name": "openai/*",
+            "litellm_params": {"model": "openai/*", "api_key": "test-api-key"},
+            "model_info": {"id": "test-id-openai-wildcard", "db_model": False},
+        },
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+    user_api_key_object = UserAPIKeyAuth(models=key_models)
+
+    try:
+        if expect_to_work:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+        else:
+            with pytest.raises(Exception):
+                await can_key_call_model(
+                    model=model,
+                    llm_model_list=llm_model_list,
+                    valid_token=user_api_key_object,
+                    llm_router=router,
+                )
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.anthropic_models.discard(model)
+
+
+@pytest.mark.asyncio
+async def test_add_known_models_explicit_map_updates_provider_sets():
+    """
+    Regression test: after a cost-map hot-reload, calling
+    add_known_models(model_cost_map=new_map) with the new map passed explicitly
+    must add any new provider models to the correct provider sets so that
+    wildcard access checks (anthropic/*, openai/*, …) work immediately.
+
+    This covers the proxy_server.py fix where both reload paths now call
+    litellm.add_known_models(model_cost_map=new_model_cost_map) instead of
+    relying on the module-level model_cost being up to date.
+    """
+    fake_new_model = "claude-brand-new-explicit-map-test"
+
+    # Baseline: the model must not be in the sets before we do anything.
+    assert fake_new_model not in litellm.anthropic_models
+
+    new_cost_map = dict(litellm.model_cost)
+    new_cost_map[fake_new_model] = {
+        "litellm_provider": "anthropic",
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+    }
+
+    # Simulate what proxy_server.py does on reload.
+    original_model_cost = litellm.model_cost
+    litellm.model_cost = new_cost_map
+    litellm.add_known_models(model_cost_map=new_cost_map)
+
+    try:
+        assert fake_new_model in litellm.anthropic_models, (
+            "add_known_models(model_cost_map=...) did not add the new model to "
+            "litellm.anthropic_models — wildcard access checks would fail."
+        )
+    finally:
+        # Clean up: restore original state.
+        litellm.model_cost = original_model_cost
+        litellm.anthropic_models.discard(fake_new_model)
+
+
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
     from litellm.proxy.auth.auth_checks import is_valid_fallback_model
@@ -411,7 +546,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_id="test-team",
             models=team_models,
         )
-        result = can_team_access_model(
+        result = await can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,
@@ -476,6 +611,126 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert, metadata, expected_alert_emails",
+    [
+        (
+            100,
+            50,
+            False,
+            None,
+            None,
+        ),  # Over soft budget, no metadata - no alert_emails configured, so no alert
+        (
+            50,
+            50,
+            False,
+            None,
+            None,
+        ),  # At soft budget, no metadata - no alert_emails configured, so no alert
+        (25, 50, False, None, None),  # Under soft budget
+        (100, None, False, None, None),  # No soft budget set
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with list of emails
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with comma-separated emails
+        (
+            100,
+            50,
+            True,
+            {
+                "soft_budget_alerting_emails": [
+                    "team1@example.com",
+                    "",
+                    "  ",
+                    "team2@example.com",
+                ]
+            },
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with empty strings filtered
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_soft_budget_check(
+    spend, soft_budget, expect_alert, metadata, expected_alert_emails
+):
+    """
+    Test cases for _team_soft_budget_check:
+    1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
+    2. Spend at soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
+    3. Spend under soft budget - should not trigger alert
+    4. No soft budget set - should not trigger alert
+    5. Team with alert emails in metadata (list) - should include alert_emails in CallInfo
+    6. Team with alert emails in metadata (comma-separated string) - should parse and include alert_emails
+    7. Team with alert emails containing empty strings - should filter them out
+    """
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        key_alias="test-key",
+    )
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        spend=spend,
+        soft_budget=soft_budget,
+        max_budget=100.0,
+        metadata=metadata,
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _team_soft_budget_check(
+        team_object=team_object,
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    await asyncio.sleep(0.1)  # Allow time for the alert task to complete
+
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+    if expect_alert:
+        assert captured_call_info is not None
+        assert captured_call_info.team_id == "test-team"
+        assert captured_call_info.spend == spend
+        assert captured_call_info.soft_budget == soft_budget
+        assert captured_call_info.event_group == Litellm_EntityType.TEAM
+        # Verify alert_emails if expected
+        if expected_alert_emails is not None:
+            assert captured_call_info.alert_emails == expected_alert_emails
+        else:
+            assert (
+                captured_call_info.alert_emails is None
+                or captured_call_info.alert_emails == []
+            )
 
 
 @pytest.mark.asyncio
@@ -674,3 +929,544 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
                 valid_token=user_api_key_object,
                 llm_router=router,
             )
+
+
+# ---------------------------------------------------------------------------
+# Access group cache helpers (_cache_access_object, _delete_cache_access_object)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cache_access_object():
+    """Test _cache_access_object stores access group in cache with correct key."""
+    from litellm.proxy.auth.auth_checks import _cache_access_object
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    cache = DualCache()
+    ag_id = "ag-test-123"
+    ag_table = LiteLLM_AccessGroupTable(
+        access_group_id=ag_id,
+        access_group_name="test-group",
+        access_model_names=["gpt-4"],
+    )
+    await _cache_access_object(
+        access_group_id=ag_id,
+        access_group_table=ag_table,
+        user_api_key_cache=cache,
+    )
+    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    assert cached is not None
+    if isinstance(cached, dict):
+        assert cached.get("access_group_id") == ag_id
+        assert cached.get("access_group_name") == "test-group"
+    else:
+        assert cached.access_group_id == ag_id
+        assert cached.access_group_name == "test-group"
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_access_object():
+    """Test _delete_cache_access_object removes access group from in-memory cache."""
+    from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    cache = DualCache()
+    ag_id = "ag-delete-test"
+    ag_table = LiteLLM_AccessGroupTable(
+        access_group_id=ag_id,
+        access_group_name="to-delete",
+    )
+    await cache.async_set_cache(key=f"access_group_id:{ag_id}", value=ag_table, ttl=60)
+    await _delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
+    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    assert cached is None
+
+
+# ---------------------------------------------------------------------------
+# Access group resource fetchers (_get_models_from_access_groups, _get_agent_ids_from_access_groups)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "resource_field, access_group_data, expected",
+    [
+        (
+            "access_model_names",
+            {"access_group_id": "ag-1", "access_model_names": ["gpt-4", "claude-3"]},
+            ["gpt-4", "claude-3"],
+        ),
+        (
+            "access_agent_ids",
+            {"access_group_id": "ag-2", "access_agent_ids": ["agent-a", "agent-b"]},
+            ["agent-a", "agent-b"],
+        ),
+        (
+            "access_model_names",
+            {"access_group_id": "ag-3", "access_model_names": []},
+            [],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_resources_from_access_groups(
+    resource_field, access_group_data, expected
+):
+    """Test _get_resources_from_access_groups returns correct resource list from access groups."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import (
+        _get_agent_ids_from_access_groups,
+        _get_models_from_access_groups,
+    )
+
+    ag_table = LiteLLM_AccessGroupTable(
+        access_group_id=access_group_data["access_group_id"],
+        access_group_name="test",
+        access_model_names=access_group_data.get("access_model_names", []),
+        access_agent_ids=access_group_data.get("access_agent_ids", []),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_access_object",
+        new_callable=AsyncMock,
+        return_value=ag_table,
+    ):
+        if resource_field == "access_model_names":
+            result = await _get_models_from_access_groups(
+                access_group_ids=[access_group_data["access_group_id"]],
+                prisma_client=MagicMock(),
+                user_api_key_cache=DualCache(),
+            )
+        else:
+            result = await _get_agent_ids_from_access_groups(
+                access_group_ids=[access_group_data["access_group_id"]],
+                prisma_client=MagicMock(),
+                user_api_key_cache=DualCache(),
+            )
+        assert sorted(result) == sorted(expected)
+
+
+@pytest.mark.asyncio
+async def test_get_models_from_access_groups_empty_ids():
+    """Test _get_models_from_access_groups returns empty list when access_group_ids is empty."""
+    from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+    result = await _get_models_from_access_groups(access_group_ids=[])
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# can_team_access_model with access_group_ids fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_via_access_group_ids():
+    """Test can_team_access_model allows access when team has access_group_ids granting model access."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        result = await can_team_access_model(
+            model="gpt-4",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        )
+        assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_access_group_ids_denied():
+    """Test can_team_access_model denies when neither team models nor access_group_ids grant access."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+    from litellm.proxy._types import ProxyException
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=["gpt-3.5-turbo"],
+        access_group_ids=["ag-other"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-3"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_team_access_model(
+                model="gpt-4",
+                team_object=team_object,
+                llm_router=None,
+                team_model_aliases=None,
+            )
+
+
+# ---------------------------------------------------------------------------
+# can_key_call_model with access_group_ids fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_via_access_group_ids():
+    """Test can_key_call_model allows access when key has access_group_ids granting model access."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        await can_key_call_model(
+            model="gpt-4",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _key_access_group_grants_model (key access group overriding team restriction)
+# ---------------------------------------------------------------------------
+
+
+def _patch_proxy_server_globals():
+    """Patch proxy_server's prisma_client and user_api_key_cache to non-None mocks
+    so the helper's None-guard doesn't short-circuit. The actual values don't
+    matter because get_access_object is patched separately to return fixtures."""
+    from unittest.mock import MagicMock, patch
+
+    return [
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ]
+
+
+def _fake_access_group(
+    access_group_id: str,
+    access_model_names=None,
+    assigned_team_ids=None,
+    assigned_key_ids=None,
+):
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    return LiteLLM_AccessGroupTable(
+        access_group_id=access_group_id,
+        access_group_name=access_group_id,
+        access_model_names=access_model_names or [],
+        assigned_team_ids=assigned_team_ids or [],
+        assigned_key_ids=assigned_key_ids or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_team_authorized():
+    """Group's assigned_team_ids includes the key's team and grants the model → True.
+
+    This is the happy path equivalent of Andres's report: admin creates an
+    access group with assigned_team_ids=[team-a], grants claude-haiku-4-5,
+    attaches it to a key on team-a. Override fires.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["premium-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],  # deliberately not synced — the access group itself authorizes
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="premium-group",
+        access_model_names=["claude-haiku-4-5"],
+        assigned_team_ids=["team-a"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is True
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_key_directly_authorized():
+    """Group's assigned_key_ids includes the key's token and grants the model → True.
+
+    Per-key authorization path: an admin scopes a group directly to a key
+    (assigned_key_ids) without listing the team.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token-hashed",
+        models=[],
+        access_group_ids=["per-key-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="per-key-group",
+        access_model_names=["claude-haiku-4-5"],
+        assigned_team_ids=[],
+        assigned_key_ids=["test-token-hashed"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is True
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_key_has_no_groups():
+    """Key with no access_group_ids → False (early return, no DB read)."""
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=[],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["any-group"],
+    )
+    assert (
+        await _key_access_group_grants_model(
+            model="claude-haiku-4-5",
+            valid_token=valid_token,
+            team_object=team_object,
+            llm_router=None,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_does_not_cover_model():
+    """Group authorizes the team but does not grant the requested model → False."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["basic-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="basic-group",
+        access_model_names=["gpt-4o-mini"],
+        assigned_team_ids=["team-a"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_authorizes_neither():
+    """
+    Bypass regression test: a team member sets a foreign access group on their
+    key. The group grants the requested model but its assigned_team_ids /
+    assigned_key_ids do not include this caller's team or token. Override is
+    denied — the team's 401 propagates.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="team-a-token",
+        models=[],
+        access_group_ids=["team-b-premium"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="team-b-premium",
+        access_model_names=["claude-opus-4-5"],
+        assigned_team_ids=["team-b"],
+        assigned_key_ids=["team-b-token"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-opus-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_get_access_object_raises():
+    """Group lookup failure (404, network, etc.) is treated as no authorization."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["missing-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=Exception("not found"),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()

@@ -97,7 +97,9 @@ async def test_anthropic_cache_control_hook_system_message():
                 for item in request_body["system"]
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}"
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point, found {cache_control_count}"
 
 
 @pytest.mark.asyncio
@@ -218,7 +220,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             # Test with multiple messages and negative indices
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "system",
@@ -350,7 +352,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
                 ]
 
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=messages,
                     cache_control_injection_points=[
                         {"location": "message", "index": 10}
@@ -418,7 +420,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
                 ]
 
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=messages,
                     cache_control_injection_points=[
                         {
@@ -484,7 +486,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             # Test with multiple user messages and negative indices
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -584,7 +586,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
             ]
 
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 cache_control_injection_points=[
                     {"location": "message", "index": bad_index}
@@ -649,7 +651,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=message_list,
                 cache_control_injection_points=[{"location": "message", "index": -1}],
                 client=client,
@@ -689,7 +691,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
                 match="bedrock requires at least one non-system message",
             ):
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=[],
                     cache_control_injection_points=[
                         {"location": "message", "index": -1}
@@ -740,7 +742,7 @@ async def test_anthropic_cache_control_hook_no_op():
             ]
 
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 # No cache_control_injection_points parameter
                 client=client,
@@ -797,7 +799,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -806,13 +808,14 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
                             {"type": "text", "text": "Second piece of context"},
                             {"type": "text", "text": "Third piece of context"},
                             {"type": "text", "text": "Fourth piece of context"},
-                            {"type": "text", "text": "Fifth piece of context - should be cached"},
+                            {
+                                "type": "text",
+                                "text": "Fifth piece of context - should be cached",
+                            },
                         ],
                     }
                 ],
-                cache_control_injection_points=[
-                    {"location": "message", "index": -1}
-                ],
+                cache_control_injection_points=[{"location": "message", "index": -1}],
                 client=client,
             )
 
@@ -829,7 +832,9 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
                 for item in message_content
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
 
 
 @pytest.mark.asyncio
@@ -869,7 +874,7 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -879,7 +884,10 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                             {"type": "text", "text": "Page 2 content"},
                             {"type": "text", "text": "Page 3 content"},
                             {"type": "text", "text": "Page 4 content"},
-                            {"type": "text", "text": "Page 5 content - final page to cache"},
+                            {
+                                "type": "text",
+                                "text": "Page 5 content - final page to cache",
+                            },
                         ],
                     }
                 ],
@@ -892,7 +900,9 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
             mock_post.assert_called_once()
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
-            print("Document analysis request_body: ", json.dumps(request_body, indent=4))
+            print(
+                "Document analysis request_body: ", json.dumps(request_body, indent=4)
+            )
 
             message_content = request_body["messages"][0]["content"]
             assert isinstance(message_content, list)
@@ -902,4 +912,178 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                 for item in message_content
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+
+
+def test_gemini_cache_control_injection_points_detected():
+    """
+    Test that cache_control_injection_points work for Gemini models.
+
+    Verifies the full flow:
+    1. The hook injects cache_control markers on string-content messages
+    2. is_cached_message() detects the injected markers (message-level cache_control)
+    3. separate_cached_messages() correctly separates the messages
+
+    Fixes GitHub issue #18519.
+    """
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        separate_cached_messages,
+    )
+    from litellm.utils import is_cached_message
+
+    hook = AnthropicCacheControlHook()
+
+    # Simulate messages as they would appear for a Gemini call with string content
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that analyzes legal documents.",
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms?",
+        },
+    ]
+
+    # Simulate what the hook does: inject cache_control on the system message
+    injection_points = [{"location": "message", "role": "system"}]
+
+    # Manually apply the hook's logic for the system message (string content case)
+    # The hook sets message["cache_control"] = {"type": "ephemeral"} for string content
+    hook._safe_insert_cache_control_in_message(
+        message=messages[0],
+        control={"type": "ephemeral"},
+    )
+
+    # Verify the hook injected message-level cache_control (string content path)
+    assert messages[0].get("cache_control") == {"type": "ephemeral"}
+
+    # Verify is_cached_message detects message-level cache_control
+    assert is_cached_message(messages[0]) is True
+    assert is_cached_message(messages[1]) is False
+
+    # Verify separate_cached_messages correctly separates them
+    cached, non_cached = separate_cached_messages(messages)
+    assert len(cached) == 1
+    assert cached[0]["role"] == "system"
+    assert len(non_cached) == 1
+    assert non_cached[0]["role"] == "user"
+
+
+def test_gemini_cache_control_injection_list_content_detected():
+    """
+    Test that cache_control_injection_points work for Gemini models
+    when the message content is a list (not string).
+    """
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        separate_cached_messages,
+    )
+    from litellm.utils import is_cached_message
+
+    hook = AnthropicCacheControlHook()
+
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant."},
+                {"type": "text", "text": "Analyze legal documents carefully."},
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms?",
+        },
+    ]
+
+    # Apply the hook's logic for list content - sets cache_control on last item
+    hook._safe_insert_cache_control_in_message(
+        message=messages[0],
+        control={"type": "ephemeral"},
+    )
+
+    # Verify cache_control was set on the last content item
+    assert messages[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    # Verify is_cached_message detects content-item-level cache_control
+    assert is_cached_message(messages[0]) is True
+    assert is_cached_message(messages[1]) is False
+
+    # Verify separate_cached_messages correctly separates them
+    cached, non_cached = separate_cached_messages(messages)
+    assert len(cached) == 1
+    assert len(non_cached) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_string_negative_index():
+    """
+    Test that string negative indices like "-1" are handled correctly.
+
+    When cache_control_injection_points are stored in DB/config as JSON, indices
+    like -1 become the string "-1". Previously, str.isdigit() returned False for
+    "-1" so the cache control was silently skipped. This tests the fix.
+    """
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-west-2",
+        },
+    ):
+        anthropic_cache_control_hook = AnthropicCacheControlHook()
+        litellm.callbacks = [anthropic_cache_control_hook]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": "Response",
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 50,
+                "totalTokens": 150,
+            },
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=[
+                    {"role": "user", "content": "First message"},
+                    {"role": "assistant", "content": "First response"},
+                    {"role": "user", "content": "Second message"},
+                ],
+                # index is a string "-1" (as stored in DB/config JSON)
+                cache_control_injection_points=[
+                    {"location": "message", "index": "-1"},
+                ],
+                client=client,
+            )
+
+            mock_post.assert_called_once()
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            # The last user message should have cache control applied
+            last_message = request_body["messages"][-1]
+            last_message_content = last_message["content"]
+            assert isinstance(
+                last_message_content, list
+            ), f"Expected list content, got {type(last_message_content)}"
+            has_cache_point = any(
+                isinstance(item, dict) and "cachePoint" in item
+                for item in last_message_content
+            )
+            assert has_cache_point, (
+                f"Expected cachePoint in last message content, got: {last_message_content}. "
+                "String index '-1' was not parsed correctly (str.isdigit() returns False for negative strings)."
+            )

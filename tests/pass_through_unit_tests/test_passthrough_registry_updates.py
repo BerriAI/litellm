@@ -18,7 +18,9 @@ def test_update_pass_through_route_updates_registry():
         # Setup - Unique IDs to avoid collision with other tests
         endpoint_id = "regression-test-endpoint"
         path = "/regression-test-path"
-        route_key = f"{endpoint_id}:exact:{path}"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
         target = "http://example.com"
 
         # Cleanup: Ensure clean state before test
@@ -90,7 +92,9 @@ def test_update_subpath_route_updates_registry():
         # Setup
         endpoint_id = "regression-test-subpath"
         path = "/regression-test-wildcard"
-        route_key = f"{endpoint_id}:subpath:{path}"
+        # Default methods are sorted: DELETE,GET,PATCH,POST,PUT
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
         target = "http://example.com"
 
         if route_key in _registered_pass_through_routes:

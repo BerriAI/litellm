@@ -108,24 +108,24 @@ async def use_callback_in_llm_call(
             "workspace": "test-workspace",
             "repository": "test-repo",
             "access_token": "test-token",
-            "branch": "main"
+            "branch": "main",
         }
         litellm.global_gitlab_config = {
             "project": "a/b/<repo_name>",
             "access_token": "your-access-token",
             "base_url": "gitlab url",
-            "prompts_path": "src/prompts", # folder to point to, defaults to root
-            "branch":"main"  # optional, defaults to main
+            "prompts_path": "src/prompts",  # folder to point to, defaults to root
+            "branch": "main",  # optional, defaults to main
         }
         # Mock BitBucket HTTP calls to prevent actual API requests
         import httpx
         from unittest.mock import MagicMock
-        
+
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"values": []}
         mock_response.text = ""
-        
+
         patch.object(
             litellm.module_level_client, "get", return_value=mock_response
         ).start()
@@ -164,7 +164,7 @@ async def use_callback_in_llm_call(
 
     for _ in range(5):
         await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             temperature=0.1,
             mock_response="hello",
@@ -204,10 +204,9 @@ async def use_callback_in_llm_call(
 
         if callback == "bitbucket":
             # Clean up bitbucket configuration and patches
-            if hasattr(litellm, 'global_bitbucket_config'):
-                delattr(litellm, 'global_bitbucket_config')
+            if hasattr(litellm, "global_bitbucket_config"):
+                delattr(litellm, "global_bitbucket_config")
             patch.stopall()
-
 
 
 def test_dynamic_logging_global_callback():
@@ -218,7 +217,7 @@ def test_dynamic_logging_global_callback():
     cl = CustomLogger()
 
     litellm_logging = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="completion",
@@ -241,7 +240,7 @@ def test_dynamic_logging_global_callback():
                 result=ModelResponse(
                     id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
                     created=1732306261,
-                    model="claude-3-opus-20240229",
+                    model="claude-opus-4-7",
                     object="chat.completion",
                     system_fingerprint=None,
                     choices=[
@@ -278,7 +277,7 @@ def test_get_combined_callback_list():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     _logging = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="completion",
@@ -293,3 +292,29 @@ def test_get_combined_callback_list():
     assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
+
+
+def test_get_combined_callback_list_returns_copy_when_dynamic_is_none():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    _logging = LiteLLMLoggingObj(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    global_callbacks = ["langfuse"]
+    combined_callbacks = _logging.get_combined_callback_list(
+        dynamic_success_callbacks=None, global_callbacks=global_callbacks
+    )
+
+    assert combined_callbacks == ["langfuse"]
+    assert combined_callbacks is not global_callbacks
+
+    combined_callbacks.append("new_callback")
+
+    assert global_callbacks == ["langfuse"]

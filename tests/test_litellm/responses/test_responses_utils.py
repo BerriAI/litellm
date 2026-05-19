@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -126,16 +127,48 @@ class TestResponsesAPIRequestUtils:
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
         litellm_metadata = {"model_info": {"id": "gpt-4o"}}
-        updated = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-            responses_api_response=responses_api_response,
-            custom_llm_provider="openai",
-            litellm_metadata=litellm_metadata,
+        updated = (
+            ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=responses_api_response,
+                custom_llm_provider="openai",
+                litellm_metadata=litellm_metadata,
+            )
         )
         assert updated["id"] != "resp_abc123"
-        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(updated["id"])
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            updated["id"]
+        )
         assert decoded.get("response_id") == "resp_abc123"
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
+
+    def test_build_decode_container_id_omits_none_model_id(self):
+        """model_id=None must not round-trip as the truthy string 'None'."""
+        encoded = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id=None,
+            container_id="cntr_upstream_abc",
+        )
+        assert "None" not in base64.b64decode(
+            encoded.replace("cntr_", "").encode("utf-8")
+        ).decode("utf-8")
+        decoded = ResponsesAPIRequestUtils._decode_container_id(encoded)
+        assert decoded.get("custom_llm_provider") == "azure"
+        assert decoded.get("model_id") is None
+        assert decoded.get("response_id") == "cntr_upstream_abc"
+
+    def test_decode_container_id_legacy_literal_none_model_id(self):
+        """IDs encoded before the None fix should decode without a bogus model_id."""
+        legacy_inner = (
+            "litellm:custom_llm_provider:azure;model_id:None;container_id:cntr_x"
+        )
+        legacy_id = "cntr_" + base64.b64encode(legacy_inner.encode("utf-8")).decode(
+            "utf-8"
+        )
+        decoded = ResponsesAPIRequestUtils._decode_container_id(legacy_id)
+        assert decoded.get("model_id") is None
+        assert decoded.get("custom_llm_provider") == "azure"
+        assert decoded.get("response_id") == "cntr_x"
 
 
 class TestResponseAPILoggingUtils:
@@ -182,7 +215,10 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 10
         assert result.completion_tokens == 20
         assert result.total_tokens == 30
-        assert result.prompt_tokens_details and result.prompt_tokens_details.cached_tokens == 2
+        assert (
+            result.prompt_tokens_details
+            and result.prompt_tokens_details.cached_tokens == 2
+        )
 
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""
@@ -204,7 +240,9 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens == 20
         assert result.total_tokens == 20
 
-    def test_transform_response_api_usage_calculates_total_from_input_and_output_tokens_if_available(self):
+    def test_transform_response_api_usage_calculates_total_from_input_and_output_tokens_if_available(
+        self,
+    ):
         """Test transformation calculates total_tokens when it's None and input / output tokens are present"""
         # Setup
         usage = {
@@ -326,7 +364,9 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
 
     def test_provider_specific_params_no_crash_with_openai(self):
@@ -338,7 +378,9 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
 
     def test_provider_specific_params_no_crash_with_vertex_ai(self):
@@ -350,5 +392,74 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
+
+
+def test_responses_extra_body_forwarded_to_completion_transformation_handler():
+    """
+    Regression test: extra_body must be forwarded to response_api_handler
+    when responses_api_provider_config is None (completion transformation path).
+
+    Before the fix, extra_body was a named parameter of responses() but was
+    not passed to litellm_completion_transformation_handler.response_api_handler(),
+    so it was silently dropped.
+    """
+    with (
+        patch(
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            return_value=None,
+        ),
+        patch(
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        ) as mock_handler,
+    ):
+        mock_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/gpt-4o",
+            input="Hello",
+            extra_body={"custom_key": "custom_value"},
+        )
+
+        mock_handler.assert_called_once()
+        call_kwargs = mock_handler.call_args
+        # extra_body can be a positional or keyword arg; check both
+        assert call_kwargs.kwargs.get("extra_body") == {"custom_key": "custom_value"}
+
+
+def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
+    """
+    Test that when reasoning_effort is passed in kwargs (e.g. from proxy litellm_params)
+    and reasoning is None, it is mapped to reasoning before the request.
+
+    Supports per-model reasoning_effort/summary config in proxy for clients like Open WebUI
+    that cannot set extra_body.
+    """
+    with (
+        patch(
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            return_value=None,
+        ),
+        patch(
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        ) as mock_handler,
+    ):
+        mock_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/gpt-4o",
+            input="Hello",
+            reasoning_effort={"effort": "high", "summary": "detailed"},
+        )
+
+        mock_handler.assert_called_once()
+        call_kwargs = mock_handler.call_args
+        responses_api_request = call_kwargs.kwargs.get("responses_api_request", {})
+        assert "reasoning" in responses_api_request
+        assert responses_api_request["reasoning"] == {
+            "effort": "high",
+            "summary": "detailed",
+        }

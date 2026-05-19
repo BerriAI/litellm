@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
@@ -30,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
@@ -210,13 +212,22 @@ def get_image_dimensions(
         Tuple[int, int]: The width and height of the image.
     """
     img_data = None
-    try:
-        # Try to open as URL
-        client = _get_httpx_client()
-        response = client.get(data)
-        img_data = response.read()
-    except Exception:
-        # If not URL, assume it's base64
+    if data.startswith(("http://", "https://")):
+        try:
+            client = _get_httpx_client()
+            response = safe_get(client, data)
+            max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > max_bytes:
+                pass  # skip download; img_data stays None
+            else:
+                body = response.read()
+                if len(body) <= max_bytes:
+                    img_data = body
+        except Exception:
+            pass
+    if img_data is None:
+        # Not a URL or fetch failed — assume base64
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
@@ -706,7 +717,7 @@ def _count_content_list(
             if isinstance(c, str):
                 num_tokens += count_function(c)
             elif c["type"] == "text":
-                num_tokens += count_function(c.get("text", ""))
+                num_tokens += count_function(str(c.get("text", "")))
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(
@@ -722,14 +733,18 @@ def _count_content_list(
             elif c["type"] == "thinking":
                 # Claude extended thinking content block
                 # Count the thinking text and skip signature (opaque signature blob)
-                thinking_text = c.get("thinking", "")
+                thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
             else:
+                content_type = (
+                    c.get("type", type(c).__name__)
+                    if isinstance(c, dict)
+                    else type(c).__name__
+                )
                 raise ValueError(
-                    f"Invalid content item type: {type(c).__name__}. "
-                    f"Expected str or dict with 'type' field. "
-                    f"Value: {c!r}"
+                    f"Invalid content item type: {content_type}. "
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
                 )
         return num_tokens
     except Exception as e:

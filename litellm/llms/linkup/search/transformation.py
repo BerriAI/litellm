@@ -3,6 +3,7 @@ Calls Linkup's /search endpoint to search the web.
 
 Linkup API Reference: https://docs.linkup.so/pages/documentation/api-reference/endpoint/post-search
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 
 import httpx
@@ -79,9 +80,7 @@ class LinkupSearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base or get_secret_str("LINKUP_API_BASE") or self.LINKUP_API_BASE
-        )
+        api_base = api_base or get_secret_str("LINKUP_API_BASE") or self.LINKUP_API_BASE
 
         # Append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):
@@ -203,4 +202,3 @@ class LinkupSearchConfig(BaseSearchConfig):
             results=results,
             object="search",
         )
-

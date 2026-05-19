@@ -3,6 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
+
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -77,26 +79,82 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
-def _apply_gemini_3_metadata(
+def _get_highest_media_resolution(
+    current: Optional[str], new_detail: Optional[str]
+) -> Optional[str]:
+    """
+    Compare two media resolution values and return the highest one.
+    Resolution hierarchy: ultra_high > high > medium > low > None
+    """
+    resolution_priority = {"ultra_high": 4, "high": 3, "medium": 2, "low": 1}
+    current_priority = resolution_priority.get(current, 0) if current else 0
+    new_priority = resolution_priority.get(new_detail, 0) if new_detail else 0
+
+    if new_priority > current_priority:
+        return new_detail
+    return current
+
+
+def _extract_max_media_resolution_from_messages(
+    messages: List[AllMessageValues],
+) -> Optional[str]:
+    """
+    Extract the highest media resolution (detail) from image content in messages.
+
+    This is used to set the global media_resolution in generation_config for
+    Gemini 2.x models which don't support per-part media resolution.
+
+    Args:
+        messages: List of messages in OpenAI format
+
+    Returns:
+        The highest detail level found ("high", "low", or None)
+    """
+    max_resolution: Optional[str] = None
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                detail: Optional[str] = None
+                if item.get("type") == "image_url":
+                    image_url = item.get("image_url")
+                    if isinstance(image_url, dict):
+                        detail = image_url.get("detail")
+                elif item.get("type") == "file":
+                    file_obj = item.get("file")
+                    if isinstance(file_obj, dict):
+                        detail = file_obj.get("detail")
+                if detail:
+                    max_resolution = _get_highest_media_resolution(
+                        max_resolution, detail
+                    )
+    return max_resolution
+
+
+def _apply_gemini_metadata(
     part: PartType,
     model: Optional[str],
     media_resolution_enum: Optional[Dict[str, str]],
     video_metadata: Optional[Dict[str, Any]],
 ) -> PartType:
     """
-    Apply the unique media_resolution and video_metadata parameters of Gemini 3+    
+    Apply media_resolution and video_metadata parameters to a Gemini part.
+
+    - Per-part media_resolution: Gemini 3+ only (2.x uses generation_config global).
+    - video_metadata (fps, startOffset, endOffset): all Gemini models (1.x, 2.x, 3+).
     """
     if model is None:
         return part
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    if not VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return part
-
     part_dict = dict(part)
 
-    if media_resolution_enum is not None:
+    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(
+        model
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -151,7 +209,23 @@ def _process_gemini_media(
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
+        elif image_url.startswith(
+            "https://generativelanguage.googleapis.com/v1beta/files/"
+        ):
+            # Gemini Files API URIs — the file is already uploaded to Google's
+            # servers; pass the URI through as file_data without fetching it.
+            # These URLs return 403 when accessed directly, so we must not try
+            # to resolve their MIME type via HTTP.
+            if format:
+                file_data = FileDataType(mime_type=format, file_uri=image_url)
+            else:
+                # Gemini Files API references can be passed through as URI-only.
+                file_data = cast(FileDataType, {"file_uri": image_url})
+            part = {"file_data": file_data}
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif (
@@ -161,14 +235,14 @@ def _process_gemini_media(
         ):
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         raise Exception("Invalid image received - {}".format(image_url))
@@ -281,7 +355,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
                                 detail = img_element["image_url"].get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                                media_resolution_enum = (
+                                    _convert_detail_to_media_resolution_enum(detail)
+                                )
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_media(
@@ -330,7 +406,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
 
                             # Convert detail to media_resolution_enum
-                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                            media_resolution_enum = (
+                                _convert_detail_to_media_resolution_enum(detail)
+                            )
 
                             try:
                                 _part = _process_gemini_media(
@@ -348,10 +426,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     )
                                 )
                     user_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -419,23 +494,53 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _parts.append(_part)
 
                     assistant_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
                     # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    provider_specific_fields = assistant_msg.get(
+                        "provider_specific_fields"
+                    )
                     thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
-                    
+                    if provider_specific_fields and isinstance(
+                        provider_specific_fields, dict
+                    ):
+                        thought_signatures = provider_specific_fields.get(
+                            "thought_signatures"
+                        )
+
                     # If we have thought signatures, add them to the part
-                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                    if (
+                        thought_signatures
+                        and isinstance(thought_signatures, list)
+                        and len(thought_signatures) > 0
+                    ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
                     else:
                         assistant_content.append(PartType(text=assistant_text))  # type: ignore
+
+                ## HANDLE ASSISTANT IMAGES FIELD
+                # Process images field if present (for generated images from assistant)
+                assistant_images = assistant_msg.get("images")
+                if assistant_images is not None and isinstance(assistant_images, list):
+                    for image_item in assistant_images:
+                        if isinstance(image_item, dict):
+                            image_url_obj = image_item.get("image_url")
+                            if isinstance(image_url_obj, dict):
+                                assistant_image_url = image_url_obj.get("url")
+                                format = image_url_obj.get("format")
+                                detail = image_url_obj.get("detail")
+                                media_resolution_enum = (
+                                    _convert_detail_to_media_resolution_enum(detail)
+                                )
+                                if assistant_image_url:
+                                    _part = _process_gemini_media(
+                                        image_url=assistant_image_url,
+                                        format=format,
+                                        media_resolution_enum=media_resolution_enum,
+                                        model=model,
+                                    )
+                                    assistant_content.append(_part)
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
@@ -454,6 +559,41 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         ):
                             assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
+
+                ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
+                _psf = assistant_msg.get("provider_specific_fields")
+                if isinstance(_psf, dict):
+                    _ss_invocations = _psf.get("server_side_tool_invocations")
+                    if isinstance(_ss_invocations, list):
+                        for invocation in _ss_invocations:
+                            # Re-inject toolCall part
+                            tc_part: Dict[str, Any] = {
+                                "toolCall": {
+                                    "toolType": invocation.get("tool_type"),
+                                    "id": invocation.get("id"),
+                                    "args": invocation.get("args"),
+                                }
+                            }
+                            if "thought_signature" in invocation:
+                                tc_part["thoughtSignature"] = invocation[
+                                    "thought_signature"
+                                ]
+                            assistant_content.append(tc_part)  # type: ignore
+
+                            # Re-inject toolResponse part if response is present
+                            if "response" in invocation:
+                                tr_dict: Dict[str, Any] = {
+                                    "id": invocation.get("id"),
+                                    "response": invocation.get("response"),
+                                }
+                                if invocation.get("tool_type"):
+                                    tr_dict["toolType"] = invocation["tool_type"]
+                                tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
+                                if "thought_signature" in invocation:
+                                    tr_part["thoughtSignature"] = invocation[
+                                        "thought_signature"
+                                    ]
+                                assistant_content.append(tr_part)  # type: ignore
 
                 msg_i += 1
 
@@ -479,7 +619,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
                 if len(tool_call_responses) > 0:
-                    contents.append(ContentType(parts=tool_call_responses))
+                    contents.append(ContentType(role="user", parts=tool_call_responses))
                     tool_call_responses = []
 
             if msg_i == init_msg_i:  # prevent infinite loops
@@ -489,7 +629,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 )
         if len(tool_call_responses) > 0:
-            contents.append(ContentType(parts=tool_call_responses))
+            contents.append(ContentType(role="user", parts=tool_call_responses))
 
         if len(contents) == 0:
             verbose_logger.warning(
@@ -508,7 +648,29 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
-def _transform_request_body(
+# Keys that LiteLLM consumes internally and must never be forwarded to the
+_LITELLM_INTERNAL_EXTRA_BODY_KEYS: frozenset = frozenset({"cache", "tags"})
+
+
+def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
+    """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
+    extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+    if extra_body is not None:
+        data_dict: dict = data  # type: ignore[assignment]
+        for k, v in extra_body.items():
+            if k in _LITELLM_INTERNAL_EXTRA_BODY_KEYS:
+                continue
+            if (
+                k in data_dict
+                and isinstance(data_dict[k], dict)
+                and isinstance(v, dict)
+            ):
+                data_dict[k].update(v)
+            else:
+                data_dict[k] = v
+
+
+def _transform_request_body(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
@@ -559,45 +721,80 @@ def _transform_request_body(
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+        include_server_side_tool_invocations: bool = optional_params.pop(
+            "include_server_side_tool_invocations", False
+        )
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
+        # Drop output_config as it's not supported by Vertex AI
+        optional_params.pop("output_config", None)
         config_fields = GenerationConfig.__annotations__.keys()
 
-        # If the LiteLLM client sends Gemini-supported parameter "labels", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
-        # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        if labels is None and "metadata" in litellm_params:
-            metadata = litellm_params["metadata"]
-            if metadata is not None and "requester_metadata" in metadata:
-                rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
+            k: v
+            for k, v in optional_params.items()
+            if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(
             **filtered_params
         )
+
+        # For Gemini 2.x models, also add media_resolution to generation_config (global)
+        # as a fallback, since some 2.x versions may not support per-part media_resolution.
+        # Gemini 1.x does not support mediaResolution at all.
+        if "gemini-2" in model:
+            max_media_resolution = _extract_max_media_resolution_from_messages(messages)
+            if max_media_resolution:
+                media_resolution_value = _convert_detail_to_media_resolution_enum(
+                    max_media_resolution
+                )
+                if media_resolution_value and generation_config is not None:
+                    generation_config["mediaResolution"] = media_resolution_value[
+                        "level"
+                    ]
+
         data = RequestBody(contents=content)
-        if system_instructions is not None:
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
+        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        # Treat dropping these fields as a request mutation guarded by modify_params.
+        can_send_cache_incompatible_fields = (
+            cached_content is None or litellm.modify_params is False
+        )
+        if can_send_cache_incompatible_fields:
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if include_server_side_tool_invocations:
+                if "toolConfig" not in data:
+                    data["toolConfig"] = {}
+                data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+
+        if service_tier := optional_params.pop("service_tier", None):
+            if isinstance(service_tier, str):
+                if service_tier.lower() == "default":
+                    data["serviceTier"] = "standard"
+                else:
+                    data["serviceTier"] = service_tier.lower()
+            else:
+                data["serviceTier"] = service_tier
+
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
+        _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
 
@@ -625,9 +822,9 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
         optional_params=optional_params,
@@ -644,7 +841,6 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
     )
-
 
     return _transform_request_body(
         messages=messages,
@@ -677,9 +873,9 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
         optional_params=optional_params,

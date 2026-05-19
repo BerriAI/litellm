@@ -4,6 +4,9 @@ from typing import Any, Optional, Union
 import httpx
 
 import litellm
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -15,7 +18,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials
-from ..common_utils import BedrockError
+from ..common_utils import BedrockError, _get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -66,8 +69,10 @@ def make_sync_call(
             model_response=model_response, json_mode=json_mode
         )
     else:
-        decoder = AWSEventStreamDecoder(model=model)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size)
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -121,7 +126,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -181,7 +186,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=headers,
         )
         data = json.dumps(request_data)
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -189,7 +194,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -270,7 +275,32 @@ class BedrockConverseLLM(BaseAWSLLM):
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
-            modelId = self.encode_model_id(model_id=model)
+            # Strip nova spec prefixes before encoding model ID for API URL
+            _model_for_id = model
+            _stripped = _model_for_id
+            for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+                if _stripped.startswith(rp):
+                    _stripped = _stripped[len(rp) :]
+                    break
+            # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
+            # and capture it so it can be used as aws_region_name below.
+            _region_from_model: Optional[str] = None
+            _potential_region = _stripped.split("/", 1)[0]
+            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+                _region_from_model = _potential_region
+                _stripped = _stripped.split("/", 1)[1]
+                _model_for_id = _stripped
+            for _nova_prefix in ["nova-2/", "nova/"]:
+                if _stripped.startswith(_nova_prefix):
+                    _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
+                    break
+            modelId = self.encode_model_id(model_id=_model_for_id)
+            # Inject region extracted from model path so _get_aws_region_name picks it up
+            if (
+                _region_from_model is not None
+                and "aws_region_name" not in optional_params
+            ):
+                optional_params["aws_region_name"] = _region_from_model
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
             fake_stream=fake_stream,
@@ -278,7 +308,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream=stream,
             custom_llm_provider="bedrock",
         )
-
 
         ### SET REGION NAME ###
         aws_region_name = self._get_aws_region_name(
@@ -303,9 +332,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_external_id = optional_params.pop("aws_external_id", None)
         optional_params.pop("aws_region_name", None)
 
-        litellm_params[
-            "aws_region_name"
-        ] = aws_region_name  # [DO NOT DELETE] important for async calls
+        litellm_params["aws_region_name"] = (
+            aws_region_name  # [DO NOT DELETE] important for async calls
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -338,6 +367,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
+        # Filter beta headers in HTTP headers before making the request
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider="bedrock_converse"
+        )
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
@@ -379,7 +412,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
-                api_key=api_key
+                api_key=api_key,
             )  # type: ignore
 
         ## TRANSFORMATION ##
@@ -392,7 +425,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=extra_headers,
         )
         data = json.dumps(_data)
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -400,7 +433,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=data,
             headers=headers,
-            api_key=api_key
+            api_key=api_key,
         )
 
         ## LOGGING

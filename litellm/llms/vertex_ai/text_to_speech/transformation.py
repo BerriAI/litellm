@@ -164,12 +164,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             voice_str = voice.get("name") if voice else None
 
         # Store credentials in litellm_params for use in transform methods
-        litellm_params_dict.update({
-            "vertex_credentials": vertex_credentials,
-            "vertex_project": vertex_project,
-            "vertex_location": vertex_location,
-            "api_base": api_base,
-        })
+        litellm_params_dict.update(
+            {
+                "vertex_credentials": vertex_credentials,
+                "vertex_project": vertex_project,
+                "vertex_location": vertex_location,
+                "api_base": api_base,
+            }
+        )
 
         # Call the text_to_speech_handler
         response = base_llm_http_handler.text_to_speech_handler(
@@ -328,7 +330,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if not input_data:
             raise ValueError("Either 'text' or 'ssml' must be provided.")
         if "text" in input_data and "ssml" in input_data:
-            raise ValueError("Only one of 'text' or 'ssml' should be provided, not both.")
+            raise ValueError(
+                "Only one of 'text' or 'ssml' should be provided, not both."
+            )
 
         return input_data
 
@@ -389,9 +393,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Check for voice dict stored in:
         # 1. litellm_params by dispatch method
         # 2. optional_params by map_openai_params
-        voice_dict = (
-            litellm_params.get("vertex_voice_dict")
-            or optional_params.get("vertex_voice_dict")
+        voice_dict = litellm_params.get("vertex_voice_dict") or optional_params.get(
+            "vertex_voice_dict"
         )
         if voice_dict is not None and isinstance(voice_dict, dict):
             vertex_voice = VertexTextToSpeechVoice(**voice_dict)
@@ -414,12 +417,16 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             )
 
         # Build audio configuration
-        audio_encoding = optional_params.get("audioEncoding", self.DEFAULT_AUDIO_ENCODING)
+        audio_encoding = optional_params.get(
+            "audioEncoding", self.DEFAULT_AUDIO_ENCODING
+        )
         speaking_rate = optional_params.get("speakingRate", self.DEFAULT_SPEAKING_RATE)
 
         # Check for full audioConfig in optional_params
         if "audioConfig" in optional_params:
-            vertex_audio_config = VertexTextToSpeechAudioConfig(**optional_params["audioConfig"])
+            vertex_audio_config = VertexTextToSpeechAudioConfig(
+                **optional_params["audioConfig"]
+            )
         else:
             vertex_audio_config = VertexTextToSpeechAudioConfig(
                 audioEncoding=audio_encoding,

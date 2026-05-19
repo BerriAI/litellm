@@ -80,50 +80,233 @@ def test_usage_completion_tokens_details_text_tokens():
 
     # Test data from the reported issue
     usage_data = {
-        'completion_tokens': 77,
-        'prompt_tokens': 11937,
-        'total_tokens': 12014,
-        'completion_tokens_details': {
-            'accepted_prediction_tokens': None,
-            'audio_tokens': None,
-            'reasoning_tokens': 65,
-            'rejected_prediction_tokens': None,
-            'text_tokens': 12
+        "completion_tokens": 77,
+        "prompt_tokens": 11937,
+        "total_tokens": 12014,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": None,
+            "audio_tokens": None,
+            "reasoning_tokens": 65,
+            "rejected_prediction_tokens": None,
+            "text_tokens": 12,
         },
-        'prompt_tokens_details': {
-            'audio_tokens': None,
-            'cached_tokens': None,
-            'text_tokens': 11937,
-            'image_tokens': None
-        }
+        "prompt_tokens_details": {
+            "audio_tokens": None,
+            "cached_tokens": None,
+            "text_tokens": 11937,
+            "image_tokens": None,
+        },
     }
 
     # Create Usage object
     u = Usage(**usage_data)
-    
+
     # Verify the object has the text_tokens field
-    assert hasattr(u.completion_tokens_details, 'text_tokens')
+    assert hasattr(u.completion_tokens_details, "text_tokens")
     assert u.completion_tokens_details.text_tokens == 12
-    
+
     # Get model_dump output
     dump_result = u.model_dump()
-    
+
     # Verify text_tokens is present in the model_dump output
-    assert 'completion_tokens_details' in dump_result
-    assert 'text_tokens' in dump_result['completion_tokens_details']
-    assert dump_result['completion_tokens_details']['text_tokens'] == 12
-    
+    assert "completion_tokens_details" in dump_result
+    assert "text_tokens" in dump_result["completion_tokens_details"]
+    assert dump_result["completion_tokens_details"]["text_tokens"] == 12
+
     # Verify the full completion_tokens_details structure
     expected_completion_details = {
-        'accepted_prediction_tokens': None,
-        'audio_tokens': None,
-        'reasoning_tokens': 65,
-        'rejected_prediction_tokens': None,
-        'text_tokens': 12,
-        'image_tokens': None
+        "accepted_prediction_tokens": None,
+        "audio_tokens": None,
+        "reasoning_tokens": 65,
+        "rejected_prediction_tokens": None,
+        "text_tokens": 12,
+        "image_tokens": None,
+        "video_tokens": None,
     }
-    assert dump_result['completion_tokens_details'] == expected_completion_details
-    
+    assert dump_result["completion_tokens_details"] == expected_completion_details
+
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+
+def test_chat_completion_token_logprob_null_top_logprobs():
+    """
+    Test that ChatCompletionTokenLogprob normalizes null top_logprobs to [].
+
+    Some providers return null for top_logprobs when logprobs=true but
+    top_logprobs is unset. The OpenAI spec requires top_logprobs to be an array.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    from litellm.types.utils import ChatCompletionTokenLogprob
+
+    logprob = ChatCompletionTokenLogprob(
+        token="Hello",
+        bytes=[72, 101, 108, 108, 111],
+        logprob=-0.31725305,
+        top_logprobs=None,
+    )
+    assert logprob.top_logprobs == []
+    assert isinstance(logprob.top_logprobs, list)
+
+
+def test_chat_completion_token_logprob_valid_top_logprobs():
+    """
+    Test that ChatCompletionTokenLogprob still accepts valid top_logprobs arrays.
+    """
+    from litellm.types.utils import ChatCompletionTokenLogprob, TopLogprob
+
+    logprob = ChatCompletionTokenLogprob(
+        token="Hello",
+        bytes=[72, 101, 108, 108, 111],
+        logprob=-0.31725305,
+        top_logprobs=[
+            TopLogprob(
+                token="Hello", logprob=-0.31725305, bytes=[72, 101, 108, 108, 111]
+            ),
+            TopLogprob(token="Hi", logprob=-1.3190403, bytes=[72, 105]),
+        ],
+    )
+    assert len(logprob.top_logprobs) == 2
+    assert logprob.top_logprobs[0].token == "Hello"
+
+
+def test_choice_logprobs_with_null_top_logprobs():
+    """
+    Test that ChoiceLogprobs correctly parses content tokens that have
+    null top_logprobs (the full nested parsing path).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    from litellm.types.utils import ChoiceLogprobs
+
+    logprobs_dict = {
+        "content": [
+            {
+                "token": "Sil",
+                "bytes": [83, 105, 108],
+                "logprob": -2.1518118381500244,
+                "top_logprobs": None,
+            },
+            {
+                "token": "ent",
+                "bytes": [101, 110, 116],
+                "logprob": -0.13957086205482483,
+                "top_logprobs": None,
+            },
+        ]
+    }
+
+    result = ChoiceLogprobs(**logprobs_dict)
+    assert result.content is not None
+    assert len(result.content) == 2
+    for token_logprob in result.content:
+        assert token_logprob.top_logprobs == []
+        assert isinstance(token_logprob.top_logprobs, list)
+
+
+def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
+    """
+    Test that invalid (non-list, non-null) top_logprobs values are still
+    rejected by Pydantic validation. The validator only normalizes null,
+    it does not coerce other invalid types.
+    """
+    from pydantic import ValidationError
+
+    from litellm.types.utils import ChatCompletionTokenLogprob
+
+    with pytest.raises(ValidationError):
+        ChatCompletionTokenLogprob(
+            token="Hello",
+            bytes=[72, 101, 108, 108, 111],
+            logprob=-0.31725305,
+            top_logprobs="invalid_string",
+        )
+
+
+# ---------------------------------------------------------------------------
+# native_finish_reason in provider_specific_fields
+# ---------------------------------------------------------------------------
+
+
+class TestNativeFinishReason:
+    """Choices exposes the raw provider finish_reason in provider_specific_fields
+    when it differs from the mapped OpenAI-compatible value."""
+
+    def test_provider_reason_exposed_when_mapped(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="end_turn")
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields["native_finish_reason"] == "end_turn"
+
+    def test_provider_reason_not_set_when_already_openai(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="stop")
+        assert choice.finish_reason == "stop"
+        assert not hasattr(choice, "provider_specific_fields")
+
+    def test_provider_reason_merged_with_existing_fields(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(
+            finish_reason="max_tokens",
+            provider_specific_fields={"citations": [{"url": "http://example.com"}]},
+        )
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
+        assert choice.provider_specific_fields["citations"] == [
+            {"url": "http://example.com"}
+        ]
+
+    def test_gemini_safety_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="SAFETY")
+        assert choice.finish_reason == "content_filter"
+        assert choice.provider_specific_fields["native_finish_reason"] == "SAFETY"
+
+    def test_anthropic_tool_use_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="tool_use")
+        assert choice.finish_reason == "tool_calls"
+        assert choice.provider_specific_fields["native_finish_reason"] == "tool_use"
+
+    def test_max_tokens_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="MAX_TOKENS")
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+
+
+def test_delta_maps_reasoning_to_reasoning_content():
+    """
+    Test that Delta maps 'reasoning' field to 'reasoning_content'.
+
+    Providers like Cerebras and Groq return delta.reasoning for gpt-oss models,
+    but LiteLLM expects delta.reasoning_content.
+    """
+    from litellm.types.utils import Delta
+
+    # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
+    delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
+    assert delta.reasoning_content == "thinking step by step"
+    assert not hasattr(
+        delta, "reasoning"
+    ), "reasoning should not leak as an extra attribute"
+
+    # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
+    delta2 = Delta(content="hello", reasoning_content="direct reasoning")
+    assert delta2.reasoning_content == "direct reasoning"
+
+    # When both are present, reasoning_content takes precedence
+    delta3 = Delta(reasoning_content="from_rc", reasoning="from_r")
+    assert delta3.reasoning_content == "from_rc"
+
+    # When neither is present, reasoning_content is not set (OpenAI spec)
+    delta4 = Delta(content="hello")
+    assert not hasattr(delta4, "reasoning_content")

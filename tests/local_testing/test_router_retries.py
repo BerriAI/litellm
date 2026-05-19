@@ -859,7 +859,7 @@ async def test_router_timeout_model_specific_and_global():
             {
                 "model_name": "anthropic-claude",
                 "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5-20250929",
+                    "model": f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
                     "timeout": 1,
                 },
             }

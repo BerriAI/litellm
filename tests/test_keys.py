@@ -62,7 +62,7 @@ async def generate_key(
     i,
     budget=None,
     budget_duration=None,
-    models=["azure-models", "gpt-4", "dall-e-3"],
+    models=["azure-models", "gpt-4", "gpt-image-1"],
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -235,7 +235,7 @@ async def chat_completion(session, key, model="gpt-4"):
                 pass
 
 
-async def image_generation(session, key, model="dall-e-3"):
+async def image_generation(session, key, model="gpt-image-1"):
     url = "http://0.0.0.0:4000/v1/images/generations"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -547,7 +547,9 @@ async def test_key_info_spend_values():
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.skip(reason="Temporarily skipping due to model change. Will be updated soon.")
+@pytest.mark.skip(
+    reason="Temporarily skipping due to model change. Will be updated soon."
+)
 async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
@@ -582,6 +584,7 @@ async def test_aaaaakey_info_spend_values_streaming():
         assert (
             rounded_response_cost == rounded_key_info_spend
         ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
+
 
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
@@ -860,7 +863,7 @@ async def test_key_over_budget():
 
         ## CALL `/models` - expect to work
         model_list = await get_key_info(session=session, get_key=key, call_key=key)
-        ## CALL `/chat/completions` - expect to fail    
+        ## CALL `/chat/completions` - expect to fail
         try:
             await chat_completion(session=session, key=key)
             pytest.fail("Expected this call to fail")

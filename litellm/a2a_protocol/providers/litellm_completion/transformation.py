@@ -124,9 +124,7 @@ class A2ACompletionBridgeTransformation:
             },
         }
 
-        verbose_logger.debug(
-            f"OpenAI -> A2A transform: content_length={len(content)}"
-        )
+        verbose_logger.debug(f"OpenAI -> A2A transform: content_length={len(content)}")
 
         return a2a_response
 

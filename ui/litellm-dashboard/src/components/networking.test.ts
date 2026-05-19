@@ -5,6 +5,7 @@ import * as Networking from "./networking";
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
+  storeLoginToken: vi.fn(),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -76,6 +77,38 @@ describe("networking - expired session handling", () => {
     }
 
     expect(mockFetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("loginCall - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt" }),
+    }) as any;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(storeLoginToken).toHaveBeenCalledWith("my-jwt");
+  });
+
+  it("does not call storeLoginToken when response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success" }),
+    }) as any;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(storeLoginToken).not.toHaveBeenCalled();
   });
 });
 
@@ -315,5 +348,108 @@ describe("UI config and public endpoints", () => {
       (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
     );
     expect(configCall).toBeDefined();
+  });
+});
+
+describe("individualModelHealthCheckCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should call /health with model_id query param so health checks run by deployment id", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        healthy_count: 1,
+        unhealthy_count: 0,
+        healthy_endpoints: [],
+        unhealthy_endpoints: [],
+      }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.individualModelHealthCheckCall("token-123", "deployment-abc-456");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    expect(urlStr).toContain("health");
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("model_id")).toBe("deployment-abc-456");
+    expect(parsed.searchParams.has("model")).toBe(false);
+  });
+
+  it("should encode model_id in URL", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        healthy_count: 0,
+        unhealthy_count: 0,
+        healthy_endpoints: [],
+        unhealthy_endpoints: [],
+      }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.individualModelHealthCheckCall("token", "id/with/slashes");
+
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("model_id")).toBe("id/with/slashes");
+  });
+});
+
+describe("teamInfoCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should URL-encode team_id query param to handle special characters safely", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ team_id: "team with spaces & special?chars" }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    const teamID = "team with spaces & special?chars";
+    await Networking.teamInfoCall("token", teamID);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/team/info");
+    // Encoded value is present in the raw URL string (verifies encodeURIComponent was used)
+    expect(urlStr).toContain(`team_id=${encodeURIComponent(teamID)}`);
+    // Round-trip parse returns the original team_id
+    expect(parsed.searchParams.get("team_id")).toBe(teamID);
+  });
+
+  it("should not append team_id when teamID is null", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.teamInfoCall("token", null);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.has("team_id")).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 """
 Main Search function for LiteLLM.
 """
+
 import asyncio
 import contextvars
 from functools import partial
@@ -30,18 +31,18 @@ def _build_search_optional_params(
 ) -> Dict[str, Any]:
     """
     Helper function to build optional_params dict from Perplexity Search API parameters.
-    
+
     Args:
         max_results: Maximum number of results (1-20)
         search_domain_filter: List of domains to filter (max 20)
         max_tokens_per_page: Max tokens per page
         country: Country code filter
-        
+
     Returns:
         Dict with non-None optional parameters
     """
     optional_params: Dict[str, Any] = {}
-    
+
     if max_results is not None:
         optional_params["max_results"] = max_results
     if search_domain_filter is not None:
@@ -50,7 +51,7 @@ def _build_search_optional_params(
         optional_params["max_tokens_per_page"] = max_tokens_per_page
     if country is not None:
         optional_params["country"] = country
-    
+
     return optional_params
 
 
@@ -70,7 +71,7 @@ async def asearch(
 ) -> SearchResponse:
     """
     Async Search function.
-    
+
     Args:
         query: Search query (string or list of strings)
         search_provider: Provider name (e.g., "perplexity")
@@ -83,20 +84,20 @@ async def asearch(
         timeout: Optional timeout
         extra_headers: Optional extra headers
         **kwargs: Additional parameters
-        
+
     Returns:
         SearchResponse with results list following Perplexity format
-        
+
     Example:
         ```python
         import litellm
-        
+
         # Basic search
         response = await litellm.asearch(
             query="latest AI developments 2024",
             search_provider="perplexity"
         )
-        
+
         # Search with options
         response = await litellm.asearch(
             query="AI developments",
@@ -106,7 +107,7 @@ async def asearch(
             max_tokens_per_page=1024,
             country="US"
         )
-        
+
         # Access results
         for result in response.results:
             print(f"{result.title}: {result.url}")
@@ -175,7 +176,7 @@ def search(
 ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
     """
     Synchronous Search function.
-    
+
     Args:
         query: Search query (string or list of strings)
         search_provider: Provider name (e.g., "perplexity")
@@ -188,20 +189,20 @@ def search(
         timeout: Optional timeout
         extra_headers: Optional extra headers
         **kwargs: Additional parameters
-        
+
     Returns:
         SearchResponse with results list following Perplexity format
-        
+
     Example:
         ```python
         import litellm
-        
+
         # Basic search
         response = litellm.search(
             query="latest AI developments 2024",
             search_provider="perplexity"
         )
-        
+
         # Search with options
         response = litellm.search(
             query="AI developments",
@@ -211,13 +212,13 @@ def search(
             max_tokens_per_page=1024,
             country="US"
         )
-        
+
         # Multi-query search
         response = litellm.search(
             query=["AI developments", "machine learning trends"],
             search_provider="perplexity"
         )
-        
+
         # Access results
         for result in response.results:
             print(f"{result.title}: {result.url}")
@@ -231,11 +232,13 @@ def search(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("asearch", False) is True
-        
+
         # Validate query parameter
         if not isinstance(query, (str, list)):
-            raise ValueError(f"query must be a string or list of strings, got {type(query)}")
-        
+            raise ValueError(
+                f"query must be a string or list of strings, got {type(query)}"
+            )
+
         if isinstance(query, list) and not all(isinstance(q, str) for q in query):
             raise ValueError("All items in query list must be strings")
 
@@ -247,13 +250,9 @@ def search(
         )
 
         if search_provider_config is None:
-            raise ValueError(
-                f"Search is not supported for provider: {search_provider}"
-            )
+            raise ValueError(f"Search is not supported for provider: {search_provider}")
 
-        verbose_logger.debug(
-            f"Search call - provider: {search_provider}"
-        )
+        verbose_logger.debug(f"Search call - provider: {search_provider}")
 
         # Build optional_params from explicit parameters
         optional_params = _build_search_optional_params(
@@ -262,15 +261,15 @@ def search(
             max_tokens_per_page=max_tokens_per_page,
             country=country,
         )
-        
+
         # Filter out internal LiteLLM parameters from kwargs
         filtered_kwargs = filter_out_litellm_params(kwargs=kwargs)
-        
+
         # Add remaining kwargs to optional_params (for provider-specific params)
         for key, value in filtered_kwargs.items():
             if key not in optional_params:
                 optional_params[key] = value
-        
+
         verbose_logger.debug(f"Search optional_params: {optional_params}")
 
         # Validate environment and get headers
@@ -288,7 +287,8 @@ def search(
 
         # Pre Call logging
         model_name = f"{search_provider}/search"
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model_name,
             optional_params=optional_params,
             litellm_params={
@@ -322,4 +322,3 @@ def search(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-

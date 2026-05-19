@@ -33,6 +33,7 @@ class BaseRerankConfig(ABC):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         return {}
 
@@ -52,8 +53,8 @@ class BaseRerankConfig(ABC):
 
     @abstractmethod
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:

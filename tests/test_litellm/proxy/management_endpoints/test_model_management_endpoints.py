@@ -1,18 +1,20 @@
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm._uuid import uuid
+
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
+    LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
@@ -20,6 +22,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _get_team_deployments,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
@@ -27,9 +30,15 @@ from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
 
 
 class MockPrismaClient:
-    def __init__(self, team_exists: bool = True, user_admin: bool = True):
+    def __init__(
+        self,
+        team_exists: bool = True,
+        user_admin: bool = True,
+        sibling_deployments: list = None,
+    ):
         self.team_exists = team_exists
         self.user_admin = user_admin
+        self.sibling_deployments = sibling_deployments or []
         self.db = self
 
     async def find_unique(self, where):
@@ -45,8 +54,31 @@ class MockPrismaClient:
             )
         return None
 
+    async def find_many(self, where=None):
+        # Filter sibling deployments based on where clause
+        if not self.sibling_deployments:
+            return []
+
+        results = self.sibling_deployments
+
+        # Support model_name startswith filter (used by _get_team_deployments)
+        if where and "model_name" in where:
+            model_name_filter = where["model_name"]
+            if (
+                isinstance(model_name_filter, dict)
+                and "startswith" in model_name_filter
+            ):
+                prefix = model_name_filter["startswith"]
+                results = [d for d in results if d.model_name.startswith(prefix)]
+
+        return results
+
     @property
     def litellm_teamtable(self):
+        return self
+
+    @property
+    def litellm_proxymodeltable(self):
         return self
 
 
@@ -381,12 +413,12 @@ class TestClearCache:
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_config
-        ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
-        ), patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger"
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
         ):
             await clear_cache()
 
@@ -399,7 +431,9 @@ class TestClearCache:
         """
         Test that clear_cache clears DB models and preserves config models.
         """
-        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
 
         # Create mock router with mixed DB and config models
         mock_router = MagicMock()
@@ -407,18 +441,18 @@ class TestClearCache:
             {
                 "model_name": "gpt-4",
                 "model_info": {"id": "db-model-1", "db_model": True},
-                "litellm_params": {"model": "gpt-4"}
+                "litellm_params": {"model": "gpt-4"},
             },
             {
-                "model_name": "gpt-3.5-turbo", 
+                "model_name": "gpt-3.5-turbo",
                 "model_info": {"id": "config-model-1", "db_model": False},
-                "litellm_params": {"model": "gpt-3.5-turbo"}
+                "litellm_params": {"model": "gpt-3.5-turbo"},
             },
             {
                 "model_name": "claude-3",
                 "model_info": {"id": "db-model-2", "db_model": True},
-                "litellm_params": {"model": "claude-3"}
-            }
+                "litellm_params": {"model": "claude-3"},
+            },
         ]
         mock_router.delete_deployment = MagicMock(return_value=True)
         mock_router.auto_routers = MagicMock()
@@ -430,12 +464,12 @@ class TestClearCache:
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_config
-        ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
-        ), patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger"
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
         ):
             await clear_cache()
 
@@ -451,6 +485,357 @@ class TestClearCache:
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+
+class TestUpdateModel:
+    """
+    Tests for the update_model (POST /model/update) handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_model_clears_cache_after_db_write(self):
+        """
+        Regression test for the stale-router bug: POST /model/update must refresh
+        the in-memory router after persisting to LiteLLM_ProxyModelTable, otherwise
+        model-level guardrails (and any other litellm_params change) silently no-op
+        until the APScheduler reload tick fires ~30 s later.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import (
+            ModelInfo,
+            updateDeployment,
+            updateLiteLLMParams,
+        )
+
+        model_id = "db-model-under-test"
+
+        existing_row = MagicMock()
+        existing_row.litellm_params = {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "sk-existing",
+        }
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": model_id},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        mock_router = MagicMock()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=None),
+            ) as mock_clear_cache,
+        ):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(guardrails=["g1"]),
+                    model_info=ModelInfo(id=model_id),
+                ),
+                user_api_key_dict=admin_user,
+            )
+
+            mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+            mock_clear_cache.assert_awaited_once_with()
+
+
+class TestUpdatePublicModelGroups:
+    """Test that update_public_model_groups correctly sets litellm.public_model_groups
+    even when get_config() overwrites it with stale DB values."""
+
+    @pytest.mark.asyncio
+    async def test_public_model_groups_set_after_get_config(self):
+        """
+        Regression test: get_config() internally calls _update_config_from_db which
+        sets litellm.public_model_groups to the old DB value. The endpoint must set
+        the in-memory value AFTER get_config() so the new value is not overwritten.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            UpdatePublicModelGroupsRequest,
+            update_public_model_groups,
+        )
+
+        old_db_models = ["db-model-1", "db-model-2"]
+        new_models = ["db-model-1", "db-model-2", "config-model-1", "config-model-2"]
+
+        # Simulate get_config() overwriting litellm.public_model_groups with old DB value
+        async def mock_get_config(*args, **kwargs):
+            # This simulates _update_config_from_db calling setattr(litellm, "public_model_groups", old_value)
+            litellm.public_model_groups = old_db_models
+            return {"litellm_settings": {"public_model_groups": old_db_models}}
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = mock_get_config
+        mock_proxy_config.save_config = AsyncMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        request = UpdatePublicModelGroupsRequest(model_groups=new_models)
+
+        original_value = getattr(litellm, "public_model_groups", None)
+        try:
+            with (
+                patch(
+                    "litellm.proxy.proxy_server.proxy_config",
+                    mock_proxy_config,
+                ),
+                patch(
+                    "litellm.proxy.proxy_server.store_model_in_db",
+                    True,
+                ),
+            ):
+                result = await update_public_model_groups(
+                    request=request,
+                    user_api_key_dict=admin_user,
+                )
+
+            # After the endpoint completes, the in-memory value must reflect
+            # the NEW models, not the stale DB value
+            assert litellm.public_model_groups == new_models
+            assert result["public_model_groups"] == new_models
+        finally:
+            litellm.public_model_groups = original_value
+
+    @pytest.mark.asyncio
+    async def test_useful_links_set_after_get_config(self):
+        """
+        Regression test: same stale-overwrite bug as public_model_groups applies
+        to update_useful_links / public_model_groups_links.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_useful_links,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            UpdateUsefulLinksRequest,
+        )
+
+        old_links = {"Old Doc": "https://old.example.com"}
+        new_links = {
+            "New Doc": "https://new.example.com",
+            "API Ref": "https://api.example.com",
+        }
+
+        async def mock_get_config(*args, **kwargs):
+            litellm.public_model_groups_links = old_links
+            return {"litellm_settings": {"public_model_groups_links": old_links}}
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = mock_get_config
+        mock_proxy_config.save_config = AsyncMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        request = UpdateUsefulLinksRequest(useful_links=new_links)
+
+        original_value = getattr(litellm, "public_model_groups_links", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ):
+                result = await update_useful_links(
+                    request=request,
+                    user_api_key_dict=admin_user,
+                )
+
+            assert litellm.public_model_groups_links == new_links
+            assert result["useful_links"] == new_links
+        finally:
+            litellm.public_model_groups_links = original_value
+
+
+class TestTeamModelSiblingRouting:
+    """
+    Verify that sibling team deployments (same public model name, different
+    api_base) are all reachable through routing — no alias overwrite, no
+    collapse to a single deployment.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_model_aliases_written_for_team_models(self):
+        """
+        _add_team_model_to_db must NOT write model_aliases (which caused
+        the second sibling to overwrite the first). It should only call
+        team_model_add to register the public name on the team's models list.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _add_team_model_to_db,
+        )
+        from litellm.types.router import ModelInfo
+
+        team_id = "team_no_alias"
+        public_name = "gpt-4.1-mini"
+
+        async def mock_add_model_to_db(model_params, user_api_key_dict, prisma_client):
+            return MagicMock(model_id=str(uuid.uuid4()))
+
+        mock_team_model_add = AsyncMock()
+
+        user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        prisma_client = MockPrismaClient(team_exists=True)
+
+        for api_base in ["https://eastus.example.com", "https://westus.example.com"]:
+            dep = Deployment(
+                model_name=public_name,
+                litellm_params=LiteLLM_Params(
+                    model="azure/gpt-4o-mini",
+                    api_key="key",
+                    api_base=api_base,
+                ),
+                model_info=ModelInfo(team_id=team_id),
+            )
+            with (
+                patch(
+                    "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                    side_effect=mock_add_model_to_db,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                    mock_team_model_add,
+                ),
+            ):
+                await _add_team_model_to_db(
+                    model_params=dep,
+                    user_api_key_dict=user,
+                    prisma_client=prisma_client,
+                )
+
+        assert mock_team_model_add.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_router_finds_all_sibling_team_deployments(self):
+        """
+        When two team deployments share team_public_model_name="gpt-4.1-mini",
+        the router's _common_checks_available_deployment must return BOTH as
+        healthy_deployments (not collapse to one).
+        """
+        import litellm
+
+        team_id = "teamA"
+        public_name = "gpt-4.1-mini"
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": f"model_name_{team_id}_uuid1",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o-mini",
+                        "api_key": "key-1",
+                        "api_base": "https://eastus.openai.azure.com",
+                    },
+                    "model_info": {
+                        "team_id": team_id,
+                        "team_public_model_name": public_name,
+                    },
+                },
+                {
+                    "model_name": f"model_name_{team_id}_uuid2",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o-mini",
+                        "api_key": "key-2",
+                        "api_base": "https://westus.openai.azure.com",
+                    },
+                    "model_info": {
+                        "team_id": team_id,
+                        "team_public_model_name": public_name,
+                    },
+                },
+                {
+                    "model_name": "global-gpt-4o",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o",
+                        "api_key": "global-key",
+                        "api_base": "https://global.openai.azure.com",
+                    },
+                    "model_info": {},  # No team_id - global deployment
+                },
+            ],
+        )
+
+        # map_team_model should return the public name (not an internal UUID)
+        result = router.map_team_model(public_name, team_id)
+        assert result == public_name
+
+        # _common_checks_available_deployment should return both deployments
+        model, healthy = router._common_checks_available_deployment(
+            model=public_name,
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+        )
+        assert isinstance(healthy, list)
+        assert len(healthy) == 2
+        api_bases = {d["litellm_params"]["api_base"] for d in healthy}
+        assert api_bases == {
+            "https://eastus.openai.azure.com",
+            "https://westus.openai.azure.com",
+        }
+
+    def test_global_deployments_accessible_to_teams(self):
+        """Test that global deployments (no team_id) are accessible to all teams"""
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "global-gpt-4o",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o",
+                        "api_key": "global-key",
+                        "api_base": "https://global.openai.azure.com",
+                    },
+                    "model_info": {},  # No team_id - global deployment
+                },
+            ],
+        )
+
+        # Global deployment should be accessible when team_id is provided
+        deployments = router._get_all_deployments(
+            model_name="global-gpt-4o", team_id="teamA"
+        )
+        assert len(deployments) == 1
+        assert deployments[0]["model_name"] == "global-gpt-4o"
+
+        # should_include_deployment should return True for global deployments
+        assert router.should_include_deployment(
+            model_name="global-gpt-4o",
+            model={"model_name": "global-gpt-4o", "model_info": {}},
+            team_id="teamA",
+        )
 
 
 class TestTeamModelUpdate:
@@ -482,14 +867,18 @@ class TestTeamModelUpdate:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
-        ), patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
-        ) as mock_update_team, patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_team_model_add:
+        with (
+            patch(
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_team_model_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
+            ) as mock_update_team,
+        ):
             result = await _update_team_model_in_db(
                 db_model=db_model,
                 patch_data=patch_data,
@@ -499,8 +888,210 @@ class TestTeamModelUpdate:
 
             assert result.get("model_name", "").startswith("model_name_test_team_123_")
             assert "team_public_model_name" in str(result.get("model_info", ""))
-            mock_update_team.assert_called_once()
+            # team_model_add must be called to add public name to team's models list
             mock_team_model_add.assert_called_once()
+            # update_team (model_aliases write) must NOT be called in the new implementation
+            mock_update_team.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rename_preserves_old_name_when_siblings_exist(self):
+        """Test that renaming a deployment preserves old public name when sibling deployments still use it"""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        # Create a deployment being renamed
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(
+                team_id="team_123", team_public_model_name="old-public-name"
+            ),
+        )
+
+        # Create a sibling deployment that still uses the old public name
+        sibling_deployment = MagicMock()
+        sibling_deployment.model_name = "model_name_team_123_uuid2"
+        sibling_deployment.model_info = {
+            "team_id": "team_123",
+            "team_public_model_name": "old-public-name",
+        }
+
+        prisma_client = MockPrismaClient(
+            team_exists=True, sibling_deployments=[sibling_deployment]
+        )
+
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
+            await _update_existing_team_model_assignment(
+                team_id="team_123",
+                public_model_name="new-public-name",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,  # type: ignore
+            )
+
+            # team_model_delete should NOT be called because sibling exists
+            mock_delete.assert_not_called()
+            # team_model_add should be called to add new public name
+            mock_add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_first_time_public_name_assignment_adds_team_model(self):
+        """If existing team deployment had no public name, first assignment must call team_model_add."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
+            await _update_existing_team_model_assignment(
+                team_id="team_123",
+                public_model_name="new-public-name",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=None,
+            )
+
+            mock_add.assert_called_once()
+            mock_delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rename_with_prisma_none_clears_patch_model_name(self):
+        """Rename path must clear patch_data.model_name even when prisma is unavailable (P1)."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(
+                team_id="team_123", team_public_model_name="old-public-name"
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        await _update_existing_team_model_assignment(
+            team_id="team_123",
+            public_model_name="new-public-name",
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=None,
+        )
+
+        assert patch_data.model_name is None
+
+    @pytest.mark.asyncio
+    async def test_rename_handles_legacy_string_model_info(self):
+        """Test rename path handles legacy string-encoded model_info rows without crashing."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(
+                team_id="team_123", team_public_model_name="old-public-name"
+            ),
+        )
+
+        sibling_deployment = MagicMock()
+        sibling_deployment.model_name = "model_name_team_123_uuid2"
+        sibling_deployment.model_info = (
+            '{"team_id":"team_123","team_public_model_name":"old-public-name"}'
+        )
+
+        prisma_client = MockPrismaClient(
+            team_exists=True, sibling_deployments=[sibling_deployment]
+        )
+
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
+            await _update_existing_team_model_assignment(
+                team_id="team_123",
+                public_model_name="new-public-name",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,  # type: ignore
+            )
+
+            mock_delete.assert_not_called()
+            mock_add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_patch_model_with_team_id_validates_permissions(self):
@@ -552,27 +1143,37 @@ class TestModelInfoEndpoint:
             user_id="test_user",
             api_key="test_key",
             models=["gpt-4", "claude-3"],
-            team_models=["gpt-3.5-turbo"]
+            team_models=["gpt-3.5-turbo"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.get_llm_provider") as mock_get_provider:
-            
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+            patch("litellm.get_llm_provider") as mock_get_provider,
+        ):
             # Setup mocks
-            mock_router.get_model_names.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_router.get_model_names.return_value = [
+                "gpt-4",
+                "claude-3",
+                "gpt-3.5-turbo",
+            ]
             mock_router.get_model_access_groups.return_value = {}
             mock_get_key_models.return_value = ["gpt-4", "claude-3"]
             mock_get_team_models.return_value = ["gpt-3.5-turbo"]
-            mock_get_complete_models.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_get_complete_models.return_value = [
+                "gpt-4",
+                "claude-3",
+                "gpt-3.5-turbo",
+            ]
             mock_get_provider.return_value = (None, "openai", None, None)
 
             # Test accessible model
             result = await model_info(
-                model_id="gpt-4",
-                user_api_key_dict=user_api_key_dict
+                model_id="gpt-4", user_api_key_dict=user_api_key_dict
             )
 
             assert result["id"] == "gpt-4"
@@ -583,22 +1184,26 @@ class TestModelInfoEndpoint:
     @pytest.mark.asyncio
     async def test_model_info_inaccessible_model_returns_404(self):
         """Test model_info returns 404 for inaccessible models"""
-        from litellm.proxy.proxy_server import model_info
         from fastapi import HTTPException
+
+        from litellm.proxy.proxy_server import model_info
 
         # Mock user with limited access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
             api_key="test_key",
             models=["gpt-4"],  # Only has access to gpt-4
-            team_models=[]
+            team_models=[],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models:
-            
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+        ):
             # Setup mocks - user only has access to gpt-4
             mock_router.get_model_names.return_value = ["gpt-4", "claude-3"]
             mock_router.get_model_access_groups.return_value = {}
@@ -610,32 +1215,35 @@ class TestModelInfoEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 await model_info(
                     model_id="claude-3",  # Not in user's accessible models
-                    user_api_key_dict=user_api_key_dict
+                    user_api_key_dict=user_api_key_dict,
                 )
-            
+
             assert exc_info.value.status_code == 404
             assert "does not exist or is not accessible" in exc_info.value.detail
 
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_model_info_team_model_access(self):
         """Test model_info works with team model access"""
         from litellm.proxy.proxy_server import model_info
-        
+
         # Mock user with team access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
-            api_key="test_key", 
+            api_key="test_key",
             team_id="test_team",
             models=[],  # No direct key models
-            team_models=["team-model-1"]
+            team_models=["team-model-1"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
-             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
-             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
-             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.get_llm_provider") as mock_get_provider:
-            
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+            patch("litellm.get_llm_provider") as mock_get_provider,
+        ):
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
             mock_router.get_model_access_groups.return_value = {}
@@ -646,10 +1254,195 @@ class TestModelInfoEndpoint:
 
             # Test team model access
             result = await model_info(
-                model_id="team-model-1",
-                user_api_key_dict=user_api_key_dict
+                model_id="team-model-1", user_api_key_dict=user_api_key_dict
             )
 
             assert result["id"] == "team-model-1"
-            assert result["object"] == "model" 
+            assert result["object"] == "model"
             assert result["owned_by"] == "custom"
+
+
+class TestAddAndDeleteModelLifecycle:
+    """
+    Mock replacement for test_add_and_delete_models in tests/test_models.py.
+
+    The original integration test required a live proxy + OPENAI_API_KEY.
+    This test verifies the same lifecycle (add → delete → double-delete fails)
+    by calling the endpoint handlers directly with mocked DB.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_then_delete_model(self):
+        """
+        - Add model via add_new_model → returns model_id
+        - Delete model via delete_model → returns success
+        - Delete same model again → raises (model not found)
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+        )
+
+        model_id = "lifecycle-test-model-123"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        # Build a real LiteLLM_ProxyModelTable for the DB mock to return
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="lifecycle-model",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.delete_deployment = MagicMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
+
+            # --- ADD ---
+            add_result = await add_new_model(
+                model_params=Deployment(
+                    model_name="lifecycle-model",
+                    litellm_params=LiteLLM_Params(
+                        model="openai/gpt-4.1-nano", api_key="fake-key"
+                    ),
+                    model_info={"id": model_id},
+                ),
+                user_api_key_dict=admin_user,
+            )
+            assert add_result.model_id == model_id
+
+            # --- DELETE ---
+            delete_result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+            assert "deleted successfully" in delete_result["message"]
+
+            # --- DELETE again should fail (model not found) ---
+            mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+                return_value=None
+            )
+            from litellm.proxy.proxy_server import ProxyException
+
+            with pytest.raises(ProxyException) as exc_info:
+                await delete_model_endpoint(
+                    model_info=ModelInfoDelete(id=model_id),
+                    user_api_key_dict=admin_user,
+                )
+            assert str(exc_info.value.code) == "400"
+
+
+class TestGetTeamDeployments:
+    """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
+
+    @pytest.mark.asyncio
+    async def test_returns_matching_team_deployments(self):
+        """Deployments with matching model_name prefix and team_id are returned."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = {"team_id": team_id, "team_public_model_name": "gpt-4"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+        assert result[0] is dep
+
+    @pytest.mark.asyncio
+    async def test_filters_out_wrong_team_id_in_model_info(self):
+        """A deployment whose model_name matches but model_info.team_id differs is excluded."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = {"team_id": "other_team"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_handles_string_encoded_model_info(self):
+        """Legacy rows with JSON-string model_info are parsed and filtered correctly."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = json.dumps({"team_id": team_id})
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_deployments(self):
+        """Returns empty list when no deployments exist."""
+        prisma_client = MockPrismaClient(sibling_deployments=[])
+        result = await _get_team_deployments("team_abc", prisma_client)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_rows_with_invalid_model_info(self):
+        """Rows with non-dict, non-parseable model_info are skipped."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = "not-valid-json"
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_multiple_deployments_mixed_filtering(self):
+        """Only deployments with correct prefix AND team_id are returned."""
+        team_id = "team_abc"
+
+        # Matches both prefix and team_id
+        dep1 = MagicMock()
+        dep1.model_name = f"model_name_{team_id}_uuid1"
+        dep1.model_info = {"team_id": team_id}
+
+        # Matches prefix but wrong team_id
+        dep2 = MagicMock()
+        dep2.model_name = f"model_name_{team_id}_uuid2"
+        dep2.model_info = {"team_id": "wrong_team"}
+
+        # Different prefix entirely (won't be returned by mock's startswith filter)
+        dep3 = MagicMock()
+        dep3.model_name = "model_name_other_team_uuid3"
+        dep3.model_info = {"team_id": "other_team"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep1, dep2, dep3])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+        assert result[0] is dep1

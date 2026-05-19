@@ -13,6 +13,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
+    CallTypes,
     Delta,
     LlmProviders,
     ModelResponseStream,
@@ -22,6 +23,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _is_streaming_request,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
@@ -30,28 +32,118 @@ from litellm.utils import (
 # Adds the parent directory to the system path
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
     This is needed for Azure Model Router which can route to OpenAI models.
     """
     # azure_ai should match openai models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "openai"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "openai"}, custom_llm_provider="azure_ai"
+        )
+        is True
+    )
 
     # azure_ai should match azure models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "azure"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "azure"}, custom_llm_provider="azure_ai"
+        )
+        is True
+    )
 
     # azure_ai should NOT match other providers
-    assert _check_provider_match(
-        model_info={"litellm_provider": "anthropic"},
-        custom_llm_provider="azure_ai"
-    ) is False
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "anthropic"}, custom_llm_provider="azure_ai"
+        )
+        is False
+    )
+
+
+def test_check_provider_match_github_allows_upstream_provider_metadata():
+    """
+    Test that github provider can match upstream provider metadata.
+    GitHub Models can provide models from multiple providers.
+    """
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "openai"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
+
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "github"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
+
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "anthropic"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_github_openai_alias():
+    assert litellm.utils.supports_function_calling(model="github/gpt-4o-mini") is True
+    assert (
+        litellm.utils.supports_function_calling(
+            model="gpt-4o-mini", custom_llm_provider="github"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_github_anthropic_alias():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/claude-3-7-sonnet-20250219"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_deepinfra_llama():
+    """Test that deepinfra Llama models correctly report function calling support.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22619
+    """
+    assert (
+        litellm.utils.supports_function_calling(
+            model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_unknown_github_alias_returns_false():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/non-existent-model-for-capability-check"
+        )
+        is False
+    )
 
 
 def test_get_optional_params_image_gen():
@@ -117,6 +209,72 @@ def test_get_optional_params_image_gen_filters_empty_values():
         extra_body={},
     )
     assert optional_params == {}
+
+
+def test_gpt_image_provider_detection_covers_existing_family():
+    for image_model in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"):
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=image_model)
+
+        assert model == image_model
+        assert custom_llm_provider == "openai"
+
+
+def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
+    assert (
+        "/v1/images/generations"
+        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert (
+        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_pdf_input"] is True
+
+
+def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="gpt-image-2-2026-04-21"
+    )
+
+    assert model == "gpt-image-2-2026-04-21"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["output_cost_per_image_token"] == 3e-05
+
+
+def test_azure_gpt_image_2_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="azure/gpt-image-2"
+    )
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "azure"
+
+    model_info = litellm.get_model_info(
+        model="gpt-image-2", custom_llm_provider="azure"
+    )
+    assert model_info["litellm_provider"] == "azure"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
@@ -320,14 +478,14 @@ def test_all_model_configs():
     assert (
         "max_completion_tokens"
         in VertexAIAnthropicConfig().get_supported_openai_params(
-            model="claude-3-5-sonnet-20240620"
+            model="claude-sonnet-4-6"
         )
     )
 
     assert VertexAIAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-6",
         drop_params=False,
     ) == {"max_tokens": 10}
 
@@ -378,11 +536,8 @@ def test_anthropic_web_search_in_model_info():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
-        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-4-sonnet-20250514",
         "anthropic/claude-sonnet-4-5-20250929",
-        "anthropic/claude-3-5-sonnet-20241022",
-        "anthropic/claude-3-5-haiku-20241022",
-        "anthropic/claude-3-5-haiku-latest",
     ]
     for model in supported_models:
         from litellm.utils import get_model_info
@@ -438,17 +593,21 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "input_cost_per_second",
         "output_cost_per_second",
+        "output_cost_per_second_1080p",
         "input_cost_per_query",
         "input_cost_per_request",
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "output_cost_per_image_token_batches",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
         "output_cost_per_token_above_128k_tokens",
         "input_cost_per_token_above_200k_tokens",
         "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens",
         "input_cost_per_character_above_128k_tokens",
         "output_cost_per_character_above_128k_tokens",
         "input_cost_per_image_above_128k_tokens",
@@ -539,8 +698,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
+                    "type": "number"
+                },
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -553,12 +717,25 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_256k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_priority": {
+                    "type": "number"
+                },
+                "cache_read_input_token_cost_above_272k_tokens_priority": {
+                    "type": "number"
+                },
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -578,6 +755,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
+                "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -592,6 +770,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "max_video_length": {"type": "number"},
                 "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
+                "provider_specific_entry": {"type": "object"},
                 "mode": {
                     "type": "string",
                     "enum": [
@@ -606,6 +785,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "video_generation",
                         "moderation",
                         "rerank",
+                        "realtime",
                         "responses",
                         "ocr",
                         "search",
@@ -617,11 +797,15 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
+                "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_256k_tokens": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
                     "type": "number"
@@ -645,8 +829,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_code_execution": {"type": "boolean"},
+                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
+                "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
@@ -657,10 +844,20 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
+                "supports_multimodal": {"type": "boolean"},
+                "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_minimal_reasoning_effort": {"type": "boolean"},
+                "supports_low_reasoning_effort": {"type": "boolean"},
+                "supports_none_reasoning_effort": {"type": "boolean"},
+                "supports_xhigh_reasoning_effort": {"type": "boolean"},
+                "supports_max_reasoning_effort": {"type": "boolean"},
+                "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
+                "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
+                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -678,6 +875,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/vertex_ai/live",
                         ],
                     },
                 },
@@ -695,6 +893,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "search_context_size_high": {"type": "number"},
                     },
                     "additionalProperties": False,
+                },
+                "web_search_billing_unit": {
+                    "type": "string",
+                    "enum": ["per_prompt", "per_query"],
                 },
                 "citation_cost_per_token": {"type": "number"},
                 "supported_modalities": {
@@ -718,6 +920,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_native_structured_output": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -749,8 +952,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         },
     }
 
-    prod_json = "./model_prices_and_context_window.json"
-    # prod_json = "../../model_prices_and_context_window.json"
+    prod_json = os.path.join(
+        os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
+    )
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -791,8 +995,10 @@ def test_max_tokens_consistency():
     from pathlib import Path
 
     # Load the model configuration
-    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
-    with open(config_path, 'r') as f:
+    config_path = (
+        Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    )
+    with open(config_path, "r") as f:
         models = json.load(f)
 
     inconsistencies = []
@@ -804,17 +1010,19 @@ def test_max_tokens_consistency():
 
         # Check if both max_tokens and max_output_tokens exist
         if isinstance(config, dict):
-            max_tokens = config.get('max_tokens')
-            max_output_tokens = config.get('max_output_tokens')
+            max_tokens = config.get("max_tokens")
+            max_output_tokens = config.get("max_output_tokens")
 
             # Only validate if both exist
             if max_tokens is not None and max_output_tokens is not None:
                 if max_tokens != max_output_tokens:
-                    inconsistencies.append({
-                        'model': model_name,
-                        'max_tokens': max_tokens,
-                        'max_output_tokens': max_output_tokens
-                    })
+                    inconsistencies.append(
+                        {
+                            "model": model_name,
+                            "max_tokens": max_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    )
 
     if inconsistencies:
         error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
@@ -843,6 +1051,7 @@ def test_get_model_info_gemini():
             and not "learnlm" in model
             and not "imagen" in model
             and not "veo" in model
+            and not "lyria" in model
             and not "robotics" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
@@ -997,7 +1206,7 @@ def test_supports_computer_use_utility():
     try:
         # Test a model known to support computer_use from backup JSON
         supports_cu_anthropic = supports_computer_use(
-            model="anthropic/claude-3-7-sonnet-20250219"
+            model="anthropic/claude-4-sonnet-20250514"
         )
         assert supports_cu_anthropic is True
 
@@ -1020,7 +1229,7 @@ def test_supports_computer_use_utility():
 def test_get_model_info_shows_supports_computer_use():
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
-    We'll use 'claude-3-7-sonnet-20250219' as it's configured
+    We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1029,7 +1238,7 @@ def test_get_model_info_shows_supports_computer_use():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # This model should have 'supports_computer_use': True in the backup JSON
-    model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
+    model_known_to_support_computer_use = "claude-4-sonnet-20250514"
     info = litellm.get_model_info(model_known_to_support_computer_use)
     print(f"Info for {model_known_to_support_computer_use}: {info}")
 
@@ -1050,8 +1259,8 @@ def test_get_model_info_shows_supports_computer_use():
     "model, custom_llm_provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
-        ("gemini-1.5-pro", "vertex_ai"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+        ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
 def test_pre_process_non_default_params(model, custom_llm_provider):
@@ -1081,20 +1290,25 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         provider_config=provider_config,
     )
     print(processed_non_default_params)
+    # Vertex AI / Gemini uses Pydantic's model_json_schema() which doesn't
+    # include additionalProperties: False (Gemini rejects it).  Other
+    # providers use OpenAI's to_strict_json_schema() which does.
+    expected_schema = {
+        "properties": {
+            "x": {"title": "X", "type": "string"},
+            "y": {"title": "Y", "type": "string"},
+        },
+        "required": ["x", "y"],
+        "title": "ResponseFormat",
+        "type": "object",
+    }
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta", "gemini"):
+        expected_schema["additionalProperties"] = False
     assert processed_non_default_params == {
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "schema": {
-                    "properties": {
-                        "x": {"title": "X", "type": "string"},
-                        "y": {"title": "Y", "type": "string"},
-                    },
-                    "required": ["x", "y"],
-                    "title": "ResponseFormat",
-                    "type": "object",
-                    "additionalProperties": False,
-                },
+                "schema": expected_schema,
                 "name": "ResponseFormat",
                 "strict": True,
             },
@@ -1135,14 +1349,14 @@ class TestProxyFunctionCalling:
             ),
             # Anthropic models (Claude supports function calling)
             (
-                "claude-3-5-sonnet-20240620",
-                "litellm_proxy/claude-3-5-sonnet-20240620",
+                "claude-sonnet-4-6",
+                "litellm_proxy/claude-sonnet-4-6",
                 True,
             ),
             # Google models
-            ("gemini-pro", "litellm_proxy/gemini-pro", True),
-            ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
-            ("gemini/gemini-1.5-flash", "litellm_proxy/gemini/gemini-1.5-flash", True),
+            ("gemini-2.5-pro", "litellm_proxy/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
@@ -1191,7 +1405,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
             ),
             (
@@ -1347,8 +1561,8 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/gpt-3.5-turbo", True),
             ("litellm_proxy/gpt-4", True),
             ("litellm_proxy/gpt-4o", True),
-            ("litellm_proxy/claude-3-5-sonnet-20240620", True),
-            ("litellm_proxy/gemini/gemini-1.5-pro", True),
+            ("litellm_proxy/claude-sonnet-4-6", True),
+            ("litellm_proxy/gemini/gemini-2.5-pro", True),
             # Test proxy models that should not support function calling
             ("litellm_proxy/command-nightly", False),
             ("litellm_proxy/anthropic.claude-instant-v1", False),
@@ -1393,8 +1607,8 @@ class TestProxyFunctionCalling:
         [
             "litellm_proxy/gpt-3.5-turbo",
             "litellm_proxy/gpt-4",
-            "litellm_proxy/claude-3-5-sonnet-20240620",
-            "litellm_proxy/gemini/gemini-1.5-pro",
+            "litellm_proxy/claude-sonnet-4-6",
+            "litellm_proxy/gemini/gemini-2.5-pro",
         ],
     )
     def test_proxy_model_with_custom_llm_provider_none(self, model_name):
@@ -1489,13 +1703,13 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
             (
                 "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
                 False,
                 "Bedrock Claude 3.5 Sonnet via Converse API",
             ),
@@ -1576,7 +1790,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1588,7 +1802,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1726,7 +1940,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -1758,13 +1972,13 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
             (
                 "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
                 False,
                 "Bedrock Claude 3.5 Sonnet via Converse API",
             ),
@@ -1845,7 +2059,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1857,7 +2071,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1995,7 +2209,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2027,13 +2241,13 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
             (
                 "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
                 False,
                 "Bedrock Claude 3.5 Sonnet via Converse API",
             ),
@@ -2114,7 +2328,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -2126,7 +2340,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2264,7 +2478,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-opus-20240229-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2283,21 +2497,18 @@ def test_register_model_with_scientific_notation():
     """
     Test that the register_model function can handle scientific notation in the model name.
     """
-    # Use a unique model name to avoid conflicts with other tests
-    test_model_name = "test-scientific-notation-model-unique-12345"
-    
-    # Clean up any pre-existing entry and clear caches
-    if test_model_name in litellm.model_cost:
-        del litellm.model_cost[test_model_name]
-    
+    import uuid
+
+    # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
+    test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
+
     # Clear LRU caches that might have stale data
     from litellm.utils import (
-        _cached_get_model_info_helper,
         _invalidate_model_cost_lowercase_map,
-        get_model_info,
     )
+
     _invalidate_model_cost_lowercase_map()
-    
+
     model_cost_dict = {
         test_model_name: {
             "max_tokens": 8192,
@@ -2316,11 +2527,69 @@ def test_register_model_with_scientific_notation():
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
-    
+
     # Clean up after test
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
     _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_openrouter_without_slash():
+    """
+    Test that register_model handles openrouter models without '/' in the name.
+
+    Fixes https://github.com/BerriAI/litellm/issues/18936
+
+    Previously, the code did `split_string[1]` which would fail with IndexError
+    when the model name didn't contain '/'. Now it uses `split_string[-1]` which
+    always works.
+    """
+    # Clear any existing entries
+    litellm.openrouter_models.discard("my-custom-alias")
+    litellm.openrouter_models.discard("gpt-4")
+    litellm.openrouter_models.discard("openai/gpt-4")
+
+    # Test 1: Model name without '/' (this was the bug - would raise IndexError)
+    litellm.register_model(
+        {
+            "my-custom-alias": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "my-custom-alias" in litellm.openrouter_models
+
+    # Test 2: Model name with single '/' (openrouter/model format)
+    litellm.register_model(
+        {
+            "openrouter/gpt-4": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "gpt-4" in litellm.openrouter_models
+
+    # Test 3: Model name with double '/' (openrouter/provider/model format)
+    litellm.register_model(
+        {
+            "openrouter/openai/gpt-4-turbo": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "openai/gpt-4-turbo" in litellm.openrouter_models
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
@@ -2548,6 +2817,128 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock()
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with(
+            "https://redis.azure.com/.default"
+        )
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_client_secret_credential = Mock(return_value=mock_credential)
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock()
+    mock_azure_identity.ClientSecretCredential = mock_client_secret_credential
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_client_secret_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    with patch.dict("sys.modules", {"azure.identity": None}):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true.
+
+    Mocks ``azure.identity`` via ``sys.modules`` so the test does not require
+    the real ``azure-identity`` package to be installed in the CI environment.
+    """
+    from unittest.mock import Mock, patch
+
+    mock_credential = Mock()
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = Mock(return_value=mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic(
+            host="myredis.redis.cache.windows.net",
+            port="6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+        assert "redis_connect_func" in redis_kwargs
+        # Marker for async paths to detect Azure AD auth
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+        # Live credential object (not raw secret) is exposed for async paths
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_credential")
+        # Raw credentials must NOT be exposed on the function
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_secret")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_id")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_tenant_id")
+
+        # Azure-specific kwargs should be removed from the dict passed to Redis
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
@@ -2586,7 +2977,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
         model_cost = json.load(f)
 
     model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
-    assert model_info is not None, "Model not found in model_prices_and_context_window.json"
+    assert (
+        model_info is not None
+    ), "Model not found in model_prices_and_context_window.json"
     assert model_info["litellm_provider"] == "openrouter"
     assert model_info["mode"] == "chat"
 
@@ -2606,6 +2999,113 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["supports_tool_choice"] is True
 
     print("openrouter kimi-k2.5 model info", model_info)
+
+
+def test_gemini_embedding_2_ga_in_cost_map():
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for key, provider in (
+        ("gemini/gemini-embedding-2", "gemini"),
+        ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
+        ("gemini-embedding-2", "vertex_ai-embedding-models"),
+    ):
+        info = model_cost.get(key)
+        assert (
+            info is not None
+        ), f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == provider
+        assert info.get("mode") == "embedding"
+        assert info.get("supports_multimodal") is True
+        assert info.get("input_cost_per_token") == 2e-07
+        assert info.get("input_cost_per_image") == 0.00012
+        assert info.get("input_cost_per_audio_per_second") == 0.00016
+        assert info.get("input_cost_per_video_per_second") == 0.00079
+        if provider in ("vertex_ai-embedding-models", "vertex_ai"):
+            assert (
+                info.get("uses_embed_content") is True
+            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
+
+
+def test_gemini_lyria_3_preview_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    clip = model_cost.get("gemini/lyria-3-clip-preview")
+    pro = model_cost.get("gemini/lyria-3-pro-preview")
+    assert clip is not None and pro is not None
+    assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
+    assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
+    assert clip["output_cost_per_image"] == 0.04
+
+
+def test_model_info_for_fireworks_short_form_models():
+    """
+    Test that fireworks_ai short-form model entries (fireworks_ai/<model>)
+    are correctly configured in model_prices_and_context_window.json.
+
+    These entries enable cost attribution for models called via short-form
+    names (e.g., fireworks_ai/glm-4p7 instead of
+    fireworks_ai/accounts/fireworks/models/glm-4p7).
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # glm-4p7: short-form and long-form
+    for key in [
+        "fireworks_ai/glm-4p7",
+        "fireworks_ai/accounts/fireworks/models/glm-4p7",
+    ]:
+        info = model_cost.get(key)
+        assert (
+            info is not None
+        ), f"{key} not found in model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "fireworks_ai"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == 6e-07
+        assert info["output_cost_per_token"] == 2.2e-06
+        assert info["max_input_tokens"] == 202800
+        assert info["supports_reasoning"] is True
+
+    # minimax-m2p1: short-form and long-form
+    for key in [
+        "fireworks_ai/minimax-m2p1",
+        "fireworks_ai/accounts/fireworks/models/minimax-m2p1",
+    ]:
+        info = model_cost.get(key)
+        assert (
+            info is not None
+        ), f"{key} not found in model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "fireworks_ai"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == 3e-07
+        assert info["output_cost_per_token"] == 1.2e-06
+        assert info["max_input_tokens"] == 204800
+
+    # kimi-k2p5: short-form only (long-form already existed)
+    info = model_cost.get("fireworks_ai/kimi-k2p5")
+    assert (
+        info is not None
+    ), "fireworks_ai/kimi-k2p5 not found in model_prices_and_context_window.json"
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] == 6e-07
+    assert info["output_cost_per_token"] == 3e-06
+    assert info["max_input_tokens"] == 262144
 
 
 class TestGetValidModelsWithCLI:
@@ -2744,6 +3244,38 @@ class TestIsCachedMessage:
         message = {"role": "user", "content": []}
         assert is_cached_message(message) is False
 
+    def test_message_level_cache_control_returns_true(self):
+        """Message with string content and message-level cache_control should return True.
+
+        This is the format injected by the cache_control_injection_points hook
+        when the message content is a string (common for system messages).
+        Fixes GitHub issue #18519 - Gemini models ignoring cache_control_injection_points.
+        """
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        assert is_cached_message(message) is True
+
+    def test_message_level_cache_control_wrong_type_returns_false(self):
+        """Message-level cache_control with non-ephemeral type should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "permanent"},
+        }
+        assert is_cached_message(message) is False
+
+    def test_message_level_cache_control_non_dict_returns_false(self):
+        """Message-level cache_control that's not a dict should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": "ephemeral",
+        }
+        assert is_cached_message(message) is False
+
 
 @pytest.mark.asyncio
 class TestProxyLoggingBudgetAlerts:
@@ -2814,7 +3346,9 @@ class TestProxyLoggingBudgetAlerts:
         user_info = MagicMock()
 
         # Should not raise an error
-        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+        await proxy_logging.budget_alerts(
+            type="organization_budget", user_info=user_info
+        )
 
     async def test_budget_alerts_with_both_slack_and_email(self):
         """Test that budget_alerts calls both slack and email instances when both are in alerting."""
@@ -2869,6 +3403,117 @@ class TestProxyLoggingBudgetAlerts:
         proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
             type=alert_type, user_info=user_info
         )
+
+    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(
+        self,
+    ):
+        """
+        Test that soft_budget alerts with alert_emails bypass the alerting=None check
+        and send emails even when alerting is None.
+
+        This tests the new logic that allows team-specific soft budget email alerts
+        via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None  # Global alerting is disabled
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with alert_emails set (simulating team metadata extraction)
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=["team1@example.com", "team2@example.com"],
+        )
+
+        # Should send email even though alerting is None (because of alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify slack was NOT called (alerting is None)
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+
+        # Verify email WAS called (bypasses alerting=None check)
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="soft_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(
+        self,
+    ):
+        """
+        Test that soft_budget alerts WITHOUT alert_emails still respect alerting=None
+        and do not send emails when alerting is None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo WITHOUT alert_emails
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=None,  # No alert emails
+        )
+
+        # Should NOT send email (alerting is None and no alert_emails)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(
+        self,
+    ):
+        """
+        Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
+        """
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        # Create CallInfo with empty alert_emails list
+        user_info = CallInfo(
+            token="test-token",
+            spend=100.0,
+            soft_budget=50.0,
+            user_id="test-user",
+            team_id="test-team",
+            team_alias="test-team-alias",
+            event_group=Litellm_EntityType.TEAM,
+            alert_emails=[],  # Empty list
+        )
+
+        # Should NOT send email (alert_emails is empty)
+        await proxy_logging.budget_alerts(type="soft_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
 
 
 def test_azure_ai_claude_provider_config():
@@ -2979,7 +3624,10 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
                 {"type": "thinking", "thinking": "Let me analyze the requirements..."}
             ],
             "tool_calls": [
-                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_1",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
         {
@@ -2992,7 +3640,10 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
             # NO thinking_blocks - Claude sometimes doesn't include them
             "content": [{"type": "text", "text": "Let me explore more..."}],
             "tool_calls": [
-                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_2",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
     ]
@@ -3005,10 +3656,9 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
 
     # So we should NOT drop thinking - the combination tells us thinking is in use
     # The fix uses both checks: only drop if last has none AND no message has any
-    should_drop_thinking = (
-        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-        and not any_assistant_message_has_thinking_blocks(messages)
-    )
+    should_drop_thinking = last_assistant_with_tool_calls_has_no_thinking_blocks(
+        messages
+    ) and not any_assistant_message_has_thinking_blocks(messages)
     assert should_drop_thinking is False
 
 
@@ -3169,3 +3819,291 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestGetOptionalParamsDeepSeek:
+    """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
+
+    def test_deepseek_supports_thinking_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts the 'thinking' param,
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled"},
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_supports_reasoning_effort_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts 'reasoning_effort',
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            reasoning_effort="high",
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_thinking_strips_budget_tokens(self):
+        """
+        DeepSeekChatConfig strips budget_tokens from thinking param.
+        This would not happen with OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled", "budget_tokens": 5000},
+        )
+        assert "budget_tokens" not in result.get("thinking", {})
+        assert result.get("thinking") == {"type": "enabled"}
+
+
+class TestIsStreamingRequest:
+    def test_stream_true_in_kwargs(self):
+        assert (
+            _is_streaming_request(kwargs={"stream": True}, call_type="acompletion")
+            is True
+        )
+
+    def test_stream_false_in_kwargs(self):
+        assert (
+            _is_streaming_request(kwargs={"stream": False}, call_type="acompletion")
+            is False
+        )
+
+    def test_no_stream_in_kwargs(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_generate_content_stream_string(self):
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.generate_content_stream.value
+            )
+            is True
+        )
+
+    def test_agenerate_content_stream_string(self):
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.agenerate_content_stream.value
+            )
+            is True
+        )
+
+    def test_generate_content_stream_enum(self):
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.generate_content_stream
+            )
+            is True
+        )
+
+    def test_agenerate_content_stream_enum(self):
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.agenerate_content_stream
+            )
+            is True
+        )
+
+    def test_non_streaming_call_type_string(self):
+        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
+
+    def test_non_streaming_call_type_enum(self):
+        assert (
+            _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
+        )
+
+    def test_stream_true_overrides_non_streaming_call_type(self):
+        assert (
+            _is_streaming_request(
+                kwargs={"stream": True}, call_type=CallTypes.acompletion
+            )
+            is True
+        )
+
+
+class TestCallbackAsyncSyncSeparation:
+    """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
+
+    def setup_method(self):
+        """Reset callback lists before each test."""
+        litellm.input_callback = []
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_input_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
+
+    def test_async_success_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_async_cb)
+        assert my_async_cb in litellm._async_success_callback
+        assert my_async_cb not in litellm.success_callback
+
+    def test_sync_success_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_sync_cb)
+        assert my_sync_cb in litellm.success_callback
+        assert my_sync_cb not in litellm._async_success_callback
+
+    def test_string_callback_stays_in_sync_list(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("langfuse")
+        assert "langfuse" in litellm.success_callback
+        assert "langfuse" not in litellm._async_success_callback
+
+    def test_async_failure_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_async_cb)
+        assert my_async_cb in litellm._async_failure_callback
+        assert my_async_cb not in litellm.failure_callback
+
+    def test_sync_failure_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_sync_cb)
+        assert my_sync_cb in litellm.failure_callback
+        assert my_sync_cb not in litellm._async_failure_callback
+
+    def test_dynamodb_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("dynamodb")
+        assert "dynamodb" in litellm._async_success_callback
+        assert "dynamodb" not in litellm.success_callback
+
+    def test_openmeter_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("openmeter")
+        assert "openmeter" in litellm._async_success_callback
+        assert "openmeter" not in litellm.success_callback
+
+    def test_async_input_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_async_cb)
+        assert my_async_cb in litellm._async_input_callback
+        assert my_async_cb not in litellm.input_callback
+
+    def test_sync_input_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_sync_cb)
+        assert my_sync_cb in litellm.input_callback
+        assert my_sync_cb not in litellm._async_input_callback
+
+
+class TestMetadataNoneHandling:
+    """
+    Test that metadata=None in kwargs doesn't cause TypeError.
+
+    When metadata key exists with value None (e.g., from Azure OpenAI streaming),
+    dict.get("metadata", {}) returns None (key exists, so default is ignored).
+    The fix uses (kwargs.get("metadata") or {}) which handles both missing key
+    and explicit None value.
+
+    Related: #20871
+    """
+
+    def test_metadata_none_get_previous_models(self):
+        """kwargs.get("metadata") or {} should return {} when metadata is None."""
+        kwargs = {"metadata": None}
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
+        assert previous_models is None
+
+    def test_metadata_none_model_group_check(self):
+        """'model_group' in (kwargs.get("metadata") or {}) should not raise TypeError."""
+        kwargs = {"metadata": None}
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
+        assert _is_litellm_router_call is False
+
+    def test_metadata_missing_key(self):
+        """Should work when metadata key is completely absent."""
+        kwargs = {}
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
+        assert previous_models is None
+
+    def test_metadata_present_with_values(self):
+        """Should work when metadata has actual values."""
+        kwargs = {"metadata": {"previous_models": ["model1"], "model_group": "test"}}
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
+        assert previous_models == ["model1"]
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
+        assert _is_litellm_router_call is True
+
+    def test_metadata_none_causes_error_with_old_pattern(self):
+        """Demonstrate the bug: dict.get('metadata', {}) returns None when key exists with None value."""
+        kwargs = {"metadata": None}
+        # Old pattern: kwargs.get("metadata", {}) returns None because key exists
+        result = kwargs.get("metadata", {})
+        assert result is None  # This is the root cause of the bug
+
+        # Attempting to use .get() on None raises AttributeError or TypeError
+        with pytest.raises((TypeError, AttributeError)):
+            kwargs.get("metadata", {}).get("previous_models", None)
+
+        # Attempting 'in' on None raises TypeError
+        with pytest.raises(TypeError):
+            "model_group" in kwargs.get("metadata", {})
+
+    def test_litellm_params_metadata_none(self):
+        """litellm_params.get("metadata") or {} should handle None value."""
+        litellm_params = {"metadata": None}
+        metadata = litellm_params.get("metadata") or {}
+        assert metadata == {}
+
+
+class TestValidateAndFixThinkingParam:
+    """Tests for validate_and_fix_thinking_param."""
+
+    def test_none_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=None) is None
+
+    def test_already_snake_case(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+
+    def test_camel_case_normalized(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+        assert "budgetTokens" not in result
+
+    def test_both_keys_snake_case_wins(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "budgetTokens": 50000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 10000}
+        assert "budgetTokens" not in result
+
+    def test_original_dict_not_mutated(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        validate_and_fix_thinking_param(thinking=thinking)
+        assert "budgetTokens" in thinking
+        assert "budget_tokens" not in thinking

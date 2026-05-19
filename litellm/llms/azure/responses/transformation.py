@@ -1,10 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -21,9 +22,23 @@ else:
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
+    # Parameters not supported by Azure Responses API
+    AZURE_UNSUPPORTED_PARAMS = ["context_management"]
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
+
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Azure Responses API does not support context_management (compaction).
+        """
+        base_supported_params = super().get_supported_openai_params(model)
+        return [
+            param
+            for param in base_supported_params
+            if param not in self.AZURE_UNSUPPORTED_PARAMS
+        ]
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -187,7 +202,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        new_path = f"{path}/{encoded_response_id}"
 
         # Reconstruct the URL with all original components but with the modified path
         constructed_url = urlunparse(
@@ -308,7 +326,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id and /cancel at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}/cancel"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        new_path = f"{path}/{encoded_response_id}/cancel"
 
         # Reconstruct the URL with all original components but with the modified path
         cancel_url = urlunparse(

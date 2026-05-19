@@ -32,6 +32,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -501,6 +502,94 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 raise e
 
+    async def _call_agentic_completion_hooks_openai(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        optional_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool,
+        litellm_params: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
+
+        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+
+        Returns the response from agentic loop, or None if no hook runs.
+        """
+        from litellm._logging import verbose_logger
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
+        # Avoid logging full callback objects to prevent leaking sensitive data
+        verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
+        tools = optional_params.get("tools", [])
+        # Avoid logging full tools payloads; they may contain sensitive parameters
+        verbose_logger.debug(
+            "LiteLLM.AgenticHooks: tools_count=%s",
+            len(tools) if isinstance(tools, list) else 1 if tools else 0,
+        )
+        # Get custom_llm_provider from litellm_params
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    # Check if the callback has the chat completion agentic loop methods
+                    if not hasattr(
+                        callback, "async_should_run_chat_completion_agentic_loop"
+                    ):
+                        continue
+
+                    # First: Check if agentic loop should run (using chat completion method)
+                    (
+                        should_run,
+                        tool_calls,
+                    ) = await callback.async_should_run_chat_completion_agentic_loop(
+                        response=response,
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        stream=stream,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=litellm_params,
+                    )
+
+                    if should_run:
+                        # Second: Execute agentic loop
+                        kwargs_with_provider = (
+                            litellm_params.copy() if litellm_params else {}
+                        )
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
+
+                        # For OpenAI Chat Completions, use the chat completion agentic loop method
+                        agentic_response = (
+                            await callback.async_run_chat_completion_agentic_loop(
+                                tools=tool_calls,
+                                model=model,
+                                messages=messages,
+                                response=response,
+                                optional_params=optional_params,
+                                logging_obj=logging_obj,
+                                stream=stream,
+                                kwargs=kwargs_with_provider,
+                            )
+                        )
+                        # First hook that runs agentic loop wins
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: {str(e)}"
+                )
+
+        return None
+
     def mock_streaming(
         self,
         response: ModelResponse,
@@ -611,6 +700,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 organization=organization,
                                 drop_params=drop_params,
                                 stream_options=stream_options,
+                                shared_session=shared_session,
                             )
                         else:
                             return self.acompletion(
@@ -844,7 +934,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     logging_obj=logging_obj,
                 )
                 stringified_response = response.model_dump()
-
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -858,6 +947,20 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     hidden_params={"headers": headers},
                     _response_headers=headers,
                 )
+
+                # Call agentic completion hooks (e.g., for websearch_interception)
+                agentic_response = await self._call_agentic_completion_hooks_openai(
+                    response=final_response_obj,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=False,
+                    litellm_params=litellm_params,
+                )
+
+                if agentic_response is not None:
+                    final_response_obj = agentic_response
 
                 if fake_stream is True:
                     return self.mock_streaming(
@@ -968,6 +1071,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         headers=None,
         drop_params: Optional[bool] = None,
         stream_options: Optional[dict] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         response = None
         data = provider_config.transform_request(
@@ -992,6 +1096,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    shared_session=shared_session,
                 )
                 ## LOGGING
                 logging_obj.pre_call(
@@ -1303,6 +1408,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         max_retries=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ):
         response = None
         try:
@@ -1316,6 +1422,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            if headers:
+                data["extra_headers"] = headers
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1348,6 +1456,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aimg_generation=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ) -> ImageResponse:
         data = {}
         try:
@@ -1357,7 +1466,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization)  # type: ignore
+                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization, headers=headers)  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1382,6 +1491,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
+            if headers:
+                data["extra_headers"] = headers
             _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
 
             response = _response.model_dump()
@@ -1641,6 +1752,92 @@ class OpenAIFilesAPI(BaseLLM):
 
         return HttpxBinaryResponseContent(response=response.response)
 
+    async def afile_content_streaming(
+        self,
+        file_content_request: FileContentRequest,
+        openai_client: AsyncOpenAI,
+        chunk_size: int = 1024 * 1024,
+    ) -> FileContentStreamingResult:
+        response_cm = openai_client.files.with_streaming_response.content(
+            **file_content_request
+        )
+        response = await response_cm.__aenter__()
+        headers = dict(response.headers)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            exc: Optional[BaseException] = None
+            try:
+                async for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    yield chunk
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    await response_cm.__aexit__(None, None, None)
+                else:
+                    await response_cm.__aexit__(type(exc), exc, exc.__traceback__)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
+
+    def file_content_streaming(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        chunk_size: int = 1024 * 1024,
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> FileContentStreamingResult:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.afile_content_streaming(  # type: ignore
+                file_content_request=file_content_request,
+                openai_client=openai_client,
+                chunk_size=chunk_size,
+            )
+
+        response_cm = cast(OpenAI, openai_client).files.with_streaming_response.content(
+            **file_content_request
+        )
+        response = response_cm.__enter__()
+        headers = dict(response.headers)
+
+        def _stream() -> Iterator[bytes]:
+            exc: Optional[BaseException] = None
+            try:
+                yield from response.iter_bytes(chunk_size=chunk_size)
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    response_cm.__exit__(None, None, None)
+                else:
+                    response_cm.__exit__(type(exc), exc, exc.__traceback__)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
+
     async def aretrieve_file(
         self,
         file_id: str,
@@ -1834,7 +2031,7 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response = await openai_client.batches.create(**create_batch_data)
+        response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     def create_batch(
@@ -1870,7 +2067,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
         return LiteLLMBatch(**response.model_dump())
 
@@ -1880,7 +2077,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
-        response = await openai_client.batches.retrieve(**retrieve_batch_data)
+        response = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
@@ -1916,7 +2113,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(

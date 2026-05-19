@@ -13,9 +13,16 @@ spec:
   {{- if and (not .Values.keda.enabled) (not .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "litellm.selectorLabels" . | nindent 6 }}
+  {{- if .Values.deploymentMinReadySeconds }}
+  minReadySeconds: {{ .Values.deploymentMinReadySeconds }}
+  {{- end }}
   template:
     metadata:
       annotations:
@@ -40,7 +47,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.extraInitContainers }}
       initContainers:
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
       containers:
         - name: {{ include "litellm.name" . }}
@@ -93,6 +100,16 @@ spec:
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- end }}
+            {{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
+            - name: DATABASE_URL_READ_REPLICA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.readReplicaUrlKey }}
+            {{- else if .Values.db.readReplicaUrl }}
+            - name: DATABASE_URL_READ_REPLICA
+              value: {{ .Values.db.readReplicaUrl | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
@@ -109,20 +126,31 @@ spec:
                   name: {{ include "redis.secretName" .Subcharts.redis }}
                   key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
             {{- end }}
+            {{- /*
+              Inject LITELLM_LOG only when envVars does not already define it.
+            */}}
+            {{- if and .Values.logLevel (not (hasKey (default dict .Values.envVars) "LITELLM_LOG")) }}
+            - name: LITELLM_LOG
+              value: {{ .Values.logLevel | quote }}
+            {{- end }}
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
-            {{- if .Values.separateHealthApp }}
-            - name: SEPARATE_HEALTH_APP
-              value: "1"
-            - name: SEPARATE_HEALTH_PORT
-              value: {{ .Values.separateHealthPort | default "8081" | quote }}
-            {{- end }}
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.migrationJob.enabled }}
+            # Schema updates are owned by the dedicated migrations Job; skip
+            # the proxy's startup `prisma db push` so N replicas don't race
+            # one DB on every rollout. Placed last (after envVars and
+            # extraEnvVars) so this override can't be silently shadowed by a
+            # user-supplied DISABLE_SCHEMA_UPDATE under last-wins duplicate-env
+            # semantics — same pattern the migrations Job uses.
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "true"
             {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
@@ -151,25 +179,33 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            {{- if .Values.separateHealthApp }}
-            - name: health
-              containerPort: {{ .Values.separateHealthPort | default 8081 }}
-              protocol: TCP
-            {{- end }}
           livenessProbe:
             httpGet:
-              path: /health/liveliness
-              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+              path: {{ .Values.livenessProbe.path | quote }}
+              port: "http"
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           readinessProbe:
             httpGet:
-              path: /health/readiness
-              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+              path: {{ .Values.readinessProbe.path | quote }}
+              port: "http"
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           startupProbe:
             httpGet:
-              path: /health/readiness
-              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
-            failureThreshold: 30
-            periodSeconds: 10
+              path: {{ .Values.startupProbe.path | quote }}
+              port: "http"
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.startupProbe.successThreshold }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -192,7 +228,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.extraContainers }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
       volumes:
         {{ if .Values.securityContext.readOnlyRootFilesystem }}

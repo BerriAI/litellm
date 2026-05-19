@@ -1,6 +1,7 @@
 """
 Unit tests for the MCPClient class - critical functionality only.
 """
+
 import base64
 import os
 import sys
@@ -14,6 +15,17 @@ import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
 from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+
+
+def test_mcp_client_uses_configurable_default_timeout():
+    """MCPClient should use MCP_CLIENT_TIMEOUT constant when no timeout is passed."""
+    with patch("litellm.experimental_mcp_client.client.MCP_CLIENT_TIMEOUT", 120.0):
+        # Client reads constant at runtime when timeout is None
+        client = MCPClient(
+            server_url="http://example.com",
+            transport_type=MCPTransport.sse,
+        )
+        assert client.timeout == 120.0
 
 
 class TestMCPClientUnitTests:
@@ -76,6 +88,27 @@ class TestMCPClientUnitTests:
         assert headers == {
             "Authorization": "Token custom_token",
         }
+
+        # OAuth2
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="oauth2-access-token-xyz",
+        )
+        headers = client._get_auth_headers()
+        assert headers == {
+            "Authorization": "Bearer oauth2-access-token-xyz",
+        }
+
+        # OAuth2 with extra_headers (per-user flow overrides auth_value)
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="static-server-token",
+            extra_headers={"Authorization": "Bearer per-user-token"},
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer per-user-token"
 
         # No auth
         client = MCPClient("http://example.com")
@@ -183,9 +216,8 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"},progress_callback=ANY
+            name="test_tool", arguments={"arg1": "value1"}, progress_callback=ANY
         )
-
 
 
 if __name__ == "__main__":

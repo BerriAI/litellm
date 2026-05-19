@@ -58,7 +58,8 @@ describe("AvailableTeamsPanel", () => {
     renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />);
 
     await waitFor(() => {
-      expect(screen.getByText("No available teams to join")).toBeInTheDocument();
+      expect(screen.getByText(/No available teams to join/i)).toBeInTheDocument();
+      expect(screen.getByText(/See how to set available teams/i)).toBeInTheDocument();
     });
   });
 

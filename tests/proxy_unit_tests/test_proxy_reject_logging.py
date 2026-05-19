@@ -163,8 +163,8 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await chat_completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", 
-                    token="hashed_sk-12345", 
+                    api_key="sk-12345",
+                    token="hashed_sk-12345",
                     rpm_limit=0,
                     request_route=route,
                 ),
@@ -174,7 +174,10 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0, request_route=route
+                    api_key="sk-12345",
+                    token="hashed_sk-12345",
+                    rpm_limit=0,
+                    request_route=route,
                 ),
                 fastapi_response=Response(),
             )
@@ -182,7 +185,10 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await embeddings(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0, request_route=route
+                    api_key="sk-12345",
+                    token="hashed_sk-12345",
+                    rpm_limit=0,
+                    request_route=route,
                 ),
                 fastapi_response=Response(),
             )

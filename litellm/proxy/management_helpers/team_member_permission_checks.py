@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from litellm.caching import DualCache
 from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
@@ -12,14 +11,17 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient
 
-DEFAULT_TEAM_MEMBER_PERMISSIONS = [
+BASELINE_TEAM_MEMBER_PERMISSIONS = [
     KeyManagementRoutes.KEY_INFO,
     KeyManagementRoutes.KEY_HEALTH,
 ]
+
+DEFAULT_TEAM_MEMBER_PERMISSIONS = BASELINE_TEAM_MEMBER_PERMISSIONS
 
 
 class TeamMemberPermissionChecks:
@@ -29,15 +31,23 @@ class TeamMemberPermissionChecks:
         team_table: LiteLLM_TeamTableCachedObj,
     ) -> List[KeyManagementRoutes]:
         """
-        Returns the permissions for a team member
+        Returns the permissions for a team member.
+
+        - If team has explicit permissions set (including []), use those
+          plus baseline permissions (/key/info, /key/health).
+        - If team has no permissions set (None), fall back to
+          DEFAULT_TEAM_MEMBER_PERMISSIONS.
         """
-        if team_table.team_member_permissions and isinstance(
+        if team_table.team_member_permissions is not None and isinstance(
             team_table.team_member_permissions, list
         ):
-            return [
+            permissions = {
                 KeyManagementRoutes(permission)
                 for permission in team_table.team_member_permissions
-            ]
+            }
+            # Always include baseline permissions
+            permissions.update(BASELINE_TEAM_MEMBER_PERMISSIONS)
+            return list(permissions)
 
         return DEFAULT_TEAM_MEMBER_PERMISSIONS
 
@@ -55,7 +65,7 @@ class TeamMemberPermissionChecks:
         user_api_key_dict: UserAPIKeyAuth,
         route: KeyManagementRoutes,
         prisma_client: PrismaClient,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         existing_key_row: LiteLLM_VerificationToken,
     ):
         """
@@ -88,11 +98,20 @@ class TeamMemberPermissionChecks:
         )
 
         # 5. Check if the team member has permissions for the endpoint
-        TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_object=key_assigned_user_in_team,
-            team_table=team_table,
-            route=route,
+        has_permission = (
+            TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+                team_member_object=key_assigned_user_in_team,
+                team_table=team_table,
+                route=route,
+            )
         )
+        if not has_permission:
+            raise ProxyException(
+                message=f"User {user_api_key_dict.user_id} does not belong to team {team_table.team_id}. Team-scoped key management endpoints can only be used for keys in your own team.",
+                type=ProxyErrorTypes.team_member_permission_error,
+                param=route,
+                code=401,
+            )
 
     @staticmethod
     def does_team_member_have_permissions_for_endpoint(

@@ -97,7 +97,11 @@ class A2ACostCalculator:
         completion_tokens = getattr(usage, "completion_tokens", 0) or 0
 
         # Calculate costs
-        input_cost = prompt_tokens * (float(input_cost_per_token) if input_cost_per_token else 0.0)
-        output_cost = completion_tokens * (float(output_cost_per_token) if output_cost_per_token else 0.0)
+        input_cost = prompt_tokens * (
+            float(input_cost_per_token) if input_cost_per_token else 0.0
+        )
+        output_cost = completion_tokens * (
+            float(output_cost_per_token) if output_cost_per_token else 0.0
+        )
 
         return input_cost + output_cost

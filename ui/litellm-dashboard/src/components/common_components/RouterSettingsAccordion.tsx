@@ -84,12 +84,12 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     // Initialize from value prop if provided (only when value actually changes externally)
     useEffect(() => {
       // Create a stable key from the value to detect actual external changes
-      const valueKey = value?.router_settings 
+      const valueKey = value?.router_settings
         ? JSON.stringify({
-            routing_strategy: value.router_settings.routing_strategy,
-            fallbacks: value.router_settings.fallbacks,
-            enable_tag_filtering: value.router_settings.enable_tag_filtering,
-          })
+          routing_strategy: value.router_settings.routing_strategy,
+          fallbacks: value.router_settings.fallbacks,
+          enable_tag_filtering: value.router_settings.enable_tag_filtering,
+        })
         : null;
 
       // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
@@ -241,9 +241,13 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               key !== "fallbacks"
             ) {
               const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
-              if (inputEl && inputEl.value !== undefined && inputEl.value !== "") {
-                const parsed = parseInputValue(key, inputEl.value, value);
-                return [key, parsed];
+              if (inputEl) {
+                if (inputEl.value !== undefined && inputEl.value !== "") {
+                  const parsed = parseInputValue(key, inputEl.value, value);
+                  return [key, parsed];
+                }
+                // Input exists but is empty — user cleared it, set to null
+                return [key, null];
               }
               return [key, value];
             } else if (key === "routing_strategy") {
@@ -358,7 +362,6 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                 groups={fallbackGroups}
                 onGroupsChange={handleFallbackGroupsChange}
                 availableModels={availableModels}
-                maxFallbacks={5}
                 maxGroups={5}
               />
             </TabPanel>

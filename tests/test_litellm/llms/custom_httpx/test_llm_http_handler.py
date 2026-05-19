@@ -1,13 +1,20 @@
+import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import (
+    BaseLLMHTTPHandler,
+    _google_genai_streaming_hidden_params,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -74,6 +81,36 @@ def test_prepare_fake_stream_request():
     assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
+def test_get_agentic_loop_settings_defaults_and_overrides():
+    handler = BaseLLMHTTPHandler()
+
+    depth, max_loops, fingerprints = handler._get_agentic_loop_settings(kwargs={})
+    assert depth == 0
+    assert max_loops == 3
+    assert fingerprints == []
+
+    depth, max_loops, fingerprints = handler._get_agentic_loop_settings(
+        kwargs={
+            "_agentic_loop_depth": 2,
+            "max_agentic_loops": 7,
+            "_agentic_loop_fingerprints": ["fp-1", "fp-2"],
+        }
+    )
+    assert depth == 2
+    assert max_loops == 7
+    assert fingerprints == ["fp-1", "fp-2"]
+
+
+def test_fingerprint_agentic_tools_is_deterministic():
+    handler = BaseLLMHTTPHandler()
+    tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
+    tools_b = {"tool_calls": [{"name": "web_search", "input": {"q": "abc"}, "id": "1"}]}
+
+    assert handler._fingerprint_agentic_tools(
+        tools_a
+    ) == handler._fingerprint_agentic_tools(tools_b)
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_extra_headers():
     """
@@ -81,7 +118,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
     extra_headers from kwargs with proper priority.
     """
     handler = BaseLLMHTTPHandler()
-    
+
     # Mock the config
     mock_config = Mock()
     mock_config.validate_anthropic_messages_environment = Mock(
@@ -90,7 +127,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
     mock_config.transform_anthropic_messages_request = Mock(
         return_value={"model": "claude-3-opus-20240229", "messages": []}
     )
-    
+
     # Mock the client
     mock_client = AsyncMock()
     mock_response = Mock()
@@ -104,13 +141,13 @@ async def test_async_anthropic_messages_handler_extra_headers():
         "stop_reason": "end_turn",
     }
     mock_client.post = AsyncMock(return_value=mock_response)
-    
+
     # Mock logging object
     mock_logging_obj = Mock()
     mock_logging_obj.update_environment_variables = Mock()
     mock_logging_obj.model_call_details = {}
     mock_logging_obj.stream = False
-    
+
     # Test case 1: Only extra_headers in kwargs
     kwargs = {
         "extra_headers": {
@@ -118,20 +155,21 @@ async def test_async_anthropic_messages_handler_extra_headers():
             "X-Auth-Token": "token123",
         }
     }
-    
+
     with patch(
         "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
     ) as mock_provider_headers:
         mock_provider_headers.return_value = None
-        
+
         # Capture what headers are passed to validate_anthropic_messages_environment
         captured_headers = {}
+
         def capture_validate(*args, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
-        
+
         mock_config.validate_anthropic_messages_environment = capture_validate
-        
+
         try:
             await handler.async_anthropic_messages_handler(
                 model="claude-3-opus-20240229",
@@ -146,12 +184,87 @@ async def test_async_anthropic_messages_handler_extra_headers():
             )
         except Exception:
             pass  # We're testing header extraction, not the full flow
-        
+
         # Verify extra_headers were extracted and merged
         assert "X-Custom-Header" in captured_headers
         assert captured_headers["X-Custom-Header"] == "from-kwargs"
         assert "X-Auth-Token" in captured_headers
         assert captured_headers["X-Auth-Token"] == "token123"
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_litellm_metadata():
+    """Ensure litellm_metadata from kwargs is forwarded via update_from_kwargs.
+
+    Routes like /messages store model_info under kwargs['litellm_metadata'].
+    The handler must forward this so that use_custom_pricing_for_model can
+    detect custom pricing. Regression test for #23185.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    custom_model_info = {
+        "id": "claude-sonnet-4-custom-pricing",
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+    }
+    kwargs = {
+        "litellm_metadata": {
+            "model_info": custom_model_info,
+            "deployment": "anthropic/claude-sonnet-4-20250514",
+        },
+    }
+
+    try:
+        await handler.async_anthropic_messages_handler(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=mock_logging_obj,
+            client=mock_client,
+            kwargs=kwargs,
+        )
+    except Exception:
+        pass
+
+    mock_logging_obj.update_from_kwargs.assert_called_once()
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args
+    kwargs_arg = (
+        call_kwargs.kwargs.get("kwargs", call_kwargs[1].get("kwargs", {}))
+        if call_kwargs.kwargs
+        else call_kwargs[1].get("kwargs", {})
+    )
+
+    assert "litellm_metadata" in kwargs_arg
+    assert kwargs_arg["litellm_metadata"]["model_info"] == custom_model_info
 
 
 @pytest.mark.asyncio
@@ -161,7 +274,7 @@ async def test_async_anthropic_messages_handler_header_priority():
     forwarded < extra_headers < provider_specific
     """
     handler = BaseLLMHTTPHandler()
-    
+
     # Mock the config
     mock_config = Mock()
     mock_client = AsyncMock()
@@ -169,31 +282,32 @@ async def test_async_anthropic_messages_handler_header_priority():
     mock_logging_obj.update_environment_variables = Mock()
     mock_logging_obj.model_call_details = {}
     mock_logging_obj.stream = False
-    
+
     # Test with all three header sources
     kwargs = {
         "headers": {"X-Priority": "forwarded", "X-Forwarded-Only": "keep"},
         "extra_headers": {"X-Priority": "extra", "X-Extra-Only": "also-keep"},
     }
-    
+
     with patch(
         "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
     ) as mock_provider_headers:
         mock_provider_headers.return_value = {
             "X-Priority": "provider",
-            "X-Provider-Only": "keep-this-too"
+            "X-Provider-Only": "keep-this-too",
         }
-        
+
         captured_headers = {}
+
         def capture_validate(*args, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
-        
+
         mock_config.validate_anthropic_messages_environment = capture_validate
         mock_config.transform_anthropic_messages_request = Mock(
             return_value={"model": "claude-3-opus-20240229", "messages": []}
         )
-        
+
         try:
             await handler.async_anthropic_messages_handler(
                 model="claude-3-opus-20240229",
@@ -208,10 +322,103 @@ async def test_async_anthropic_messages_handler_header_priority():
             )
         except Exception:
             pass
-        
+
         # Verify priority: provider_specific should win
         assert captured_headers["X-Priority"] == "provider"
         # Verify all unique headers from different sources are present
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
+    logging_obj = Mock()
+    logging_obj.get_router_model_id = Mock(return_value="router-model-id")
+
+    from_model_info = _google_genai_streaming_hidden_params(
+        api_base="https://generativelanguage.googleapis.com/v1beta",
+        litellm_params=GenericLiteLLMParams(model_info={"id": "info-id"}),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({"x-ratelimit-remaining": "10"}),
+    )
+    assert from_model_info["model_id"] == "info-id"
+    assert (
+        from_model_info["api_base"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+    assert isinstance(from_model_info["additional_headers"], dict)
+
+    from_router = _google_genai_streaming_hidden_params(
+        api_base="https://x",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({}),
+    )
+    assert from_router["model_id"] == "router-model-id"
+
+
+def _build_delete_response_mock(captured: dict):
+    """Returns a fake httpx delete that records its kwargs."""
+
+    def _response() -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=b'{"id": "resp_x", "object": "response", "deleted": true}',
+            request=httpx.Request(method="DELETE", url="https://test.openai.azure.com"),
+        )
+
+    async def fake_async_delete(*args, **kwargs):
+        captured.update(kwargs)
+        return _response()
+
+    def fake_sync_delete(*args, **kwargs):
+        captured.update(kwargs)
+        return _response()
+
+    return fake_async_delete, fake_sync_delete
+
+
+def test_async_delete_responses_omits_body_for_azure():
+    """Azure responses DELETE rejects requests with any body. Verify the handler
+    does not pass `json=` to httpx when the transformer returns an empty dict."""
+    captured: dict = {}
+    fake_async_delete, _ = _build_delete_response_mock(captured)
+
+    async def run():
+        with patch.object(AsyncHTTPHandler, "delete", new=fake_async_delete):
+            await litellm.adelete_responses(
+                response_id="resp_xyz",
+                custom_llm_provider="azure",
+                api_base="https://test.openai.azure.com",
+                api_key="test-key",
+                api_version="2025-03-01-preview",
+            )
+
+    asyncio.run(run())
+
+    assert "json" not in captured
+    assert "data" not in captured
+    assert captured["url"].endswith(
+        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
+    )
+
+
+def test_sync_delete_responses_omits_body_for_azure():
+    captured: dict = {}
+    _, fake_sync_delete = _build_delete_response_mock(captured)
+
+    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
+        litellm.delete_responses(
+            response_id="resp_xyz",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+        )
+
+    assert "json" not in captured
+    assert "data" not in captured
+    assert captured["url"].endswith(
+        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
+    )

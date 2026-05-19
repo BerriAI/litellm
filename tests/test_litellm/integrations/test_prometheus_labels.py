@@ -1,6 +1,7 @@
 """
 Unit tests for prometheus metric labels configuration
 """
+
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -69,6 +70,21 @@ def test_model_id_in_required_metrics():
         print(f"✅ {metric_name} contains model_id label")
 
 
+def test_api_provider_in_spend_and_requests_metrics():
+    """
+    Test that api_provider label is present in spend and requests metrics
+    so users can build spend-by-provider and request-count-by-provider dashboards.
+    """
+    api_provider_label = UserAPIKeyLabelNames.API_PROVIDER.value
+
+    for metric_name in ["litellm_spend_metric", "litellm_requests_metric"]:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            api_provider_label in labels
+        ), f"Metric {metric_name} should contain api_provider label"
+        print(f"✅ {metric_name} contains api_provider label")
+
+
 def test_user_email_label_exists():
     """Test that the USER_EMAIL label is properly defined"""
     assert UserAPIKeyLabelNames.USER_EMAIL.value == "user_email"
@@ -121,12 +137,14 @@ def test_model_id_in_required_metrics():
         "litellm_proxy_total_requests_metric",
         "litellm_proxy_failed_requests_metric",
         "litellm_request_total_latency_metric",
-        "litellm_llm_api_time_to_first_token_metric"
+        "litellm_llm_api_time_to_first_token_metric",
     ]
 
     for metric_name in metrics_with_model_id:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
+        assert (
+            model_id_label in labels
+        ), f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
 
 
@@ -292,6 +310,87 @@ def test_prometheus_metrics_use_normalized_routes():
     print("✅ Prometheus metrics use normalized routes in labels")
 
 
+def test_prometheus_label_value_sanitization():
+    """
+    Test that Prometheus label values are sanitized to prevent breaking
+    the Prometheus text format.
+
+    Issue: Unicode Line Separator (U+2028) in label values (e.g. from a
+    malformed model name) breaks the Prometheus exposition format, causing
+    scrapers like Datadog to fail parsing the entire /metrics endpoint.
+    """
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+    from unittest.mock import MagicMock
+
+    prometheus_logger = MagicMock()
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    # Simulate a model name with U+2028 (Unicode Line Separator) appended
+    # and an api_key_alias with newlines and quotes
+    enum_values = UserAPIKeyLabelValues(
+        requested_model="claude-haiku-4-5-20251001\u2028",
+        api_key_alias='My Key "test"\nwith newline',
+        route="/v1/chat/completions",
+        status_code="400",
+    )
+
+    labels = prometheus_label_factory(
+        supported_enum_labels=prometheus_logger.get_labels_for_metric(
+            metric_name="litellm_proxy_total_requests_metric"
+        ),
+        enum_values=enum_values,
+    )
+
+    # U+2028 must be stripped
+    assert (
+        "\u2028" not in labels["requested_model"]
+    ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
+    assert labels["requested_model"] == "claude-haiku-4-5-20251001"
+
+    # Newlines must be replaced with spaces, quotes must be escaped
+    assert "\n" not in labels["api_key_alias"]
+    assert labels["api_key_alias"] == 'My Key \\"test\\" with newline'
+
+    print("✅ Prometheus label values are properly sanitized")
+
+
+def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
+    """Test that U+2029 (Paragraph Separator) is also stripped."""
+    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+
+    result = _sanitize_prometheus_label_value("model\u2029name")
+    assert result == "modelname"
+    assert "\u2029" not in result
+
+    print("✅ U+2029 Paragraph Separator is stripped")
+
+
+def test_prometheus_label_value_sanitization_none():
+    """Test that None values pass through unchanged."""
+    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+
+    assert _sanitize_prometheus_label_value(None) is None
+
+    print("✅ None values pass through unchanged")
+
+
+def test_prometheus_label_value_sanitization_non_string_types():
+    """Test that non-string values (int, bool, etc.) are coerced to str."""
+    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+
+    assert _sanitize_prometheus_label_value(200) == "200"
+    assert _sanitize_prometheus_label_value(True) == "True"
+    assert _sanitize_prometheus_label_value(3.14) == "3.14"
+
+    print("✅ Non-string values are coerced to str")
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
@@ -301,4 +400,8 @@ if __name__ == "__main__":
     test_route_normalization_preserves_static_routes()
     test_route_normalization_other_dynamic_apis()
     test_prometheus_metrics_use_normalized_routes()
+    test_prometheus_label_value_sanitization()
+    test_prometheus_label_value_sanitization_unicode_paragraph_separator()
+    test_prometheus_label_value_sanitization_none()
+    test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")

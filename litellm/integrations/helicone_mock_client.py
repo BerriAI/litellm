@@ -8,7 +8,10 @@ Usage:
     Set HELICONE_MOCK=true in environment variables or config to enable mock mode.
 """
 
-from litellm.integrations.mock_client_factory import MockClientConfig, create_mock_client_factory
+from litellm.integrations.mock_client_factory import (
+    MockClientConfig,
+    create_mock_client_factory,
+)
 
 # Create mock client using factory
 # Helicone uses HTTPHandler which internally uses httpx.Client.send(), not httpx.Client.post()
@@ -29,4 +32,6 @@ _config = MockClientConfig(
     patch_http_handler=True,  # Patch HTTPHandler.post directly
 )
 
-create_mock_helicone_client, should_use_helicone_mock = create_mock_client_factory(_config)
+create_mock_helicone_client, should_use_helicone_mock = create_mock_client_factory(
+    _config
+)

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -17,6 +17,7 @@ else:
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
+
 class BaseGoogleGenAIGenerateContentStreamingIterator:
     """
     Base class for Google GenAI Generate Content streaming iterators that provides common logic
@@ -28,12 +29,14 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
         model: str,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
         self.collected_chunks: List[bytes] = []
         self.model = model
+        self._hidden_params: Dict[str, Any] = hidden_params or {}
 
     async def _handle_async_streaming_logging(
         self,
@@ -42,6 +45,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
+
         end_time = datetime.now()
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
@@ -58,7 +62,9 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
 
-class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
+class GoogleGenAIGenerateContentStreamingIterator(
+    BaseGoogleGenAIGenerateContentStreamingIterator
+):
     """
     Streaming iterator specifically for Google GenAI generate content API.
     """
@@ -72,11 +78,13 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: Optional[dict] = None,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
             model=model,
+            hidden_params=hidden_params,
         )
         self.response = response
         self.model = model
@@ -105,10 +113,14 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
     async def __anext__(self):
         # This should not be used for sync responses
         # If you need async iteration, use AsyncGoogleGenAIGenerateContentStreamingIterator
-        raise NotImplementedError("Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration")
+        raise NotImplementedError(
+            "Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration"
+        )
 
 
-class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
+class AsyncGoogleGenAIGenerateContentStreamingIterator(
+    BaseGoogleGenAIGenerateContentStreamingIterator
+):
     """
     Async streaming iterator specifically for Google GenAI generate content API.
     """
@@ -122,11 +134,13 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: Optional[dict] = None,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
             model=model,
+            hidden_params=hidden_params,
         )
         self.response = response
         self.model = model
@@ -148,4 +162,4 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
             return chunk
         except StopAsyncIteration:
             await self._handle_async_streaming_logging()
-            raise StopAsyncIteration 
+            raise StopAsyncIteration

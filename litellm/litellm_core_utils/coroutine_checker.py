@@ -10,14 +10,14 @@ from litellm.constants import (
 
 class CoroutineChecker:
     """Utility class for checking coroutine status of functions and callables.
-    
+
     Simple bounded cache using WeakKeyDictionary to avoid memory leaks.
     """
-    
+
     def __init__(self):
         self._cache = WeakKeyDictionary()
         self._max_size = COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY
-    
+
     def is_async_callable(self, callback: Any) -> bool:
         """Fast, cached check for whether a callback is an async function.
         Falls back gracefully if the object cannot be weak-referenced or cached.
@@ -52,12 +52,13 @@ class CoroutineChecker:
             # Simple size enforcement: clear cache if it gets too large
             if len(self._cache) >= self._max_size:
                 self._cache.clear()
-            
+
             self._cache[callback] = result
         except Exception:
             pass
 
         return result
+
 
 # Global instance for backward compatibility and convenience
 coroutine_checker = CoroutineChecker()

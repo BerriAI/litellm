@@ -1,16 +1,24 @@
 """Video generation and management functions for LiteLLM."""
 
 from .main import (
-    avideo_generation,
-    video_generation,
-    avideo_list,
-    video_list,
-    avideo_status,
-    video_status,
     avideo_content,
-    video_content,
+    avideo_create_character,
+    avideo_edit,
+    avideo_extension,
+    avideo_generation,
+    avideo_get_character,
+    avideo_list,
     avideo_remix,
+    avideo_status,
+    video_content,
+    video_create_character,
+    video_edit,
+    video_extension,
+    video_generation,
+    video_get_character,
+    video_list,
     video_remix,
+    video_status,
 )
 
 __all__ = [
@@ -24,4 +32,12 @@ __all__ = [
     "video_content",
     "avideo_remix",
     "video_remix",
+    "avideo_create_character",
+    "video_create_character",
+    "avideo_get_character",
+    "video_get_character",
+    "avideo_edit",
+    "video_edit",
+    "avideo_extension",
+    "video_extension",
 ]

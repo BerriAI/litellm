@@ -1,9 +1,12 @@
 import asyncio
+import json
 import os
 import sys
 import time
+import types
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,9 +28,77 @@ class MockLiteLLMTeamMembership:
         return {"count": 1}
 
 
+class MockLiteLLMVerificationToken:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
+class MockLiteLLMOrganizationTable:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
+class MockLiteLLMTagTable:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
+class MockLiteLLMEndUserTable:
+    def __init__(self):
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
+        self.litellm_verificationtoken = MockLiteLLMVerificationToken()
+        self.litellm_endusertable = MockLiteLLMEndUserTable()
+        self.litellm_organizationtable = MockLiteLLMOrganizationTable()
+        self.litellm_tagtable = MockLiteLLMTagTable()
 
 
 class MockPrismaClient:
@@ -320,3 +391,1252 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
     assert mock_prisma_client.updated_data["team"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
+
+
+def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """
+    Test that when a budget tier is reset, keys linked to that budget
+    (via budget_id) that don't have their own budget_duration also get
+    their spend reset.
+
+    This covers the case where keys were created with budget_id but
+    budget_duration was not inherited to the key (pre-fix keys).
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+
+    # Create a budget tier that is due for reset
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    # Run the method
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    # Verify that update_many was called on litellm_verificationtoken
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1, f"Expected 1 update_many call, got {len(calls)}"
+
+    # Verify the where clause filters by budget_id and null budget_duration
+    call = calls[0]
+    assert call["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+    assert call["where"]["budget_duration"] is None
+
+    # Verify spend is reset to 0
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_keys_linked_to_budgets_excludes_keys_with_own_budget_duration(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that keys with BOTH budget_id AND budget_duration are excluded from
+    reset_budget_for_keys_linked_to_budgets. Such keys have their own reset
+    schedule and are handled only by reset_budget_for_litellm_keys(). The
+    budget_duration=None filter ensures they are NOT double-reset when the
+    linked budget tier expires.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1
+    call = calls[0]
+
+    # Critical: budget_duration must be None so keys with their own budget_duration
+    # (e.g. key has budget_id="X" AND budget_duration=60) are excluded.
+    # Those keys are reset only by reset_budget_for_litellm_keys() - no double-reset.
+    assert call["where"]["budget_duration"] is None
+    assert call["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+
+
+def test_reset_budget_for_keys_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that when there are no budgets to reset, no update is performed
+    on the verification token table.
+    """
+    # Run with empty list
+    asyncio.run(
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=[])
+    )
+
+    # Verify no update_many calls were made
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 0
+
+
+def test_reset_budget_for_orgs_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """
+    Test that when a budget tier is reset, orgs linked to that budget
+    (via budget_id) also get their spend reset.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "30d-org-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_orgs_linked_to_budgets(
+            budgets_to_reset=[test_budget]
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_organizationtable.update_many_calls
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["where"]["budget_id"] == {"in": ["30d-org-budget"]}
+    assert call["where"]["spend"] == {"gt": 0}
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_orgs_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that when there are no budgets to reset, no update is performed
+    on the organization table.
+    """
+    asyncio.run(
+        reset_budget_job.reset_budget_for_orgs_linked_to_budgets(budgets_to_reset=[])
+    )
+    calls = mock_prisma_client.db.litellm_organizationtable.update_many_calls
+    assert len(calls) == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """
+    Test that when a budget tier is reset, tags linked to that budget
+    (via budget_id) also get their spend reset.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "30d-tag-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(
+            budgets_to_reset=[test_budget]
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["where"]["budget_id"] == {"in": ["30d-tag-budget"]}
+    assert call["where"]["spend"] == {"gt": 0}
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that when there are no budgets to reset, no update is performed
+    on the tag table.
+    """
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(budgets_to_reset=[])
+    )
+    calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert len(calls) == 0
+
+
+@pytest.mark.parametrize(
+    "budget_duration, expected_day, expected_month",
+    [
+        ("30d", 1, 7),  # 30d → 1st of next month
+        ("1mo", 1, 7),  # 1mo → 1st of next month
+        ("1d", 16, 6),  # 1d → next midnight (same month)
+    ],
+    ids=["30d-calendar-month", "1mo-calendar-month", "1d-next-midnight"],
+)
+def test_reset_budget_reset_at_date_calendar_aligned(
+    budget_duration, expected_day, expected_month
+):
+    """
+    Verify that _reset_budget_reset_at_date produces calendar-aligned reset
+    times (matching get_budget_reset_time), not sliding-window offsets.
+    """
+    from unittest.mock import patch
+
+    # Fix "now" to 2023-06-15 10:30:00 UTC for deterministic results
+    fixed_now = datetime(2023, 6, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": budget_duration,
+            "budget_reset_at": fixed_now - timedelta(hours=1),
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=30),
+        },
+    )
+
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
+
+    assert test_budget.budget_reset_at.day == expected_day
+    assert test_budget.budget_reset_at.month == expected_month
+    assert test_budget.budget_reset_at.hour == 0
+    assert test_budget.budget_reset_at.minute == 0
+    assert test_budget.budget_reset_at.second == 0
+
+
+def test_reset_budget_reset_at_date_7d_next_monday():
+    """Verify 7d budget duration resets to next Monday at midnight."""
+    from unittest.mock import patch
+
+    # 2023-06-14 is a Wednesday
+    fixed_now = datetime(2023, 6, 14, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": "7d",
+            "budget_reset_at": fixed_now - timedelta(hours=1),
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=7),
+        },
+    )
+
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
+
+    # Next Monday after Wednesday June 14 is June 19
+    assert test_budget.budget_reset_at.day == 19
+    assert test_budget.budget_reset_at.month == 6
+    assert test_budget.budget_reset_at.weekday() == 0  # Monday
+    assert test_budget.budget_reset_at.hour == 0
+
+
+def test_reset_budget_reset_at_date_none_duration():
+    """Verify that budget_reset_at is unchanged when budget_duration is None."""
+    original_reset_at = datetime(2023, 6, 20, 0, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2023, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": None,
+            "budget_reset_at": original_reset_at,
+            "budget_id": "test-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, now))
+    assert test_budget.budget_reset_at == original_reset_at
+
+
+def test_reset_budget_reset_at_date_none_reset_at():
+    """Verify that budget_reset_at is set correctly even when previously None."""
+    from unittest.mock import patch
+
+    fixed_now = datetime(2023, 6, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": "30d",
+            "budget_reset_at": None,
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=5),
+        },
+    )
+
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
+
+    # Should be set to 1st of next month (July 1)
+    assert test_budget.budget_reset_at is not None
+    assert test_budget.budget_reset_at.day == 1
+    assert test_budget.budget_reset_at.month == 7
+
+
+def test_budget_table_reset_also_resets_linked_keys(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Integration-style test: when reset_budget_for_litellm_budget_table runs,
+    it should also reset spend for keys linked to the expiring budget tiers
+    (in addition to end-users and team members).
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "7d-budget-tier",
+            "created_at": now - timedelta(days=7),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    # Run the full budget table reset
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    # Verify that keys linked to the budget were also reset
+    calls = mock_prisma_client.db.litellm_verificationtoken.update_many_calls
+    assert len(calls) == 1, (
+        "Expected reset_budget_for_litellm_budget_table to also reset keys "
+        f"linked to expiring budgets, but got {len(calls)} update_many calls"
+    )
+    assert calls[0]["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
+    assert calls[0]["data"]["spend"] == 0
+
+
+def test_budget_table_reset_also_resets_linked_orgs(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Integration-style test: when reset_budget_for_litellm_budget_table runs,
+    it should also reset spend for orgs linked to the expiring budget tiers
+    (in addition to end-users, team members, and keys).
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "30d-org-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    calls = mock_prisma_client.db.litellm_organizationtable.update_many_calls
+    assert len(calls) == 1, (
+        "Expected reset_budget_for_litellm_budget_table to also reset orgs "
+        f"linked to expiring budgets, but got {len(calls)} update_many calls"
+    )
+    assert calls[0]["where"]["budget_id"] == {"in": ["30d-org-budget"]}
+    assert calls[0]["data"]["spend"] == 0
+
+
+def test_budget_table_reset_also_resets_linked_tags(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Integration-style test: when reset_budget_for_litellm_budget_table runs,
+    it should also reset spend for tags linked to the expiring budget tiers.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "30d-tag-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert len(calls) == 1, (
+        "Expected reset_budget_for_litellm_budget_table to also reset tags "
+        f"linked to expiring budgets, but got {len(calls)} update_many calls"
+    )
+    assert calls[0]["where"]["budget_id"] == {"in": ["30d-tag-budget"]}
+    assert calls[0]["data"]["spend"] == 0
+
+
+def test_reset_budget_resets_endusers_with_null_budget_id(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    When litellm.max_end_user_budget_id is configured and that budget is
+    being reset, end users with budget_id=NULL should also have their spend
+    reset.  These users were implicitly created and have no budget_id persisted,
+    but are enforced against the default budget in-memory.
+    """
+    import litellm
+
+    now = datetime.now(timezone.utc)
+    default_budget_id = "default-enduser-budget"
+    litellm.max_end_user_budget_id = default_budget_id
+
+    # Budget that is due for reset — matches the default end user budget
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": default_budget_id,
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    # End user WITH explicit budget_id (found by the normal budget_id_list query)
+    enduser_with_budget = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 30.0,
+            "litellm_budget_table": test_budget,
+            "user_id": "enduser-explicit",
+        },
+    )
+
+    # End user WITHOUT budget_id (NULL) — should also be reset
+    enduser_no_budget_row = type(
+        "EndUserRow",
+        (),
+        {
+            "spend": 25.0,
+            "user_id": "enduser-implicit",
+            "budget_id": None,
+            "alias": None,
+            "allowed_model_region": None,
+            "default_model": None,
+            "blocked": False,
+            "object_permission_id": None,
+            "object_permission": None,
+            "litellm_budget_table": None,
+            "dict": lambda self=None: {
+                "spend": 25.0,
+                "user_id": "enduser-implicit",
+                "blocked": False,
+                "alias": None,
+                "allowed_model_region": None,
+                "default_model": None,
+                "litellm_budget_table": None,
+                "object_permission_id": None,
+                "object_permission": None,
+            },
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+    mock_prisma_client.data["enduser"] = [enduser_with_budget]
+
+    # Set up the DB mock for NULL-budget-id end users
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [enduser_no_budget_row]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    # Both end users should have been reset
+    updated = mock_prisma_client.updated_data["enduser"]
+    assert (
+        len(updated) == 2
+    ), f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
+
+    user_ids = {u.user_id for u in updated}
+    assert "enduser-explicit" in user_ids
+    assert "enduser-implicit" in user_ids
+
+    for u in updated:
+        assert u.spend == 0.0, f"Expected spend=0 for {u.user_id}, got {u.spend}"
+
+    # Verify find_many was called to fetch NULL-budget-id end users
+    find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
+    assert len(find_many_calls) == 1
+    assert find_many_calls[0]["where"] == {"budget_id": None, "spend": {"gt": 0}}
+
+    litellm.max_end_user_budget_id = None
+
+
+def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    When litellm.max_end_user_budget_id is NOT configured, end users with
+    budget_id=NULL should NOT be fetched or reset.
+    """
+    import litellm
+
+    now = datetime.now(timezone.utc)
+    litellm.max_end_user_budget_id = None
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "some-budget",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    # Should NOT have queried for NULL-budget-id end users
+    find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
+    assert len(find_many_calls) == 0
+
+    litellm.max_end_user_budget_id = None
+
+
+def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_list(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    When litellm.max_end_user_budget_id IS configured but the corresponding
+    budget is NOT in the budgets-to-reset list (not yet expired), end users
+    with budget_id=NULL should NOT be reset.
+    """
+    import litellm
+
+    now = datetime.now(timezone.utc)
+    litellm.max_end_user_budget_id = "default-budget-not-expired"
+
+    # A different budget that IS expiring (not the default one)
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "other-budget",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    # Should NOT have queried for NULL-budget-id end users
+    find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
+    assert len(find_many_calls) == 0
+
+    litellm.max_end_user_budget_id = None
+
+
+def test_reset_budget_for_team_members_preserves_total_spend():
+    """Regression guard: reset_budget_for_litellm_team_members must zero `spend`
+    but leave `total_spend` untouched.
+
+    The reset writes `data={"spend": 0}` explicitly. If a future refactor adds
+    `"total_spend": 0` to that dict, this test fails immediately.
+    """
+    expired_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {"budget_id": "budget-1"},
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MagicMock(), prisma_client=mock_prisma_client
+    )
+
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    mock_prisma_client.db.litellm_teammembership.update_many.assert_called_once()
+    call_kwargs = (
+        mock_prisma_client.db.litellm_teammembership.update_many.call_args.kwargs
+    )
+    assert call_kwargs["where"]["budget_id"]["in"] == ["budget-1"]
+    assert call_kwargs["data"] == {"spend": 0}
+    assert "total_spend" not in call_kwargs["data"]
+
+
+# ---------------------------------------------------------------------------
+# reset_budget_windows (per-key / per-team concurrent window resets)
+# ---------------------------------------------------------------------------
+
+
+def _make_reset_budget_windows_job(
+    monkeypatch,
+    key_rows: List[Dict[str, Any]],
+    team_rows: List[Dict[str, Any]],
+):
+    """Build a ResetBudgetJob with a fully-mocked prisma client and a fake
+    `litellm.proxy.proxy_server` module exposing a stub `spend_counter_cache`.
+
+    Returns (job, prisma_client_mock, spend_counter_cache_mock).
+    """
+    prisma_client = MagicMock()
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        # Dispatch by table name in the SQL so a single stub covers both calls.
+        if '"LiteLLM_VerificationToken"' in query:
+            return key_rows
+        if '"LiteLLM_TeamTable"' in query:
+            return team_rows
+        raise AssertionError(f"Unexpected query_raw call: {query}")
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    # Stub out litellm.proxy.proxy_server so the in-function
+    # `from litellm.proxy.proxy_server import spend_counter_cache` resolves
+    # without importing the real (heavy) module.
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None  # skip the async redis branch
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    return job, prisma_client, spend_counter_cache
+
+
+def test_reset_budget_windows_uses_is_not_null_filter(monkeypatch):
+    """Regression guard for the Prisma client limitation documented in
+    RobertCraigie/prisma-client-py#714: `{"not": None}` on a `Json?` column
+    raises `MissingRequiredValueError`. We work around it by using `query_raw`
+    with `IS NOT NULL`. If someone reverts to the ORM filter, this test fails.
+    """
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    queries = [call.args[0] for call in prisma_client.db.query_raw.await_args_list]
+    assert len(queries) == 2, queries
+    key_query, team_query = queries
+
+    assert '"LiteLLM_VerificationToken"' in key_query
+    assert "budget_limits IS NOT NULL" in key_query
+    assert '"LiteLLM_TeamTable"' in team_query
+    assert "budget_limits IS NOT NULL" in team_query
+
+
+def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
+    """A key whose window's `reset_at` has passed gets an update with a new
+    `reset_at` in the future, and the in-memory spend counter is cleared."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    # Update should have been called exactly once with the expired token.
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    call_kwargs = prisma_client.db.litellm_verificationtoken.update.await_args.kwargs
+    assert call_kwargs["where"] == {"token": "sk-expired"}
+
+    # The `budget_limits` payload is re-serialized JSON with a bumped reset_at.
+    written_windows = json.loads(call_kwargs["data"]["budget_limits"])
+    assert len(written_windows) == 1
+    new_reset_at = datetime.fromisoformat(
+        written_windows[0]["reset_at"].replace("Z", "+00:00")
+    ).replace(tzinfo=None)
+    assert new_reset_at > now
+
+    # The spend counter for this key+window was cleared.
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-expired:window:1d", value=0.0
+    )
+
+
+def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
+    """If `reset_at` is in the future, no write should happen for that key."""
+    now = datetime.utcnow()
+    future = (now + timedelta(hours=1)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-future",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
+    """Same as the key test, but for teams."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    team_rows = [
+        {
+            "team_id": "team-expired",
+            "budget_limits": [{"budget_duration": "30d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=team_rows
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+    call_kwargs = prisma_client.db.litellm_teamtable.update.await_args.kwargs
+    assert call_kwargs["where"] == {"team_id": "team-expired"}
+    assert "budget_limits" in call_kwargs["data"]
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team:team-expired:window:30d", value=0.0
+    )
+
+
+def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
+    """Defensive: if `query_raw` returns `budget_limits` as a JSON-encoded
+    string (driver-dependent), the code still parses and resets it.
+    """
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-string-limits",
+            "budget_limits": json.dumps(
+                [{"budget_duration": "1d", "reset_at": expired}]
+            ),
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+
+
+def test_reset_budget_windows_skips_row_with_empty_budget_limits(monkeypatch):
+    """A row whose `budget_limits` comes back as an empty/falsy payload
+    (shouldn't happen given the WHERE filter, but we guard anyway) must not
+    trigger an update or crash the loop."""
+    key_rows = [
+        {"token": "sk-empty-list", "budget_limits": []},
+        {"token": "sk-empty-str", "budget_limits": ""},
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
+    """If the key query raises, the teams path still runs (and vice-versa).
+    Each side has its own try/except; this locks that in."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    prisma_client = MagicMock()
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        if '"LiteLLM_VerificationToken"' in query:
+            raise RuntimeError("boom")
+        if '"LiteLLM_TeamTable"' in query:
+            return [
+                {
+                    "team_id": "team-ok",
+                    "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+                }
+            ]
+        raise AssertionError(query)
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+
+    asyncio.run(job.reset_budget_windows())  # must not raise
+
+    prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Counter invalidation on budget reset
+# ---------------------------------------------------------------------------
+
+
+def _make_counter_invalidation_job(monkeypatch):
+    """Stub spend_counter_cache (and user_api_key_cache) so we can observe
+    invalidation calls.
+
+    Both caches are looked up via ``from litellm.proxy.proxy_server import
+    <name>`` inside the reset job, so we publish them on a fake module.
+    """
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = user_api_key_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    spend_counter_cache.user_api_key_cache = user_api_key_cache
+    return spend_counter_cache
+
+
+def test_reset_budget_for_team_members_invalidates_redis_counter(monkeypatch):
+    """Team-member budget reset clears the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "alice", "team_id": "team-x", "budget_id": "budget-1"},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Key budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {
+                "spend": 100.0,
+                "budget_duration": "30d",
+                "budget_reset_at": now,
+                "id": "key-1",
+                "token": "sk-abc",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-abc", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_users_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """User budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 50.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "id": "user-1",
+                "user_id": "alice",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:user:alice", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_teams_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Team budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["team"] = [
+        type(
+            "Team",
+            (),
+            {
+                "spend": 200.0,
+                "budget_duration": "1mo",
+                "budget_reset_at": now,
+                "id": "team-1",
+                "team_id": "team-x",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monkeypatch):
+    """Resetting keys via budget tier must clear each linked key's counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_key = type("Key", (), {"token": "sk-linked"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[linked_key]
+    )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_keys_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-linked", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_orgs_linked_to_budgets_invalidates_redis_counter(monkeypatch):
+    """Resetting orgs via budget tier must clear each linked org's counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_org = type("Org", (), {"organization_id": "org-acme"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[linked_org]
+    )
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_orgs_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:org:org-acme", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:org:org-acme", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_redis_counter(monkeypatch):
+    """Resetting tags via budget tier must clear each linked tag's counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:tag:tenant-42", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:tag:tenant-42", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_management_cache(
+    monkeypatch,
+):
+    """Regression guard for the bug where tag spend stayed frozen across cycles.
+
+    ``SpendCounterReseed.from_db`` returns ``None`` for ``spend:tag:*`` keys,
+    so once the spend counter expires the tag budget check falls back to the
+    cached ``LiteLLM_TagTable.spend``. If we don't drop the management cache
+    entry on reset, that cached object lingers (TTL 60s) with the pre-reset
+    spend, and ``_tag_max_budget_check`` keeps returning HTTP 400 even though
+    the DB row has been zeroed.
+    """
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    counter_cache.user_api_key_cache.async_delete_cache.assert_any_await(
+        key="tag:tenant-42"
+    )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_each_tag_management_cache(
+    monkeypatch,
+):
+    """When multiple tags share the expired budget tier, every one of them
+    has its ``user_api_key_cache`` entry dropped — not just the first."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tags = [
+        type("Tag", (), {"tag_name": "tenant-a"}),
+        type("Tag", (), {"tag_name": "tenant-b"}),
+        type("Tag", (), {"tag_name": "tenant-c"}),
+    ]
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=linked_tags)
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 3})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    deleted_keys = {
+        call.kwargs.get("key")
+        for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
+    assert deleted_keys == {"tag:tenant-a", "tag:tenant-b", "tag:tenant-c"}
+
+
+def test_reset_budget_for_keys_linked_to_budgets_invalidates_management_cache(
+    monkeypatch,
+):
+    """Budget-tier key resets must drop the cached key object (hashed token key).
+
+    Historically this test used ``assert_not_awaited()`` on
+    ``user_api_key_cache.async_delete_cache``, reflecting the assumption that
+    ``SpendCounterReseed.from_db`` alone kept spend consistent for keys and
+    that invalidating the management cache was unnecessary. That was flipped to
+    ``assert_any_await(...)`` because the old invariant fails across pods: a
+    budget reset on one instance can leave another pod's cached key object
+    (including embedded ``.spend``) stale until TTL expiry. Eviction now matches
+    tags/orgs/teams. Do not treat the ``cache_key_fn`` / invalidation wiring as
+    redundant without revisiting that cross-pod consistency story.
+    """
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_key = type("Key", (), {"token": "sk-linked"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[linked_key]
+    )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_keys_linked_to_budgets([expired_budget]))
+
+    counter_cache.user_api_key_cache.async_delete_cache.assert_any_await(
+        key="sk-linked"
+    )
+
+
+def test_reset_budget_for_orgs_linked_to_budgets_invalidates_management_cache(
+    monkeypatch,
+):
+    """Org rows use both base and budget-table cache keys — evict both on reset."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_org = type("Org", (), {"organization_id": "org-acme"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[linked_org]
+    )
+    prisma_client.db.litellm_organizationtable.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_orgs_linked_to_budgets([expired_budget]))
+
+    deleted_keys = {
+        call.kwargs.get("key")
+        for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
+    assert deleted_keys == {
+        "org_id:org-acme",
+        "org_id:org-acme:with_budget",
+    }
+
+
+def test_reset_budget_for_team_members_invalidates_management_cache(monkeypatch):
+    """Team membership cache key matches auth: ``{team_id}_{user_id}``."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "alice", "team_id": "team-x", "budget_id": "budget-1"},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    counter_cache.user_api_key_cache.async_delete_cache.assert_any_await(
+        key="team-x_alice"
+    )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_management_cache_delete_failure_still_resets(
+    monkeypatch,
+):
+    """If ``async_delete_cache`` raises, the DB cascade must still complete."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.user_api_key_cache.async_delete_cache = AsyncMock(
+        side_effect=RuntimeError("cache unavailable")
+    )
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()

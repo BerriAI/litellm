@@ -165,3 +165,157 @@ def test_hosted_vllm_supports_thinking():
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "low"
+
+
+def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+    """
+    Test that thinking_blocks on assistant messages are converted to content
+    blocks prepended before the existing content.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": "Hello",
+        },
+        {
+            "role": "assistant",
+            "content": "Here is my answer.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me reason about this...",
+                    "signature": "abc123",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "Follow up question",
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert isinstance(assistant_msg["content"], list)
+    assert assistant_msg["content"][0] == {
+        "type": "thinking",
+        "thinking": "Let me reason about this...",
+    }
+    assert assistant_msg["content"][1] == {
+        "type": "text",
+        "text": "Here is my answer.",
+    }
+    assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_thinking_blocks_with_list_content():
+    """
+    Test thinking_blocks prepended when assistant content is already a list.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Response text"}],
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 reasoning",
+                    "signature": "sig1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2 reasoning",
+                    "signature": "sig2",
+                },
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    assert len(assistant_msg["content"]) == 3
+    assert assistant_msg["content"][0] == {
+        "type": "thinking",
+        "thinking": "Step 1 reasoning",
+    }
+    assert assistant_msg["content"][1] == {
+        "type": "thinking",
+        "thinking": "Step 2 reasoning",
+    }
+    assert assistant_msg["content"][2] == {"type": "text", "text": "Response text"}
+    assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
+    config = HostedVLLMChatConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "apply_patch",
+                        "description": "Apply text patch",
+                        "format": {
+                            "type": "grammar",
+                            "grammar": {"syntax": "lark", "definition": "start: /.*/"},
+                        },
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["name"] == "apply_patch"
+    assert tools[0]["function"]["description"] == "Apply text patch"
+    assert tools[0]["function"]["parameters"]["type"] == "object"
+    assert "input" in tools[0]["function"]["parameters"]["properties"]
+
+
+def test_hosted_vllm_custom_tools_use_top_level_input_schema():
+    config = HostedVLLMChatConfig()
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "search",
+                    "description": "Search docs",
+                    "input_schema": input_schema,
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "search"
+    assert tools[0]["function"]["description"] == "Search docs"
+    assert tools[0]["function"]["parameters"] == input_schema

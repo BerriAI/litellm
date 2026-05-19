@@ -18,6 +18,7 @@ from openai.types.file_deleted import FileDeleted
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -74,11 +75,7 @@ class ManusFilesConfig(BaseFilesConfig):
         Manus uses API_KEY header instead of Authorization: Bearer.
         For file uploads, don't set Content-Type - httpx will set it for multipart.
         """
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("MANUS_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -194,14 +191,14 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        
+
         # Get API key
         api_key = (
             litellm_params.get("api_key")
             or litellm.api_key
             or get_secret_str("MANUS_API_KEY")
         )
-        
+
         if not api_key:
             raise ValueError(
                 "Manus API key is required. Set MANUS_API_KEY environment variable or pass api_key parameter."
@@ -310,7 +307,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
 
     def transform_retrieve_file_response(
         self,
@@ -340,7 +338,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
 
     def transform_delete_file_response(
         self,
@@ -426,7 +425,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}/content", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}/content", {}
 
     def transform_file_content_response(
         self,
@@ -436,4 +436,3 @@ class ManusFilesConfig(BaseFilesConfig):
     ) -> HttpxBinaryResponseContent:
         """Transform file content response."""
         return HttpxBinaryResponseContent(response=raw_response)
-

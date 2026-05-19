@@ -168,7 +168,9 @@ class GenerateContentHelper:
             )
         )
         # Extract systemInstruction from kwargs to pass to transform
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
@@ -183,7 +185,8 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
@@ -318,7 +321,9 @@ def generate_content(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -407,7 +412,9 @@ async def agenerate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:

@@ -1,6 +1,7 @@
 import base64
 import json  # <--- NEW
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -391,6 +392,22 @@ class LangfuseOtelLogger(OpenTelemetry):
             dynamic_headers["Authorization"] = auth_header
 
         return dynamic_headers
+
+    def create_litellm_proxy_request_started_span(
+        self,
+        start_time: datetime,
+        headers: dict,
+    ) -> Optional[Span]:
+        """
+        Override to prevent creating empty proxy request spans.
+
+        Langfuse should only receive spans for actual LLM calls, not for
+        internal proxy operations (auth, postgres, proxy_pre_call, etc.).
+
+        By returning None, we prevent the parent span from being created,
+        which in turn prevents empty traces from being sent to Langfuse.
+        """
+        return None
 
     async def async_service_success_hook(self, *args, **kwargs):
         """

@@ -7,14 +7,16 @@ import {
   ShoppingCartOutlined,
   TagsOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Badge, Select } from "antd";
 import React from "react";
-export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user-agent-activity";
+export type UsageOption = "global" | "my-usage" | "organization" | "team" | "customer" | "tag" | "agent" | "user" | "user-agent-activity";
 export interface UsageViewSelectProps {
   value: UsageOption;
   onChange: (value: UsageOption) => void;
   isAdmin: boolean;
+  canViewTagUsage?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -41,6 +43,13 @@ const OPTIONS: OptionConfig[] = [
     descriptionForAdmin: "View usage across all resources",
     descriptionForNonAdmin: "View your usage",
     icon: <GlobalOutlined style={{ fontSize: "16px" }} />,
+  },
+  {
+    value: "my-usage",
+    label: "Your Usage",
+    description: "View your own usage",
+    icon: <UserOutlined style={{ fontSize: "16px" }} />,
+    adminOnly: true,
   },
   {
     value: "organization",
@@ -80,6 +89,13 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
   {
+    value: "user",
+    label: "User Usage",
+    description: "View usage by individual users",
+    icon: <UserOutlined style={{ fontSize: "16px" }} />,
+    adminOnly: true,
+  },
+  {
     value: "user-agent-activity",
     label: "User Agent Activity",
     description: "View detailed user agent activity logs",
@@ -91,12 +107,16 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
   isAdmin,
+  canViewTagUsage = false,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
 }) => {
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
+      if (option.value === "tag" && canViewTagUsage) {
+        return true;
+      }
       if (option.adminOnly && !isAdmin) {
         return false;
       }

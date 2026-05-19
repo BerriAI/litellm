@@ -115,6 +115,47 @@ async def test_route_request_no_model_required_with_router_settings():
 
 
 @pytest.mark.asyncio
+async def test_route_request_vector_store_routes_model_none_no_api_key_in_body():
+    """
+    GET /vector_stores/{id} and related routes do not send api_key in the body.
+    Router must still accept model=None (as set by common_processing_pre_call_logic).
+    """
+    cases: list[tuple[str, dict]] = [
+        ("avector_store_retrieve", {"vector_store_id": "vs_123", "model": None}),
+        ("avector_store_list", {"model": None}),
+        (
+            "avector_store_update",
+            {"vector_store_id": "vs_123", "name": "n", "model": None},
+        ),
+        ("avector_store_delete", {"vector_store_id": "vs_123", "model": None}),
+    ]
+
+    for route_type, data in cases:
+        llm_router = MagicMock()
+        llm_router.router_general_settings.pass_through_all_models = False
+        llm_router.default_deployment = None
+        llm_router.pattern_router.patterns = []
+        llm_router.model_names = []
+        llm_router.has_model_id.return_value = False
+        llm_router.deployment_names = []
+        llm_router.model_group_alias = None
+
+        getattr(llm_router, route_type).return_value = "fake_response"
+
+        response = await route_request(dict(data), llm_router, None, route_type)
+
+        assert response == "fake_response"
+        mock_method = getattr(llm_router, route_type)
+        mock_method.assert_called_once()
+        actual_kwargs = mock_method.call_args.kwargs
+        for key, value in data.items():
+            assert actual_kwargs.get(key) == value, (
+                f"{route_type}: expected {key}={value!r}, got {actual_kwargs.get(key)!r}"
+            )
+        llm_router.reset_mock()
+
+
+@pytest.mark.asyncio
 async def test_route_request_no_model_required_with_router_settings_and_no_router():
     """Test route types that don't require model parameter with router settings and no router"""
     from unittest.mock import patch
@@ -137,62 +178,204 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
 
 
 @pytest.mark.asyncio
-async def test_route_request_with_invalid_router_params():
+async def test_route_request_with_router_settings_override():
     """
-    Test that route_request filters out invalid Router init params from 'user_config'.
-    This covers the fix for https://github.com/BerriAI/litellm/issues/19693
+    Test that route_request handles router_settings_override by merging settings into kwargs
+    instead of creating a new Router (which is expensive and was the old behavior).
     """
-    import litellm
-    from litellm.router import Router
-    from unittest.mock import AsyncMock
-
-    # Mock data with user_config containing invalid keys (simulating DB entry)
+    # Mock data with router_settings_override containing per-request settings
     data = {
         "model": "gpt-3.5-turbo",
-        "user_config": {
-            "model_list": [
-                {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test"},
-                }
-            ],
-            "model_alias_map": {"alias": "real_model"},  # INVALID PARAM
-            "invalid_garbage_key": "crash_me",  # INVALID PARAM
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 5,
+            "timeout": 30,
+            "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
+            # These settings should be ignored (not in per_request_settings list)
+            "routing_strategy": "least-busy",
+            "model_group_alias": {"alias": "real_model"},
         },
     }
 
-    # We expect Router(**config) to succeed because of the filtering.
-    # If filtering fails, this will raise TypeError and fail the test.
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    # Verify the router method was called with merged settings
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+    assert call_kwargs["num_retries"] == 5
+    assert call_kwargs["timeout"] == 30
+    assert call_kwargs["model_group_retry_policy"] == {
+        "gpt-3.5-turbo": {"RateLimitErrorRetries": 3}
+    }
+    # Verify unsupported settings were NOT merged
+    assert "routing_strategy" not in call_kwargs
+    assert "model_group_alias" not in call_kwargs
+    # Verify router_settings_override was removed from data
+    assert "router_settings_override" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_no_router():
+    """
+    Test that router_settings_override works when no router is provided,
+    falling back to litellm module directly.
+    """
+    import litellm
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 3,
+        },
+    }
+
+    # Use MagicMock explicitly to avoid auto-AsyncMock behavior in Python 3.12+
+    mock_completion = MagicMock(return_value="success")
+    original_acompletion = litellm.acompletion
+    litellm.acompletion = mock_completion
+
     try:
-        # route_request calls getattr(user_router, route_type)(**data)
-        # We'll mock the internal call to avoid making real network requests
-        with pytest.MonkeyPatch.context() as m:
-            # Mock the method that gets called on the router instance
-            # We don't easily have access to the instance created INSIDE existing route_request
-            # So we will wrap litellm.Router to spy on it or verify it doesn't crash
+        response = await route_request(data, None, None, "acompletion")
 
-            original_router_init = litellm.Router.__init__
+        assert response == "success"
+        # Verify litellm.acompletion was called with merged settings
+        call_kwargs = mock_completion.call_args[1]
+        assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+        assert call_kwargs["num_retries"] == 3
+    finally:
+        litellm.acompletion = original_acompletion
 
-            def safe_router_init(self, **kwargs):
-                # Verify that invalid keys are NOT present in kwargs
-                assert "model_alias_map" not in kwargs
-                assert "invalid_garbage_key" not in kwargs
-                # Call original init (which would raise TypeError if invalid keys were present)
-                original_router_init(self, **kwargs)
 
-            m.setattr(litellm.Router, "__init__", safe_router_init)
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_preserves_existing():
+    """
+    Test that router_settings_override does not override settings already in the request.
+    Request-level settings take precedence over key/team settings.
+    """
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "num_retries": 10,  # Request-level setting
+        "router_settings_override": {
+            "num_retries": 3,  # Key/team setting - should NOT override
+            "timeout": 30,  # Key/team setting - should be applied
+        },
+    }
 
-            # Use 'acompletion' as the route_type
-            # We also need to mock the completion method to avoid real calls
-            m.setattr(Router, "acompletion", AsyncMock(return_value="success"))
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
 
-            response = await route_request(data, None, None, "acompletion")
-            assert response == "success"
+    response = await route_request(data, llm_router, None, "acompletion")
 
-    except TypeError as e:
-        pytest.fail(
-            f"route_request raised TypeError, implying invalid params were passed to Router: {e}"
-        )
-    except Exception:
-        # Other exceptions might happen (e.g. valid config issues) but we care about TypeError here
-        pass
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    # Request-level num_retries should take precedence
+    assert call_kwargs["num_retries"] == 10
+    # Key/team timeout should be applied since not in request
+    assert call_kwargs["timeout"] == 30
+
+
+def test_mock_testing_kwarg_names_matches_dataclass():
+    """``_MOCK_TESTING_KWARG_NAMES`` is hardcoded to avoid a cyclic import
+    against ``litellm.types.router``. This test guards against drift —
+    if a new ``mock_testing_*`` field is added to ``MockRouterTestingParams``
+    the strip list must be updated to keep covering it."""
+    from dataclasses import fields
+
+    from litellm.proxy.route_llm_request import _MOCK_TESTING_KWARG_NAMES
+    from litellm.types.router import MockRouterTestingParams
+
+    assert set(_MOCK_TESTING_KWARG_NAMES) == {
+        f.name for f in fields(MockRouterTestingParams)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mock_flag",
+    [
+        "mock_testing_fallbacks",
+        "mock_testing_context_fallbacks",
+        "mock_testing_content_policy_fallbacks",
+    ],
+)
+async def test_route_request_strips_mock_testing_flags(mock_flag):
+    """VERIA-44: router-internal testing flags must not survive a
+    user-supplied request body. Without this strip, an attacker can
+    combine ``mock_testing_fallbacks=true`` with an unauthorized fallback
+    in ``router_settings_override`` to deterministically execute requests
+    against restricted models."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        mock_flag: True,
+    }
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert mock_flag not in call_kwargs
+    # The flag is also gone from the original data dict so any subsequent
+    # processing (e.g. logging) doesn't see it either.
+    assert mock_flag not in data
+
+
+@pytest.mark.parametrize(
+    "route_type", ["agenerate_content", "agenerate_content_stream"]
+)
+@pytest.mark.asyncio
+async def test_route_request_maps_generation_config_for_google_routes(route_type):
+    """For Google generate_content routes, route_request must rename
+    `generationConfig` (Google's wire format) to `config` (the kwarg the
+    router method expects). Without this mapping the request reaches the
+    LLM with the field under the wrong name and the config is dropped."""
+    data = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": "9:16", "imageSize": "4K"},
+        },
+    }
+    llm_router = MagicMock()
+    getattr(llm_router, route_type).return_value = "ok"
+
+    await route_request(data, llm_router, None, route_type)
+
+    call_kwargs = getattr(llm_router, route_type).call_args[1]
+    assert "generationConfig" not in call_kwargs
+    assert "config" in call_kwargs
+    assert call_kwargs["config"]["responseModalities"] == ["TEXT", "IMAGE"]
+    assert call_kwargs["config"]["imageConfig"]["aspectRatio"] == "9:16"
+    assert call_kwargs["config"]["imageConfig"]["imageSize"] == "4K"
+
+
+@pytest.mark.parametrize(
+    "route_type", ["agenerate_content", "agenerate_content_stream"]
+)
+@pytest.mark.asyncio
+async def test_route_request_preserves_existing_config_for_google_routes(route_type):
+    """If the caller already supplies `config`, route_request must not
+    overwrite it with `generationConfig`."""
+    data = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "config": {"existing": True},
+        "generationConfig": {"shouldNotWin": True},
+    }
+    llm_router = MagicMock()
+    getattr(llm_router, route_type).return_value = "ok"
+
+    await route_request(data, llm_router, None, route_type)
+
+    call_kwargs = getattr(llm_router, route_type).call_args[1]
+    assert call_kwargs["config"] == {"existing": True}

@@ -71,7 +71,6 @@ class OllamaModelInfo(BaseLLMModelInfo):
             or get_secret_str("OLLAMA_API_KEY")
         )
 
-
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> str:
         from litellm.secret_managers.main import get_secret_str
@@ -86,7 +85,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         base = self.get_api_base(api_base)
         api_key = self.get_api_key()
-        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         names: set[str] = set()
         try:
@@ -109,7 +108,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                     continue
                 nm = entry.get("name") or entry.get("model")
                 if isinstance(nm, str):
-                    names.add(nm)
+                    names.add(nm if nm.startswith("ollama/") else f"ollama/{nm}")
         except Exception as e:
             verbose_logger.warning(f"Error retrieving ollama tag endpoint: {e}")
             # If tags endpoint fails, fall back to static list
