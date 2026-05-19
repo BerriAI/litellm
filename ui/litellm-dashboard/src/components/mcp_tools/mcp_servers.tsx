@@ -99,9 +99,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     const targetId = params.get("openUserFields");
     if (!targetId) return;
     const target = serversWithHealth.find((s) => s.server_id === targetId);
-    if (target) {
-      setUserFieldsServer(target);
-    }
+    if (!target) return;
+    setUserFieldsServer(target);
     params.delete("openUserFields");
     const remaining = params.toString();
     const newUrl =
