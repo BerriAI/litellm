@@ -49,7 +49,15 @@ jobs:
       - name: Run Agent Shin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Only expose the LLM key when the workflow is actually allowed to
+          # take action (AGENT_SHIN_ENABLED=true) or when a collaborator runs
+          # it manually via workflow_dispatch (write access required to
+          # trigger). On the public issues path while the bot is not yet
+          # enabled, the key is intentionally absent so the script
+          # short-circuits with skip-no-llm-key — otherwise an external user
+          # could open/reopen issues with large bodies to force paid LLM
+          # calls.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
