@@ -1716,7 +1716,7 @@ async def get_user_key_counts(
     user_ids: list[str] | None = None,
 ):
     """
-    Helper function to get the count of keys for each user using Prisma's count method.
+    Helper function to get the count of keys for each user using Prisma's group_by method.
 
     Args:
         prisma_client: The Prisma client instance
@@ -1730,20 +1730,26 @@ async def get_user_key_counts(
     if not user_ids or len(user_ids) == 0:
         return {}
 
-    result = {}
+    result = {user_id: 0 for user_id in user_ids}
 
-    # Get count for each user_id individually
-    for user_id in user_ids:
-        count = await VerificationTokenRepository(prisma_client).table.count(
-            where={
-                "user_id": user_id,
-                "OR": [
-                    {"team_id": None},
-                    {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
-                ],
-            }
-        )
-        result[user_id] = count
+    grouped_counts = await prisma_client.db.litellm_verificationtoken.group_by(
+        by=["user_id"],
+        where={
+            "user_id": {"in": user_ids},
+            "OR": [
+                {"team_id": None},
+                {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+            ],
+        },
+        count={"user_id": True},
+    )
+
+    for row in grouped_counts:
+        user_id = row.get("user_id")
+        if user_id is None:
+            continue
+        count_block = row.get("_count") or {}
+        result[user_id] = count_block.get("user_id", 0)
 
     return result
 
