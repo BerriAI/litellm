@@ -950,7 +950,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    data=json.dumps(data),
                     timeout=timeout,
                 )
         except Exception as e:
