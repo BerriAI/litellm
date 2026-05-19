@@ -67,9 +67,10 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
 
   const buildDeepLinkUrl = (): string => {
     if (typeof window === "undefined") {
-      return `<dashboard-url>?openUserFields=${server.server_id}`;
+      return `<dashboard-url>?page=mcp-servers&openUserFields=${server.server_id}`;
     }
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams();
+    params.set("page", "mcp-servers");
     params.set("openUserFields", server.server_id);
     return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
   };

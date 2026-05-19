@@ -417,7 +417,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         const validUserFields = userFields.filter(
           (f) => f && f.name && f.name.trim() !== "",
         );
-        if (response?.server_id && validUserFields.length > 0) {
+        if (response?.server_id) {
           setUserFieldDefs(response.server_id, validUserFields);
         }
 

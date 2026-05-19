@@ -94,22 +94,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // ?openUserFields=<server_id> (this is the deep-link target shown in the
   // mocked Claude Code error message).
   useEffect(() => {
-    if (typeof window === "undefined" || !serversWithHealth || serversWithHealth.length === 0) {
-      return;
-    }
+    if (typeof window === "undefined" || !mcpServers) return;
     const params = new URLSearchParams(window.location.search);
     const targetId = params.get("openUserFields");
     if (!targetId) return;
     const target = serversWithHealth.find((s) => s.server_id === targetId);
     if (target) {
       setUserFieldsServer(target);
-      params.delete("openUserFields");
-      const remaining = params.toString();
-      const newUrl =
-        window.location.pathname + (remaining ? `?${remaining}` : "") + window.location.hash;
-      window.history.replaceState({}, "", newUrl);
     }
-  }, [serversWithHealth]);
+    params.delete("openUserFields");
+    const remaining = params.toString();
+    const newUrl =
+      window.location.pathname + (remaining ? `?${remaining}` : "") + window.location.hash;
+    window.history.replaceState({}, "", newUrl);
+  }, [mcpServers, serversWithHealth]);
 
   // Servers with one or more missing user fields for the current user (prototype)
   const serversNeedingUserFields = React.useMemo(() => {
@@ -549,7 +547,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       <UserFieldsModal
         server={userFieldsServer}
         userId={userID || ""}
-        open={!!userFieldsServer}
+        open={!!userFieldsServer && !!userID}
         onClose={() => setUserFieldsServer(null)}
         onSaved={() => setUserFieldsRefreshKey((k) => k + 1)}
       />

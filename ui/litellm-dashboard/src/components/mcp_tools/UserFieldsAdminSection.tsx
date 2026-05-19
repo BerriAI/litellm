@@ -64,7 +64,7 @@ const UserFieldsAdminSection: React.FC<UserFieldsAdminSectionProps> = ({ value, 
       ) : (
         <div className="space-y-3">
           {fields.map((f, idx) => (
-            <div key={idx} className="bg-white rounded border border-gray-200 p-3">
+            <div key={f.name || idx} className="bg-white rounded border border-gray-200 p-3">
               <div className="grid grid-cols-12 gap-2 items-start">
                 <div className="col-span-3">
                   <Text type="secondary" style={{ fontSize: 11 }}>Field Name (key)</Text>
