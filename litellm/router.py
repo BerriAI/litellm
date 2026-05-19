@@ -1579,6 +1579,44 @@ class Router:
             cancel_interaction, call_type="cancel_interaction"
         )
 
+    def _initialize_managed_agents_endpoints(self):
+        """Initialize Google Managed Agents API endpoints (v1beta/agents)."""
+        from litellm.interactions.agents import acreate as acreate_agent
+        from litellm.interactions.agents import adelete as adelete_agent
+        from litellm.interactions.agents import aget as aget_agent
+        from litellm.interactions.agents import alist as alist_agents
+        from litellm.interactions.agents import alist_versions as alist_agent_versions
+        from litellm.interactions.agents import create as create_agent
+        from litellm.interactions.agents import delete as delete_agent
+        from litellm.interactions.agents import get as get_agent
+        from litellm.interactions.agents import list as list_agents
+        from litellm.interactions.agents import list_versions as list_agent_versions
+
+        self.acreate_agent = self.factory_function(
+            acreate_agent, call_type="acreate_agent"
+        )
+        self.create_agent = self.factory_function(
+            create_agent, call_type="create_agent"
+        )
+        self.alist_agents = self.factory_function(
+            alist_agents, call_type="alist_agents"
+        )
+        self.list_agents = self.factory_function(list_agents, call_type="list_agents")
+        self.aget_agent = self.factory_function(aget_agent, call_type="aget_agent")
+        self.get_agent = self.factory_function(get_agent, call_type="get_agent")
+        self.adelete_agent = self.factory_function(
+            adelete_agent, call_type="adelete_agent"
+        )
+        self.delete_agent = self.factory_function(
+            delete_agent, call_type="delete_agent"
+        )
+        self.alist_agent_versions = self.factory_function(
+            alist_agent_versions, call_type="alist_agent_versions"
+        )
+        self.list_agent_versions = self.factory_function(
+            list_agent_versions, call_type="list_agent_versions"
+        )
+
     def _initialize_specialized_endpoints(self):
         """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
         self._initialize_vector_store_endpoints()
@@ -1591,6 +1629,7 @@ class Router:
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
         self._initialize_interactions_endpoints()
+        self._initialize_managed_agents_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -5361,6 +5400,16 @@ class Router:
             "delete_interaction",
             "acancel_interaction",
             "cancel_interaction",
+            "acreate_agent",
+            "create_agent",
+            "alist_agents",
+            "list_agents",
+            "aget_agent",
+            "get_agent",
+            "adelete_agent",
+            "delete_agent",
+            "alist_agent_versions",
+            "list_agent_versions",
         ] = "assistants",
     ):
         """
@@ -5445,6 +5494,27 @@ class Router:
 
             return vector_store_file_sync_wrapper
 
+        if call_type in (
+            "create_agent",
+            "list_agents",
+            "get_agent",
+            "delete_agent",
+            "list_agent_versions",
+        ):
+
+            def managed_agents_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = "gemini"
+                return original_function(**kwargs)
+
+            return managed_agents_sync_wrapper
+
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: Optional[str] = None,
@@ -5508,8 +5578,6 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
-                "acreate_interaction",
-                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -5569,11 +5637,25 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "acreate_interaction",
+                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",
             ):
                 return await self._init_interactions_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_agent",
+                "alist_agents",
+                "aget_agent",
+                "adelete_agent",
+                "alist_agent_versions",
+            ):
+                return await self._init_managed_agents_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
                     **kwargs,
@@ -5682,6 +5764,34 @@ class Router:
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
         # Default to gemini for interactions API
+        if "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = "gemini"
+        # If the proxy accidentally passed agent name as model, clear it
+        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
+            kwargs["model"] = None
+        # Model-based interactions use deployment routing + fallbacks; agent-only calls
+        # must not enter model-group lookup (agent name is not a LiteLLM deployment).
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
+        return await original_function(**kwargs)
+
+    async def _init_managed_agents_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Managed Agents API endpoints on the router (v1beta/agents).
+
+        CRUD operations for Gemini managed agents don't need model-based routing,
+        so we call the original function directly with the custom_llm_provider.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
         if "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = "gemini"
         return await original_function(**kwargs)
