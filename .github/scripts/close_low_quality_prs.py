@@ -350,6 +350,7 @@ def close_pr(
     repo: str | None,
     dry_run: bool,
     label: str | None,
+    grace_period_elapsed: bool = True,
 ) -> None:
     """Post the explanatory comment and close the PR."""
     pr_number = pr["number"]
@@ -362,11 +363,19 @@ def close_pr(
         )
         return
 
-    comment_body = (
-        f"Closing as part of automated PR triage.\n\n"
+    score_sentence = (
         f"Greptile's most recent review scored this PR **{score}/5**, below "
         f"our merge bar of **{threshold}/5**, and the 1-day grace period since "
         "the warning has elapsed.\n\n"
+        if grace_period_elapsed
+        else (
+            f"Greptile's most recent review scored this PR **{score}/5**, "
+            f"below our merge bar of **{threshold}/5**.\n\n"
+        )
+    )
+    comment_body = (
+        f"Closing as part of automated PR triage.\n\n"
+        f"{score_sentence}"
         "We close low-confidence PRs aggressively to keep the review queue "
         "manageable for maintainers and contributors alike. **This is not a "
         "rejection of the idea** — to bring this back:\n\n"
@@ -602,6 +611,7 @@ def main() -> int:
             repo=args.repo,
             dry_run=pr_dry_run,
             label=args.close_label,
+            grace_period_elapsed=not is_immediate,
         )
 
         if not pr_dry_run:
