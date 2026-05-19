@@ -1742,6 +1742,135 @@ async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation
 
 
 @pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_fallback():
+    """_aresponses_streaming_iterator should catch MidStreamFallbackError and
+    re-enter the Router's fallback chain — parity with the chat-completions
+    streaming path. Mirrors test_acompletion_streaming_iterator for aresponses.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/claude-sonnet-4-6",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "fake-anthropic-key",
+                },
+            },
+            {
+                "model_name": "vertex_ai/claude-sonnet-4-6",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-sonnet-4-6",
+                    "api_key": "fake-vertex-key",
+                },
+            },
+        ],
+        fallbacks=[{"anthropic/claude-sonnet-4-6": ["vertex_ai/claude-sonnet-4-6"]}],
+    )
+
+    initial_kwargs = {
+        "model": "anthropic/claude-sonnet-4-6",
+        "stream": True,
+        "input": "Hi",
+    }
+
+    # Source iterator: yields one chunk, then raises MidStreamFallbackError.
+    class _ErrorIterator(BaseResponsesAPIStreamingIterator):
+        def __init__(self):
+            self._chunks = [MagicMock(type="response.created")]
+            self._idx = 0
+            self._hidden_params = {"model_id": "src-deployment-1"}
+            self.model = "anthropic/claude-sonnet-4-6"
+            self.custom_llm_provider = "anthropic"
+            self.logging_obj = MagicMock()
+            self.litellm_metadata = None
+            self.responses_api_provider_config = None
+            self.finished = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._idx < len(self._chunks):
+                chunk = self._chunks[self._idx]
+                self._idx += 1
+                return chunk
+            raise MidStreamFallbackError(
+                message="anthropic socket timeout",
+                model="anthropic/claude-sonnet-4-6",
+                llm_provider="anthropic",
+                is_pre_first_chunk=False,
+                generated_content="",
+            )
+
+    # Fallback iterator: what the Router would return from the fallback chain.
+    fallback_chunks = [
+        MagicMock(type="response.output_text.delta"),
+        MagicMock(type="response.completed"),
+    ]
+
+    class _FallbackIterator:
+        def __init__(self, items):
+            self._items = items
+            self._idx = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._idx >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._idx]
+            self._idx += 1
+            return item
+
+    src = _ErrorIterator()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_FallbackIterator(fallback_chunks),
+    ) as mock_fallback_utils:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                **initial_kwargs,
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+
+        # Wrapper preserves isinstance for downstream consumers
+        assert isinstance(wrapped, BaseResponsesAPIStreamingIterator)
+        # Hidden params propagated through (needed for response headers)
+        assert wrapped._hidden_params.get("model_id") == "src-deployment-1"
+
+        collected = []
+        async for chunk in wrapped:
+            collected.append(chunk)
+
+    # 1 chunk before the error + 2 from fallback iterator
+    assert len(collected) == 3
+    assert mock_fallback_utils.called
+
+    call_kwargs = mock_fallback_utils.call_args.kwargs
+    fallback_call_kwargs = call_kwargs["kwargs"]
+    # Re-entry must hit the per-attempt helper, with original_generic_function
+    # preserved so the helper calls litellm.aresponses on each fallback attempt.
+    # (Bound methods compare equal when they share the same instance + __func__.)
+    assert (
+        fallback_call_kwargs["original_function"]
+        == router._ageneric_api_call_with_fallbacks_helper
+    )
+    assert fallback_call_kwargs["original_generic_function"] is litellm.aresponses
+    assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
+    assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
 async def test_async_function_with_fallbacks_common_utils():
     """Test the async_function_with_fallbacks_common_utils method"""
     # Create a basic router for testing
