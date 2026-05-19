@@ -42,16 +42,21 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
 
   if (!server) return null;
 
-  const missing = defs.filter(
-    (f) => !values[f.name] || values[f.name].trim() === "",
-  );
+  const isFieldMissing = (name: string): boolean =>
+    !values[name] ||
+    typeof values[name] !== "string" ||
+    values[name].trim() === "";
+
+  const missing = defs.filter((f) => isFieldMissing(f.name));
   const allFilled = defs.length > 0 && missing.length === 0;
+
+  const serverDisplayName = server.server_name || server.alias || server.server_id;
 
   const handleSave = () => {
     setUserFieldValues(server.server_id, userId, values);
     NotificationsManager.success(
       allFilled
-        ? `Saved. ${server.server_name || "MCP server"} is ready to use.`
+        ? `Saved. ${serverDisplayName} is ready to use.`
         : `Saved ${defs.length - missing.length} of ${defs.length} fields.`,
     );
     onSaved();
@@ -59,8 +64,6 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
       onClose();
     }
   };
-
-  const serverDisplayName = server.server_name || server.alias || server.server_id;
 
   const buildDeepLinkUrl = (): string => {
     if (typeof window === "undefined") {
@@ -73,8 +76,8 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
 
   const errorPreview = `Error: MCP server "${serverDisplayName}" requires user configuration before use.
 
-${missing.length > 0 ? `Missing field${missing.length === 1 ? "" : "s"}:` : "All fields configured."}
-${missing.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
+${defs.length > 0 ? `Missing field${defs.length === 1 ? "" : "s"}:` : "No fields defined."}
+${defs.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
 
 Please configure your fields at:
 ${buildDeepLinkUrl()}
@@ -122,7 +125,7 @@ Once configured, retry your request.`;
                 ) : (
                   <Form layout="vertical">
                     {defs.map((f) => {
-                      const isMissing = !values[f.name] || values[f.name].trim() === "";
+                      const isMissing = isFieldMissing(f.name);
                       return (
                         <Form.Item
                           key={f.name}
