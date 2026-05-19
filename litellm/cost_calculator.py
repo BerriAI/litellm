@@ -4,7 +4,17 @@ import logging
 import math
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, List, Literal, Mapping, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from httpx import Response
 from pydantic import BaseModel
