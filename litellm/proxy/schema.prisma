@@ -1128,6 +1128,24 @@ model LiteLLM_SkillsTable {
   file_name      String?  // Original filename
   file_type      String?  // MIME type (e.g., "application/zip")
   metadata       Json?    @default("{}")
+  // S2-02: xct-native first-class fields. All nullable; legacy Anthropic
+  // rows (source="anthropic") leave these untouched.
+  team_id                String?
+  user_id                String?
+  version                String?
+  is_public              Boolean  @default(false)
+  object_permission_id   String?
+  tool_schema            Json?
+  system_prompt_template String?
+  xct_metadata           Json?    @default("{}")
+  created_at     DateTime @default(now())
+  created_by     String?
+  updated_at     DateTime @default(now()) @updatedAt
+  updated_by     String?
+
+  @@index([source, team_id])
+  @@index([source, user_id])
+}")
   created_at     DateTime @default(now())
   created_by     String?
   updated_at     DateTime @default(now()) @updatedAt
