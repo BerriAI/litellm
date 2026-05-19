@@ -393,6 +393,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                 self._assert_within_categories_dir(candidate, categories_dir)
                 return candidate
 
+        # File not found via any resolution strategy — jail the module-relative
+        # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
+        # regardless of CWD or whether the target file exists.
+        self._assert_within_categories_dir(
+            os.path.join(module_dir, file_path), categories_dir
+        )
         return file_path
 
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
