@@ -170,6 +170,7 @@ async def _check_agent_url_health(
         )
         response = await client.get(url)
         if response.status_code >= 500:
+            await _emit_agent_health_failure(agent, f"HTTP {response.status_code}")
             return {
                 "agent_id": agent.agent_id,
                 "healthy": False,
@@ -177,11 +178,28 @@ async def _check_agent_url_health(
             }
         return {"agent_id": agent.agent_id, "healthy": True}
     except Exception as exc:
+        await _emit_agent_health_failure(agent, str(exc))
         return {
             "agent_id": agent.agent_id,
             "healthy": False,
             "error": str(exc),
         }
+
+
+async def _emit_agent_health_failure(agent: AgentResponse, error: str) -> None:
+    """S6-06 best-effort: fire agent.healthcheck.failed webhook."""
+    try:
+        from litellm.proxy.webhook_endpoints.events import (
+            emit_agent_healthcheck_failed,
+        )
+
+        await emit_agent_healthcheck_failed(
+            agent_id=agent.agent_id,
+            agent_name=agent.agent_name,
+            error=error,
+        )
+    except Exception:  # pragma: no cover — best-effort
+        pass
 
 
 @router.get(

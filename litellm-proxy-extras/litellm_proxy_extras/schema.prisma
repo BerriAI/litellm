@@ -1419,3 +1419,45 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+
+// S6-04: Webhook subscriptions belonging to an XCT app (or team/user until S4
+// lands). The delivery dispatcher (S6-05) reads (app_id, is_active, events)
+// and posts to target_url with an HMAC signature derived from secret_hash.
+model LiteLLM_WebhookSubscriptionTable {
+  subscription_id      String   @id @default(uuid())
+  app_id               String?
+  team_id              String?
+  user_id              String?
+  events               String[] @default([])
+  target_url           String
+  secret_hash          String
+  filters              Json?
+  is_active            Boolean  @default(true)
+  created_at           DateTime @default(now())
+  created_by           String?
+  updated_at           DateTime @default(now()) @updatedAt
+  last_success_at      DateTime?
+  last_failure_at      DateTime?
+  consecutive_failures Int      @default(0)
+
+  dlq LiteLLM_WebhookDLQ[]
+
+  @@index([app_id, is_active])
+}
+
+// S6-05: dead-letter parking lot for webhook deliveries that exhausted retries.
+model LiteLLM_WebhookDLQ {
+  dlq_id           String   @id @default(uuid())
+  subscription_id  String
+  event_type       String
+  payload          Json
+  last_error       String?
+  attempts         Int      @default(0)
+  first_attempt_at DateTime @default(now())
+  last_attempt_at  DateTime @default(now())
+
+  subscription LiteLLM_WebhookSubscriptionTable @relation(fields: [subscription_id], references: [subscription_id], onDelete: Cascade)
+
+  @@index([subscription_id, last_attempt_at(sort: Desc)])
+}

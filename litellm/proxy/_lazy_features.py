@@ -100,6 +100,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/v1/xct-marketplace",),
     ),
     LazyFeature(
+        name="xct_webhooks",
+        module_path="litellm.proxy.webhook_endpoints.endpoints",
+        path_prefixes=("/v1/webhooks",),
+    ),
+    LazyFeature(
         name="a2a",
         module_path="litellm.proxy.agent_endpoints.a2a_endpoints",
         path_prefixes=("/a2a", "/v1/a2a"),

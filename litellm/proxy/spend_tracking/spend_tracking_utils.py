@@ -504,12 +504,36 @@ def get_logging_payload(  # noqa: PLR0915
             record_capability_call,
         )
 
+        spend_amount = float(kwargs.get("response_cost", 0) or 0)
         record_capability_call(
             app_id=app_id_val,
             entity_type=entity_type,
             entity_id=entity_id,
-            spend=float(kwargs.get("response_cost", 0) or 0),
+            spend=spend_amount,
         )
+
+        # S6-06: fire capability.invoked webhook fan-out for subscribers.
+        try:
+            import asyncio
+
+            from litellm.proxy.webhook_endpoints.events import (
+                emit_capability_invoked,
+            )
+
+            asyncio.create_task(
+                emit_capability_invoked(
+                    app_id=app_id_val,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    spend=spend_amount,
+                    request_id=str(id),
+                    user_id=metadata.get("user_api_key_user_id") or None,
+                    team_id=metadata.get("user_api_key_team_id") or None,
+                )
+            )
+        except RuntimeError:
+            # No running event loop (e.g. called from sync context); skip.
+            pass
 
         verbose_proxy_logger.debug(
             "SpendTable: created payload - request_id: %s, model: %s, spend: %s",
