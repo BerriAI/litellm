@@ -45,7 +45,7 @@ interface XCTAgentMarketplaceProps {
   onAgentAdded?: () => void;
 }
 
-const DEFAULT_GATEWAY_URL = "https://xct-agent-gateway-production.up.railway.app";
+const DEFAULT_GATEWAY_URL = "https://xct-agents-production.up.railway.app";
 
 const XCTAgentMarketplace: React.FC<XCTAgentMarketplaceProps> = ({
   accessToken,
