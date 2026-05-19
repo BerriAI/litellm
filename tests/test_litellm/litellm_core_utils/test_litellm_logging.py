@@ -272,6 +272,16 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""
 
+    def test_returns_id_from_direct_model_info(self, logging_obj):
+        """Should prefer model_info.id stamped directly on litellm_params."""
+        logging_obj.litellm_params = {
+            "model_info": {"id": "direct-deploy-id"},
+            "litellm_metadata": {
+                "model_info": {"id": "from-litellm-meta"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "direct-deploy-id"
+
     def test_returns_id_from_litellm_metadata(self, logging_obj):
         """Should extract model_info.id from litellm_metadata."""
         logging_obj.litellm_params = {
@@ -385,6 +395,86 @@ class TestAnthropicPassthroughCustomPricing:
             call_kwargs = mock_cost.call_args
             assert call_kwargs.kwargs.get("custom_pricing") is True
             assert call_kwargs.kwargs.get("router_model_id") == "claude-custom-pricing"
+            assert call_kwargs.kwargs.get("litellm_logging_obj") is logging_obj
+            assert logging_obj.model_call_details["response_cost"] == 42.0
+
+    def test_response_cost_uses_actual_deployment_id_for_shared_model_group(self):
+        """Anthropic /v1/messages cost should use the selected deployment pricing.
+
+        Two deployments can share one public model name. The router-selected
+        deployment id is the only stable key for deployment-specific pricing.
+        """
+        import litellm
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.types.utils import Usage
+
+        provider_a_deployment_id = "provider-a-shared-public-model-test"
+        provider_b_deployment_id = "provider-b-shared-public-model-test"
+
+        litellm.register_model(
+            model_cost={
+                provider_a_deployment_id: {
+                    "litellm_provider": "anthropic",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                provider_b_deployment_id: {
+                    "litellm_provider": "anthropic",
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        )
+
+        try:
+            logging_obj = LiteLLMLoggingObj(
+                model="claude-shared-public-model",
+                messages=[{"role": "user", "content": "Hi"}],
+                stream=False,
+                call_type="anthropic_messages",
+                start_time=time.time(),
+                litellm_call_id="test-shared-public-model",
+                function_id="test-fn",
+            )
+            logging_obj.update_environment_variables(
+                model="claude-shared-public-model",
+                user="",
+                optional_params={},
+                litellm_params={
+                    "model_info": {
+                        "id": provider_b_deployment_id,
+                        "input_cost_per_token": 0.000003,
+                        "output_cost_per_token": 0.000004,
+                    },
+                    "litellm_metadata": {
+                        "model_info": {
+                            "id": provider_a_deployment_id,
+                            "input_cost_per_token": 0.000001,
+                            "output_cost_per_token": 0.000002,
+                        },
+                    },
+                },
+            )
+            logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+            response_obj = ModelResponse(
+                model="claude-shared-public-model",
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            )
+
+            cost = logging_obj._response_cost_calculator(result=response_obj)
+
+            provider_a_cost = (10 * 0.000001) + (5 * 0.000002)
+            provider_b_cost = (10 * 0.000003) + (5 * 0.000004)
+            assert provider_a_cost != provider_b_cost
+            assert logging_obj.get_router_model_id() == provider_b_deployment_id
+            assert cost == pytest.approx(provider_b_cost)
+        finally:
+            litellm.model_cost.pop(provider_a_deployment_id, None)
+            litellm.model_cost.pop(provider_b_deployment_id, None)
 
 
 class TestUpdateFromKwargs:
@@ -489,6 +579,22 @@ class TestUpdateFromKwargs:
         kwargs = {"litellm_metadata": lm_meta}
 
         logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        assert use_custom_pricing_for_model(logging_obj.litellm_params) is True
+
+    def test_custom_pricing_detected_via_direct_model_info(self, logging_obj):
+        """Custom pricing in litellm_params.model_info should set custom_pricing flag."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            use_custom_pricing_for_model,
+        )
+
+        logging_obj.litellm_params = {
+            "model_info": {
+                "id": "deploy-custom-direct",
+                "input_cost_per_token": 0.005,
+                "output_cost_per_token": 0.015,
+            }
+        }
 
         assert use_custom_pricing_for_model(logging_obj.litellm_params) is True
 

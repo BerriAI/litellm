@@ -140,10 +140,12 @@ class AnthropicPassthroughLoggingHandler:
                 custom_llm_provider=custom_llm_provider,
                 custom_pricing=custom_pricing,
                 router_model_id=router_model_id,
+                litellm_logging_obj=logging_obj,
             )
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
+            logging_obj.model_call_details["response_cost"] = response_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )

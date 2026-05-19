@@ -875,6 +875,42 @@ class TestProxyBaseLLMRequestProcessing:
             float(headers_7["x-litellm-key-spend"]) == 0.001
         )  # Should use original spend on error
 
+    def test_get_custom_headers_uses_logging_obj_response_cost_fallback(self):
+        """
+        Passthrough routes can calculate response_cost in the logging object
+        before response hidden params are populated.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.001
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-shared-public-model",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="test-call-id-fallback",
+            function_id="test-function-id",
+        )
+        logging_obj.model_call_details["response_cost"] = 0.0007
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-fallback",
+            response_cost="",
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(0.0007)
+        assert float(headers["x-litellm-key-spend"]) == pytest.approx(0.0017)
+
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
         """
