@@ -2533,9 +2533,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages, model=model)
+        return _gemini_convert_messages_with_history(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
@@ -3139,6 +3144,31 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
 
+    @staticmethod
+    def _check_streaming_error(chunk: dict) -> None:
+        """Detect embedded errors (e.g. 429 RESOURCE_EXHAUSTED) in streaming chunks and raise VertexAIError."""
+        if "error" not in chunk:
+            return
+        error_data = chunk["error"]
+        if not isinstance(error_data, dict):
+            raise VertexAIError(
+                status_code=500,
+                message=f"Unexpected error format in mid-stream chunk: {error_data}",
+            )
+        raw_code = error_data.get("code", 500)
+        if raw_code is None:
+            raw_code = 500
+        try:
+            error_code = int(raw_code)
+        except (TypeError, ValueError):
+            error_code = 500
+        error_message = error_data.get("message", "Unknown error")
+        error_status = error_data.get("status", "UNKNOWN")
+        raise VertexAIError(
+            status_code=error_code,
+            message=f"{error_status} - {error_message}",
+        )
+
     def _apply_stream_candidates(
         self,
         _candidates: List[Candidates],
@@ -3256,6 +3286,11 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
+
+            # Detect mid-stream error chunks (e.g. 429 RESOURCE_EXHAUSTED).
+            # Vertex AI can return errors as HTTP 200 but with an "error" field in the SSE body.
+            self._check_streaming_error(chunk)
+
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
