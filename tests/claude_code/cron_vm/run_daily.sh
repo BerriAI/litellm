@@ -268,7 +268,13 @@ else
   if [[ ! -x "${WORKTREE_UV}" ]]; then
     log "downloading uv ${PINNED_UV_VERSION} for the worktree"
     mkdir -p "${WORKTREE}/.uv-bin"
-    UV_TARBALL_NAME="uv-x86_64-unknown-linux-gnu.tar.gz"
+    # Detect host arch so the same script works on x86_64 GCP VMs and on
+    # aarch64 hosts (Astral publishes both `uv-x86_64-unknown-linux-gnu`
+    # and `uv-aarch64-unknown-linux-gnu` tarballs under the same release
+    # tag, and `uname -m` already returns the exact token uv uses).
+    UV_ARCH="$(uname -m)"
+    UV_TRIPLE="uv-${UV_ARCH}-unknown-linux-gnu"
+    UV_TARBALL_NAME="${UV_TRIPLE}.tar.gz"
     UV_DOWNLOAD_URL="https://github.com/astral-sh/uv/releases/download/${PINNED_UV_VERSION}/${UV_TARBALL_NAME}"
     UV_TMPDIR="$(mktemp -d -t uv-download.XXXXXX)"
     # Download the tarball and Astral's official .sha256 sidecar to disk
@@ -280,8 +286,8 @@ else
     curl -fsSL --output "${UV_TMPDIR}/${UV_TARBALL_NAME}.sha256" "${UV_DOWNLOAD_URL}.sha256"
     (cd "${UV_TMPDIR}" && sha256sum -c "${UV_TARBALL_NAME}.sha256") \
       || { rm -rf "${UV_TMPDIR}"; die "uv ${PINNED_UV_VERSION} sha256 mismatch — refusing to install"; }
-    tar -xzf "${UV_TMPDIR}/${UV_TARBALL_NAME}" -C "${UV_TMPDIR}" "uv-x86_64-unknown-linux-gnu/uv"
-    mv "${UV_TMPDIR}/uv-x86_64-unknown-linux-gnu/uv" "${WORKTREE_UV}.tmp"
+    tar -xzf "${UV_TMPDIR}/${UV_TARBALL_NAME}" -C "${UV_TMPDIR}" "${UV_TRIPLE}/uv"
+    mv "${UV_TMPDIR}/${UV_TRIPLE}/uv" "${WORKTREE_UV}.tmp"
     chmod +x "${WORKTREE_UV}.tmp"
     mv "${WORKTREE_UV}.tmp" "${WORKTREE_UV}"
     rm -rf "${UV_TMPDIR}"
@@ -314,7 +320,15 @@ log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 # SIGTERM the whole tree by passing the pgid as a negative pid. We
 # write that pid to a file so cleanup() doesn't need to remember a
 # variable that might be stale by the time the trap fires.
-setsid env LITELLM_MASTER_KEY="${PROXY_API_KEY}" bash -c '
+#
+# Pass the master key as a shell-prefix assignment on `setsid` (inherited
+# via the environment) rather than as `env KEY=VAL ...` argv. The argv
+# form would land the literal key in /proc/<setsid-pid>/cmdline, where
+# any local reader (a model-directed `Read` tool call, another user on
+# the VM, a crash dump) could pick it up before the process execs into
+# the litellm child. The shell-prefix form keeps the key out of argv at
+# every layer (setsid → bash → uv → litellm).
+LITELLM_MASTER_KEY="${PROXY_API_KEY}" setsid bash -c '
   echo "$$" > "$0"
   cd "$1"
   exec "$2" run litellm --config "$3" --host 127.0.0.1 --port "$4"
