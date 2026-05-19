@@ -21,6 +21,7 @@ class TestGeminiImageEditTransformation:
 
     def test_map_openai_params(self) -> None:
         optional_params: Dict[str, object] = {
+            "n": 2,
             "size": "1792x1024",
             "response_format": "b64_json",
             "quality": "high",
@@ -33,6 +34,7 @@ class TestGeminiImageEditTransformation:
         )
 
         assert mapped["imageConfig"] == {"aspectRatio": "16:9"}
+        assert mapped["sampleCount"] == 2
         assert "response_format" not in mapped
         assert "quality" not in mapped
 
@@ -119,6 +121,7 @@ class TestGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
+        assert generation_config["candidateCount"] == 2
         assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
         assert generation_config["imageConfig"]["imageSize"] == "2K"
 

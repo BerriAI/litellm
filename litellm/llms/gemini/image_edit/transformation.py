@@ -1,17 +1,15 @@
 import base64
-import json
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 from httpx._types import RequestFiles
 
-import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.common_utils import (
-    map_openai_size_to_gemini_image_config,
-    supports_gemini_image_size,
+    get_gemini_image_generation_config,
+    map_openai_image_params_to_gemini,
 )
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
@@ -36,7 +34,7 @@ else:
 
 class GeminiImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    SUPPORTED_PARAMS: List[str] = ["size", "imageConfig"]
+    SUPPORTED_PARAMS: List[str] = ["n", "size", "imageConfig"]
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return list(self.SUPPORTED_PARAMS)
@@ -47,36 +45,12 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> Dict[str, Any]:
-        supported_params = self.get_supported_openai_params(model)
-        filtered_params = {
-            key: value
-            for key, value in image_edit_optional_params.items()
-            if key in supported_params
-        }
-
-        mapped_params: Dict[str, Any] = {}
-
-        if "size" in filtered_params:
-            image_config = map_openai_size_to_gemini_image_config(
-                filtered_params["size"],  # type: ignore[arg-type]
-                model,
-            )
-            if image_config is not None:
-                mapped_params["imageConfig"] = image_config
-
-        image_config_param = filtered_params.get("imageConfig")
-        if isinstance(image_config_param, str):
-            try:
-                image_config_param = json.loads(image_config_param)
-            except json.JSONDecodeError as exc:
-                raise litellm.UnsupportedParamsError(
-                    model=model,
-                    message="`imageConfig` must be valid JSON when provided as a string.",
-                ) from exc
-        if isinstance(image_config_param, dict):
-            mapped_params["imageConfig"] = image_config_param
-
-        return mapped_params
+        return map_openai_image_params_to_gemini(
+            params=image_edit_optional_params,  # type: ignore[arg-type]
+            model=model,
+            supported_params=self.get_supported_openai_params(model),
+            parse_image_config_string=True,
+        )
 
     def validate_environment(
         self,
@@ -136,17 +110,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         request_body: Dict[str, Any] = {"contents": contents}
 
-        generation_config: Dict[str, Any] = {}
-
-        if isinstance(image_edit_optional_request_params.get("imageConfig"), dict):
-            image_config = dict(image_edit_optional_request_params["imageConfig"])
-            if not supports_gemini_image_size(model):
-                image_config.pop("imageSize", None)
-            if image_config:
-                generation_config["imageConfig"] = image_config
-
-        if generation_config:
-            request_body["generationConfig"] = generation_config
+        request_body["generationConfig"] = get_gemini_image_generation_config(
+            model=model,
+            optional_params=image_edit_optional_request_params,
+        )
 
         empty_files = cast(RequestFiles, [])
         return request_body, empty_files

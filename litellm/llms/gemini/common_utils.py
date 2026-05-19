@@ -1,5 +1,6 @@
 import base64
 import datetime
+import json
 import math
 from typing import Any, Dict, List, Optional, Union
 
@@ -113,6 +114,83 @@ def supports_gemini_image_size(model: str) -> bool:
     # Gemini 2.5 Flash image supports aspectRatio but rejects imageSize; newer
     # Gemini image models are expected to support both fields.
     return "2.5-flash" not in model
+
+
+def map_openai_image_params_to_gemini(
+    params: Dict[str, Any],
+    model: str,
+    supported_params: List[str],
+    optional_params: Optional[Dict[str, Any]] = None,
+    parse_image_config_string: bool = False,
+) -> Dict[str, Any]:
+    optional_params = optional_params or {}
+    filtered_params = {
+        key: value for key, value in params.items() if key in supported_params
+    }
+
+    mapped_params: Dict[str, Any] = {}
+
+    if "n" in filtered_params and "n" not in optional_params:
+        mapped_params["sampleCount"] = filtered_params["n"]
+
+    if "size" in filtered_params and "size" not in optional_params:
+        image_config = map_openai_size_to_gemini_image_config(
+            filtered_params["size"],
+            model,
+        )
+        if image_config is not None:
+            if "gemini" in model:
+                mapped_params["imageConfig"] = image_config
+            else:
+                mapped_params["aspectRatio"] = image_config["aspectRatio"]
+                if "imageSize" in image_config:
+                    mapped_params["imageSize"] = image_config["imageSize"]
+
+    image_config_param = filtered_params.get("imageConfig")
+    if isinstance(image_config_param, str) and parse_image_config_string:
+        try:
+            image_config_param = json.loads(image_config_param)
+        except json.JSONDecodeError as exc:
+            raise litellm.UnsupportedParamsError(
+                model=model,
+                message="`imageConfig` must be valid JSON when provided as a string.",
+            ) from exc
+    if isinstance(image_config_param, dict):
+        mapped_params["imageConfig"] = image_config_param
+
+    for key, value in filtered_params.items():
+        if key not in ("n", "size", "imageConfig") and key not in optional_params:
+            mapped_params[key] = value
+
+    return mapped_params
+
+
+def get_gemini_image_generation_config(
+    model: str,
+    optional_params: Dict[str, Any],
+) -> Dict[str, Any]:
+    generation_config: Dict[str, Any] = {"response_modalities": ["IMAGE", "TEXT"]}
+
+    image_config: Dict[str, Any] = {}
+    if isinstance(optional_params.get("imageConfig"), dict):
+        image_config.update(optional_params["imageConfig"])
+
+    if not supports_gemini_image_size(model):
+        image_config.pop("imageSize", None)
+
+    if image_config:
+        generation_config["imageConfig"] = image_config
+
+    candidate_count = (
+        optional_params.get("candidateCount")
+        or optional_params.get("candidate_count")
+        or optional_params.get("sampleCount")
+        or optional_params.get("n")
+    )
+    if candidate_count is not None:
+        generation_config["candidateCount"] = candidate_count
+
+    return generation_config
 
 
 def _parse_openai_image_size(size: str) -> Optional[tuple[int, int]]:

@@ -6,8 +6,8 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.llms.gemini.common_utils import (
-    map_openai_size_to_gemini_image_config,
-    supports_gemini_image_size,
+    get_gemini_image_generation_config,
+    map_openai_image_params_to_gemini,
 )
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
@@ -50,37 +50,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        mapped_params = {}
-
-        if "n" in non_default_params and "n" not in optional_params:
-            mapped_params["sampleCount"] = non_default_params["n"]
-
-        if "size" in non_default_params and "size" not in optional_params:
-            image_config = map_openai_size_to_gemini_image_config(
-                non_default_params["size"], model
-            )
-            if image_config is not None:
-                if "gemini" in model:
-                    mapped_params["imageConfig"] = image_config
-                else:
-                    mapped_params["aspectRatio"] = image_config["aspectRatio"]
-                    if "imageSize" in image_config:
-                        mapped_params["imageSize"] = image_config["imageSize"]
-
-        if "imageConfig" in supported_params and isinstance(
-            non_default_params.get("imageConfig"), dict
-        ):
-            mapped_params["imageConfig"] = non_default_params["imageConfig"]
-
-        for k, v in non_default_params.items():
-            if (
-                k not in ("n", "size", "imageConfig")
-                and k not in optional_params
-                and k in supported_params
-            ):
-                mapped_params[k] = v
-        return mapped_params
+        return map_openai_image_params_to_gemini(
+            params=non_default_params,
+            model=model,
+            supported_params=self.get_supported_openai_params(model),
+            optional_params=optional_params,
+        )
 
     def get_complete_url(
         self,
@@ -157,23 +132,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
         if "gemini" in model:
-            generation_config: Dict[str, Any] = {
-                "response_modalities": ["IMAGE", "TEXT"]
-            }
-            image_config: Dict[str, Any] = {}
-
-            if isinstance(optional_params.get("imageConfig"), dict):
-                image_config.update(optional_params["imageConfig"])
-
-            if not supports_gemini_image_size(model):
-                image_config.pop("imageSize", None)
-
-            if image_config:
-                generation_config["imageConfig"] = image_config
-
             request_body: dict = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": generation_config,
+                "generationConfig": get_gemini_image_generation_config(
+                    model=model,
+                    optional_params=optional_params,
+                ),
             }
             return request_body
         else:
