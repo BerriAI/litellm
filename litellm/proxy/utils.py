@@ -2851,21 +2851,26 @@ class PrismaClient:
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
         self._db_last_reconnect_attempt_ts: float = 0.0
+        self._db_last_health_watchdog_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(
             1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15"))
         )
         self._db_health_watchdog_interval_seconds: int = max(
-            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
+            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "120"))
         )
         self._db_health_watchdog_enabled: bool = (
             str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
         )
         self._db_health_watchdog_probe_timeout_seconds: float = max(
             0.5,
-            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "5.0")),
+            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "15")),
+        )
+        self._db_health_watchdog_reconnect_cooldown_seconds: int = max(
+            1,
+            int(os.getenv("PRISMA_HEALTH_WATCHDOG_RECONNECT_COOLDOWN_SECONDS", "120")),
         )
         self._db_watchdog_reconnect_timeout_seconds: float = max(
-            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "30.0"))
+            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "60.0"))
         )
         self._db_auth_reconnect_timeout_seconds: float = max(
             0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
@@ -4772,9 +4777,9 @@ class PrismaClient:
             self._db_health_watchdog_loop()
         )
         verbose_proxy_logger.info(
-            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
+            "Started Prisma DB health watchdog (interval=%ss, watchdog_reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
             self._db_health_watchdog_interval_seconds,
-            self._db_reconnect_cooldown_seconds,
+            self._db_health_watchdog_reconnect_cooldown_seconds,
             self._db_health_watchdog_probe_timeout_seconds,
             self._db_watchdog_reconnect_timeout_seconds,
         )
@@ -4807,8 +4812,19 @@ class PrismaClient:
                 if isinstance(
                     e, asyncio.TimeoutError
                 ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                    now = time.time()
+                    if (
+                        now - self._db_last_health_watchdog_reconnect_attempt_ts
+                        < self._db_health_watchdog_reconnect_cooldown_seconds
+                    ):
+                        verbose_proxy_logger.debug(
+                            "Skipping DB health watchdog reconnect due to watchdog cooldown."
+                        )
+                        continue
+                    self._db_last_health_watchdog_reconnect_attempt_ts = now
                     await self.attempt_db_reconnect(
                         reason="db_health_watchdog_connection_error",
+                        force=True,
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
