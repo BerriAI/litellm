@@ -69,6 +69,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
+from litellm.utils import supports_reasoning
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 if TYPE_CHECKING:
@@ -86,15 +87,16 @@ STREAMING_TIMEOUT = 60 * 5
 def _model_uses_max_completion_tokens(model: str) -> bool:
     """Return True for OCI-hosted models that require ``maxCompletionTokens``.
 
-    GPT-5 family (and related reasoning-mode models) on OCI reject ``maxTokens``
+    Reasoning models on OCI (e.g. the OpenAI GPT-5 family) reject ``maxTokens``
     with HTTP 400 and require ``maxCompletionTokens`` per OpenAI's reasoning-API
-    convention. The model id we receive is the OCI model id, e.g.
-    ``openai.gpt-5``, ``openai.gpt-5-mini``, ``openai.gpt-5.5``.
+    convention. Driven by ``supports_reasoning`` in
+    ``model_prices_and_context_window.json`` so new model families are picked
+    up via a catalog update rather than a code change.
     """
-    name = (model or "").lower()
-    if name.startswith("oci/"):
-        name = name[4:]
-    return name.startswith("openai.gpt-5") or name == "openai.gpt-5"
+    if not model:
+        return False
+    name = model[4:] if model.lower().startswith("oci/") else model
+    return supports_reasoning(model=name, custom_llm_provider="oci")
 
 
 def _iter_sse_events(stream: Iterator[str]) -> Iterator[str]:
@@ -327,14 +329,15 @@ class OCIChatConfig(BaseConfig):
         )
         selected_params: Dict = {}
 
-        # OpenAI GPT-5+ family on OCI rejects "maxTokens" and requires
-        # "maxCompletionTokens" instead. Route to the correct field per OCI's
-        # /20231130/Chat schema for these models. Verified against live OCI:
-        # error reads `Invalid 'maxTokens': Unsupported parameter ... Use
-        # 'maxCompletionTokens' instead.` on openai.gpt-5*, gpt-5.5, etc.
+        # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
+        # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
+        # Driven by the supports_reasoning flag in the model catalog. Cohere's
+        # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key = (
             "maxCompletionTokens"
-            if model and _model_uses_max_completion_tokens(model)
+            if vendor != OCIVendors.COHERE
+            and model
+            and _model_uses_max_completion_tokens(model)
             else "maxTokens"
         )
 

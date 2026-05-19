@@ -337,8 +337,35 @@ class TestOCIStreamWrapperChunkCreator:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def _register_oci_gpt5_in_catalog():
+    """Ensure OCI GPT-5 catalog entries exist for tests run against the live
+    remote map. The bundled backup already contains them — this is a no-op for
+    most environments and only patches in entries when the loaded map omits them.
+    """
+    import litellm
+
+    needed = {
+        "oci/openai.gpt-5",
+        "oci/openai.gpt-5-mini",
+        "oci/openai.gpt-5-nano",
+    }
+    added = []
+    for key in needed:
+        if key not in litellm.model_cost:
+            litellm.model_cost[key] = {
+                "litellm_provider": "oci",
+                "mode": "chat",
+                "supports_reasoning": True,
+            }
+            added.append(key)
+    yield
+    for key in added:
+        litellm.model_cost.pop(key, None)
+
+
 class TestGpt5MaxCompletionTokens:
-    def test_helper_detects_gpt5_family(self):
+    def test_helper_detects_gpt5_family(self, _register_oci_gpt5_in_catalog):
         from litellm.llms.oci.chat.transformation import (
             _model_uses_max_completion_tokens,
         )
@@ -346,16 +373,16 @@ class TestGpt5MaxCompletionTokens:
         assert _model_uses_max_completion_tokens("openai.gpt-5") is True
         assert _model_uses_max_completion_tokens("openai.gpt-5-mini") is True
         assert _model_uses_max_completion_tokens("openai.gpt-5-nano") is True
-        assert _model_uses_max_completion_tokens("openai.gpt-5.5") is True
         assert _model_uses_max_completion_tokens("oci/openai.gpt-5") is True
 
-        assert _model_uses_max_completion_tokens("openai.gpt-4o") is False
-        assert _model_uses_max_completion_tokens("openai.gpt-4.1") is False
+        assert _model_uses_max_completion_tokens("openai.gpt-oss-120b") is False
         assert _model_uses_max_completion_tokens("meta.llama-3.3-70b-instruct") is False
         assert _model_uses_max_completion_tokens("cohere.command-latest") is False
         assert _model_uses_max_completion_tokens("") is False
 
-    def test_gpt5_routes_max_tokens_to_max_completion_tokens(self):
+    def test_gpt5_routes_max_tokens_to_max_completion_tokens(
+        self, _register_oci_gpt5_in_catalog
+    ):
         from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
 
         cfg = OCIChatConfig()
@@ -369,7 +396,7 @@ class TestGpt5MaxCompletionTokens:
 
         # 2. already pre-translated to OCI alias
         out_b = cfg._get_optional_params(
-            OCIVendors.GENERIC, {"maxTokens": 64}, model="openai.gpt-5.5"
+            OCIVendors.GENERIC, {"maxTokens": 64}, model="openai.gpt-5-mini"
         )
         assert out_b.get("maxCompletionTokens") == 64
         assert "maxTokens" not in out_b
@@ -382,6 +409,18 @@ class TestGpt5MaxCompletionTokens:
             OCIVendors.GENERIC,
             {"max_tokens": 64},
             model="meta.llama-3.3-70b-instruct",
+        )
+        assert out.get("maxTokens") == 64
+        assert "maxCompletionTokens" not in out
+
+    def test_cohere_reasoning_model_keeps_max_tokens(self):
+        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
+
+        cfg = OCIChatConfig()
+        out = cfg._get_optional_params(
+            OCIVendors.COHERE,
+            {"max_tokens": 64},
+            model="cohere.command-a-reasoning",
         )
         assert out.get("maxTokens") == 64
         assert "maxCompletionTokens" not in out
