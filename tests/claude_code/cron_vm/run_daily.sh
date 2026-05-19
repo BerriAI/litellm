@@ -163,7 +163,27 @@ LITELLM_VERSION="$(
 [[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest v*-stable tag in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
 
-CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' | head -n1)"
+# The systemd unit loads provider credentials and the agent-shin GitHub
+# token from /etc/litellm-compat-matrix.env into this script's
+# environment. Running the npm-installed `claude` binary directly here
+# would hand that full env to package code -- a compromised
+# @anthropic-ai/claude-code release could read ANTHROPIC_API_KEY /
+# AWS_BEARER_TOKEN_BEDROCK / AZURE_FOUNDRY_API_KEY /
+# AGENT_SHIN_GITHUB_TOKEN from os.environ and exfiltrate them before
+# the proxy or test harness ever starts. Probe under `env -i` with the
+# same minimal allowlist the PR-gate uses (the matrix run itself goes
+# through cli_driver.py, which already scrubs the CLI env).
+CLAUDE_CODE_VERSION="$(env -i \
+  PATH="${PATH}" \
+  HOME="${HOME}" \
+  USER="${USER:-mateo}" \
+  TERM="${TERM:-dumb}" \
+  LANG="${LANG:-C.UTF-8}" \
+  LC_ALL="${LC_ALL:-}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  claude --version 2>/dev/null \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' \
+  | head -n1)"
 [[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not parse semver from 'claude --version'"
 log "local claude code: ${CLAUDE_CODE_VERSION}"
 
