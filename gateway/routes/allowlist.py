@@ -99,6 +99,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/openai_passthrough/",
     # Dynamic provider / toolset passthrough (path templates)
     "/{provider}/",
+    "/lazymcp",
     "/toolset/",
     # Realtime / streaming
     "/v1/realtime",

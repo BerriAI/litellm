@@ -3705,40 +3705,6 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-            for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name, client_ip=_client_ip
-                )
-                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For per-user OAuth servers, only skip the pre-emptive 401 when
-                    # a stored token actually exists for this user+server pair.
-                    # If no stored token exists, fail fast with 401 so clients can
-                    # kick off PKCE/interactive OAuth flow immediately.
-                    if server.needs_user_oauth_token:
-                        stored_oauth_headers = (
-                            await _get_user_oauth_extra_headers_from_db(
-                                server=server,
-                                user_api_key_auth=user_api_key_auth,
-                            )
-                        )
-                        if stored_oauth_headers:
-                            continue
-
-                    request = StarletteRequest(scope)
-                    base_url = get_request_base_url(request)
-
-                    authorization_uri = (
-                        f"Bearer authorization_uri="
-                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                    )
-
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Unauthorized",
-                        headers={"www-authenticate": authorization_uri},
-                    )
-
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [
                 (k, v)
