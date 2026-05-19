@@ -2819,8 +2819,8 @@ class MCPServerManager:
                 if "Authorization" in extra_headers:
                     verbose_logger.warning(
                         "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
+                        "the existing Authorization header (from static_headers, forwarded raw "
+                        "headers, or user-fields). The hook JWT will take precedence."
                     )
                 elif server_auth_header is not None:
                     # server_auth_header is passed separately to _create_mcp_client as

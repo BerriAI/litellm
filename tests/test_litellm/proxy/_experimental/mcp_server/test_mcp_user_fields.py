@@ -545,10 +545,20 @@ async def test_post_user_field_values_rejects_undeclared_keys():
 
     captured = {}
 
-    async def fake_store(prisma, user_id, server_id, values):
+    async def fake_store(
+        prisma, user_id, server_id, values=None, *, merge_fn=None, **kwargs
+    ):
         captured["user_id"] = user_id
         captured["server_id"] = server_id
-        captured["values"] = values
+        # The endpoint passes a ``merge_fn`` that closes over the request
+        # payload + declared_keys; resolve it against an empty existing dict
+        # (mirroring "no row yet") so the test can assert on the final values.
+        if merge_fn is not None:
+            result = merge_fn({})
+        else:
+            result = values or {}
+        captured["values"] = result
+        return result
 
     async def fake_get(prisma, user_id, server_id):
         return None  # no existing values

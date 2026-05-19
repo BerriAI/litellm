@@ -2277,19 +2277,28 @@ if MCP_AVAILABLE:
             )
 
         # Merge with anything already stored — partial saves should preserve
-        # previously-supplied values rather than wipe them.
-        existing = await get_user_field_values(prisma_client, user_id, server_id) or {}
-        merged: Dict[str, str] = {**existing}
-        for key, value in payload.values.items():
-            if key not in declared_keys:
-                continue
-            if value == "":
-                merged.pop(key, None)
-            else:
-                merged[key] = value
+        # previously-supplied values rather than wipe them. The merge is run
+        # inside ``store_user_field_values`` on every CAS retry so a
+        # concurrent partial save by the same user from another tab is
+        # folded in rather than silently overwritten.
+        def _merge_user_fields(existing: Dict[str, str]) -> Dict[str, str]:
+            merged_local: Dict[str, str] = {**existing}
+            for key, value in payload.values.items():
+                if key not in declared_keys:
+                    continue
+                if value == "":
+                    merged_local.pop(key, None)
+                else:
+                    merged_local[key] = value
+            return merged_local
 
         try:
-            await store_user_field_values(prisma_client, user_id, server_id, merged)
+            merged = await store_user_field_values(
+                prisma_client,
+                user_id,
+                server_id,
+                merge_fn=_merge_user_fields,
+            )
         except ValueError as e:
             # The (user, server) row already holds a BYOK or OAuth2 credential.
             # Refuse rather than silently destroying the existing credential.
