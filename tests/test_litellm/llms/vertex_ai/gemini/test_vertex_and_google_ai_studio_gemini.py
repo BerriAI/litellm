@@ -2959,6 +2959,38 @@ def test_vertex_ai_gemini3_tool_combination_no_drop():
     assert len(tools) == 3
 
 
+def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
+    """
+    When function tools and web_search_options are sent separately (Codex-style),
+    search tools are dropped unless include_server_side_tool_invocations is set.
+    """
+    v = VertexGeminiConfig()
+    optional_params: dict = {}
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "exec_command", "description": "Run a command"},
+            }
+        ],
+        "web_search_options": {},
+    }
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3.5-flash",
+        drop_params=True,
+    )
+
+    assert not result.get("include_server_side_tool_invocations")
+    tool_keys = set()
+    for tool in result.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" not in tool_keys
+
+
 def test_vertex_ai_openai_web_search_tool_transformation():
     """
     Test that OpenAI-style web_search and web_search_preview tools are transformed to googleSearch.
