@@ -1043,7 +1043,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             ):
                 _part = convert_to_gemini_tool_call_result(
                     messages[msg_i],  # type: ignore
-                    last_message_with_tool_calls,
+                    last_message_with_tool_calls,  # type: ignore
                     model=model,
                 )
                 msg_i += 1
