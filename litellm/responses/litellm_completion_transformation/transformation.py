@@ -1086,11 +1086,11 @@ class LiteLLMCompletionResponsesConfig:
                                 }
                             )
                     elif part_type in ("input_file", "file"):
-                        normalized_blocks.append(
-                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                                part
-                            )
+                        file_item = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                            part
                         )
+                        if file_item.get("file"):
+                            normalized_blocks.append(file_item)
 
                 # Prefer structured blocks if we have any non-text part
                 # (images or files); otherwise return a string.

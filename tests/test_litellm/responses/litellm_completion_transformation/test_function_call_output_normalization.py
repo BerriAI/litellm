@@ -107,3 +107,24 @@ def test_function_call_output_input_file_with_file_id_is_preserved():
     file_blocks = [b for b in content if b.get("type") == "file"]
     assert len(file_blocks) == 1
     assert file_blocks[0]["file"]["file_id"] == "file-abc123"
+
+
+def test_function_call_output_input_file_without_data_is_skipped():
+    """An input_file part with no file_id, file_url, or file_data carries no
+    payload — appending it as ``{"type": "file", "file": {}}`` would activate
+    the structured-content path and emit a hollow block that downstream
+    adapters (Gemini, Bedrock) reject or silently ignore. Skip it instead."""
+    out = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+        tool_call_output={
+            "type": "function_call_output",
+            "call_id": "call_empty_file",
+            "output": [
+                {"type": "input_text", "text": "Just text here."},
+                {"type": "input_file", "filename": "missing.pdf"},
+            ],
+        }
+    )
+
+    assert len(out) == 1
+    # No usable file payload -> fall back to the plain-string text path.
+    assert out[0]["content"] == "Just text here."
