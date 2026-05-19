@@ -4233,8 +4233,8 @@ class PrismaClient:
         else:
             return f"raw_wait_status={wait_status}"
 
+    @staticmethod
     def _format_prisma_engine_exit_reason(
-        self,
         *,
         detection_method: str,
         wait_status: Optional[int],
@@ -4243,11 +4243,11 @@ class PrismaClient:
             return f"detection_method={detection_method} exit_status=unavailable"
         return (
             f"detection_method={detection_method} "
-            f"{self._format_engine_wait_status(wait_status)}"
+            f"{PrismaClient._format_engine_wait_status(wait_status)}"
         )
 
+    @staticmethod
     def _log_prisma_engine_exit_reason(
-        self,
         *,
         pid: int,
         detection_method: str,
@@ -4256,7 +4256,7 @@ class PrismaClient:
         verbose_proxy_logger.error(
             "prisma-query-engine PID %s exited; %s; triggering reconnect.",
             pid,
-            self._format_prisma_engine_exit_reason(
+            PrismaClient._format_prisma_engine_exit_reason(
                 detection_method=detection_method,
                 wait_status=wait_status,
             ),
@@ -4313,10 +4313,6 @@ class PrismaClient:
                 pid=pid,
                 detection_method="waitpid watch start",
                 wait_status=wait_status,
-            )
-            verbose_proxy_logger.warning(
-                "prisma-query-engine PID %s already dead at watch start; triggering reconnect.",
-                pid,
             )
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
