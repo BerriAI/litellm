@@ -6,7 +6,7 @@ import httpx
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.gigachat.authenticator import get_access_token
 from litellm.llms.gigachat.chat.streaming import GigaChatModelResponseIterator
-from litellm.llms.gigachat.utils import get_api_base
+from litellm.llms.gigachat.utils import GIGACHAT_BASE_URL
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
@@ -204,7 +204,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
-        return get_api_base(api_base)
+        return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
 
     @staticmethod
     def get_api_key(
