@@ -2644,6 +2644,16 @@ jobs:
             # row alone. The daily cron in
             # tests/claude_code/cron_vm/run_daily.sh still exercises
             # it and publishes the cell.
+            #
+            # `web_search` is excluded from the gate too: the
+            # assertion ("a `tool_use` block with name=WebSearch
+            # appeared") depends on the model deciding to call the
+            # tool. `--allowed-tools WebSearch` permits the call but
+            # cannot force it, and Haiku 4.5 in particular routinely
+            # answers from training data instead. Running it inside
+            # the merge-blocking gate would flake on non-deterministic
+            # model behaviour; the daily cron still exercises the row
+            # and publishes the cell to the matrix.
             env -i \
               PATH="$PATH" \
               HOME="$HOME" \
@@ -2662,6 +2672,7 @@ jobs:
                 --ignore=tests/claude_code/_publisher_unit_tests \
                 --ignore=tests/claude_code/_pr_gate_unit_tests \
                 --ignore=tests/claude_code/long_context_1m \
+                --ignore=tests/claude_code/web_search \
                 --junitxml=test-results/junit.xml \
                 --durations=10
           no_output_timeout: 30m

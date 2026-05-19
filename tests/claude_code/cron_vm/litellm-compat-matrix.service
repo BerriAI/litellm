@@ -32,7 +32,6 @@
 
 [Unit]
 Description=Claude Code compatibility-matrix populator (oneshot)
-Documentation=file:///home/mateo/litellm/litellm/tests/claude_code/cron_vm/README.md
 Wants=network-online.target
 After=network-online.target
 
