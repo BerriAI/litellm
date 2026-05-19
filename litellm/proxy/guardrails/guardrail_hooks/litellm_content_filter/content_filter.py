@@ -328,7 +328,22 @@ class ContentFilterGuardrail(CustomGuardrail):
         return result
 
     @staticmethod
-    def _resolve_category_file_path(file_path: str) -> str:
+    def _assert_within_categories_dir(path: str, categories_dir: str) -> None:
+        """Raise ValueError if path escapes the categories directory."""
+        resolved = os.path.realpath(path)
+        allowed = os.path.realpath(categories_dir)
+        try:
+            if os.path.commonpath([resolved, allowed]) != allowed:
+                raise ValueError(
+                    f"Category file path '{path}' is outside the allowed "
+                    f"categories directory '{categories_dir}'"
+                )
+        except ValueError as exc:
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed categories directory"
+            ) from exc
+
+    def _resolve_category_file_path(self, file_path: str) -> str:
         """
         Resolve a category file path that may be relative.
 
@@ -339,12 +354,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         file isn't found.
 
         Resolution order:
-        1. Return as-is if absolute or already exists.
-        2. Try joining the full path relative to this module's directory.
+        1. Return as-is if absolute or already exists (jailed to categories/).
+        2. Try joining the full path relative to this module's directory (jailed).
         3. Progressively strip leading path components and try each suffix
-           relative to this module's directory (handles paths like
-           "litellm/proxy/.../policy_templates/file.yaml" by finding the
-           "policy_templates/file.yaml" suffix that exists).
+           relative to this module's directory (jailed).
 
         Args:
             file_path: The file path to resolve (absolute or relative).
@@ -352,8 +365,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             The resolved absolute-ish path, or the original path if
             resolution fails (caller should check existence).
+
+        Raises:
+            ValueError: If the resolved path escapes the categories directory.
         """
+        categories_dir = os.path.join(os.path.dirname(__file__), "categories")
+
         if os.path.isabs(file_path) or os.path.exists(file_path):
+            self._assert_within_categories_dir(file_path, categories_dir)
             return file_path
 
         module_dir = os.path.dirname(__file__)
@@ -361,6 +380,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Try the full relative path joined to the module directory
         candidate = os.path.join(module_dir, file_path)
         if os.path.exists(candidate):
+            self._assert_within_categories_dir(candidate, categories_dir)
             return candidate
 
         # Progressively strip leading components to find a matching suffix
@@ -369,8 +389,15 @@ class ContentFilterGuardrail(CustomGuardrail):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
             if os.path.exists(candidate):
+                self._assert_within_categories_dir(candidate, categories_dir)
                 return candidate
 
+        # File not found via any resolution strategy — jail the module-relative
+        # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
+        # regardless of CWD or whether the target file exists.
+        self._assert_within_categories_dir(
+            os.path.join(module_dir, file_path), categories_dir
+        )
         return file_path
 
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
@@ -392,6 +419,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             if not category_name or not isinstance(category_name, str):
                 verbose_proxy_logger.warning(
                     "Category name missing or invalid in config, skipping"
+                )
+                continue
+
+            # Prevent path traversal via category_name (e.g. "../../etc/passwd")
+            if not re.match(r"^[a-zA-Z0-9_\-]+$", category_name):
+                verbose_proxy_logger.warning(
+                    f"Category name '{category_name}' contains invalid characters, skipping"
                 )
                 continue
 
