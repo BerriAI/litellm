@@ -216,8 +216,15 @@ def handle_cohere_response(
         finish_reason = "length"
     elif oci_finish_reason == "TOOL_CALL":
         finish_reason = "tool_calls"
+    elif oci_finish_reason is not None:
+        # OCI Cohere can emit error/cancel finish reasons (e.g. ``ERROR``,
+        # ``ERROR_TOXIC``, ``ERROR_LIMIT``, ``USER_CANCEL``) that aren't part
+        # of OpenAI's standard set. Normalize them to ``"stop"`` so downstream
+        # consumers switching on ``finish_reason`` keep working — matches the
+        # streaming handler below.
+        finish_reason = "stop"
     else:
-        finish_reason = oci_finish_reason
+        finish_reason = None
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_response.chatResponse.toolCalls:

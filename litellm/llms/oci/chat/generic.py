@@ -332,7 +332,11 @@ def handle_generic_response(
     elif oci_finish_reason == "TOOL_CALLS":
         model_response.choices[0].finish_reason = "tool_calls"  # type: ignore[union-attr]
     elif oci_finish_reason is not None:
-        model_response.choices[0].finish_reason = oci_finish_reason  # type: ignore[union-attr,assignment]
+        # OCI GENERIC can emit non-OpenAI finish reasons (e.g. ``ERROR``,
+        # ``CONTENT_FILTERED``, ``CANCELLED``). Normalize to ``"stop"`` so
+        # downstream consumers switching on ``finish_reason`` keep working —
+        # matches the streaming handler.
+        model_response.choices[0].finish_reason = "stop"  # type: ignore[union-attr]
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
@@ -398,8 +402,13 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
         finish_reason = "length"
     elif oci_finish_reason == "TOOL_CALLS":
         finish_reason = "tool_calls"
+    elif oci_finish_reason is not None:
+        # OCI GENERIC can emit non-OpenAI finish reasons (e.g. ``ERROR``,
+        # ``CONTENT_FILTERED``, ``CANCELLED``). Normalize to ``"stop"`` so
+        # downstream consumers switching on ``finish_reason`` keep working.
+        finish_reason = "stop"
     else:
-        finish_reason = oci_finish_reason
+        finish_reason = None
 
     return ModelResponseStream(
         choices=[

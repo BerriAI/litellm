@@ -252,6 +252,12 @@ class OCIChatConfig(BaseConfig):
                 adapted_params[key] = value
                 continue
             adapted_params[alias] = value
+            # Preserve the original OpenAI ``response_format`` key alongside the
+            # OCI-mapped ``responseFormat`` so downstream litellm framework code
+            # (e.g. ``json_mode`` detection, logging) that inspects
+            # ``optional_params["response_format"]`` continues to work.
+            if alias == "responseFormat":
+                adapted_params["response_format"] = value
 
         return adapted_params
 

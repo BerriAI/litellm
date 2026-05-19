@@ -939,12 +939,20 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=signed_body if signed_body is not None else json.dumps(data),
-                timeout=timeout,
-            )
+            if signed_body is not None:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=signed_body,
+                    timeout=timeout,
+                )
+            else:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
