@@ -284,12 +284,13 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     )
     text = "" if is_terminal_consolidation else (typed_chunk.text or "")
 
-    cohere_tool_calls = typed_chunk.toolCalls
-    if cohere_tool_calls is None and is_terminal_consolidation:
-        for history_msg in typed_chunk.chatHistory or []:
-            if history_msg.role == "CHATBOT" and history_msg.toolCalls:
-                cohere_tool_calls = history_msg.toolCalls
-                break
+    # Tool calls on the terminal consolidation chunk (whether from
+    # `typed_chunk.toolCalls` or from `chatHistory`) restate what was already
+    # streamed in intermediate chunks. Re-emitting them here would mint fresh
+    # `uuid4` IDs and cause downstream consumers to execute each tool call
+    # twice. Suppress them on the terminal chunk for the same reason `text`
+    # is suppressed above.
+    cohere_tool_calls = None if is_terminal_consolidation else typed_chunk.toolCalls
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_tool_calls:
