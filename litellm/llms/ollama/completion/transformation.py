@@ -40,6 +40,10 @@ else:
 
 
 class OllamaConfig(BaseConfig):
+    # Ollama natively understands `think=False`, and litellm's existing
+    # `reasoning_effort="disable"` -> `think=False` mapping turns the OpenAI-
+    # style flag into the native one upstream. Safe to inject "disable".
+    supports_reasoning_disable: bool = True
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 

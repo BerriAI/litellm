@@ -168,6 +168,10 @@ class VertexAIBaseConfig:
 
 
 class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
+    # Gemini's `thinkingConfig.thinkingBudget = 0` translates the OpenAI-style
+    # `reasoning_effort="disable"` into a real "no reasoning" upstream signal,
+    # so it is safe to inject "disable" for `think:false` requests.
+    supports_reasoning_disable: bool = True
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
