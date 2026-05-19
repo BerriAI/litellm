@@ -21,6 +21,16 @@ def test_bedrock_cross_region_inference_profile_mapping():
     assert model_info["input_cost_per_token"] == 8e-07
 
 
+def test_bedrock_au_inference_profile_regional_model_cost_key():
+    """Regional inference profile id must map to regional prices, not unprefixed anthropic.* entry."""
+    model = "bedrock/au.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    model_info = _get_model_info_helper(model=model, custom_llm_provider="bedrock")
+    assert model_info["key"] == "au.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    assert model_info["input_cost_per_token"] == 3.3e-06
+    assert model_info["output_cost_per_token"] == 1.65e-05
+    assert model_info["cache_creation_input_token_cost"] == 4.125e-06
+
+
 def test_proxy_cost_calculation_scenario():
     """Test exact GitHub issue scenario: proxy cost calculation"""
     model = "litellm_proxy/bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
