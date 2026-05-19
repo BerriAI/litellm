@@ -2057,9 +2057,16 @@ def anthropic_process_openai_file_message(
     AnthropicMessagesContainerUploadParam,
 ]:
     file_message = cast(ChatCompletionFileObject, message)
-    file_data = file_message["file"].get("file_data")
-    file_id = file_message["file"].get("file_id")
-    format = file_message["file"].get("format")
+    file_sub = file_message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider="anthropic",
+        )
+    file_data = file_sub.get("file_data")
+    file_id = file_sub.get("file_id")
+    format = file_sub.get("format")
     if file_data:
         image_chunk = convert_to_anthropic_image_obj(
             openai_image_url=file_data,
@@ -4879,7 +4886,13 @@ class BedrockConverseMessagesProcessor:
 
     @staticmethod
     def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
-        file_message = message["file"]
+        file_message = message.get("file")
+        if file_message is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="bedrock",
+            )
         file_data = file_message.get("file_data")
         file_id = file_message.get("file_id")
 
@@ -4900,7 +4913,13 @@ class BedrockConverseMessagesProcessor:
     async def _async_process_file_message(
         message: ChatCompletionFileObject,
     ) -> BedrockContentBlock:
-        file_message = message["file"]
+        file_message = message.get("file")
+        if file_message is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="bedrock",
+            )
         file_data = file_message.get("file_data")
         file_id = file_message.get("file_id")
         format = file_message.get("format")
@@ -4977,8 +4996,9 @@ class BedrockConverseMessagesProcessor:
             )
             if reasoning_text and not reasoning_text.get("signature"):
                 reasoning_text_text = reasoning_text["text"]
-                assistants_part = BedrockContentBlock(text=reasoning_text_text)
-                assistant_parts.append(assistants_part)
+                if reasoning_text_text.strip():
+                    assistants_part = BedrockContentBlock(text=reasoning_text_text)
+                    assistant_parts.append(assistants_part)
             else:
                 filtered_thinking_blocks.append(block)
         if len(filtered_thinking_blocks) > 0:

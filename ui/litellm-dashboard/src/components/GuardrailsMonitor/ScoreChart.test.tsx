@@ -6,6 +6,10 @@ import { ScoreChart } from "./ScoreChart";
 
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
+  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
+  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
+  // post-teardown -> "window is not defined".
   return {
     ...actual,
     BarChart: ({ data, categories }: { data: any[]; categories: string[] }) => (
@@ -17,6 +21,12 @@ vi.mock("@tremor/react", async (importOriginal) => {
         ))}
       </div>
     ),
+    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) => (
+      <button {...props} ref={ref}>
+        {children}
+      </button>
+    )),
+    Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   };
 });
 

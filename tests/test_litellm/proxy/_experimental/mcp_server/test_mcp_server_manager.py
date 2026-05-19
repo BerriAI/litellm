@@ -2456,6 +2456,51 @@ class TestMCPServerManager:
             assert "test_server_1" in result
             assert "test_server_2" in result
 
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
+        """Anonymous delegated auth listing should only include oauth2 servers."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        manager = MCPServerManager()
+        oauth_delegate_server = MCPServer(
+            server_id="oauth-delegate",
+            name="oauth_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        api_key_delegate_server = MCPServer(
+            server_id="api-key-delegate",
+            name="api_key_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            delegate_auth_to_upstream=True,
+        )
+        oauth_non_delegate_server = MCPServer(
+            server_id="oauth-non-delegate",
+            name="oauth_non_delegate",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=False,
+        )
+        manager.registry = {
+            oauth_delegate_server.server_id: oauth_delegate_server,
+            api_key_delegate_server.server_id: api_key_delegate_server,
+            oauth_non_delegate_server.server_id: oauth_non_delegate_server,
+        }
+
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await manager.get_allowed_mcp_servers(None)
+
+        assert set(result) == {"oauth-delegate"}
+
     def test_get_mcp_server_from_tool_name_uses_server_name_not_name(self):
         """
         Test that _get_mcp_server_from_tool_name uses server.server_name instead of server.name
@@ -2586,6 +2631,67 @@ class TestMCPServerTimestamps:
 
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
+
+
+class TestInternalDelegatePkceWarningLog:
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-1",
+            server_name="warn_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" in combined
+        assert "delegate_auth_to_upstream=true" in combined
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_no_internal_delegate_log_when_public(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-2",
+            server_name="warn_server_pub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=True,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
+
+    def test_warn_skipped_for_client_credentials(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_internal_delegate_pkce_if_applicable,
+        )
+
+        server = MCPServer(
+            server_id="m2m-1",
+            name="x",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        _warn_internal_delegate_pkce_if_applicable(server, source="test")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
 
 
 class TestHasClientCredentialsOAuth2Flow:

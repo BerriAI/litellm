@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.85.0"
+version = "1.86.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -56,13 +56,14 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.71",
-    "litellm-enterprise==0.1.40",
+    "litellm-proxy-extras==0.4.72",
+    "litellm-enterprise==0.1.41",
     "RestrictedPython==8.1",
     "rich==13.9.4",
     "polars==1.38.1",
     "soundfile==0.12.1",
     "pyroscope-io==0.8.16; sys_platform != 'win32'",
+    "pydantic-settings>=2.14.1",
 ]
 extra_proxy = [
     "prisma==0.11.0",
@@ -250,7 +251,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.85.0"
+version = "1.86.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -290,6 +291,12 @@ tests_dir = [
 also_copy = [
     "litellm/",
 ]
+# Run the test suite once before mutation to gather line coverage, then skip
+# mutating lines no test exercises. Those mutants would survive regardless
+# (no test hits the line to kill them), so generating them wastes hours of CI.
+# The score now reads as "mutation score over covered code" — pair with a
+# line-coverage number when reporting.
+mutate_only_covered_lines = true
 # Disable rerun/parallel plugins for mutation runs:
 # - pytest-retry triggers an `INTERNALERROR: no option named 'filtered_exceptions'`
 #   when invoked via mutmut's in-process `pytest.main()` call.
