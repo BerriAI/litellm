@@ -286,6 +286,45 @@ def test_pr_gate_pytest_step_scrubs_secrets_from_env(
     )
 
 
+def test_pr_gate_resolver_output_safely_persisted_to_bash_env(
+    circleci_config: dict,
+) -> None:
+    """The resolver step writes the resolved version to `$BASH_ENV` so
+    later steps can interpolate it. `$BASH_ENV` is sourced by bash at
+    the start of every subsequent step *before* any `env -i` wrapper
+    we install can run, so the job env (with provider credentials in
+    scope) is live at that moment. The resolver lives under
+    `tests/claude_code/` and is therefore PR-controlled — a malicious
+    PR could make it print a value containing a newline + shell
+    snippet to exfiltrate credentials.
+
+    Pin the two defenses so they cannot silently regress:
+
+    1. The persisted value must be shell-quoted via `printf '%q'`
+       (not unquoted via `echo`) so any bytes the resolver emits are
+       safely re-parsed as a literal `export` assignment.
+    2. The resolver output must be matched against a strict semver
+       regex and rejected otherwise, so anything that isn't a
+       `N.N.N` string never reaches `$BASH_ENV` in the first place.
+    """
+    job = circleci_config["jobs"][JOB_NAME]
+    command = _find_step_command(job, "Resolve Claude Code CLI version")
+    assert command, "PR gate must have a step that resolves the CLI version."
+    assert "printf 'export CLAUDE_CODE_VERSION=%q\\n'" in command, (
+        "Resolver step must persist CLAUDE_CODE_VERSION via `printf '%q'` "
+        "(shell-quoted) — a raw `echo \"export ...=$VAR\"` lets PR-controlled "
+        "resolver output inject shell commands into $BASH_ENV that run with "
+        "provider credentials in scope at the start of the next step."
+    )
+    assert "[[ \"$CLAUDE_CODE_VERSION\" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]" in command, (
+        "Resolver step must validate CLAUDE_CODE_VERSION against a strict "
+        "whole-string semver regex (`[[ ... =~ ^N.N.N$ ]]`) before "
+        "persisting; a per-line grep would pass a multi-line resolver "
+        "output, and anything that isn't a `N.N.N` string should never "
+        "reach $BASH_ENV / `npm install`."
+    )
+
+
 def test_existing_proxy_e2e_anthropic_job_unchanged(circleci_config: dict) -> None:
     """No regression to the existing `proxy_e2e_anthropic_messages_tests`
     job (acceptance criterion). We don't lock its full body, but we do

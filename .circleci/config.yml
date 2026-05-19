@@ -2525,8 +2525,22 @@ jobs:
               LC_ALL="${LC_ALL:-}" \
               TMPDIR="${TMPDIR:-/tmp}" \
               uv run --no-sync python -m tests.claude_code.pr_gate_version_resolver)
+            # The resolver lives under tests/claude_code/ and is therefore
+            # PR-controlled: a malicious PR could make it print a value
+            # containing a newline + shell snippet. Reject anything that
+            # is not a strict `N.N.N` semver before persisting, and
+            # shell-quote on write so a bypass of the regex still cannot
+            # break out of the `export` assignment when CircleCI sources
+            # $BASH_ENV at the start of every subsequent step (which
+            # happens before our `env -i` wrappers can run and would
+            # otherwise execute the injected snippet with provider
+            # credentials in scope).
+            if ! [[ "$CLAUDE_CODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "pr_gate_version_resolver returned a non-semver value; refusing to persist" >&2
+              exit 1
+            fi
             echo "Selected @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-            echo "export CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}" >> "$BASH_ENV"
+            printf 'export CLAUDE_CODE_VERSION=%q\n' "$CLAUDE_CODE_VERSION" >> "$BASH_ENV"
       - run:
           name: Install Node.js 20 + Claude Code CLI
           command: |
