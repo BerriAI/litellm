@@ -64,13 +64,17 @@ TOOL_USE_ARGS = [
 ]
 
 # Floor on the number of stream-json records we expect to see for a
-# tool-use turn. A buffered (non-streamed) wire collapses to one
-# `system` init record + one `assistant` final + one `result`, total 3.
-# Real fine-grained streaming produces many more (incremental
-# input_json_delta events, intermediate assistant deltas, etc.). We
-# pick a floor above the buffered case so the assertion catches the
-# regression without being flaky on short responses.
-MIN_STREAM_EVENTS = 4
+# tool-use turn. A buffered (non-streamed) wire for this multi-turn
+# flow collapses to roughly: one `system` init + one `assistant` with
+# the `tool_use` block + a `user` tool_result + one `assistant` final
+# text + one `result`, i.e. ~5 records (the CLI executes the tool
+# locally and sends the result back, producing a second model turn
+# even on a fully buffered proxy). Real fine-grained streaming
+# produces many more (incremental input_json_delta events,
+# intermediate assistant deltas, etc., typically 15+). We pick a
+# floor comfortably above the buffered case so the assertion catches
+# the regression without being flaky on short responses.
+MIN_STREAM_EVENTS = 8
 
 
 def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
