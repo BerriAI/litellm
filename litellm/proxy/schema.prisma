@@ -79,6 +79,28 @@ model LiteLLM_AgentsTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+
+  versions LiteLLM_AgentVersionTable[]
+}
+
+// S3-03: append-only history of every PUT/PATCH on LiteLLM_AgentsTable.
+// Used by GET /v1/agents/{id}/versions and POST /rollback.
+model LiteLLM_AgentVersionTable {
+  version_id        String   @id @default(uuid())
+  agent_id          String
+  version_number    Int
+  agent_card_params Json
+  litellm_params    Json?
+  static_headers    Json?
+  created_by        String?
+  created_at        DateTime @default(now())
+  is_rollback       Boolean  @default(false)
+  rolled_back_from  Int?
+
+  agent LiteLLM_AgentsTable @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+
+  @@unique([agent_id, version_number])
+  @@index([agent_id, version_number(sort: Desc)])
 }
 
 model LiteLLM_OrganizationTable {

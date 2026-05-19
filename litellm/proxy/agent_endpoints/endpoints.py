@@ -665,6 +665,15 @@ async def update_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
+        # S3-03: snapshot the pre-mutation state before we overwrite the row.
+        from litellm.proxy.agent_endpoints.versioning import snapshot_existing_agent
+
+        await snapshot_existing_agent(
+            prisma_client=prisma_client,
+            existing_row=existing_agent,
+            created_by=updated_by,
+        )
+
         result = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
             agent=request,
@@ -757,6 +766,15 @@ async def patch_agent(
 
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
+
+        # S3-03: snapshot pre-PATCH state.
+        from litellm.proxy.agent_endpoints.versioning import snapshot_existing_agent
+
+        await snapshot_existing_agent(
+            prisma_client=prisma_client,
+            existing_row=existing_agent,
+            created_by=updated_by,
+        )
 
         result = await AGENT_REGISTRY.patch_agent_in_db(
             agent_id=agent_id,
@@ -1187,4 +1205,107 @@ async def get_agent_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+    )
+
+
+# ============================================================================
+# S3-04: agent version list + rollback
+# ============================================================================
+
+
+@router.get(
+    "/v1/agents/{agent_id}/versions",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_agent_versions_endpoint(
+    agent_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    cursor: Optional[str] = Query(
+        None, description="version_id of the prev page tail."
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> List[Dict[str, Any]]:
+    """Return version history for an agent (newest first).
+
+    Read scoping: same as `GET /v1/agents/{id}` — must be visible to the
+    caller (S3-01). Non-admins see history only for agents they can see.
+    """
+    is_admin = _is_admin_role(user_api_key_dict)
+    if not is_admin:
+        visible_ids = await _resolve_visible_agent_ids(user_api_key_dict)
+        if agent_id not in visible_ids:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not accessible.",
+            )
+    from litellm.proxy.agent_endpoints.versioning import list_agent_versions
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=503, detail="DB not initialized")
+    return await list_agent_versions(
+        prisma_client=prisma_client,
+        agent_id=agent_id,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@router.post(
+    "/v1/agents/{agent_id}/rollback",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=AgentResponse,
+)
+async def rollback_agent_endpoint(
+    agent_id: str,
+    body: Dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Restore an agent to a prior `version_number`.
+
+    Write scope: PROXY_ADMIN only (same gate as PUT/PATCH /v1/agents/{id}).
+    Appends a new version row tagged `is_rollback=True` so history stays
+    linear.
+    """
+    _check_agent_management_permission(user_api_key_dict)
+    version_number = body.get("version_number")
+    if not isinstance(version_number, int):
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must include {'version_number': <int>}.",
+        )
+    from litellm.proxy.agent_endpoints.versioning import rollback_agent_to_version
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=503, detail="DB not initialized")
+    await rollback_agent_to_version(
+        prisma_client=prisma_client,
+        agent_id=agent_id,
+        target_version_number=version_number,
+        created_by=user_api_key_dict.user_id,
+    )
+    # Re-register the in-memory entry to reflect the rolled-back content.
+    refreshed = await prisma_client.db.litellm_agentstable.find_unique(
+        where={"agent_id": agent_id}
+    )
+    if refreshed is None:
+        raise HTTPException(
+            status_code=404, detail=f"Agent {agent_id} vanished mid-rollback."
+        )
+    agent_dict = (
+        refreshed.model_dump() if hasattr(refreshed, "model_dump") else dict(refreshed)
+    )
+    response = AgentResponse(**agent_dict)
+    AGENT_REGISTRY.deregister_agent(agent_name=agent_dict.get("agent_name"))
+    AGENT_REGISTRY.register_agent(agent_config=response)
+    return response
+
+
+def _is_admin_role(uak: UserAPIKeyAuth) -> bool:
+    return uak.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
     )
