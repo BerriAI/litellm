@@ -4,13 +4,18 @@ Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/comple
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
-)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+def _has_non_text_content(message: AllMessageValues) -> bool:
+    """Check if a message has non-text content items (e.g. image_url)."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(item.get("type") != "text" for item in content)
 
 
 class ModelScopeChatConfig(OpenAIGPTConfig):
@@ -33,9 +38,20 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        ModelScope does not support content in list format.
+        Flatten text-only content lists to strings for ModelScope.
+
+        Messages with non-text content (e.g. image_url for vision models)
+        are kept as lists so the parent class can normalize them properly.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        for message in messages:
+            if _has_non_text_content(message):
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                message["content"] = "".join(
+                    item.get("text") or "" for item in content
+                )
+
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True

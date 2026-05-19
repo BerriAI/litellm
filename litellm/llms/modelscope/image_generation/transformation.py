@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -176,7 +177,6 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
                 error_message=f"Error parsing ModelScope response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
-                model=model,
             )
 
         # Check for errors in response
@@ -188,7 +188,6 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
-                model=model,
             )
 
         # Extract images from response
@@ -211,8 +210,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         error_message: str,
         status_code: int,
         headers: Union[dict, httpx.Headers],
-        model: Optional[str] = None,
-    ) -> Exception:
+    ) -> BaseLLMException:
         """Return the appropriate error class for ModelScope."""
         from litellm.exceptions import (
             AuthenticationError,
@@ -221,26 +219,26 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         if status_code == 400:
-            return BadRequestError(
+            return BadRequestError(  # type: ignore[return-value]
                 message=error_message,
-                model=model or "",
+                model="",
                 llm_provider="modelscope",
             )
         elif status_code == 401:
-            return AuthenticationError(
+            return AuthenticationError(  # type: ignore[return-value]
                 message=error_message,
-                model=model or "",
+                model="",
                 llm_provider="modelscope",
             )
         elif status_code >= 500:
-            return InternalServerError(
+            return InternalServerError(  # type: ignore[return-value]
                 message=error_message,
-                model=model or "",
+                model="",
                 llm_provider="modelscope",
             )
         else:
-            return BadRequestError(
+            return BadRequestError(  # type: ignore[return-value]
                 message=error_message,
-                model=model or "",
+                model="",
                 llm_provider="modelscope",
             )

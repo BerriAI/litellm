@@ -415,7 +415,6 @@ class TestModelScopeImageGenerationTransformation:
             error_message="Bad request",
             status_code=400,
             headers={"Content-Type": "application/json"},
-            model=self.model,
         )
 
         assert isinstance(error, BadRequestError)
@@ -428,7 +427,6 @@ class TestModelScopeImageGenerationTransformation:
             error_message="Invalid API key",
             status_code=401,
             headers={"Content-Type": "application/json"},
-            model=self.model,
         )
 
         assert isinstance(error, AuthenticationError)
@@ -441,7 +439,6 @@ class TestModelScopeImageGenerationTransformation:
             error_message="Internal server error",
             status_code=500,
             headers={"Content-Type": "application/json"},
-            model=self.model,
         )
 
         assert isinstance(error, InternalServerError)
@@ -454,7 +451,6 @@ class TestModelScopeImageGenerationTransformation:
             error_message="Some error",
             status_code=404,
             headers={"Content-Type": "application/json"},
-            model=self.model,
         )
 
         assert isinstance(error, BadRequestError)
