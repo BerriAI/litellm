@@ -209,6 +209,12 @@ class OCIChatConfig(BaseConfig):
         # the param dropped under drop_params, rather than silently passing
         # through and tripping Pydantic validation on CohereChatRequest.
         self.openai_to_oci_cohere_param_map["reasoning_effort"] = False
+        # CohereChatRequest has no logProbs/logitBias fields, so passing these
+        # through would be silently dropped by Pydantic. Mark them unsupported
+        # so get_supported_openai_params doesn't advertise them and callers
+        # get a clear error (or drop_params behaviour) instead.
+        self.openai_to_oci_cohere_param_map["logprobs"] = False
+        self.openai_to_oci_cohere_param_map["logit_bias"] = False
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         param_map = (
