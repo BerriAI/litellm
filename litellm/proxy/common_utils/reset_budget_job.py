@@ -44,6 +44,7 @@ from litellm.repositories.table_repositories import (
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.unit_of_work import (
     budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
@@ -237,6 +238,13 @@ async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload:
     )
 
 
+async def _write_user_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
+    await UserRepository(prisma_client).table.update(
+        where={"user_id": row_id},
+        data={"budget_limits": payload},
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _WindowSource:
     """A table whose rows carry their own per-window budget limits."""
@@ -279,6 +287,14 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         log_subject="teams",
         retry_subject="team",
         write=_write_team_windows,
+    ),
+    _WindowSource(
+        table="LiteLLM_UserTable",
+        id_column="user_id",
+        counter_prefix="spend:user",
+        log_subject="users",
+        retry_subject="user",
+        write=_write_user_windows,
     ),
 )
 
@@ -1120,7 +1136,7 @@ class ResetBudgetJob:
 
     async def reset_budget_windows(self) -> None:
         """
-        For keys and teams with budget_limits, reset any individual windows where
+        For keys, teams, and users with budget_limits, reset any individual windows where
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
 

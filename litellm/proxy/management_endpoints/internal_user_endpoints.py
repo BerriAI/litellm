@@ -1189,7 +1189,58 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
+def _existing_reset_at_by_duration(existing_user_row: BaseModel | None) -> dict[str, str]:
+    if existing_user_row is None:
+        return {}
+    existing_limits = getattr(existing_user_row, "budget_limits", None)
+    if isinstance(existing_limits, str):
+        try:
+            existing_limits = json.loads(existing_limits)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(existing_limits, list):
+        return {}
+    return {
+        window["budget_duration"]: (
+            window["reset_at"].isoformat() if isinstance(window["reset_at"], datetime) else window["reset_at"]
+        )
+        for window in existing_limits
+        if isinstance(window, dict) and window.get("budget_duration") and window.get("reset_at")
+    }
+
+
+def _initialize_budget_limits_for_update(
+    new_windows: list[object] | None,
+    existing_user_row: BaseModel | None,
+) -> str | None:
+    if new_windows is None:
+        return None
+    if not new_windows:
+        return "[]"
+
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    preserved = _existing_reset_at_by_duration(existing_user_row)
+    initialized = tuple(
+        {
+            **(window if isinstance(window, dict) else window.model_dump()),
+            "reset_at": preserved.get(
+                window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            )
+            or get_budget_reset_time(
+                budget_duration=window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            ).isoformat(),
+        }
+        for window in new_windows
+    )
+    return json.dumps(initialized)
+
+
+def _update_internal_user_params(
+    data_json: dict,
+    data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail,
+    existing_user_row: BaseModel | None = None,
+) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
@@ -1197,6 +1248,8 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         if k == "max_budget":
             if "max_budget" in fields_set:
                 non_default_values[k] = v
+        elif k == "budget_limits" and "budget_limits" in fields_set:
+            non_default_values[k] = v
         elif (
             v is not None
             and v
@@ -1218,6 +1271,12 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         validate_budget_duration(non_default_values["budget_duration"])
         non_default_values["budget_reset_at"] = get_budget_reset_time(
             budget_duration=non_default_values["budget_duration"]
+        )
+
+    if "budget_limits" in non_default_values:
+        non_default_values["budget_limits"] = _initialize_budget_limits_for_update(
+            new_windows=non_default_values["budget_limits"],
+            existing_user_row=existing_user_row,
         )
 
     if "max_budget" not in non_default_values:
@@ -1379,10 +1438,6 @@ async def _update_single_user_helper(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
-    non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values)
-
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
         existing_user_row = await _user_table(prisma_client).find_first(where={"user_id": user_request.user_id})
@@ -1393,6 +1448,14 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
+
+    data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
+    non_default_values = _update_internal_user_params(
+        data_json=data_json,
+        data=user_request,
+        existing_user_row=existing_user_row,
+    )
+    _hash_password_in_dict(non_default_values)
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
@@ -1409,7 +1472,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1746,7 +1809,7 @@ async def bulk_user_update(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -1793,8 +1856,18 @@ async def bulk_user_update(
                 },
             )
 
-        # Apply update transformations (reuse existing logic)
         data_json: Final[dict] = data.user_updates.model_dump(exclude_unset=True)
+        if "budget_limits" in data_json:
+            users_to_update = [
+                data.user_updates.model_copy(update={"user_id": user.user_id}) for user in all_users_in_db
+            ]
+            return await bulk_update_processed_users(
+                users_to_update=cast(list[UpdateUserRequest], users_to_update),
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+
+        # Apply update transformations (reuse existing logic)
         non_default_values: Final = _update_internal_user_params(data_json=data_json, data=data.user_updates)
 
         # Remove user identification fields since we're updating by user_id
@@ -1811,6 +1884,10 @@ async def bulk_user_update(
                 where={},
                 data=non_default_values,  # Update all users
             )
+
+            for user in all_users_in_db:
+                await user_api_key_cache.async_delete_cache(key=user.user_id)
+                await user_api_key_cache.async_delete_cache(key=f"{user.user_id}_user_api_key_user_id")
 
             # Create individual success results
             for user in all_users_in_db:

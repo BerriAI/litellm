@@ -994,6 +994,13 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _user_max_budget_check(),
+                _user_multi_budget_check(user_object=user_object)
+                if not (
+                    general_settings.get("skip_user_budget_on_team_key") is True
+                    and team_object is not None
+                    and team_object.team_id is not None
+                )
+                else None,
                 _check_team_member_budget(
                     team_object=team_object,
                     user_object=user_object,
@@ -4316,6 +4323,26 @@ async def _virtual_key_max_budget_check(
             )
 
 
+def _coerce_budget_limit_window_for_check(window: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(window, dict):
+        w = window
+    elif hasattr(window, "model_dump"):
+        w = window.model_dump()
+    else:
+        return None
+    budget_duration = w.get("budget_duration")
+    max_budget = w.get("max_budget")
+    if budget_duration is None or max_budget is None:
+        return None
+    try:
+        max_budget_float = float(max_budget)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(max_budget_float):
+        return None
+    return {"budget_duration": budget_duration, "max_budget": max_budget_float}
+
+
 async def _virtual_key_multi_budget_check(
     valid_token: UserAPIKeyAuth,
 ):
@@ -4326,9 +4353,6 @@ async def _virtual_key_multi_budget_check(
     Using budget_duration (not list index) keeps counters stable when windows are reordered
     or removed during a key update.
 
-    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
-    per-window spend resets to zero within the current window period. This is an acceptable
-    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
     """
     if not valid_token.budget_limits:
         return
@@ -4336,7 +4360,9 @@ async def _virtual_key_multi_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     for window in valid_token.budget_limits:
-        w: dict = window if isinstance(window, dict) else window.model_dump()
+        w = _coerce_budget_limit_window_for_check(window=window)
+        if w is None:
+            continue
         counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
@@ -4346,7 +4372,7 @@ async def _virtual_key_multi_budget_check(
             window_entity_id=valid_token.token,
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+        if window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
@@ -4356,6 +4382,48 @@ async def _virtual_key_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,
+            )
+
+
+async def _user_multi_budget_check(
+    user_object: Optional[LiteLLM_UserTable],
+):
+    """
+    Raises BudgetExceededError if any budget window in user_object.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:user:{user_id}:window:{budget_duration}.
+    Using budget_duration keeps counters stable when windows are reordered or removed during
+    a user update.
+
+    """
+    if user_object is None or not user_object.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in user_object.budget_limits:
+        w = _coerce_budget_limit_window_for_check(window=window)
+        if w is None:
+            continue
+        counter_key = f"spend:user:{user_object.user_id}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="User",
+            window_entity_id=user_object.user_id,
+            window_start=get_budget_window_start(w),
+        )
+        if window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: User={user_object.user_id} over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
+                entity_type=Litellm_EntityType.USER.value,
+                entity_id=user_object.user_id,
             )
 
 
@@ -4709,7 +4777,9 @@ async def _team_multi_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     for window in team_object.budget_limits:
-        w: dict = window if isinstance(window, dict) else window.model_dump()
+        w = _coerce_budget_limit_window_for_check(window=window)
+        if w is None:
+            continue
         counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
@@ -4719,7 +4789,7 @@ async def _team_multi_budget_check(
             window_entity_id=team_object.team_id,
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+        if window_spend >= w["max_budget"]:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
                 max_budget=w["max_budget"],
