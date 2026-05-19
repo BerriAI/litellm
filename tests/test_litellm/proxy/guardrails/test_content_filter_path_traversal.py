@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 import pytest
 
 
@@ -98,3 +99,86 @@ class TestContentFilterPathTraversal:
         valid_file = str(tmp_path / "test.yaml")
         # Should not raise
         ContentFilterGuardrail._assert_within_categories_dir(valid_file, categories_dir)
+
+    def test_assert_within_categories_dir_commonpath_raises_valueerror(self, tmp_path):
+        """Cover the except-ValueError branch (Windows cross-drive paths)."""
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        categories_dir = str(tmp_path)
+        valid_file = str(tmp_path / "test.yaml")
+        with patch(
+            "os.path.commonpath", side_effect=ValueError("Paths on different drives")
+        ):
+            with pytest.raises(
+                ValueError, match="outside the allowed categories directory"
+            ):
+                ContentFilterGuardrail._assert_within_categories_dir(
+                    valid_file, categories_dir
+                )
+
+    def test_resolve_category_file_path_direct_join_hit(self):
+        """Cover the first-join-attempt success branch (lines 383-384)."""
+        guardrail = self._get_guardrail()
+        # "categories/<file>" joined directly to module_dir resolves to an existing file.
+        categories_dir = os.path.join(
+            os.path.dirname(
+                __import__(
+                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
+                    fromlist=["content_filter"],
+                ).__file__
+            ),
+            "categories",
+        )
+        yaml_files = [f for f in os.listdir(categories_dir) if f.endswith(".yaml")]
+        if not yaml_files:
+            pytest.skip("No category YAML files present in this environment")
+        relative_path = os.path.join("categories", yaml_files[0])
+        result = guardrail._resolve_category_file_path(relative_path)
+        assert os.path.isabs(result) or os.path.exists(result)
+
+    def test_resolve_category_file_path_component_strip_hit(self):
+        """Cover the component-stripping loop success branch (lines 392-393)."""
+        guardrail = self._get_guardrail()
+        categories_dir = os.path.join(
+            os.path.dirname(
+                __import__(
+                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
+                    fromlist=["content_filter"],
+                ).__file__
+            ),
+            "categories",
+        )
+        yaml_files = [f for f in os.listdir(categories_dir) if f.endswith(".yaml")]
+        if not yaml_files:
+            pytest.skip("No category YAML files present in this environment")
+        # Prefix with a fake leading component so the first-join attempt misses,
+        # but stripping that component reveals categories/<file> which exists.
+        prefixed_path = "some_prefix/categories/" + yaml_files[0]
+        result = guardrail._resolve_category_file_path(prefixed_path)
+        assert os.path.isabs(result) or os.path.exists(result)
+
+    def test_load_categories_traversal_category_file_skipped(self):
+        """Cover the except-ValueError branch in _load_categories (lines 451-454)."""
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        guardrail = ContentFilterGuardrail.__new__(ContentFilterGuardrail)
+        guardrail.loaded_categories = {}
+        guardrail.severity_threshold = "medium"
+        guardrail.category_keywords = {}
+        guardrail.always_block_category_keywords = {}
+        guardrail.conditional_categories = {}
+        # A traversal path in category_file must be skipped (not crash) via ValueError.
+        guardrail._load_categories(
+            [
+                {
+                    "category": "valid_name",
+                    "enabled": True,
+                    "category_file": "../../../../etc/passwd",
+                }
+            ]
+        )
+        assert "valid_name" not in guardrail.loaded_categories
