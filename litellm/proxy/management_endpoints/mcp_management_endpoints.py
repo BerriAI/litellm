@@ -851,6 +851,50 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials_list(servers)
 
+    async def _annotate_user_credential_flags(
+        servers: List[LiteLLM_MCPServerTable],
+        user_id: str,
+    ) -> None:
+        """Populate ``has_user_credential`` and ``missing_user_field_keys``
+        for the calling user across BYOK / user-fields servers in a single
+        batched query."""
+        from litellm.proxy._experimental.mcp_server.db import (
+            _decode_user_credential,
+            _decode_user_fields_payload,
+        )
+        from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
+
+        if not user_id or _byok_prisma_client is None:
+            return
+        relevant_server_ids = [
+            s.server_id
+            for s in servers
+            if getattr(s, "is_byok", False) or server_has_user_fields(s)
+        ]
+        if not relevant_server_ids:
+            return
+        cred_rows = await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
+            where={"user_id": user_id, "server_id": {"in": relevant_server_ids}}
+        )
+        byok_set: set = set()
+        user_fields_by_server: Dict[str, Dict[str, str]] = {}
+        for row in cred_rows:
+            payload = _decode_user_fields_payload(row.credential_b64)
+            if payload is not None:
+                user_fields_by_server[row.server_id] = payload
+            elif _decode_user_credential(row.credential_b64):
+                byok_set.add(row.server_id)
+        for server in servers:
+            if getattr(server, "is_byok", False):
+                server.has_user_credential = server.server_id in byok_set
+            if server_has_user_fields(server):
+                stored = user_fields_by_server.get(server.server_id, {})
+                server.missing_user_field_keys = [
+                    f["field_key"]
+                    for f in compute_missing_user_fields(server, stored)
+                    if isinstance(f.get("field_key"), str)
+                ]
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -955,56 +999,9 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
 
-        # Annotate has_user_credential (BYOK) and missing_user_field_keys
-        # (user_fields) for the calling user. Both flags share the same
-        # storage table, so we batch a single query covering both feature
-        # sets.
-        from litellm.proxy._experimental.mcp_server.db import (
-            _decode_user_credential,
-            _decode_user_fields_payload,
+        await _annotate_user_credential_flags(
+            redacted_mcp_servers, user_api_key_dict.user_id or ""
         )
-        from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
-
-        user_id = user_api_key_dict.user_id or ""
-        if user_id and _byok_prisma_client is not None:
-            relevant_server_ids = [
-                s.server_id
-                for s in redacted_mcp_servers
-                if getattr(s, "is_byok", False) or server_has_user_fields(s)
-            ]
-            if relevant_server_ids:
-                cred_rows = (
-                    await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                        where={
-                            "user_id": user_id,
-                            "server_id": {"in": relevant_server_ids},
-                        }
-                    )
-                )
-                # Build two indexes: one for BYOK presence, one mapping
-                # server_id → stored user-field values.
-                byok_set: set = set()
-                user_fields_by_server: Dict[str, Dict[str, str]] = {}
-                for row in cred_rows:
-                    payload = _decode_user_fields_payload(row.credential_b64)
-                    if payload is not None:
-                        user_fields_by_server[row.server_id] = payload
-                    else:
-                        # Anything that isn't a user-fields payload counts
-                        # as a BYOK credential for has_user_credential.
-                        decoded = _decode_user_credential(row.credential_b64)
-                        if decoded:
-                            byok_set.add(row.server_id)
-                for server in redacted_mcp_servers:
-                    if getattr(server, "is_byok", False):
-                        server.has_user_credential = server.server_id in byok_set
-                    if server_has_user_fields(server):
-                        stored = user_fields_by_server.get(server.server_id, {})
-                        server.missing_user_field_keys = [
-                            f["field_key"]
-                            for f in compute_missing_user_fields(server, stored)
-                            if isinstance(f.get("field_key"), str)
-                        ]
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
