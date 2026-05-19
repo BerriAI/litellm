@@ -76,7 +76,11 @@ class GigaChatModelResponseIterator:
             usage_data = chunk.get("usage", {})
             if usage_data:
                 usage = convert_usage(usage_data)
-                usage_block = ChatCompletionUsageBlock(**usage.dict())
+                usage_block = ChatCompletionUsageBlock(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                )
 
         if finish_reason is not None:
             is_finished = True
