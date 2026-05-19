@@ -6,7 +6,7 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 """
 
 import json
-from typing import Any, AsyncIterator, Dict, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -27,6 +27,7 @@ class BedrockAgentCoreA2ATransformation:
         litellm_params: Dict[str, Any],
         method: str = "message/send",
         stream: bool = False,
+        agent_extra_headers: Optional[Dict[str, str]] = None,
     ) -> Tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
@@ -37,6 +38,12 @@ class BedrockAgentCoreA2ATransformation:
             litellm_params: Agent's litellm_params (model, api_key, etc.)
             method: JSON-RPC method name (default: "message/send")
             stream: Whether this is a streaming request
+            agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
+                admin extra_headers) to forward on the upstream HTTP call. Merged into
+                the headers dict before signing so SigV4 includes them in the signature.
+                Note: in the JWT/Bearer path the AgentCore signer unconditionally sets
+                ``Authorization``, so use ``api_key`` (not ``agent_extra_headers``) to
+                override the bearer token.
 
         Returns:
             Tuple of (url, signed_headers, signed_body_bytes)
@@ -84,6 +91,10 @@ class BedrockAgentCoreA2ATransformation:
         runtime_user_id = agentcore_config._get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
+
+        # Merge per-request agent headers before signing so SigV4 covers them.
+        if agent_extra_headers:
+            headers.update(agent_extra_headers)
 
         # Sign the request (SigV4 or JWT depending on api_key presence)
         signed_headers, signed_body = agentcore_config.sign_request(

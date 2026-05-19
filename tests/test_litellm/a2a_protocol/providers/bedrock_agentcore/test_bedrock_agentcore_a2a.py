@@ -110,6 +110,53 @@ class TestTransformation:
         )
         assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "a" * 40
 
+    def test_agent_extra_headers_merged_into_signed_headers_jwt(self):
+        """agent_extra_headers should appear on the outbound request (JWT path)."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+            agent_extra_headers={"x-mcp-token": "mcp-abc", "x-tenant": "t1"},
+        )
+        assert headers["x-mcp-token"] == "mcp-abc"
+        assert headers["x-tenant"] == "t1"
+
+    def test_agent_extra_headers_signed_for_sigv4(self):
+        """agent_extra_headers must be present in the dict passed to _sign_request."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        litellm_params_no_key = {
+            "model": SAMPLE_MODEL,
+            "custom_llm_provider": "bedrock",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+        }
+
+        captured: dict = {}
+
+        def fake_sign(self, headers, **kwargs):
+            captured.update(headers)
+            return headers, b'{"jsonrpc":"2.0"}'
+
+        with patch(
+            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
+            new=fake_sign,
+        ):
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=litellm_params_no_key,
+                agent_extra_headers={"x-mcp-token": "mcp-abc"},
+            )
+        assert captured.get("x-mcp-token") == "mcp-abc"
+
     def test_sigv4_auth_when_no_api_key(self):
         """When no api_key, falls through to SigV4 signing."""
         from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -199,6 +246,39 @@ class TestNonStreaming:
 
             # Verify response is passed through
             assert result["result"]["message"]["parts"][0]["text"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_agent_extra_headers_forwarded_on_outbound_post(self):
+        """End-to-end: agent_extra_headers from the bridge land on the HTTP POST."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": "req-001",
+            "result": {},
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "litellm.a2a_protocol.providers.bedrock_agentcore.handler.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            config = BedrockAgentCoreA2AConfig()
+            await config.handle_non_streaming(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=SAMPLE_LITELLM_PARAMS,
+                agent_extra_headers={"x-mcp-token": "mcp-abc"},
+            )
+
+            sent_headers = mock_client.post.call_args.kwargs["headers"]
+            assert sent_headers.get("x-mcp-token") == "mcp-abc"
 
     @pytest.mark.asyncio
     async def test_a2a_error_response_passthrough(self):
@@ -301,6 +381,7 @@ class TestHandlerIntegration:
                 params=SAMPLE_PARAMS,
                 api_base=None,
                 litellm_params=SAMPLE_LITELLM_PARAMS,
+                agent_extra_headers=None,
             )
 
     @pytest.mark.asyncio
