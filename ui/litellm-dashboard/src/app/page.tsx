@@ -52,7 +52,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ConfigProvider, theme } from "antd";
 
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
@@ -109,12 +108,6 @@ function CreateKeyPageContent() {
   const [isClaudeCode, setIsClaudeCode] = useState(false);
   const [showClaudeCodePrompt, setShowClaudeCodePrompt] = useState(false);
   const [showClaudeCodeModal, setShowClaudeCodeModal] = useState(false);
-
-  // Dark mode state
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
-  };
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -450,10 +443,7 @@ function CreateKeyPageContent() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <ConfigProvider theme={{
-          algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        }}>
-          <ThemeProvider accessToken={accessToken}>
+      <ThemeProvider accessToken={accessToken}>
             {invitation_id ? (
               <UserDashboard
                 userID={userID}
@@ -471,7 +461,7 @@ function CreateKeyPageContent() {
                 createClicked={createClicked}
               />
             ) : (
-              <div className="flex flex-col min-h-screen">
+              <div className="flex flex-col min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
                 <Navbar
                   userID={userID}
                   userRole={userRole}
@@ -483,8 +473,6 @@ function CreateKeyPageContent() {
                   isPublicPage={false}
                   sidebarCollapsed={sidebarCollapsed}
                   onToggleSidebar={toggleSidebar}
-                  isDarkMode={isDarkMode}
-                  toggleDarkMode={toggleDarkMode}
                 />
                 <div className="flex flex-1">
                   <div className="mt-2">
@@ -682,7 +670,6 @@ function CreateKeyPageContent() {
               </div>
             )}
           </ThemeProvider>
-        </ConfigProvider>
     </Suspense>
   );
 }

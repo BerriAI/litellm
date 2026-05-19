@@ -979,7 +979,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
+      <div className={isEmbedded ? "w-full" : "min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"}>
         {/* Navigation - only show when not embedded */}
         {!isEmbedded && (
           <Navbar
@@ -991,8 +991,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
           />
         )}
 
