@@ -8,8 +8,11 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-from litellm.types.router import LiteLLM_Params
+from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.utils import get_valid_models
+
+
+_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -246,7 +249,11 @@ def _hydrate_litellm_credential_name(
 
     litellm_params = litellm_params.model_copy()
     for key, value in credential_values.items():
-        setattr(litellm_params, key, value)
+        if (
+            key in _CREDENTIAL_LITELLM_PARAM_FIELDS
+            and getattr(litellm_params, key, None) is None
+        ):
+            setattr(litellm_params, key, value)
     litellm_params.litellm_credential_name = None
     return litellm_params
 
