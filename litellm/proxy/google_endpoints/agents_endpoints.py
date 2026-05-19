@@ -5,14 +5,16 @@ Exposes Gemini's /v1beta/agents surface through the LiteLLM proxy so that
 user curl commands transfer 1-to-1 by swapping the host + auth header.
 
 Routes:
-  POST   /v1beta/agents                     → acreate_agent
-  GET    /v1beta/agents                     → alist_agents
-  GET    /v1beta/agents/{name}              → aget_agent
-  DELETE /v1beta/agents/{name}              → adelete_agent
-  GET    /v1beta/agents/{name}/versions     → alist_agent_versions
+  POST   /v1beta/agents                     -> acreate_agent
+  GET    /v1beta/agents                     -> alist_agents
+  GET    /v1beta/agents/{name}              -> aget_agent
+  DELETE /v1beta/agents/{name}              -> adelete_agent
+  GET    /v1beta/agents/{name}/versions     -> alist_agent_versions
 
 These are distinct from the A2A agent registry at /v1/agents.
 """
+
+import json
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -20,9 +22,61 @@ from fastapi.responses import ORJSONResponse
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_get_request_query_params,
+)
 
 router = APIRouter(tags=["gemini managed agents"])
+
+
+def _merge_query_params_into_data(data: dict, request: Request) -> dict:
+    """
+    For GET/DELETE endpoints that cannot carry a JSON body, read any
+    ``litellm_params_template`` (a JSON-encoded string) and plain
+    ``key=value`` pairs from the query string and merge them into *data*,
+    without overwriting keys that are already present (e.g. path params
+    like ``name`` or the fixed ``custom_llm_provider``).
+
+    This mirrors the ``litellm_params_template`` handling in
+    ``create_gemini_agent`` and allows multi-tenant callers to supply
+    per-request credentials such as ``api_key``:
+
+    .. code-block:: bash
+
+        # JSON-encoded template
+        curl "http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
+            -H "Authorization: Bearer sk-..."
+
+        # or directly as a flat query parameter
+        curl "http://localhost:4000/v1beta/agents?api_key=AIza..." \\
+            -H "Authorization: Bearer sk-..."
+    """
+    query_params = _safe_get_request_query_params(request)
+    if not query_params:
+        return data
+
+    # Handle JSON-encoded litellm_params_template first (e.g. api_key, api_base)
+    raw_template = query_params.pop("litellm_params_template", None)
+    if raw_template:
+        try:
+            template = (
+                json.loads(raw_template)
+                if isinstance(raw_template, str)
+                else raw_template
+            )
+        except (json.JSONDecodeError, ValueError):
+            template = {}
+        if isinstance(template, dict):
+            for key, value in template.items():
+                data.setdefault(key, value)
+
+    # Apply remaining flat query params (e.g. api_key=...) without
+    # overwriting path params or custom_llm_provider already in data.
+    for key, value in query_params.items():
+        data.setdefault(key, value)
+
+    return data
 
 
 def _proxy_server_imports():
@@ -139,14 +193,17 @@ async def list_gemini_agents(
     """
     List all custom agents on the Gemini side.
 
-    Example:
+    Pass per-request Gemini credentials via ``litellm_params_template``
+    (JSON-encoded) or as flat query parameters:
+
     ```bash
-    curl "http://localhost:4000/v1beta/agents" \\
+    curl "http://localhost:4000/v1beta/agents?api_key=AIza..." \\
         -H "Authorization: Bearer sk-..."
     ```
     """
     srv = _proxy_server_imports()
     data: dict = {"custom_llm_provider": "gemini"}
+    _merge_query_params_into_data(data, request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -191,14 +248,17 @@ async def get_gemini_agent(
     """
     Get a specific custom agent by name.
 
-    Example:
+    Pass per-request Gemini credentials via ``litellm_params_template``
+    (JSON-encoded) or as flat query parameters:
+
     ```bash
-    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent" \\
+    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent?api_key=AIza..." \\
         -H "Authorization: Bearer sk-..."
     ```
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
+    _merge_query_params_into_data(data, request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -243,14 +303,17 @@ async def delete_gemini_agent(
     """
     Delete a custom agent by name.
 
-    Example:
+    Pass per-request Gemini credentials via ``litellm_params_template``
+    (JSON-encoded) or as flat query parameters:
+
     ```bash
-    curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent" \\
+    curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent?api_key=AIza..." \\
         -H "Authorization: Bearer sk-..."
     ```
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
+    _merge_query_params_into_data(data, request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -295,14 +358,17 @@ async def list_gemini_agent_versions(
     """
     List versions of a custom agent.
 
-    Example:
+    Pass per-request Gemini credentials via ``litellm_params_template``
+    (JSON-encoded) or as flat query parameters:
+
     ```bash
-    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions" \\
+    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?api_key=AIza..." \\
         -H "Authorization: Bearer sk-..."
     ```
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
+    _merge_query_params_into_data(data, request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
