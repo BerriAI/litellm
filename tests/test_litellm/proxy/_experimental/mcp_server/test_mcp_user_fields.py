@@ -501,6 +501,74 @@ async def test_enforce_user_fields_no_user_id_raises():
 
 
 @pytest.mark.asyncio
+async def test_manager_call_tool_enforces_required_user_fields():
+    """``MCPServerManager.call_tool`` is invoked directly by the Responses
+    API path, so it must raise the same friendly 401 as ``execute_mcp_tool``
+    when a required user-field has no stored value — otherwise a caller
+    can bypass enforcement and dispatch with the value silently dropped.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import _user_fields_cache
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _user_fields_cache.clear()
+    srv = _gmail_server()
+    mgr = MCPServerManager()
+    mgr.registry["s1"] = srv
+    mgr.tool_name_to_mcp_server_name_mapping["gmail-prod-send"] = srv.name
+    mgr.tool_name_to_mcp_server_name_mapping["send"] = srv.name
+    user = UserAPIKeyAuth(api_key="hashed", user_id="responses-user")
+    _user_fields_cache[("responses-user", "s1")] = (None, 1e18)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await mgr.call_tool(
+            server_name="gmail-prod",
+            name="send",
+            arguments={},
+            user_api_key_auth=user,
+        )
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["error"] == "user_fields_missing"
+    assert "GMAIL_TOKEN" in [
+        m["field_key"] for m in exc_info.value.detail["missing_fields"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_manager_call_tool_enforces_when_no_user_id():
+    """Anonymous callers cannot satisfy required user-fields, so the manager
+    must still surface ``user_fields_missing`` rather than silently dispatch
+    without the configured headers."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    srv = _gmail_server()
+    mgr = MCPServerManager()
+    mgr.registry["s1"] = srv
+    mgr.tool_name_to_mcp_server_name_mapping["gmail-prod-send"] = srv.name
+    mgr.tool_name_to_mcp_server_name_mapping["send"] = srv.name
+    user = UserAPIKeyAuth(api_key="hashed")  # no user_id
+
+    with pytest.raises(HTTPException) as exc_info:
+        await mgr.call_tool(
+            server_name="gmail-prod",
+            name="send",
+            arguments={},
+            user_api_key_auth=user,
+        )
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["error"] == "user_fields_missing"
+
+
+@pytest.mark.asyncio
 async def test_build_stdio_env_merges_user_field_env_over_static():
     """Stored user_field env vars must take precedence over static server.env."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

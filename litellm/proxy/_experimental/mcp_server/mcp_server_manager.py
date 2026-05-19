@@ -1371,6 +1371,44 @@ class MCPServerManager:
         _, values = await _get_user_field_values_cached(mcp_server, user_api_key_auth)
         return values or {}
 
+    async def _enforce_required_user_fields(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> None:
+        """Raise the user_fields_missing 401 when required values are absent.
+
+        ``server.execute_mcp_tool`` runs the same gate for the streamable-HTTP
+        entrypoint, but ``call_tool`` is also called directly by the
+        Responses API path (``LiteLLM_Proxy_MCP_Handler``). Running the check
+        here covers every dispatch path through the manager so a caller
+        cannot skip enforcement by going around ``execute_mcp_tool``.
+        """
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            build_user_fields_missing_error,
+            compute_missing_user_fields,
+            server_has_user_fields,
+        )
+
+        if not server_has_user_fields(mcp_server):
+            return
+
+        stored_values = await self._resolve_user_field_values(
+            mcp_server, user_api_key_auth
+        )
+        missing = compute_missing_user_fields(mcp_server, stored_values or None)
+        if not missing:
+            return
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            _resolve_proxy_base_url_env,
+        )
+
+        detail = build_user_fields_missing_error(
+            mcp_server, missing, _resolve_proxy_base_url_env()
+        )
+        raise HTTPException(status_code=401, detail=detail)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -2955,6 +2993,8 @@ class MCPServerManager:
         mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
+
+        await self._enforce_required_user_fields(mcp_server, user_api_key_auth)
 
         #########################################################
         # Pre MCP Tool Call Hook
