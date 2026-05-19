@@ -256,6 +256,12 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
             "llm_provider-"
         ):  # return raw provider headers (incl. openai-compatible ones)
             processed_headers[k] = v
+        elif k.startswith("x-litellm-"):
+            # LiteLLM's own internal headers (e.g. x-litellm-attempted-fallbacks,
+            # x-litellm-model-group) are not LLM provider headers and must not be
+            # prefixed. Downstream consumers (proxy override, callers checking
+            # whether a fallback happened) look up the bare key.
+            processed_headers[k] = v
         else:
             additional_headers["{}-{}".format("llm_provider", k)] = v
 
