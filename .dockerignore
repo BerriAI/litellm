@@ -9,6 +9,25 @@ tests
 log.txt
 docker/Dockerfile.*
 
+# XCT in-tree docs site — Docusaurus build artifact; ships separately to a
+# static host (docs.xct.ai), never needs to live in the proxy image.
+xct-docs/
+
+# XCT SDKs publish independently to npm + PyPI; source is checked into the
+# main repo for codegen / single-PR releases (see sdk/README.md), but the
+# proxy image never imports them at runtime.
+sdk/
+
+# In-tree dashboard already has its own next.config + build pipeline run by
+# docker/build_admin_ui.sh; node_modules in particular should never be in
+# the build context. Source is COPYed in if build_admin_ui.sh is enabled.
+**/.next
+ui/litellm-dashboard/node_modules
+
+# Build artifacts and ephemeral state that shouldn't enter the snapshot.
+**/tsconfig.tsbuildinfo
+.docusaurus
+
 # Claude Flow generated files (must be excluded from Docker build)
 .claude/
 .claude-flow/
