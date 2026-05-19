@@ -87,22 +87,10 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     HTTP handler for Interactions API requests.
     """
 
-    def _handle_error(
-        self,
-        e: Exception,
-        provider_config: BaseInteractionsAPIConfig,
-    ) -> Exception:
-        """Handle errors from HTTP requests."""
-        if isinstance(e, httpx.HTTPStatusError):
-            error_message = e.response.text
-            status_code = e.response.status_code
-            headers = dict(e.response.headers)
-            return provider_config.get_error_class(
-                error_message=error_message,
-                status_code=status_code,
-                headers=headers,
-            )
-        return e
+    # _handle_error is inherited from _BaseHTTPHandler (accepts Any provider_config).
+    # AgentsHTTPHandler also extends this class and passes BaseAgentsAPIConfig, which
+    # is structurally compatible but a different type — keeping the override here with
+    # BaseInteractionsAPIConfig would cause type errors in the subclass.
 
     # =========================================================
     # CREATE INTERACTION
