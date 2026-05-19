@@ -54,6 +54,9 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/messages",
     "/v1/skills",
     "/v1/a2a/",
+    # Capability discovery (S1)
+    "/v1/capabilities",
+    "/.well-known/xct-capabilities",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",
