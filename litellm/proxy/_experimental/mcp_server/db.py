@@ -588,7 +588,27 @@ async def store_user_credential(
     server_id: str,
     credential: str,
 ) -> None:
-    """Store a user credential for a BYOK MCP server."""
+    """Store a user credential for a BYOK MCP server.
+
+    BYOK, OAuth2, and user-fields payloads share the same ``credential_b64``
+    column. Refuse to overwrite a stored user-fields payload so saving a
+    BYOK credential does not silently destroy the user's saved field values.
+    """
+
+    # Guard against silently overwriting a user-fields payload that shares
+    # the same (user_id, server_id) row.
+    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if (
+        existing is not None
+        and _decode_user_fields_payload(existing.credential_b64) is not None
+    ):
+        raise ValueError(
+            f"Existing credential for user {user_id} and server "
+            f"{server_id} holds user-fields values. Refusing to overwrite "
+            f"with a BYOK credential."
+        )
 
     encoded = encrypt_value_helper(credential)
     await prisma_client.db.litellm_mcpusercredentials.upsert(
@@ -609,12 +629,21 @@ async def get_user_credential(
     user_id: str,
     server_id: str,
 ) -> Optional[str]:
-    """Return credential for a user+server pair, or None."""
+    """Return credential for a user+server pair, or None.
+
+    The ``credential_b64`` column is multiplexed between BYOK strings,
+    OAuth2 blobs and user-fields blobs. A row holding a user-fields
+    payload is not a BYOK credential — return ``None`` so the caller
+    triggers the normal "no credential stored" flow instead of injecting
+    the raw JSON blob as an Authorization header.
+    """
 
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
+        return None
+    if _decode_user_fields_payload(row.credential_b64) is not None:
         return None
     return _decode_user_credential(row.credential_b64)
 

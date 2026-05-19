@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 import re
-import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
@@ -1348,6 +1347,10 @@ class MCPServerManager:
         ``server.execute_mcp_tool`` raises a 401 with a config_url before
         we even get here, so by the time injection happens we already
         know the values are present.
+
+        Delegates to ``server._get_user_field_values_cached`` so the
+        enforcement check and dispatch share a single cache + DB-lookup
+        implementation.
         """
         from litellm.proxy._experimental.mcp_server.user_fields import (
             coerce_user_fields,
@@ -1358,69 +1361,12 @@ class MCPServerManager:
         if user_api_key_auth is None or not getattr(user_api_key_auth, "user_id", None):
             return {}
 
-        # Reuse the cache and lookup function from server.py so we don't
-        # pay a second DB round-trip after the enforcement check populated
-        # the same cache key.
-        try:
-            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
-                _USER_FIELDS_CACHE_TTL,
-                _user_fields_cache,
-                _write_user_fields_cache,
-            )
-        except ImportError:
-            _user_fields_cache = {}  # type: ignore[assignment]
-            _USER_FIELDS_CACHE_TTL = 60
-            _write_user_fields_cache = None  # type: ignore[assignment]
-
-        user_id = user_api_key_auth.user_id or ""
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _user_fields_cache.get(cache_key) if _user_fields_cache else None
-        if cached is not None:
-            values, ts = cached
-            if time.monotonic() - ts < _USER_FIELDS_CACHE_TTL:
-                return values or {}
-
-        from litellm.proxy._experimental.mcp_server.db import get_user_field_values
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            return {}
-        values = await get_user_field_values(
-            prisma_client=prisma_client,
-            user_id=user_id,
-            server_id=mcp_server.server_id,
+        from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+            _get_user_field_values_cached,
         )
-        if _write_user_fields_cache is not None:
-            _write_user_fields_cache(user_id, mcp_server.server_id, values)
+
+        _, values = await _get_user_field_values_cached(mcp_server, user_api_key_auth)
         return values or {}
-
-    async def _resolve_user_field_headers(
-        self,
-        mcp_server: MCPServer,
-        user_api_key_auth: Optional["UserAPIKeyAuth"],
-    ) -> Dict[str, str]:
-        from litellm.proxy._experimental.mcp_server.user_fields import (
-            resolve_user_field_headers,
-        )
-
-        stored = await self._resolve_user_field_values(mcp_server, user_api_key_auth)
-        if not stored:
-            return {}
-        return resolve_user_field_headers(mcp_server, stored)
-
-    async def _resolve_user_field_env(
-        self,
-        mcp_server: MCPServer,
-        user_api_key_auth: Optional["UserAPIKeyAuth"],
-    ) -> Dict[str, str]:
-        from litellm.proxy._experimental.mcp_server.user_fields import (
-            resolve_user_field_env,
-        )
-
-        stored = await self._resolve_user_field_values(mcp_server, user_api_key_auth)
-        if not stored:
-            return {}
-        return resolve_user_field_env(mcp_server, stored)
 
     async def _create_mcp_client(
         self,
@@ -2841,10 +2787,22 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
 
-        # User-fields: inject each declared user field's stored value either
-        # as a header (http/sse) or env var (stdio path; handled below).
-        user_field_headers = await self._resolve_user_field_headers(
+        # User-fields: resolve the calling user's stored values once and
+        # reuse them for both the header (http/sse) and env (stdio) paths
+        # below — calling the resolver twice would repeat cache lookups
+        # and coercion work for the same data.
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            resolve_user_field_env,
+            resolve_user_field_headers,
+        )
+
+        stored_user_field_values = await self._resolve_user_field_values(
             mcp_server, user_api_key_auth
+        )
+        user_field_headers = (
+            resolve_user_field_headers(mcp_server, stored_user_field_values)
+            if stored_user_field_values
+            else {}
         )
         if user_field_headers:
             if extra_headers is None:
@@ -2880,8 +2838,10 @@ class MCPServerManager:
         if extra_headers is not None and len(extra_headers) == 0:
             extra_headers = None
 
-        user_field_env = await self._resolve_user_field_env(
-            mcp_server, user_api_key_auth
+        user_field_env = (
+            resolve_user_field_env(mcp_server, stored_user_field_values)
+            if stored_user_field_values
+            else {}
         )
         stdio_env = self._build_stdio_env(
             mcp_server, raw_headers, user_field_env=user_field_env or None

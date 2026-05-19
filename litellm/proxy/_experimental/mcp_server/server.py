@@ -121,6 +121,46 @@ def _write_user_fields_cache(
     _user_fields_cache[(user_id, server_id)] = (values, time.monotonic())
 
 
+async def _get_user_field_values_cached(
+    mcp_server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    """Return (user_id, stored_values) for the calling user.
+
+    ``stored_values`` is None when either no user_id is available or
+    the user has not yet saved any values. Reads through a 60s
+    in-memory cache so back-to-back tool calls don't hammer the DB.
+
+    Module-level (not nested) so ``mcp_server_manager`` can reuse the
+    same cache + DB-lookup path during dispatch — keeping two copies
+    in sync was a maintenance hazard.
+    """
+    user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+    if not user_id:
+        return None, None
+
+    cache_key = (user_id, mcp_server.server_id)
+    cached = _user_fields_cache.get(cache_key)
+    if cached is not None:
+        values, ts = cached
+        if time.monotonic() - ts < _USER_FIELDS_CACHE_TTL:
+            return user_id, values
+
+    from litellm.proxy._experimental.mcp_server.db import get_user_field_values
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return user_id, None
+
+    values = await get_user_field_values(
+        prisma_client=prisma_client,
+        user_id=user_id,
+        server_id=mcp_server.server_id,
+    )
+    _write_user_fields_cache(user_id, mcp_server.server_id, values)
+    return user_id, values
+
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -2066,41 +2106,6 @@ if MCP_AVAILABLE:
                 },
             )
 
-    async def _get_user_field_values_cached(
-        mcp_server: MCPServer,
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-    ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
-        """Return (user_id, stored_values) for the calling user.
-
-        ``stored_values`` is None when either no user_id is available or
-        the user has not yet saved any values. Reads through a 60s
-        in-memory cache so back-to-back tool calls don't hammer the DB.
-        """
-        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
-        if not user_id:
-            return None, None
-
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _user_fields_cache.get(cache_key)
-        if cached is not None:
-            values, ts = cached
-            if time.monotonic() - ts < _USER_FIELDS_CACHE_TTL:
-                return user_id, values
-
-        from litellm.proxy._experimental.mcp_server.db import get_user_field_values
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            return user_id, None
-
-        values = await get_user_field_values(
-            prisma_client=prisma_client,
-            user_id=user_id,
-            server_id=mcp_server.server_id,
-        )
-        _write_user_fields_cache(user_id, mcp_server.server_id, values)
-        return user_id, values
-
     async def _enforce_user_fields(
         mcp_server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2121,11 +2126,16 @@ if MCP_AVAILABLE:
 
         user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
         if not user_id:
-            # No identity means we can't look up stored values; treat as
-            # missing and let the user log in via the dashboard.
+            # No identity means we can't look up stored values. Compute the
+            # missing-required set against an empty value map and only raise
+            # when at least one required field is actually missing — servers
+            # whose user_fields are all optional must not be blocked here.
+            missing = compute_missing_user_fields(mcp_server, None)
+            if not missing:
+                return
             detail = build_user_fields_missing_error(
                 mcp_server,
-                compute_missing_user_fields(mcp_server, None),
+                missing,
                 _resolve_proxy_base_url_env(),
             )
             raise HTTPException(status_code=401, detail=detail)
