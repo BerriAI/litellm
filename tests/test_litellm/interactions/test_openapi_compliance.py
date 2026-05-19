@@ -179,17 +179,22 @@ class TestResponseCompliance:
         # `status` is an output-only field; validate against the response schema.
         schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026)
-        expected_statuses = [
+        # Google Interactions API uses lowercase status values (updated Feb 2026).
+        # Assert these are a subset rather than an exact match: the spec is
+        # fetched live, and Google adds new statuses additively (e.g.
+        # `budget_exceeded` in 2026) — that should not break our CI.
+        expected_statuses = {
             "in_progress",
             "requires_action",
             "completed",
             "failed",
             "cancelled",
             "incomplete",
-        ]
-        assert status_prop["enum"] == expected_statuses
-        print(f"✓ Status enum values: {expected_statuses}")
+        }
+        actual_statuses = set(status_prop["enum"])
+        missing = expected_statuses - actual_statuses
+        assert not missing, f"Status enum missing expected values: {missing}"
+        print(f"✓ Status enum values present: {sorted(expected_statuses)}")
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""
