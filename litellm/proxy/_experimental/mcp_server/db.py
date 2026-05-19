@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
-from prisma.errors import UniqueViolationError
+from prisma.errors import RecordNotFoundError, UniqueViolationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -668,7 +668,23 @@ async def delete_user_credential(
     user_id: str,
     server_id: str,
 ) -> None:
-    """Delete the user's stored credential for a BYOK MCP server."""
+    """Delete the user's stored credential for a BYOK MCP server.
+
+    BYOK, OAuth2, and user-fields payloads share the same
+    ``(user_id, server_id)`` row. Refuse to delete a row that holds a
+    user-fields payload so the BYOK delete endpoint does not silently
+    destroy the user's saved field values — mirroring the overwrite
+    guards on the write paths.
+    """
+    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if existing is None:
+        raise RecordNotFoundError()
+    if _decode_user_fields_payload(existing.credential_b64) is not None:
+        # Treat as "no BYOK credential present" so the endpoint reports
+        # has_credential=False without clobbering the user-fields row.
+        raise RecordNotFoundError()
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
@@ -681,11 +697,13 @@ async def delete_user_credential(
 # distinguish formats without an extra column.
 
 
-def _decode_user_fields_payload(stored: str) -> Optional[Dict[str, str]]:
-    """Return the field-values dict if ``stored`` holds a user-fields payload."""
-    decoded = _decode_user_credential(stored)
-    if decoded is None:
-        return None
+def _parse_user_fields_plaintext(decoded: str) -> Optional[Dict[str, str]]:
+    """Return the field-values dict if ``decoded`` is a user-fields JSON payload.
+
+    Takes already-decrypted plaintext so callers that have already paid
+    the decryption cost (e.g. annotating server-list responses) can avoid
+    a redundant decryption round-trip.
+    """
     try:
         parsed = json.loads(decoded)
     except (ValueError, TypeError):
@@ -696,6 +714,14 @@ def _decode_user_fields_payload(stored: str) -> Optional[Dict[str, str]]:
     if not isinstance(values, dict):
         return {}
     return {str(k): str(v) for k, v in values.items()}
+
+
+def _decode_user_fields_payload(stored: str) -> Optional[Dict[str, str]]:
+    """Return the field-values dict if ``stored`` holds a user-fields payload."""
+    decoded = _decode_user_credential(stored)
+    if decoded is None:
+        return None
+    return _parse_user_fields_plaintext(decoded)
 
 
 async def store_user_field_values(

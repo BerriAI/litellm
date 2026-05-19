@@ -1309,7 +1309,10 @@ class MCPServerManager:
         """
 
         if server.transport != MCPTransport.stdio:
-            return user_field_env or None
+            # Non-stdio transports (HTTP/SSE) don't take an env dict; user
+            # fields with env_var_name are stdio-only. Match the legacy
+            # contract of always returning None for non-stdio servers.
+            return None
         if not server.env:
             return user_field_env or None
 

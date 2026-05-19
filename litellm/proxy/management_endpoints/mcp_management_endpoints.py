@@ -860,7 +860,7 @@ if MCP_AVAILABLE:
         batched query."""
         from litellm.proxy._experimental.mcp_server.db import (
             _decode_user_credential,
-            _decode_user_fields_payload,
+            _parse_user_fields_plaintext,
         )
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
@@ -879,10 +879,15 @@ if MCP_AVAILABLE:
         byok_set: set = set()
         user_fields_by_server: Dict[str, Dict[str, str]] = {}
         for row in cred_rows:
-            payload = _decode_user_fields_payload(row.credential_b64)
+            # Decrypt once and classify, instead of paying the crypto
+            # cost twice (once for user-fields detection, once for BYOK).
+            decoded = _decode_user_credential(row.credential_b64)
+            if not decoded:
+                continue
+            payload = _parse_user_fields_plaintext(decoded)
             if payload is not None:
                 user_fields_by_server[row.server_id] = payload
-            elif _decode_user_credential(row.credential_b64):
+            else:
                 byok_set.add(row.server_id)
         for server in servers:
             if getattr(server, "is_byok", False):
