@@ -13,10 +13,18 @@ from litellm.llms.gemini.common_utils import (
     map_openai_size_to_gemini_image_config,
     supports_gemini_image_size,
 )
+from litellm.llms.gemini.image_usage_transformation import (
+    transform_gemini_image_usage,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import FileTypes, ImageObject, ImageResponse, OpenAIImage
+from litellm.types.utils import (
+    FileTypes,
+    ImageObject,
+    ImageResponse,
+    OpenAIImage,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -176,6 +184,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                     )
 
         model_response.data = cast(List[OpenAIImage], data_list)
+        if "usageMetadata" in response_json:
+            model_response.usage = transform_gemini_image_usage(
+                response_json["usageMetadata"]
+            )
         return model_response
 
     def _prepare_inline_image_parts(

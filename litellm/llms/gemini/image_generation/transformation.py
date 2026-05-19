@@ -9,18 +9,16 @@ from litellm.llms.gemini.common_utils import (
     map_openai_size_to_gemini_image_config,
     supports_gemini_image_size,
 )
+from litellm.llms.gemini.image_usage_transformation import (
+    transform_gemini_image_usage,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import GeminiImageGenerationRequest
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import (
-    ImageObject,
-    ImageResponse,
-    ImageUsage,
-    ImageUsageInputTokensDetails,
-)
+from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -83,36 +81,6 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             ):
                 mapped_params[k] = v
         return mapped_params
-
-    def _transform_image_usage(self, usage_metadata: dict) -> ImageUsage:
-        """
-        Transform Gemini usageMetadata to ImageUsage format
-        """
-        input_tokens_details = ImageUsageInputTokensDetails(
-            image_tokens=0,
-            text_tokens=0,
-        )
-
-        # Extract detailed token counts from promptTokensDetails
-        tokens_details = usage_metadata.get("promptTokensDetails", [])
-        for details in tokens_details:
-            if isinstance(details, dict):
-                modality = str(details.get("modality", "")).upper()
-                raw_token_count = details.get(
-                    "tokenCount", details.get("token_count", 0)
-                )
-                token_count = raw_token_count if isinstance(raw_token_count, int) else 0
-                if modality == "TEXT":
-                    input_tokens_details.text_tokens += token_count
-                elif modality == "IMAGE":
-                    input_tokens_details.image_tokens += token_count
-
-        return ImageUsage(
-            input_tokens=usage_metadata.get("promptTokenCount", 0),
-            input_tokens_details=input_tokens_details,
-            output_tokens=usage_metadata.get("candidatesTokenCount", 0),
-            total_tokens=usage_metadata.get("totalTokenCount", 0),
-        )
 
     def get_complete_url(
         self,
@@ -278,7 +246,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
-                model_response.usage = self._transform_image_usage(
+                model_response.usage = transform_gemini_image_usage(
                     response_data["usageMetadata"]
                 )
         else:

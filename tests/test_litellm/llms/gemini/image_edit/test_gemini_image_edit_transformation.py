@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
 
 
@@ -192,7 +193,16 @@ class TestGeminiImageEditTransformation:
                         ]
                     }
                 },
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 30},
+                    {"modality": "IMAGE", "tokenCount": 5},
+                ],
+            },
         }
 
         mock_response = MagicMock(spec=httpx.Response)
@@ -214,6 +224,19 @@ class TestGeminiImageEditTransformation:
         assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
             "utf-8"
         )
+
+        usage = image_response.model_dump()["usage"]
+        assert usage["input_tokens"] == 35
+        assert usage["output_tokens"] == 1716
+        assert usage["prompt_tokens"] == 35
+        assert usage["completion_tokens"] == 1716
+        assert usage["prompt_tokens_details"]["image_tokens"] == 5
+        assert usage["completion_tokens_details"]["image_tokens"] == 1716
+
+        logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj=image_response.model_dump()
+        )
+        assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}
