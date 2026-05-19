@@ -1433,18 +1433,30 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
-            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook)
+            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
+            # Skip entirely when the signer is not configured (avoid an unnecessary
+            # dict copy on every list call) and when the server has its own
+            # static Authorization header — admin-configured static auth must
+            # take precedence per-server so the signer doesn't silently
+            # overwrite e.g. an upstream API key.
             if user_api_key_auth is not None and not server.spec_path:
                 from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                    get_mcp_jwt_signer,
                     inject_mcp_jwt_headers_for_upstream,
                 )
 
-                extra_headers = await inject_mcp_jwt_headers_for_upstream(
-                    user_api_key_dict=user_api_key_auth,
-                    extra_headers=extra_headers,
-                    raw_headers=raw_headers,
-                    for_list_tools=True,
+                has_static_authorization = bool(server.static_headers) and any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in server.static_headers.keys()
                 )
+
+                if get_mcp_jwt_signer() is not None and not has_static_authorization:
+                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                        user_api_key_dict=user_api_key_auth,
+                        extra_headers=extra_headers,
+                        raw_headers=raw_headers,
+                        for_list_tools=True,
+                    )
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -2836,19 +2848,32 @@ class MCPServerManager:
         """
         start_time = datetime.datetime.now()
 
-        # Resolve server (REST may pass server_name + prefixed or unprefixed tool name)
+        # Resolve server (REST may pass server_name + prefixed or unprefixed tool name).
+        # Prefer prefixed-name lookup first so the resolution validates that the
+        # tool actually belongs to server_name. Fall back to name-based server
+        # resolution only when the tool->server mapping isn't populated (e.g.
+        # OAuth2 servers skipped during init).
         mcp_server: Optional[MCPServer] = None
-        for candidate in self.get_registry().values():
-            if normalize_server_name(candidate.name) == normalize_server_name(
-                server_name
+        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
+        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        if mcp_server is None:
+            for candidate in self.get_registry().values():
+                if normalize_server_name(candidate.name) == normalize_server_name(
+                    server_name
+                ):
+                    mcp_server = candidate
+                    break
+        if mcp_server is None:
+            # Last resort: lookup by unprefixed tool name. Only accept the
+            # match when it agrees with the caller's server_name — otherwise
+            # we'd silently dispatch to a different server than requested.
+            fallback = self._get_mcp_server_from_tool_name(name)
+            if fallback is not None and (
+                not server_name
+                or normalize_server_name(fallback.name)
+                == normalize_server_name(server_name)
             ):
-                mcp_server = candidate
-                break
-        if mcp_server is None:
-            prefixed_tool_name = add_server_prefix_to_name(name, server_name)
-            mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
-        if mcp_server is None:
-            mcp_server = self._get_mcp_server_from_tool_name(name)
+                mcp_server = fallback
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
