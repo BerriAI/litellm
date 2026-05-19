@@ -587,6 +587,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         # insufficient — a BM25 entry sent alongside a regular function tool
         # leaves a list with zero tool-search entries, which must still skip
         # the ``tool-search-tool-2025-10-19`` beta.
+        # Ref: https://github.com/BerriAI/litellm/issues/28083
         if tool_search_used and not any(
             isinstance(t, dict)
             and t.get("type")
