@@ -246,16 +246,29 @@ def was_auto_closed_by_agent_shin(repo: str, number: int) -> bool:
          commenting `@agent-shin reconsider`.
       2. A comment authored by the same bot login that performed the
          close contains the Agent Shin auto-close marker
-         (`AGENT_SHIN_AUTO_CLOSE_MARKER`). Matching the comment author
-         to the closer rules out closures by unrelated bots (stale,
-         cla-assistant, etc.) and spoofing via marker text pasted by
-         non-bot accounts.
+         (`AGENT_SHIN_AUTO_CLOSE_MARKER`) AND was posted in the current
+         open→closed cycle (after the most recent `reopened` event, if
+         any, and no later than the most recent `closed` event). This
+         anchors the marker to the close that's actually being
+         reconsidered: a stale-workflow closure that runs as
+         `github-actions[bot]` (because `actions/stale` uses
+         `secrets.GITHUB_TOKEN`, the same identity as Agent Shin) does
+         NOT post a marker in its own cycle, so the cycle-anchored check
+         refuses to override it even though a historical Agent Shin
+         marker comment still exists from an earlier cycle.
     """
     events = fetch_issue_events(repo, number)
-    last_closer: str | None = None
+    last_close_ts = ""
+    last_closer = ""
+    last_reopen_ts = ""
     for event in events:
-        if (event.get("event") or "").lower() == "closed":
+        kind = (event.get("event") or "").lower()
+        ts = event.get("created_at") or ""
+        if kind == "closed":
+            last_close_ts = ts
             last_closer = ((event.get("actor") or {}).get("login") or "").lower()
+        elif kind == "reopened":
+            last_reopen_ts = ts
     if not last_closer or not last_closer.endswith("[bot]"):
         return False
     for comment in fetch_issue_comments(repo, number):
@@ -263,8 +276,14 @@ def was_auto_closed_by_agent_shin(repo: str, number: int) -> bool:
         if login != last_closer:
             continue
         body = comment.get("body") or ""
-        if AGENT_SHIN_AUTO_CLOSE_MARKER in body:
-            return True
+        if AGENT_SHIN_AUTO_CLOSE_MARKER not in body:
+            continue
+        comment_ts = comment.get("created_at") or ""
+        if last_reopen_ts and comment_ts <= last_reopen_ts:
+            continue
+        if last_close_ts and comment_ts > last_close_ts:
+            continue
+        return True
     return False
 
 
