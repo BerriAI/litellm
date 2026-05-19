@@ -327,7 +327,7 @@ def handle_generic_response(
     reasoning_tokens: Optional[int] = None
     if (
         oci_usage.completionTokensDetails
-        and oci_usage.completionTokensDetails.reasoningTokens
+        and oci_usage.completionTokensDetails.reasoningTokens is not None
     ):
         reasoning_tokens = oci_usage.completionTokensDetails.reasoningTokens
     model_response.usage = Usage(  # type: ignore[attr-defined]

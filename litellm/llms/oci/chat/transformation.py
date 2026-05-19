@@ -195,11 +195,15 @@ class OCIChatConfig(BaseConfig):
         # - tool_choice is unsupported
         # - stop sequences key is "stopSequences" not "stop"
         # - n (numGenerations) is GENERIC-only
+        # The unsupported keys are kept in the map with value ``False`` so
+        # ``map_openai_params`` either drops them (under drop_params) or raises
+        # a clear error, rather than silently passing them through.
         self.openai_to_oci_cohere_param_map = {
             k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
-            if k not in ("tool_choice", "max_retries", "n")
         }
+        self.openai_to_oci_cohere_param_map["tool_choice"] = False
+        self.openai_to_oci_cohere_param_map["n"] = False
         # OCI Cohere models are not reasoning models; mark reasoning_effort
         # explicitly unsupported so callers either get a clear error or have
         # the param dropped under drop_params, rather than silently passing
@@ -316,7 +320,12 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        # If the caller provides a full endpoint URL, use it as-is.
+        # Otherwise construct the standard OCI GenAI chat endpoint from the region.
+        resolved_base = api_base or litellm.api_base
+        if resolved_base:
+            return resolved_base.rstrip("/")
+        base = get_oci_base_url(optional_params, None)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
     def _get_optional_params(

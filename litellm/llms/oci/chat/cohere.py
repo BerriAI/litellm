@@ -254,11 +254,14 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
         typed_chunk.index = 0
 
     # OCI Cohere's terminal SSE event re-sends the full assembled response in
-    # `text` alongside a populated `chatHistory`. Emitting that text would
-    # concatenate the whole response onto the already-streamed deltas.
-    # `chatHistory` is the correct discriminator: `finishReason` is a weaker
-    # signal that could in principle appear on a non-consolidated chunk.
-    is_terminal_consolidation = typed_chunk.chatHistory is not None
+    # `text` alongside a populated `chatHistory` and a non-null `finishReason`.
+    # Emitting that text would concatenate the whole response onto the
+    # already-streamed deltas. We require both signals to be present so that a
+    # future API change which adds `chatHistory` to intermediate chunks (or a
+    # rare early-populated case) doesn't silently drop legitimate token deltas.
+    is_terminal_consolidation = (
+        typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
+    )
     text = "" if is_terminal_consolidation else (typed_chunk.text or "")
 
     finish_reason = typed_chunk.finishReason
