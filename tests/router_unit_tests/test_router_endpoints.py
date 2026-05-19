@@ -31,23 +31,23 @@ import asyncio
 def model_list():
     return [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "gpt-4o",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -59,9 +59,9 @@ def model_list():
             },
         },
         {
-            "model_name": "claude-3-5-sonnet-20240620",
+            "model_name": "claude-sonnet-4-5-20250929",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "mock_response": "hi this is macintosh.",
             },
         },
@@ -323,21 +323,21 @@ async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
 
     if sync_mode:
         response = router.text_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
     else:
         ## Test 1: user facing function
         response = await router.atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
 
         ## Test 2: underlying function
         response_2 = await router._atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
@@ -359,12 +359,12 @@ async def test_router_with_empty_choices(model_list):
             completion_tokens=10,
             total_tokens=20,
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         object="chat.completion",
         created=1723081200,
     ).model_dump()
     response = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response=mock_response,
     )
@@ -1142,7 +1142,7 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
             {
                 "model_name": "azure-router-model",
                 "litellm_params": {
-                    "model": "azure/gpt-4",
+                    "model": "azure/gpt-5.5",
                     "api_key": "fake-key",
                     "api_base": "https://westus.api.cognitive.microsoft.com",
                 },

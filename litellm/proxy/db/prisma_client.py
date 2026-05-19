@@ -10,11 +10,62 @@ import subprocess
 import time
 import urllib
 import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
+
+
+@dataclass(frozen=True)
+class IAMEndpoint:
+    """Static parts of an RDS IAM-authenticated Postgres connection.
+
+    The IAM token rotates every ~15 minutes; everything else (host, port, user,
+    database name, schema) stays fixed. We capture the static fields once so
+    refresh just regenerates the token and reassembles the URL.
+    """
+
+    host: str
+    port: str
+    user: str
+    name: str
+    schema: Optional[str] = None
+
+    def build_url(self, token: str) -> str:
+        url = f"postgresql://{self.user}:{token}@{self.host}:{self.port}/{self.name}"
+        if self.schema:
+            url += f"?schema={self.schema}"
+        return url
+
+
+def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
+    """Parse an IAMEndpoint from a Postgres URL.
+
+    Used so a reader URL can drive its own IAM refresh without requiring
+    callers to set parallel DATABASE_HOST_READ_REPLICA / etc. env vars.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname or not parsed.username:
+        raise ValueError("Cannot parse IAM endpoint from URL: missing host or username")
+    name = (parsed.path or "/").lstrip("/")
+    if not name:
+        raise ValueError("Cannot parse IAM endpoint from URL: missing database name")
+    port = str(parsed.port) if parsed.port else "5432"
+    schema: Optional[str] = None
+    if parsed.query:
+        qs = urllib.parse.parse_qs(parsed.query)
+        schema_vals = qs.get("schema")
+        if schema_vals:
+            schema = schema_vals[0]
+    return IAMEndpoint(
+        host=parsed.hostname,
+        port=port,
+        user=parsed.username,
+        name=name,
+        schema=schema,
+    )
 
 
 class PrismaWrapper:
@@ -37,9 +88,32 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
-    def __init__(self, original_prisma: Any, iam_token_db_auth: bool):
+    def __init__(
+        self,
+        original_prisma: Any,
+        iam_token_db_auth: bool,
+        *,
+        db_url_env_var: str = "DATABASE_URL",
+        iam_endpoint: Optional[IAMEndpoint] = None,
+        recreate_uses_datasource: bool = False,
+        log_prefix: str = "",
+    ):
         self._original_prisma = original_prisma
         self.iam_token_db_auth = iam_token_db_auth
+
+        # Per-connection knobs so the same wrapper can be used for the writer
+        # (defaults: DATABASE_URL env, IAM endpoint from DATABASE_HOST/etc.,
+        # recreate via env reload) or for a reader (DATABASE_URL_READ_REPLICA
+        # env, IAM endpoint parsed from that URL, recreate via datasource
+        # override since Prisma only auto-reads DATABASE_URL).
+        self._db_url_env_var = db_url_env_var
+        self._iam_endpoint = iam_endpoint
+        self._recreate_uses_datasource = recreate_uses_datasource
+        # Tag every log line emitted by this wrapper instance so writer and
+        # reader can be told apart in interleaved output (e.g. "[writer] RDS
+        # IAM token refresh scheduled in 720 seconds"). Empty string (default)
+        # keeps backward-compatible logs for the single-DB case.
+        self._log_prefix = f"{log_prefix} " if log_prefix else ""
 
         # Background token refresh task management
         self._token_refresh_task: Optional[asyncio.Task] = None
@@ -157,7 +231,7 @@ class PrismaWrapper:
             Returns 0 if token should be refreshed immediately.
             Returns FALLBACK_REFRESH_INTERVAL_SECONDS if parsing fails.
         """
-        db_url = os.getenv("DATABASE_URL")
+        db_url = os.getenv(self._db_url_env_var)
         token = self._extract_token_from_db_url(db_url)
         expiration_time = self._parse_token_expiration(token)
 
@@ -199,12 +273,30 @@ class PrismaWrapper:
         return datetime.utcnow() > expiration_time
 
     def get_rds_iam_token(self) -> Optional[str]:
-        """Generate a new RDS IAM token and update DATABASE_URL."""
-        if self.iam_token_db_auth:
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+        """Generate a new RDS IAM token and update the configured DB URL env var.
 
+        When the wrapper was constructed with an explicit `iam_endpoint`
+        (typical for a reader wrapper whose host/port/user came from a parsed
+        URL), use that. Otherwise fall back to the legacy DATABASE_HOST/PORT/
+        USER/NAME/SCHEMA env vars (writer behavior).
+        """
+        if not self.iam_token_db_auth:
+            return None
+
+        from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+
+        if self._iam_endpoint is not None:
+            endpoint = self._iam_endpoint
+            token = generate_iam_auth_token(
+                db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
+            )
+            _db_url = endpoint.build_url(token)
+        else:
             db_host = os.getenv("DATABASE_HOST")
-            db_port = os.getenv("DATABASE_PORT")
+            # Default to the Postgres standard port; passing None to
+            # `generate_iam_auth_token` makes botocore embed the literal
+            # string "None" in the presigned URL, which then fails to parse.
+            db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
@@ -217,9 +309,8 @@ class PrismaWrapper:
             if db_schema:
                 _db_url += f"?schema={db_schema}"
 
-            os.environ["DATABASE_URL"] = _db_url
-            return _db_url
-        return None
+        os.environ[self._db_url_env_var] = _db_url
+        return _db_url
 
     async def recreate_prisma_client(
         self, new_db_url: str, http_client: Optional[Any] = None
@@ -231,6 +322,11 @@ class PrismaWrapper:
         synchronous `subprocess.Popen.wait()` that can freeze the asyncio event
         loop for 30-120+ seconds when the engine is stuck on TCP close,
         breaking `/health/liveliness` and causing Kubernetes pod restarts.
+
+        The writer wrapper relies on Prisma re-reading `DATABASE_URL` from env;
+        the reader wrapper opts into `recreate_uses_datasource=True` so the
+        new URL is passed explicitly via `datasource={"url": ...}` (Prisma
+        does not auto-read alternate env vars like DATABASE_URL_READ_REPLICA).
         """
         from prisma import Prisma  # type: ignore
 
@@ -238,10 +334,12 @@ class PrismaWrapper:
         if old_engine_pid > 0:
             await self._kill_engine_process(old_engine_pid)
 
+        kwargs: Dict[str, Any] = {}
         if http_client is not None:
-            self._original_prisma = Prisma(http=http_client)
-        else:
-            self._original_prisma = Prisma()
+            kwargs["http"] = http_client
+        if self._recreate_uses_datasource:
+            kwargs["datasource"] = {"url": new_db_url}
+        self._original_prisma = Prisma(**kwargs)
 
         await self._original_prisma.connect()
 
@@ -265,7 +363,8 @@ class PrismaWrapper:
 
         self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
         verbose_proxy_logger.info(
-            "Started RDS IAM token proactive refresh background task"
+            "%sStarted RDS IAM token proactive refresh background task",
+            self._log_prefix,
         )
 
     async def stop_token_refresh_task(self) -> None:
@@ -283,7 +382,9 @@ class PrismaWrapper:
         except asyncio.CancelledError:
             pass
         self._token_refresh_task = None
-        verbose_proxy_logger.info("Stopped RDS IAM token refresh background task")
+        verbose_proxy_logger.info(
+            "%sStopped RDS IAM token refresh background task", self._log_prefix
+        )
 
     async def _token_refresh_loop(self) -> None:
         """
@@ -294,7 +395,7 @@ class PrismaWrapper:
         This is more efficient than polling, requiring only 1 wake-up per token cycle.
         """
         verbose_proxy_logger.info(
-            f"RDS IAM token refresh loop started. "
+            f"{self._log_prefix}RDS IAM token refresh loop started. "
             f"Tokens will be refreshed {self.TOKEN_REFRESH_BUFFER_SECONDS}s before expiration."
         )
 
@@ -305,21 +406,25 @@ class PrismaWrapper:
 
                 if sleep_seconds > 0:
                     verbose_proxy_logger.info(
-                        f"RDS IAM token refresh scheduled in {sleep_seconds:.0f} seconds "
-                        f"({sleep_seconds / 60:.1f} minutes)"
+                        f"{self._log_prefix}RDS IAM token refresh scheduled in "
+                        f"{sleep_seconds:.0f} seconds ({sleep_seconds / 60:.1f} minutes)"
                     )
                     await asyncio.sleep(sleep_seconds)
 
                 # Refresh the token
-                verbose_proxy_logger.info("Proactively refreshing RDS IAM token...")
+                verbose_proxy_logger.info(
+                    "%sProactively refreshing RDS IAM token...", self._log_prefix
+                )
                 await self._safe_refresh_token()
 
             except asyncio.CancelledError:
-                verbose_proxy_logger.info("RDS IAM token refresh loop cancelled")
+                verbose_proxy_logger.info(
+                    "%sRDS IAM token refresh loop cancelled", self._log_prefix
+                )
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
-                    f"Error in RDS IAM token refresh loop: {e}. "
+                    f"{self._log_prefix}Error in RDS IAM token refresh loop: {e}. "
                     f"Retrying in {self.FALLBACK_REFRESH_INTERVAL_SECONDS}s..."
                 )
                 # On error, wait before retrying to avoid tight error loops
@@ -341,65 +446,75 @@ class PrismaWrapper:
                 await self.recreate_prisma_client(new_db_url)
                 self._last_refresh_time = datetime.utcnow()
                 verbose_proxy_logger.info(
-                    "RDS IAM token refreshed successfully. New token valid for ~15 minutes."
+                    "%sRDS IAM token refreshed successfully. New token valid for ~15 minutes.",
+                    self._log_prefix,
                 )
             else:
                 verbose_proxy_logger.error(
-                    "Failed to generate new RDS IAM token during proactive refresh"
+                    "%sFailed to generate new RDS IAM token during proactive refresh",
+                    self._log_prefix,
                 )
 
     def __getattr__(self, name: str):
         """
         Proxy attribute access to the underlying Prisma client.
 
-        If IAM token auth is enabled and the token is expired, this method
-        provides a synchronous fallback to refresh the token. However, this
-        should rarely be needed since the background task proactively refreshes
-        tokens before they expire.
+        If IAM token auth is enabled and the token is found expired here, the
+        proactive refresh task has missed its window. Behavior depends on
+        whether we're called from inside a running event loop:
 
-        FIXED: Now properly waits for reconnection to complete before returning,
-        instead of the previous fire-and-forget pattern that caused the bug.
+        - Inside the loop (typical: from a coroutine): schedule a refresh as a
+          background task and return the (stale) attribute. The caller's await
+          will likely fail with a connection error and be retried by upper
+          layers (`call_with_db_reconnect_retry`); by that time the refresh
+          has either completed or escalated to the proactive loop's error
+          path. We CANNOT block here — `run_coroutine_threadsafe(...)` +
+          `future.result()` from inside the same loop deadlocks the loop
+          (loop thread is blocked, scheduled coroutine never runs, 30s timeout).
+
+        - No running loop (sync caller, mostly tests): run the refresh in a
+          fresh loop and re-fetch the attribute.
         """
         original_attr = getattr(self._original_prisma, name)
 
         if self.iam_token_db_auth:
-            db_url = os.getenv("DATABASE_URL")
+            db_url = os.getenv(self._db_url_env_var)
 
             # Check if token is expired (should be rare if background task is running)
             if self.is_token_expired(db_url):
-                verbose_proxy_logger.warning(
-                    "RDS IAM token expired in __getattr__ - proactive refresh may have failed. "
-                    "Triggering synchronous fallback refresh..."
-                )
+                try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
 
-                new_db_url = self.get_rds_iam_token()
-                if new_db_url:
-                    loop = asyncio.get_event_loop()
-
-                    if loop.is_running():
-                        # FIXED: Actually wait for the reconnection to complete!
-                        # The previous code used fire-and-forget which caused the bug.
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.recreate_prisma_client(new_db_url), loop
-                        )
-                        try:
-                            # Wait up to 30 seconds for reconnection
-                            future.result(timeout=30)
-                            verbose_proxy_logger.info(
-                                "Synchronous token refresh completed successfully"
-                            )
-                        except Exception as e:
-                            verbose_proxy_logger.error(
-                                f"Failed to refresh token synchronously: {e}"
-                            )
-                            raise
-                    else:
-                        asyncio.run(self.recreate_prisma_client(new_db_url))
-
-                    # Get the NEW attribute after reconnection
-                    original_attr = getattr(self._original_prisma, name)
+                if running_loop is not None:
+                    verbose_proxy_logger.warning(
+                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "may have failed. Scheduling async refresh; the current "
+                        "request may fail and be retried with the fresh token.",
+                        self._log_prefix,
+                    )
+                    # Non-blocking: schedule the locked refresh on the
+                    # running loop. The reconnection lock inside
+                    # `_safe_refresh_token` coalesces concurrent triggers.
+                    running_loop.create_task(self._safe_refresh_token())
                 else:
-                    raise ValueError("Failed to get RDS IAM token")
+                    verbose_proxy_logger.warning(
+                        "%sRDS IAM token expired in __getattr__ — proactive refresh "
+                        "may have failed. Triggering synchronous fallback refresh...",
+                        self._log_prefix,
+                    )
+                    new_db_url = self.get_rds_iam_token()
+                    if new_db_url:
+                        asyncio.run(self.recreate_prisma_client(new_db_url))
+                        # Re-fetch attribute against the recreated Prisma instance.
+                        original_attr = getattr(self._original_prisma, name)
+                        verbose_proxy_logger.info(
+                            "%sSynchronous token refresh completed successfully",
+                            self._log_prefix,
+                        )
+                    else:
+                        raise ValueError("Failed to get RDS IAM token")
 
         return original_attr
 

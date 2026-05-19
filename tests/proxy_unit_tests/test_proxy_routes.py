@@ -189,3 +189,37 @@ def test_get_request_route_with_base_url_not_at_start():
     request = create_request("/api/genai/test")
     result = get_request_route(request)
     assert result == "/api/genai/test"
+
+
+def _create_request_with_host_header(path: str, host_header: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "path": path,
+            "query_string": b"",
+            "headers": [(b"host", host_header.encode())],
+            "client": ("127.0.0.1", 50000),
+            "root_path": "",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        "localhost/?x=1",
+        "localhost:4000/?x=1",
+        "localhost/#test",
+        "localhost:4000/#test",
+    ],
+)
+def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
+    for protected_path in ["/health", "/user/new", "/key/generate", "/get/internal_user_settings"]:
+        request = _create_request_with_host_header(path=protected_path, host_header=host_header)
+        result = get_request_route(request)
+        assert result == protected_path, (
+            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+        )

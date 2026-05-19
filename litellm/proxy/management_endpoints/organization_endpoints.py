@@ -1,3 +1,5 @@
+import math
+
 """
 Endpoints for /organization operations
 
@@ -220,18 +222,22 @@ async def new_organization(
         )
 
     # Validate budget values are not negative
-    if data.max_budget is not None and data.max_budget < 0:
+    if data.max_budget is not None and (
+        not math.isfinite(data.max_budget) or data.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
             },
         )
-    if data.soft_budget is not None and data.soft_budget < 0:
+    if data.soft_budget is not None and (
+        not math.isfinite(data.soft_budget) or data.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
             },
         )
 
@@ -482,18 +488,22 @@ async def update_organization(
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
 
     # Validate budget values are not negative
-    if data.max_budget is not None and data.max_budget < 0:
+    if data.max_budget is not None and (
+        not math.isfinite(data.max_budget) or data.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
             },
         )
-    if data.soft_budget is not None and data.soft_budget < 0:
+    if data.soft_budget is not None and (
+        not math.isfinite(data.soft_budget) or data.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
             },
         )
 

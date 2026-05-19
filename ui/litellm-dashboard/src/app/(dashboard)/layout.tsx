@@ -80,7 +80,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           isDarkMode={false}
           toggleDarkMode={() => { }}
         />
-        <DebugWarningBanner />
+        <DebugWarningBanner accessToken={accessToken} />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
             <SidebarProvider

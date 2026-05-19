@@ -142,6 +142,7 @@ if MCP_AVAILABLE:
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
+        MCPTransport,
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
@@ -152,11 +153,17 @@ if MCP_AVAILABLE:
         UserAPIKeyAuth,
         UserMCPManagementMode,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.auth.user_api_key_auth import (
+        _user_api_key_auth_builder,
+        user_api_key_auth,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body,
+        populate_request_with_path_params,
+    )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPCredentials
+    from litellm.types.mcp import MCPAuth, MCPCredentials
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -1064,6 +1071,24 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # stdio servers spawn a local subprocess on the proxy host with the
+        # configured command + args, so accepting them from non-admin callers
+        # would let a team member propose a server config that an admin could
+        # rubber-stamp into local code execution. Restrict stdio submission to
+        # the admin POST /v1/mcp/server path or to config.yaml.
+        if payload.transport == MCPTransport.stdio:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "stdio MCP servers cannot be submitted via the user "
+                        "registration workflow. Ask a proxy admin to add this "
+                        "server via POST /v1/mcp/server or to declare it in "
+                        "config.yaml."
+                    )
+                },
+            )
+
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -1492,6 +1517,105 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
+        """
+        Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
+
+        Tries the Authorization header first. Falls back to decoding the UI
+        'token' session cookie (set by SSO login) to extract the API key, which
+        allows browser-based OAuth redirects to work without an explicit
+        Authorization header.
+        """
+        import jwt as _jwt
+
+        from litellm.proxy.proxy_server import master_key
+
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header  # _get_bearer_token will strip "Bearer " prefix
+
+        if not api_key:
+            token_cookie = request.cookies.get("token")
+            if token_cookie and master_key:
+                try:
+                    decoded = _jwt.decode(
+                        token_cookie,
+                        master_key,
+                        algorithms=["HS256"],
+                        # UI session cookies may omit exp; don't require it.
+                        options={"verify_exp": False},
+                    )
+                    if decoded.get("login_method") in ("sso", "username_password"):
+                        cookie_key = decoded.get("key", "")
+                        if cookie_key:
+                            api_key = f"Bearer {cookie_key}"
+                except _jwt.InvalidTokenError:
+                    pass
+
+        # For delegate_auth_to_upstream servers the entire PKCE handshake
+        # (both /authorize browser redirect and /token authorization_code
+        # exchange) must work without a LiteLLM session.  /authorize is opened
+        # in a VS Code webview that may have no cookie; /token is a programmatic
+        # POST from VS Code. PKCE security (code_verifier) guarantees the
+        # authorization_code exchange cannot be replayed, so anonymous access
+        # is safe for that grant only.
+        #
+        # Importantly, NOT safe for refresh_token grants: ``mcp_token`` will
+        # forward the request to the upstream issuer with LiteLLM's stored
+        # ``client_secret`` attached, so any caller holding a refresh token
+        # issued to this client could mint fresh upstream access tokens through
+        # us. Require normal LiteLLM auth for those.
+        if not api_key:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            server_id = request.path_params.get("server_id", "")
+            if server_id:
+                _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if not _s:
+                    _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                if (
+                    _s
+                    and getattr(_s, "auth_type", None) == MCPAuth.oauth2
+                    and getattr(_s, "delegate_auth_to_upstream", False) is True
+                    # M2M servers fetch tokens with stored credentials; never
+                    # expose their /authorize or /token endpoints anonymously.
+                    and not _s.has_client_credentials
+                ):
+                    # For /token, require PKCE authorization_code; refresh_token
+                    # grants must NOT bypass auth (see comment above).
+                    path_lower = (request.url.path or "").rstrip("/").lower()
+                    if path_lower.endswith("/token"):
+                        body_data = await _read_request_body(request=request)
+                        grant_type = (body_data or {}).get("grant_type", "")
+                        if grant_type != "authorization_code":
+                            # Fall through to normal LiteLLM auth (will 401 if
+                            # no key supplied).
+                            pass
+                        else:
+                            return UserAPIKeyAuth()
+                    else:
+                        # /authorize and other PKCE-flow GETs are safe to
+                        # bypass: PKCE binds the upstream issuer's ``code``
+                        # to the original ``code_challenge`` so no anonymous
+                        # token can be minted via the redirect alone.
+                        return UserAPIKeyAuth()
+
+        request_data = await _read_request_body(request=request)
+        request_data = populate_request_with_path_params(
+            request_data=request_data, request=request
+        )
+
+        return await _user_api_key_auth_builder(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1542,12 +1666,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1587,12 +1711,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),

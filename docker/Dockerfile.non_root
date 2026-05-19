@@ -103,13 +103,12 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python3 bash openssl tzdata supervisor libsndfile nodejs && break || sleep 5; \
+      apk add --no-cache python3 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
     done
 
 COPY --from=builder /app /app
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
-COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \

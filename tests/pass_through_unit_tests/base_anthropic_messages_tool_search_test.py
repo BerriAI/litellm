@@ -98,9 +98,9 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         Returns the model string to use for tests.
 
         Examples:
-        - "anthropic/claude-sonnet-4-20250514"
-        - "vertex_ai/claude-sonnet-4@20250514"
-        - "bedrock/invoke/anthropic.claude-sonnet-4-20250514-v1:0"
+        - "anthropic/claude-sonnet-4-5-20250929"
+        - "vertex_ai/claude-sonnet-4-5@20250929"
+        - "bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0"
         """
         pass
 

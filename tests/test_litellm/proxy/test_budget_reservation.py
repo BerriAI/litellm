@@ -585,15 +585,24 @@ async def test_should_cap_known_estimate_to_remaining_budget(
 
 
 @pytest.mark.asyncio
-async def test_should_reserve_remaining_budget_when_output_cap_missing(
+async def test_should_clamp_reservation_to_default_when_output_cap_missing(
     spend_counter_state,
 ):
+    """When max_tokens is not specified, _estimate_output_tokens falls back to
+    DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK (16K), clamped by the model's
+    max_output_tokens. Reservation must be a bounded per-request amount
+    (mirroring parallel_request_limiter_v3's DEFAULT_MAX_TOKENS_ESTIMATE),
+    not the entire remaining headroom."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
+    )
+
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
         token="key-budget-uncapped",
         spend=0.2,
-        max_budget=1.0,
+        max_budget=10000.0,
     )
     await key_cache.async_set_cache(
         key="key-budget-uncapped",
@@ -602,22 +611,24 @@ async def test_should_reserve_remaining_budget_when_output_cap_missing(
     request_body = _request_body()
     request_body.pop("max_tokens")
 
+    output_cost_per_token = 1e-5  # roughly Opus 4.5/4.7 output rate
+    expected_cost = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK * output_cost_per_token
+
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
         return_value={
             "input_cost_per_token": 0.0,
-            "output_cost_per_token": 100.0,
-            "max_output_tokens": 200000,
+            "output_cost_per_token": output_cost_per_token,
+            "max_output_tokens": 200000,  # well above the 16K fallback
         },
     ):
-        assert (
-            estimate_request_max_cost(
-                request_body=request_body,
-                route="/chat/completions",
-                llm_router=None,
-            )
-            is None
+        estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
         )
+        assert estimated == pytest.approx(expected_cost)
+
         reservation = await reserve_budget_for_request(
             request_body=request_body,
             route="/chat/completions",
@@ -631,47 +642,45 @@ async def test_should_reserve_remaining_budget_when_output_cap_missing(
         )
 
     assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(0.8)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-uncapped"
-    ) == pytest.approx(1.0)
-
+    assert reservation["reserved_cost"] == pytest.approx(expected_cost)
     await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
-async def test_should_shrink_uncapped_reservation_when_counter_advances(
+async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequests(
     spend_counter_state,
-    monkeypatch,
 ):
+    """An adversarial caller sending max_tokens=999_999_999 must not be able
+    to inflate the per-request reservation up to the entire remaining team
+    headroom. _estimate_output_tokens clamps the explicit value at the
+    model's max_output_tokens — the model can only physically emit that
+    many tokens anyway, so anything more is both wasteful and a DoS surface."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
-        token="key-budget-uncapped-race",
-        spend=0.2,
-        max_budget=1.0,
+        token="key-budget-overrequest",
+        spend=0.0,
+        max_budget=10000.0,
     )
+    await key_cache.async_set_cache(
+        key="key-budget-overrequest",
+        value=valid_token,
+    )
+
     request_body = _request_body()
-    request_body.pop("max_tokens")
+    request_body["max_tokens"] = 999_999_999
 
-    from litellm.proxy.spend_tracking import budget_reservation
-
-    async def stale_counter_read(counter):
-        await counter_cache.async_increment_cache(
-            key=counter.counter_key,
-            value=0.3,
-        )
-        return 0.2
-
-    monkeypatch.setattr(
-        budget_reservation,
-        "_get_current_counter_value",
-        stale_counter_read,
-    )
+    output_cost_per_token = 1e-5
+    model_ceiling = 128_000
+    expected_cost = model_ceiling * output_cost_per_token
 
     with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=None,
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": output_cost_per_token,
+            "max_output_tokens": model_ceiling,
+        },
     ):
         reservation = await reserve_budget_for_request(
             request_body=request_body,
@@ -686,66 +695,91 @@ async def test_should_shrink_uncapped_reservation_when_counter_advances(
         )
 
     assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(0.7)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-uncapped-race"
-    ) == pytest.approx(1.0)
-
+    assert reservation["reserved_cost"] == pytest.approx(expected_cost)
     await release_budget_reservation(reservation)
-
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-uncapped-race"
-    ) == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio
-async def test_should_shrink_uncapped_reservation_multiple_times(
+async def test_should_reserve_image_generation_cost_per_image(
     spend_counter_state,
-    monkeypatch,
 ):
+    """Image-generation requests reserve `n × per-image cost` so concurrent
+    requests against a depleted budget cannot all bypass the admission gate.
+    The OpenAI ``dall-e-3`` entry exposes the per-image price as
+    ``input_cost_per_image`` (a naming quirk), while other providers use
+    ``output_cost_per_image`` — both must be honored."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
-        token="key-budget-double-resize",
-        spend=0.2,
-        max_budget=1.0,
-        team_id="team-budget-double-resize",
+        token="key-image-gen",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-image-gen", value=valid_token)
+
+    request_body = {"model": "dall-e-3", "prompt": "a cat", "n": 3}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_image": 0.04,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.12)  # 3 × $0.04
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reject_concurrent_image_request_against_depleted_budget(
+    spend_counter_state,
+):
+    """Greptile P1 regression: with image-gen reservation in place, a second
+    concurrent image request against a budget already pinned at the cap by
+    the first reservation must raise BudgetExceededError instead of
+    silently reaching the provider."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-deplete",
+        spend=0.0,
+        team_id="team-image-deplete",
     )
     team_object = LiteLLM_TeamTable(
-        team_id="team-budget-double-resize",
-        spend=0.2,
-        max_budget=1.0,
+        team_id="team-image-deplete",
+        max_budget=0.04,
+        spend=0.0,
     )
-    request_body = _request_body()
-    request_body.pop("max_tokens")
-
-    from litellm.proxy.spend_tracking import budget_reservation
-
-    stale_spend_by_counter_key = {
-        "spend:key:key-budget-double-resize": 0.3,
-        "spend:team:team-budget-double-resize": 0.4,
-    }
-
-    async def stale_counter_read(counter):
-        await counter_cache.async_increment_cache(
-            key=counter.counter_key,
-            value=stale_spend_by_counter_key[counter.counter_key],
-        )
-        return 0.2
-
-    monkeypatch.setattr(
-        budget_reservation,
-        "_get_current_counter_value",
-        stale_counter_read,
+    await key_cache.async_set_cache(
+        key=f"team_id:{team_object.team_id}",
+        value=team_object,
     )
+
+    request_body = {"model": "dall-e-3", "prompt": "a cat"}
 
     with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=None,
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_image": 0.04,
+        },
     ):
-        reservation = await reserve_budget_for_request(
+        first = await reserve_budget_for_request(
             request_body=request_body,
-            route="/chat/completions",
+            route="/v1/images/generations",
             llm_router=None,
             valid_token=valid_token,
             team_object=team_object,
@@ -754,32 +788,167 @@ async def test_should_shrink_uncapped_reservation_multiple_times(
             user_api_key_cache=key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        assert first is not None
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=request_body,
+                route="/v1/images/generations",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    await release_budget_reservation(first)
+
+
+@pytest.mark.asyncio
+async def test_should_skip_reservation_for_per_pixel_image_model(
+    spend_counter_state,
+):
+    """DALL-E 2-style per-pixel pricing depends on the requested ``size``,
+    which we don't decode here. Fall through to read-time enforcement
+    rather than guess."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-per-pixel",
+        spend=0.0,
+        max_budget=1.0,
+    )
+    await key_cache.async_set_cache(key="key-image-per-pixel", value=valid_token)
+
+    request_body = {"model": "dall-e-2", "prompt": "a cat", "size": "256x256"}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_pixel": 2.4414e-07,
+            "output_cost_per_pixel": 0.0,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+
+
+@pytest.mark.asyncio
+async def test_should_use_token_pricing_for_chat_model_with_image_cost_field(
+    spend_counter_state,
+):
+    """Several chat and embedding models carry ``input_cost_per_image`` /
+    ``output_cost_per_image`` to price multimodal vision *input*, not image
+    generation (e.g. gemini-3.1-pro-preview, azure/gpt-realtime-*,
+    amazon.titan-embed-image-v1). _estimate_image_generation_cost must gate
+    on ``mode`` so these models still go through the token-priced path —
+    otherwise a long chat reserves a fraction of a cent instead of the true
+    token cost."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-multimodal-chat",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-multimodal-chat", value=valid_token)
+
+    # Roughly the gemini-3.1-pro-preview shape: chat-mode model that
+    # carries an output_cost_per_image alongside token pricing.
+    output_cost_per_token = 1.2e-5
+    request_body = {
+        "model": "gemini-3.1-pro-preview",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 1000,
+    }
+    expected_cost = 1000 * output_cost_per_token  # token-priced path, not 1 × $0.00012
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": output_cost_per_token,
+            "output_cost_per_image": 0.00012,
+            "max_output_tokens": 64000,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(0.6)
-    assert [entry["reserved_cost"] for entry in reservation["entries"]] == [
-        pytest.approx(0.6),
-        pytest.approx(0.6),
-    ]
-    assert [entry["applied_adjustment"] for entry in reservation["entries"]] == [
-        pytest.approx(0.0),
-        pytest.approx(0.0),
-    ]
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-double-resize"
-    ) == pytest.approx(0.9)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:team:team-budget-double-resize"
-    ) == pytest.approx(1.0)
-
+    # Token-priced path: reservation ≈ output_tokens × output_cost_per_token,
+    # plus a small input-token contribution. Must NOT collapse to the
+    # per-image price ($0.00012) which would indicate the image-gen branch
+    # incorrectly fired for this chat model.
+    assert reservation["reserved_cost"] == pytest.approx(expected_cost, rel=0.05)
+    assert reservation["reserved_cost"] > 0.001  # well above per-image price
     await release_budget_reservation(reservation)
 
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:key:key-budget-double-resize"
-    ) == pytest.approx(0.3)
-    assert counter_cache.in_memory_cache.get_cache(
-        key="spend:team:team-budget-double-resize"
-    ) == pytest.approx(0.4)
+
+@pytest.mark.asyncio
+async def test_should_reserve_image_edit_cost_per_image(
+    spend_counter_state,
+):
+    """``image_edit`` models (Flux Kontext, Stability inpaint/outpaint, etc.)
+    bill per generated image just like ``image_generation`` and must get
+    the same atomic per-image reservation."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-edit",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-image-edit", value=valid_token)
+
+    request_body = {"model": "stability/inpaint", "prompt": "a cat", "n": 2}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_edit",
+            "output_cost_per_image": 0.05,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/edits",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.10)  # 2 × $0.05
+    await release_budget_reservation(reservation)
 
 
 def test_should_start_window_without_reset_at_at_duration_boundary():
@@ -1045,62 +1214,6 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-reserve-after-increment-failure"
     ) == pytest.approx(0.0)
-
-
-@pytest.mark.asyncio
-async def test_should_not_re_read_uncapped_budget_after_reservation_fallback(
-    spend_counter_state,
-    monkeypatch,
-):
-    _, key_cache = spend_counter_state
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
-    valid_token = UserAPIKeyAuth(
-        token="key-budget-uncapped-read-once",
-        spend=0.2,
-        max_budget=1.0,
-    )
-
-    from litellm.proxy.spend_tracking import budget_reservation
-
-    current_counter_reads = []
-
-    async def mock_get_current_counter_value(counter):
-        current_counter_reads.append(counter.counter_key)
-        return counter.fallback_spend
-
-    async def mock_reserve_counter(counter, reservation_cost):
-        return None
-
-    monkeypatch.setattr(
-        budget_reservation,
-        "_get_current_counter_value",
-        mock_get_current_counter_value,
-    )
-    monkeypatch.setattr(
-        budget_reservation,
-        "_reserve_counter",
-        mock_reserve_counter,
-    )
-
-    with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
-        return_value=None,
-    ):
-        reservation = await reserve_budget_for_request(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-            valid_token=valid_token,
-            team_object=None,
-            user_object=None,
-            prisma_client=None,
-            user_api_key_cache=key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    assert reservation is not None
-    assert reservation["reserved_cost"] == pytest.approx(0.8)
-    assert current_counter_reads == ["spend:key:key-budget-uncapped-read-once"]
 
 
 @pytest.mark.asyncio
@@ -1492,4 +1605,94 @@ async def test_should_reserve_all_budgeted_counters(spend_counter_state):
         counter_cache.in_memory_cache.get_cache(key="spend:team:team-budget-all") == 0.3
     )
 
-    await release_budget_reservation(reservation)
+
+@pytest.mark.asyncio
+async def test_should_not_block_concurrent_team_request_when_first_request_lacks_max_tokens(
+    spend_counter_state,
+):
+    """
+    Regression test: a team-bound request with no max_tokens must not pin the
+    team's spend counter at max_budget for the duration of the request.
+
+    Repro of the integration-test team being falsely budget-blocked at the
+    $2000 cap while DB spend is $0.144: the first request without max_tokens
+    used to reserve the entire remaining headroom, leaving any subsequent
+    request stuck behind a counter sitting at the cap until the success
+    callback finished reconciling.
+    """
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+
+    valid_token = UserAPIKeyAuth(
+        token="key-team-integration-tests",
+        spend=0.0,
+        team_id="team-integration-tests",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-integration-tests",
+        max_budget=2000.0,
+        spend=0.144,
+    )
+    await key_cache.async_set_cache(
+        key=f"team_id:{team_object.team_id}",
+        value=team_object,
+    )
+
+    request_body = _request_body()
+    request_body.pop("max_tokens")
+
+    # Realistic Opus 4.7 output pricing — the 16K fallback × $25/M ≈ $0.40
+    # reservation per request, leaving ~5000 admittable concurrent requests
+    # against a $2000 team budget.
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 2.5e-5,
+            "max_output_tokens": 128000,
+        },
+    ):
+        first_reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # The team counter must not be pinned at max_budget while the first
+        # request is in flight, otherwise concurrent requests false-positive.
+        team_counter_after_first = (
+            counter_cache.in_memory_cache.get_cache(
+                key=f"spend:team:{team_object.team_id}"
+            )
+            or 0.0
+        )
+        assert team_counter_after_first < team_object.max_budget, (
+            f"Team counter sat at {team_counter_after_first} after one uncapped "
+            f"reservation against a {team_object.max_budget} budget — concurrent "
+            "requests will be falsely blocked."
+        )
+
+        # Second request — same shape — must succeed without raising.
+        second_reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert second_reservation is not None
+
+    if first_reservation is not None:
+        await release_budget_reservation(first_reservation)
+    if second_reservation is not None:
+        await release_budget_reservation(second_reservation)

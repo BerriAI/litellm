@@ -95,11 +95,9 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
     )
-    if reservation_cost is None:
-        reservation_cost = await _get_smallest_remaining_budget(
-            counters=counters,
-            current_spend_by_counter_key=current_spend_by_counter_key,
-        )
+    # estimate_request_max_cost still returns None when the model is unknown
+    # to the cost map (no token-priced cost fields, e.g. image/audio routes).
+    # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
 
@@ -553,32 +551,6 @@ def _coerce_window(window: Any) -> dict:
     return {}
 
 
-async def _get_smallest_remaining_budget(
-    counters: List[_BudgetCounter],
-    current_spend_by_counter_key: Dict[str, float],
-) -> Optional[float]:
-    remaining_budget: Optional[float] = None
-    for counter in counters:
-        current_spend = await _get_current_counter_value(counter=counter)
-        current_spend_by_counter_key[counter.counter_key] = current_spend
-        remaining = counter.max_budget - current_spend
-        if remaining <= 0:
-            raise litellm.BudgetExceededError(
-                current_cost=current_spend,
-                max_budget=counter.max_budget,
-                message=(
-                    "Budget has been exceeded! "
-                    f"{counter.entity_type}={counter.entity_id} "
-                    f"Current cost: {current_spend}, "
-                    f"Max budget: {counter.max_budget}"
-                ),
-            )
-        remaining_budget = (
-            remaining if remaining_budget is None else min(remaining_budget, remaining)
-        )
-    return remaining_budget
-
-
 async def _reserve_counter(
     counter: _BudgetCounter,
     reservation_cost: float,
@@ -855,6 +827,13 @@ def _estimate_request_max_cost_for_model(
     if model_info is None:
         return None
 
+    image_cost = _estimate_image_generation_cost(
+        request_body=request_body,
+        model_info=model_info,
+    )
+    if image_cost is not None:
+        return image_cost
+
     input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
     output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
     input_tokens = _estimate_input_tokens(
@@ -884,6 +863,44 @@ def _estimate_request_max_cost_for_model(
         return None
 
     return cost
+
+
+def _estimate_image_generation_cost(
+    request_body: dict,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
+    """
+    Reserve `n × per-image cost` for image-generation requests so concurrent
+    requests against a depleted budget cannot all slip past the admission gate
+    onto the provider. Token-based pricing (e.g. gpt-image-1) is handled by
+    the chat-route token path; per-pixel and size/quality-tiered pricing
+    (DALL-E 2 size variants, premium tiers) are not handled here and fall
+    through to read-time enforcement.
+
+    The "output" vs "input" cost-per-image naming is inconsistent across
+    providers — OpenAI's dall-e-3 entry uses ``input_cost_per_image`` while
+    aiml/dall-e-3 uses ``output_cost_per_image`` — so both are summed.
+    """
+    # Gate strictly on `mode`. Several chat and embedding models carry
+    # ``input_cost_per_image`` / ``output_cost_per_image`` to price multimodal
+    # *vision input* (e.g. ``gemini-3.1-pro-preview``, ``azure/gpt-realtime-*``,
+    # ``amazon.titan-embed-image-v1``). Falling back to "treat as image-gen if
+    # an image cost field is present" would short-circuit the token-priced
+    # path for those models and reserve a fraction of a cent instead of the
+    # true per-token cost. All real image-generation entries in
+    # ``model_prices_and_context_window.json`` carry ``mode: image_generation``
+    # or ``mode: image_edit``, so the field-presence fallback is unnecessary.
+    if model_info.get("mode") not in ("image_generation", "image_edit"):
+        return None
+
+    output_cost_per_image = _to_float(model_info.get("output_cost_per_image"))
+    input_cost_per_image = _to_float(model_info.get("input_cost_per_image"))
+    cost_per_image = (output_cost_per_image or 0.0) + (input_cost_per_image or 0.0)
+    if cost_per_image <= 0:
+        return None
+
+    n = _to_int(request_body.get("n")) or 1
+    return cost_per_image * max(n, 1)
 
 
 def _get_model_cost_info(
@@ -946,6 +963,9 @@ def _estimate_input_tokens(
     return None
 
 
+DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK = 16384
+
+
 def _estimate_output_tokens(
     request_body: dict,
     route: str,
@@ -954,15 +974,27 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
+    requested: Optional[int] = None
     for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        max_tokens = _to_int(request_body.get(key))
-        if max_tokens is not None:
-            return max_tokens
+        requested = _to_int(request_body.get(key))
+        if requested is not None:
+            break
 
-    # If the caller did not cap output tokens, avoid reserving a model's
-    # theoretical maximum context. The caller can still admit one request by
-    # reserving the smallest remaining budget in reserve_budget_for_request().
-    return None
+    # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
+    # (1) Without an explicit cap we still need a finite reservation so the
+    #     atomic admission counter actually bounds concurrent in-flight cost
+    #     (mirrors parallel_request_limiter_v3's DEFAULT_MAX_TOKENS_ESTIMATE).
+    # (2) An adversarial caller cannot send max_tokens=999999999 to inflate
+    #     the reservation up to remaining team headroom and pin the counter
+    #     at the cap — the model can only physically emit max_output_tokens
+    #     anyway, so reserving more is both wasteful and a DoS surface.
+    model_ceiling = (
+        _to_int(model_info.get("max_output_tokens"))
+        or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    )
+    if requested is None:
+        requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    return min(requested, model_ceiling)
 
 
 def _count_text_tokens(model: str, text: Any) -> int:

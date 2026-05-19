@@ -113,9 +113,11 @@ test_logger_instance = TestCustomLogger()
 
         mock_s3_download.side_effect = mock_download
 
-        # Test loading with S3 URL
+        # Test loading with S3 URL — pass config_file_path to indicate
+        # this is a startup config-file load (the documented operator
+        # flow that the runtime gate preserves).
         test_url = "s3://test-bucket/test_custom_logger.test_logger_instance"
-        instance = get_instance_fn(test_url)
+        instance = get_instance_fn(test_url, config_file_path="/any/path")
 
         assert instance is not None
         assert hasattr(instance, "initialized")
@@ -141,9 +143,9 @@ test_logger_instance = TestCustomLogger()
 
         mock_gcs_download.side_effect = mock_download
 
-        # Test loading with GCS URL
+        # Test loading with GCS URL (startup config-file load path).
         test_url = "gcs://test-bucket/test_custom_logger.test_logger_instance"
-        instance = get_instance_fn(test_url)
+        instance = get_instance_fn(test_url, config_file_path="/any/path")
 
         assert instance is not None
         assert hasattr(instance, "initialized")
@@ -179,25 +181,27 @@ test_logger_instance = TestCustomLogger()
             get_instance_fn("ftp://bucket/module.instance")
 
     def test_invalid_url_format(self):
-        """Test error handling for invalid URL formats"""
+        """Test error handling for invalid URL formats (config-file load path)."""
         # Missing bucket
         with pytest.raises(ImportError, match="Invalid URL format"):
-            get_instance_fn("s3://")
+            get_instance_fn("s3://", config_file_path="/any/path")
 
         # Missing path
         with pytest.raises(ImportError, match="Invalid URL format"):
-            get_instance_fn("s3://bucket-only")
+            get_instance_fn("s3://bucket-only", config_file_path="/any/path")
 
         # Missing instance name
         with pytest.raises(ImportError, match="Invalid module specification"):
-            get_instance_fn("s3://bucket/module-only")
+            get_instance_fn("s3://bucket/module-only", config_file_path="/any/path")
 
         # Including .py extension (common mistake)
         with pytest.raises(
             ImportError,
             match="Don't include '\\.py' extension and you must specify the instance name",
         ):
-            get_instance_fn("s3://bucket/custom_guardrail.py")
+            get_instance_fn(
+                "s3://bucket/custom_guardrail.py", config_file_path="/any/path"
+            )
 
     @patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3")
     def test_download_failure_handling(self, mock_s3_download):
@@ -207,7 +211,7 @@ test_logger_instance = TestCustomLogger()
         test_url = "s3://test-bucket/failing_logger.instance"
 
         with pytest.raises(ImportError, match="Failed to download"):
-            get_instance_fn(test_url)
+            get_instance_fn(test_url, config_file_path="/any/path")
 
     @patch("litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3")
     def test_file_cleanup(self, mock_s3_download, sample_custom_logger_content):
@@ -223,7 +227,7 @@ test_logger_instance = TestCustomLogger()
         mock_s3_download.side_effect = mock_download
 
         test_url = "s3://test-bucket/test_custom_logger.test_logger_instance"
-        instance = get_instance_fn(test_url)
+        instance = get_instance_fn(test_url, config_file_path="/any/path")
 
         assert instance is not None
 

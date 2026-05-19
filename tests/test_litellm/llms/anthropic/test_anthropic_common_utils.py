@@ -1229,6 +1229,104 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
+    def test_strip_empty_text_blocks_from_anthropic_messages(self):
+        """Covers #22930.  The core regression scenario: an assistant message
+        with an empty text block alongside ``tool_use`` loses the empty block
+        and keeps the ``tool_use``; a whole message that reduces to no blocks
+        is dropped; whitespace-only text counts as empty; the caller's list
+        is never mutated."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
+        msgs = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "  \n "}, tu]},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 2 and out[0] is msgs[0]
+        assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
+        assert len(msgs[1]["content"]) == 2  # caller's content unchanged
+
+    def test_strip_empty_text_blocks_preserves_thinking_blocks(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": ""},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["thinking"]
+
+    def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": None},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
+    def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text"},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
+    def test_strip_empty_text_blocks_leaves_non_empty_text_alone(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert out[0] is msgs[0]  # untouched messages keep identity
+
+    def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": 123},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 

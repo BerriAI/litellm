@@ -9,7 +9,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -979,28 +979,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   }}
                 >
-                  <Option value="default" label="Default">
-                    <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Default</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call AI APIs + Management routes
-                      </div>
-                    </div>
-                  </Option>
                   <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>AI APIs</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      <Typography.Text strong>AI APIs</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         Can call only AI API routes (chat/completions, embeddings, etc.)
-                      </div>
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                   <Option value="management" label="Management">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Management</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      <Typography.Text strong>Management</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         Can call only management routes (user/team/key management)
-                      </div>
+                      </Typography.Paragraph>
+                    </div>
+                  </Option>
+                  <Option value="default" label="Full Access">
+                    <div style={{ padding: "4px 0" }}>
+                      <Typography.Text strong>Full Access</Typography.Text>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        Can call all routes (AI APIs, Management, and read-only)
+                      </Typography.Paragraph>
                     </div>
                   </Option>
                 </Select>

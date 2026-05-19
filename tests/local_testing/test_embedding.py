@@ -193,19 +193,12 @@ def _azure_ai_image_mock_response(*args, **kwargs):
     return new_response
 
 
-@pytest.mark.parametrize(
-    "model, api_base, api_key",
-    [
-        (
-            "azure_ai/Cohere-embed-v3-multilingual-2",
-            os.getenv("AZURE_AI_API_BASE"),
-            os.getenv("AZURE_AI_API_KEY"),
-        )
-    ],
-)
 @pytest.mark.parametrize("sync_mode", [True])  # , False
 @pytest.mark.asyncio
-async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
+async def test_azure_ai_embedding_image(sync_mode):
+    model = "azure_ai/Cohere-embed-v3-multilingual-2"
+    api_base = os.getenv("AZURE_AI_API_BASE")
+    api_key = os.getenv("AZURE_AI_API_KEY")
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")

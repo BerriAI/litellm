@@ -1610,6 +1610,22 @@
         "interactions": true
       }
     },
+    "nvidia_riva": {
+      "display_name": "Nvidia Riva (`nvidia_riva`)",
+      "url": "https://docs.litellm.ai/docs/providers/nvidia_riva",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "oci": {
       "display_name": "OCI (`oci`)",
       "url": "https://docs.litellm.ai/docs/providers/oci",

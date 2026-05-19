@@ -279,6 +279,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: flowState.clientSecret,
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
+        accessToken,
       });
 
       onTokenReceived(token);

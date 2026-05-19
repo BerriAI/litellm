@@ -396,17 +396,23 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full h-full overflow-y-auto p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
-          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          userAlias: currentKeyData.user?.user_alias ?? null,
+          createdBy:
+            currentKeyData.created_by_user?.user_alias ||
+            currentKeyData.created_by_user?.user_email ||
+            currentKeyData.created_by ||
+            "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+          expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
@@ -614,7 +620,7 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card className="overflow-y-auto max-h-[65vh]">
+            <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && canModifyKey && (

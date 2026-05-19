@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_filename
 from litellm.types.prompts.init_prompts import (
@@ -1295,6 +1296,13 @@ async def test_prompt(
         }
         data.update(optional_params)
 
+        is_request_body_safe(
+            request_body=data,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            model=data.get("model", ""),
+        )
+
         # Use ProxyBaseLLMRequestProcessing to go through all proxy logic
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         result = await base_llm_response_processor.base_process_llm_request(
@@ -1323,6 +1331,8 @@ async def test_prompt(
 
     except HTTPException as e:
         raise e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error testing prompt: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -227,6 +227,132 @@ def test_wildcard_ignores_reasoning_split_model_info(monkeypatch):
     assert _resolve_health_check_max_tokens(model_info, litellm_params) is None
 
 
+# ---------------------------------------------------------------------------
+# image_generation must not receive max_tokens.
+#
+# _update_litellm_params_for_health_check injected `max_tokens` for every
+# deployment. For `mode: image_generation` that leaked into OpenAI
+# `/v1/images/generations`, which strictly rejects unknown fields with
+# `400 "Unknown parameter: 'max_tokens'"`, marking dall-e-* and
+# gpt-image-1 as permanently unhealthy even though their actual image
+# calls succeed. `messages` still gets injected (downstream
+# `_filter_model_params` already strips it for non-chat handlers).
+# ---------------------------------------------------------------------------
+
+
+def test_image_generation_mode_skips_max_tokens():
+    """image_generation must not receive max_tokens."""
+    model_info = {"mode": "image_generation"}
+    litellm_params = {"model": "openai/dall-e-3", "api_key": "sk-test"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "max_tokens" not in updated
+    # connection-level params must still pass through unchanged
+    assert updated["api_key"] == "sk-test"
+
+
+def test_health_check_max_tokens_value_is_ignored_for_non_chat_modes():
+    """A configured `health_check_max_tokens` *value* (the int that controls
+    how many tokens to inject) is still skipped when the mode is outside the
+    allow-list — the inject decision runs before value resolution, so the
+    value never reaches `_resolve_health_check_max_tokens`. Note this is
+    distinct from `health_check_supports_max_tokens` (the bool that toggles
+    injection on/off per deployment)."""
+    model_info = {"mode": "image_generation", "health_check_max_tokens": 50}
+    litellm_params = {"model": "openai/dall-e-3"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "max_tokens" not in updated
+
+
+def test_chat_mode_still_injects_max_tokens():
+    """Regression guard: the chat-style probe payload is unchanged."""
+    model_info = {"mode": "chat"}
+    litellm_params = {"model": "gpt-4"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 5
+
+
+def test_no_mode_still_injects_max_tokens():
+    """Regression guard: model_info without `mode` keeps the legacy path."""
+    model_info: dict = {}
+    litellm_params = {"model": "gpt-4"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Allow-list behavior: only chat-style modes (chat / completion / responses)
+# receive max_tokens. Every other mode is skipped by default.
+#
+# Per-deployment override via `health_check_supports_max_tokens` lets the
+# operator force injection on (e.g. a non-listed but max_tokens-capable
+# endpoint where they want to bound probe token usage) or off (e.g. a
+# chat-style provider with a strict schema that rejects unknown fields).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["chat", "completion", "responses"])
+def test_chat_style_modes_inject_max_tokens(mode):
+    updated = _update_litellm_params_for_health_check(
+        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
+    )
+
+    assert updated["max_tokens"] == 5
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "embedding",
+        "image_generation",
+        "image_edit",
+        "audio_speech",
+        "audio_transcription",
+        "rerank",
+        "video_generation",
+        "ocr",
+        "search",
+        "moderation",
+    ],
+)
+def test_non_chat_modes_skip_max_tokens(mode):
+    updated = _update_litellm_params_for_health_check(
+        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
+    )
+
+    assert "max_tokens" not in updated
+
+
+def test_explicit_override_true_forces_injection_outside_allowlist():
+    """Operator opts a non-listed deployment in to bound probe token usage."""
+    model_info = {
+        "mode": "image_generation",
+        "health_check_supports_max_tokens": True,
+    }
+    litellm_params = {"model": "openai/some-future-image-model"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_tokens"] == 5
+
+
+def test_explicit_override_false_suppresses_injection_inside_allowlist():
+    """Operator opts a chat-style deployment out (strict-schema provider)."""
+    model_info = {"mode": "chat", "health_check_supports_max_tokens": False}
+    litellm_params = {"model": "openai/strict-schema-chat"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "max_tokens" not in updated
+
+
 def test_update_litellm_params_health_check_reasoning_effort():
     """model_info.health_check_reasoning_effort sets reasoning_effort for chat-style health checks."""
     model_info = {"health_check_reasoning_effort": "low"}

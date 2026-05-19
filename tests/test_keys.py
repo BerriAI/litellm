@@ -62,7 +62,7 @@ async def generate_key(
     i,
     budget=None,
     budget_duration=None,
-    models=["azure-models", "gpt-4", "dall-e-3"],
+    models=["azure-models", "gpt-4", "gpt-image-1"],
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -235,7 +235,7 @@ async def chat_completion(session, key, model="gpt-4"):
                 pass
 
 
-async def image_generation(session, key, model="dall-e-3"):
+async def image_generation(session, key, model="gpt-image-1"):
     url = "http://0.0.0.0:4000/v1/images/generations"
     headers = {
         "Authorization": f"Bearer {key}",

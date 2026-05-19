@@ -1,9 +1,12 @@
 import asyncio
 import threading
 import time
-from typing import Dict, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
+
+# Azure AD scope for Redis Cache for Azure.
+AZURE_REDIS_SCOPE = "https://redis.azure.com/.default"
 
 # GCP IAM tokens are valid for 1 hour. Cache for 55 minutes to refresh before expiry.
 _GCP_IAM_TOKEN_TTL_SECONDS = 3300
@@ -101,3 +104,33 @@ class GCPIAMCredentialProvider(CredentialProvider):
             _get_cached_gcp_iam_token, self._gcp_service_account
         )
         return (token,)
+
+
+class AzureADCredentialProvider(CredentialProvider):
+    """
+    redis.credentials.CredentialProvider implementation that supplies Azure AD
+    tokens for Redis authentication.
+
+    Wraps an azure-identity credential object so the Azure SDK's internal token
+    cache and silent refresh are honoured on every Redis connection. This avoids
+    the static-token-baked-in-pool issue where pool-managed connections would
+    fail authentication after the initial token expired (~1 hour TTL).
+    """
+
+    def __init__(self, credential: Any, username: Optional[str] = None) -> None:
+        self._credential = credential
+        self._username = username
+
+    def get_credentials(self) -> Union[Tuple[str], Tuple[str, str]]:
+        token = self._credential.get_token(AZURE_REDIS_SCOPE).token
+        if self._username:
+            return (self._username, token)
+        return (token,)
+
+    async def get_credentials_async(self) -> Union[Tuple[str], Tuple[str, str]]:
+        token_obj = await asyncio.to_thread(
+            self._credential.get_token, AZURE_REDIS_SCOPE
+        )
+        if self._username:
+            return (self._username, token_obj.token)
+        return (token_obj.token,)

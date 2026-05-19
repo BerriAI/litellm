@@ -2485,7 +2485,9 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], [], {})
 
@@ -2506,6 +2508,100 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
         pass
 
     assert called_model_lists == [[{"model_name": "model-a"}]]
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_legacy_three_arg_stub(
+    monkeypatch,
+):
+    """Monkeypatched perform_health_check with only base kwargs should still run."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    result = await proxy_server._run_direct_health_check_with_instrumentation(
+        [{"model_name": "m"}],
+        True,
+        1,
+        {"enabled": True, "source": "test", "cycle_id": "c1"},
+    )
+    assert result == ([], [], {})
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_instrumentation_only(
+    monkeypatch,
+):
+    """Stub that accepts instrumentation_context but not health_check filter kwargs."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, instrumentation_context=None
+    ):
+        seen.append(instrumentation_context)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        False,
+        2,
+        {"enabled": True, "source": "test", "cycle_id": "c2"},
+    )
+    assert len(seen) == 1
+    assert seen[0]["cycle_id"] == "c2"
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
+    monkeypatch,
+):
+    """Stub that accepts health_check_skip_disabled_background_models but not instrumentation."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list,
+        details,
+        max_concurrency=None,
+        health_check_skip_disabled_background_models=False,
+    ):
+        seen.append(health_check_skip_disabled_background_models)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        True,
+        None,
+        {"enabled": False},
+    )
+    assert len(seen) == 1
+    assert seen[0] is False
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_non_kw_typeerror_reraises(
+    monkeypatch,
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(**kwargs):
+        raise TypeError("unsupported operand type(s)")
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    with pytest.raises(TypeError, match="unsupported operand"):
+        await proxy_server._run_direct_health_check_with_instrumentation(
+            [],
+            True,
+            1,
+            {},
+        )
 
 
 def test_get_timeout_from_request():

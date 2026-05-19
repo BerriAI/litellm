@@ -74,7 +74,7 @@ def validate_stream_chunk(chunk):
 def test_basic_response():
     client = get_test_client()
     response = client.responses.create(
-        model="gpt-4o", input="just respond with the word 'ping'"
+        model="gpt-5.5", input="just respond with the word 'ping'"
     )
     print("basic response=", response)
 
@@ -94,7 +94,7 @@ def test_basic_response():
 def test_streaming_response():
     client = get_test_client()
     stream = client.responses.create(
-        model="gpt-4o", input="just respond with the word 'ping'", stream=True
+        model="gpt-5.5", input="just respond with the word 'ping'", stream=True
     )
 
     collected_chunks = []
@@ -117,7 +117,7 @@ def test_bad_request_bad_param_error():
     with pytest.raises(BadRequestError):
         # Trigger error with invalid model name
         client.responses.create(
-            model="gpt-4o", input="This should fail", temperature=2000
+            model="gpt-5.5", input="This should fail", temperature=2000
         )
 
 
@@ -137,7 +137,7 @@ def test_cancel_response():
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         response = client.responses.create(
-            model="gpt-4o", input="just respond with the word 'ping'", background=True
+            model="gpt-5.5", input="just respond with the word 'ping'", background=True
         )
         print("basic response=", response)
 
@@ -160,7 +160,7 @@ def test_cancel_streaming_response():
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         stream = client.responses.create(
-            model="gpt-4o",
+            model="gpt-5.5",
             input="just respond with the word 'ping'",
             stream=True,
             background=True,

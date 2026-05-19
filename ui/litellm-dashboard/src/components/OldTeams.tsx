@@ -80,8 +80,7 @@ interface TeamProps {
 }
 
 interface FilterState {
-  team_id: string;
-  team_alias: string;
+  search: string;
   organization_id: string;
   sort_by: string;
   sort_order: "asc" | "desc";
@@ -200,8 +199,7 @@ const Teams: React.FC<TeamProps> = ({
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [filters, setFilters] = useState<FilterState>({
-    team_id: "",
-    team_alias: "",
+    search: "",
     organization_id: "",
     sort_by: "created_at",
     sort_order: "desc",
@@ -215,7 +213,7 @@ const Teams: React.FC<TeamProps> = ({
     sortBy?: string;
     sortOrder?: string;
     organizationID?: string;
-    teamAlias?: string;
+    search?: string;
   } = {}) => {
     if (!accessToken) return;
     const page = opts.page ?? currentPage;
@@ -223,7 +221,7 @@ const Teams: React.FC<TeamProps> = ({
     const sortBy = opts.sortBy ?? filters.sort_by;
     const sortOrder = opts.sortOrder ?? filters.sort_order;
     const organizationID = opts.organizationID ?? filters.organization_id;
-    const teamAlias = opts.teamAlias ?? filters.team_alias;
+    const search = opts.search ?? filters.search;
 
     setIsLoading(true);
     setFetchError(null);
@@ -234,7 +232,7 @@ const Teams: React.FC<TeamProps> = ({
         size,
         {
           organizationID: organizationID || null,
-          team_alias: teamAlias || null,
+          search: search || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: sortBy || null,
           sortOrder: sortOrder || null,
@@ -632,9 +630,9 @@ const Teams: React.FC<TeamProps> = ({
     setIsSearching(true);
     searchDebounceRef.current = setTimeout(async () => {
       try {
-        setFilters((prev) => ({ ...prev, team_alias: value }));
+        setFilters((prev) => ({ ...prev, search: value }));
         setCurrentPage(1);
-        await fetchTeamsV2({ page: 1, teamAlias: value });
+        await fetchTeamsV2({ page: 1, search: value });
       } finally {
         setIsSearching(false);
       }
@@ -653,7 +651,7 @@ const Teams: React.FC<TeamProps> = ({
         pageSize,
         {
           organizationID: newFilters.organization_id || null,
-          team_alias: newFilters.team_alias || null,
+          search: newFilters.search || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: newFilters.sort_by || null,
           sortOrder: newFilters.sort_order || null,
@@ -670,15 +668,14 @@ const Teams: React.FC<TeamProps> = ({
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setIsSearching(false);
     const resetFilters: FilterState = {
-      team_id: "",
-      team_alias: "",
+      search: "",
       organization_id: "",
       sort_by: "created_at",
       sort_order: "desc",
     };
     setFilters(resetFilters);
     setCurrentPage(1);
-    fetchTeamsV2({ page: 1, organizationID: "", teamAlias: "", sortBy: "created_at", sortOrder: "desc" });
+    fetchTeamsV2({ page: 1, organizationID: "", search: "", sortBy: "created_at", sortOrder: "desc" });
   };
 
   const { token } = theme.useToken();
@@ -945,7 +942,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Input
                   prefix={<SearchIcon size={16} />}
                   suffix={isSearching ? <AntDLoadingSpinner size="small" /> : null}
-                  placeholder="Search teams by name..."
+                  placeholder="Search teams by name or ID..."
                   onChange={(e) => handleSearchChange(e.target.value)}
                   allowClear
                   style={{ maxWidth: 400 }}

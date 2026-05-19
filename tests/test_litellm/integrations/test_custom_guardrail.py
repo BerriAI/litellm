@@ -929,6 +929,91 @@ class TestEventTypeLogging:
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
 
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_if_function_already_recorded(
+        self,
+    ):
+        """When a wrapped guardrail function records its own entry directly
+        (e.g. block_code_execution.apply_guardrail records a rich
+        ``[detections...]`` payload), the decorator must NOT also append its
+        own ``"allow"``/raw-response entry — otherwise every backend
+        (OTEL spans, Datadog, Langfuse, spend logs) double-records one
+        logical guardrail invocation."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response=[{"action_taken": "block"}],
+                    request_data=request_data,
+                    guardrail_status="success",
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                return inputs
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=request_data
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1, (
+            f"Decorator must not double-record when the wrapped function "
+            f"already appended its own entry; got {len(logged_info)} entries"
+        )
+        assert logged_info[0]["guardrail_response"] == [{"action_taken": "block"}]
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_on_exception_if_function_already_recorded(
+        self,
+    ):
+        """Same as above on the failure path: if the wrapped function
+        appended an entry in its ``finally`` block before re-raising, the
+        decorator must just re-raise without auto-recording on top."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                try:
+                    raise ValueError("blocked")
+                finally:
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_json_response=[{"action_taken": "block"}],
+                        request_data=request_data,
+                        guardrail_status="guardrail_intervened",
+                        event_type=GuardrailEventHooks.pre_call,
+                    )
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        with pytest.raises(ValueError, match="blocked"):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["x"]}, request_data=request_data
+            )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_status"] == "guardrail_intervened"
+
     def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
         self,
     ):
@@ -1086,9 +1171,12 @@ class TestCustomGuardrailSpendLogMatchRedaction:
             ][0]["match"]
             == "[REDACTED]"
         )
-        assert raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "GG"
+        assert (
+            raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+                "match"
+            ]
+            == "GG"
+        )
 
     def test_add_standard_logging_redacts_regex_field(self):
         cg = CustomGuardrail(guardrail_name="test-rail")

@@ -90,7 +90,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
-let mockUseHealthReadinessImpl = () => ({ data: null as any });
+let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 let mockUseAuthorizedImpl = () => ({
   userId: "test-user",
@@ -99,12 +99,17 @@ let mockUseAuthorizedImpl = () => ({
   premiumUser: false,
 });
 
+const useHealthReadinessDetailsSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
-  useHealthReadiness: () => mockUseHealthReadinessImpl(),
+vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
+  useHealthReadinessDetails: (accessToken: string | null | undefined) => {
+    useHealthReadinessDetailsSpy(accessToken);
+    return mockUseHealthReadinessDetailsImpl();
+  },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -204,14 +209,30 @@ describe("Navbar", () => {
   });
 
   it("should show version badge when health data contains version", () => {
-    mockUseHealthReadinessImpl = () => ({ data: { litellm_version: "1.0.0" } });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: { litellm_version: "1.0.0" } });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
     expect(screen.getByText("v1.0.0")).toBeInTheDocument();
 
     // Reset mock
-    mockUseHealthReadinessImpl = () => ({ data: null });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: null });
+  });
+
+  it("should forward accessToken to the readiness hook", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="my-token" />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token");
+  });
+
+  it("should forward a null accessToken to the readiness hook (disables the hook)", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken={null} />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
   });
 
   it("should use custom logo from theme context", () => {

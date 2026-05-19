@@ -1512,7 +1512,7 @@ class ProxyBaseLLMRequestProcessing:
             status_code=result.status_code,
             headers=HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=result.headers,
-                custom_headers=None,
+                custom_headers=dict(fastapi_response.headers),
             ),
         )
 

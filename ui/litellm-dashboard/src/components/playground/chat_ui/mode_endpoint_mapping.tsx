@@ -28,6 +28,7 @@ export enum EndpointType {
   A2A_AGENTS = "a2a_agents",
   MCP = "mcp",
   REALTIME = "realtime",
+  INTERACTIONS = "interactions",
 }
 
 // Create a mapping between the model mode and the corresponding endpoint type

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -691,6 +692,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> Literal[
         "converse",
         "invoke",
+        "claude_platform",
         "converse_like",
         "agent",
         "agentcore",
@@ -705,6 +707,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             str,
             Literal[
                 "invoke",
+                "claude_platform",
                 "converse_like",
                 "converse",
                 "agent",
@@ -715,6 +718,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             ],
         ] = {
             "invoke/": "invoke",
+            "claude_platform/": "claude_platform",
             "converse_like/": "converse_like",
             "converse/": "converse",
             "agent/": "agent",
@@ -751,6 +755,36 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit converse route.
         """
         return "converse/" in model
+
+    @staticmethod
+    def _explicit_claude_platform_route(model: str) -> bool:
+        """
+        Check if the model is an explicit Claude Platform on AWS route.
+        """
+        return "claude_platform/" in model
+
+    @staticmethod
+    def get_claude_platform_model(model: str) -> str:
+        """
+        Strip the Claude Platform route prefix from a Bedrock model name.
+        """
+        return model.replace("claude_platform/", "", 1)
+
+    @staticmethod
+    def map_claude_platform_auth_params(
+        passed_params: dict, optional_params: dict
+    ) -> dict:
+        """
+        Map Claude Platform route auth params that are not OpenAI request params.
+        """
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic_workspace_id",
+        ):
+            if key in passed_params:
+                optional_params[key] = passed_params[key]
+        return optional_params
 
     @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
@@ -815,6 +849,12 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
 
         #########################################################
+        # Claude Platform route uses Anthropic Messages API via the AWS gateway.
+        #########################################################
+        if BedrockModelInfo._explicit_claude_platform_route(model):
+            return litellm.BedrockClaudePlatformMessagesConfig()
+
+        #########################################################
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
@@ -859,7 +899,9 @@ def get_bedrock_chat_config(model: str):
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
-    if bedrock_route == "converse" or bedrock_route == "converse_like":
+    if bedrock_route == "claude_platform":
+        return litellm.BedrockClaudePlatformConfig()
+    elif bedrock_route == "converse" or bedrock_route == "converse_like":
         return litellm.AmazonConverseConfig()
     elif bedrock_route == "openai":
         return litellm.AmazonBedrockOpenAIConfig()
@@ -917,38 +959,57 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+def _load_bedrock_response_stream_shape():
+    """
+    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+
+    Called once at module import time; the result is stored in
+    ``BEDROCK_RESPONSE_STREAM_SHAPE`` and reused for the process lifetime.
+    Returns ``None`` if botocore is unavailable or the service model cannot be
+    loaded, so the module still imports cleanly.
+    """
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        loader = Loader()
+        service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        return ServiceModel(service_dict).shape_for("ResponseStream")
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not pre-load bedrock-runtime response stream shape "
+            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            e,
+        )
+        return None
+
+
+# Eagerly resolved once per process — avoids per-instance or per-request disk I/O.
+BEDROCK_RESPONSE_STREAM_SHAPE = _load_bedrock_response_stream_shape()
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
     """
-
-    _response_stream_shape_cache = None
 
     def __init__(self):
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
 
-    def get_response_stream_shape(self):
-        if self._response_stream_shape_cache is None:
-            from botocore.loaders import Loader
-            from botocore.model import ServiceModel
-
-            loader = Loader()
-            bedrock_service_dict = loader.load_service_model(
-                "bedrock-runtime", "service-2"
-            )
-            bedrock_service_model = ServiceModel(bedrock_service_dict)
-            self._response_stream_shape_cache = bedrock_service_model.shape_for(
-                "ResponseStream"
-            )
-
-        return self._response_stream_shape_cache
-
     def _parse_message_from_event(self, event) -> Optional[str]:
+        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
-            response_dict, self.get_response_stream_shape()
+            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
         )
 
         if response_dict["status_code"] != 200:

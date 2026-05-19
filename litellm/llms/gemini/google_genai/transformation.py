@@ -2,6 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -10,6 +11,10 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
+)
+from litellm.llms.vertex_ai.common_utils import (
+    _build_vertex_schema,
+    supports_response_json_schema,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.router import GenericLiteLLMParams
@@ -302,6 +307,52 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             litellm_params=litellm_params,
         )
 
+    @staticmethod
+    def _normalize_response_schema(
+        generate_content_config_dict: Dict, model: str
+    ) -> None:
+        schema_key = next(
+            (
+                k
+                for k in ("responseSchema", "response_schema")
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+        json_schema_key = next(
+            (
+                k
+                for k in ("responseJsonSchema", "response_json_schema")
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+
+        if schema_key is None:
+            return
+
+        value = generate_content_config_dict[schema_key]
+        if not isinstance(value, dict):
+            return
+
+        if supports_response_json_schema(model):
+            if json_schema_key is not None:
+                generate_content_config_dict.pop(schema_key)
+                return
+            generate_content_config_dict.pop(schema_key)
+            new_json_schema_key = (
+                "response_json_schema"
+                if schema_key == "response_schema"
+                else "responseJsonSchema"
+            )
+            generate_content_config_dict[new_json_schema_key] = value
+        else:
+            if json_schema_key is not None:
+                generate_content_config_dict.pop(json_schema_key)
+            generate_content_config_dict[schema_key] = _build_vertex_schema(
+                parameters=deepcopy(value), add_property_ordering=True
+            )
+
     def transform_generate_content_request(
         self,
         model: str,
@@ -314,6 +365,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             GenerateContentConfigDict,
             GenerateContentRequestDict,
         )
+
+        self._normalize_response_schema(generate_content_config_dict, model)
 
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,

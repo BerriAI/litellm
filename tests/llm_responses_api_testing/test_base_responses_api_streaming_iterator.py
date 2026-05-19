@@ -72,7 +72,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -142,7 +142,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -188,7 +188,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
         )
@@ -214,7 +214,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
         )
@@ -240,7 +240,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
         )
@@ -280,7 +280,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = ResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -355,7 +355,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = ResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -417,7 +417,7 @@ class TestBaseResponsesAPIStreamingIterator:
         # Create the iterator instance
         iterator = SyncResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -475,7 +475,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         iterator = ResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
@@ -554,7 +554,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         iterator = ResponsesAPIStreamingIterator(
             response=mock_response,
-            model="gpt-4",
+            model="gpt-5.5",
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},

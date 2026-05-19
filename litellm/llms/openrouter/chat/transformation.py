@@ -163,7 +163,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
             messages = self._move_cache_control_to_content(messages)
 
         # Strip "openrouter/" prefix before sending to OpenRouter API
-        model = model.replace("openrouter/", "") if model.startswith("openrouter/") else model
+        model = (
+            model.replace("openrouter/", "")
+            if model.startswith("openrouter/")
+            else model
+        )
 
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(

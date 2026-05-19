@@ -1236,6 +1236,7 @@ def create_pass_through_route(
     query_params: Optional[dict] = None,
     default_query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
+    config_file_path: Optional[str] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1245,7 +1246,7 @@ def create_pass_through_route(
         if isinstance(target, CustomLogger):
             adapter = target
         else:
-            adapter = get_instance_fn(value=target)
+            adapter = get_instance_fn(value=target, config_file_path=config_file_path)
         adapter_id = str(uuid.uuid4())
         litellm.adapters = [{"id": adapter_id, "adapter": adapter}]
 
@@ -2019,6 +2020,7 @@ class InitPassThroughEndpointHelpers:
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
+        config_file_path: Optional[str] = None,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2058,6 +2060,7 @@ class InitPassThroughEndpointHelpers:
                 cost_per_request=cost_per_request,
                 default_query_params=default_query_params,
                 guardrails=guardrails,
+                config_file_path=config_file_path,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2095,6 +2098,7 @@ class InitPassThroughEndpointHelpers:
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
+        config_file_path: Optional[str] = None,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2135,6 +2139,7 @@ class InitPassThroughEndpointHelpers:
                 cost_per_request=cost_per_request,
                 default_query_params=default_query_params,
                 guardrails=guardrails,
+                config_file_path=config_file_path,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2298,6 +2303,7 @@ async def _register_pass_through_endpoint(
     app: FastAPI,
     premium_user: bool,
     visited_endpoints: set[str],
+    config_file_path: Optional[str] = None,
 ) -> None:
     endpoint_data: Dict[str, Any]
     if isinstance(endpoint, PassThroughGenericEndpoint):
@@ -2355,6 +2361,7 @@ async def _register_pass_through_endpoint(
         guardrails=guardrails,
         methods=methods,
         default_query_params=default_query_params,
+        config_file_path=config_file_path,
     )
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -2379,6 +2386,7 @@ async def _register_pass_through_endpoint(
             guardrails=guardrails,
             methods=methods,
             default_query_params=default_query_params,
+            config_file_path=config_file_path,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
@@ -2389,6 +2397,7 @@ async def _register_pass_through_endpoint(
 
 async def initialize_pass_through_endpoints(
     pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
+    config_file_path: Optional[str] = None,
 ):
     """
     1. Create a global list of pass-through endpoints (db + config)
@@ -2399,6 +2408,12 @@ async def initialize_pass_through_endpoints(
 
     Args:
         pass_through_endpoints: List of pass-through endpoints to initialize
+        config_file_path: Path to the operator's config.yaml when this call
+            originates from a YAML-load. Threaded through to
+            ``create_pass_through_route`` so an operator using
+            ``s3://``/``gcs://`` ``custom_handler`` in their config still
+            loads. Callers from the DB-overlay / runtime API path must leave
+            this ``None`` so the runtime gate in ``get_instance_fn`` fires.
 
     Returns:
         None
@@ -2438,6 +2453,7 @@ async def initialize_pass_through_endpoints(
             app=app,
             premium_user=premium_user,
             visited_endpoints=visited_endpoints,
+            config_file_path=config_file_path,
         )
 
     # remove the ones that are not visited from the list

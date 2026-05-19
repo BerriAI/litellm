@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _request_auth_header,
+    _request_extra_headers,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -868,3 +870,340 @@ class TestResolveOperationParams:
         assert "per_page" in names
         assert "sha" in names
         assert len(names) == 4  # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# Tool name sanitization for OpenAPI -> MCP
+# Repro: GitHub's REST OpenAPI uses tag-namespaced operationIds like
+# "actions/download-job-logs-for-workflow-run". Without sanitization the
+# generated MCP tool name contains '/', which Anthropic/OpenAI/Bedrock all
+# reject (^[a-zA-Z0-9_-]+$). This block guards the registration + preview
+# paths against that.
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeOpenAPIToolName:
+    def test_replaces_slashes(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert (
+            sanitize_openapi_tool_name("actions/download-job-logs-for-workflow-run")
+            == "actions_download-job-logs-for-workflow-run"
+        )
+
+    def test_replaces_other_punctuation(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("foo.bar:baz qux") == "foo_bar_baz_qux"
+
+    def test_lowercases(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("Pulls/List-Files") == "pulls_list-files"
+
+    def test_already_valid_passes_through(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("plain-tool_name") == "plain-tool_name"
+
+    def test_empty_string(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("") == ""
+
+    def test_caps_at_128_chars(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        out = sanitize_openapi_tool_name("a/" * 200)
+        assert len(out) <= 128
+
+
+class TestRegisterToolsFromOpenAPI:
+    """Verify register_tools_from_openapi emits provider-safe tool names."""
+
+    def test_github_style_operation_ids_are_sanitized(self, monkeypatch):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
+                    "get": {
+                        "operationId": "actions/download-job-logs-for-workflow-run",
+                        "summary": "Download job logs",
+                    }
+                },
+                "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
+                    "get": {
+                        "operationId": "pulls/list-files",
+                        "summary": "List files",
+                    }
+                },
+            }
+        }
+
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered, "expected at least one registered tool"
+        anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+        for name in registered:
+            assert anthropic_re.match(
+                name
+            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+        assert "actions_download-job-logs-for-workflow-run" in registered
+        assert "pulls_list-files" in registered
+
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(
+        self, monkeypatch
+    ):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/foo/{bar}/baz": {
+                    "get": {"summary": "no operationId here"},
+                }
+            }
+        }
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered
+        for name in registered:
+            assert re.match(
+                r"^[a-zA-Z0-9_-]+$", name
+            ), f"fallback tool name {name!r} not sanitized"
+
+
+class TestRequestExtraHeaders:
+    """Tests for _request_extra_headers ContextVar forwarding in tool_function."""
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_forwarded_to_upstream(self):
+        """Extra headers set via ContextVar are included in the upstream request."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "secret-value"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-TOKEN") == "secret-value"
+
+    @pytest.mark.asyncio
+    async def test_no_extra_headers_by_default(self):
+        """Without setting _request_extra_headers, no extra headers are injected."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static-value"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            result = await func()
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent == {"X-Static": "static-value"}
+            assert "X-TOKEN" not in headers_sent
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_merged_with_static_headers(self):
+        """Forwarded headers are passed through alongside non-conflicting static headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static-value"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "created")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "dynamic-value"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "created"
+            call_args = async_client.post.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Static") == "static-value"
+            assert headers_sent.get("X-TOKEN") == "dynamic-value"
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_over_forwarded_on_conflict(self):
+        """Static (operator) headers must override forwarded (caller) headers on name conflict."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-Tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "caller-spoofed" not in headers_sent.values()
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_case_insensitively(self):
+        """Forwarded header with different casing must not bypass the static-wins rule."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"x-tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "x-tenant" not in headers_sent
+            assert "caller-spoofed" not in headers_sent.values()
+
+    @pytest.mark.asyncio
+    async def test_auth_header_still_overrides_extra_headers(self):
+        """_request_auth_header takes precedence for Authorization over extra headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/secure",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "secure-data")
+            mock_client.return_value = async_client
+
+            extra_token = _request_extra_headers.set(
+                {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
+            )
+            auth_token = _request_auth_header.set("Bearer byok-credential")
+            try:
+                result = await func()
+            finally:
+                _request_auth_header.reset(auth_token)
+                _request_extra_headers.reset(extra_token)
+
+            assert result == "secure-data"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("Authorization") == "Bearer byok-credential"
+            assert headers_sent.get("X-TOKEN") == "token-value"
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_not_leaked_between_calls(self):
+        """After resetting the ContextVar, subsequent calls do not see the headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "first-call"})
+            _request_extra_headers.reset(token)
+
+            await func()
+
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert "X-TOKEN" not in headers_sent

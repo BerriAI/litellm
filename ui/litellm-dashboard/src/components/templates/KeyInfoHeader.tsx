@@ -1,19 +1,20 @@
 import React from "react";
-import { Button, Typography, Tooltip, Space, Divider, Flex } from "antd";
+import { Button, Typography, Tooltip, Space, Divider, Flex, Popover } from "antd";
 import {
   ArrowLeftOutlined,
   SyncOutlined,
   DeleteOutlined,
   PlusOutlined,
   UserOutlined,
-  MailOutlined,
   CalendarOutlined,
   ClockCircleOutlined,
   ThunderboltOutlined,
   SafetyCertificateOutlined,
   TransactionOutlined,
+  FieldTimeOutlined,
 } from "@ant-design/icons";
 import LabeledField from "../common_components/LabeledField";
+import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 
 const { Title, Text } = Typography;
 
@@ -22,10 +23,12 @@ export interface KeyInfoData {
   keyId: string;
   userId: string;
   userEmail: string;
+  userAlias?: string | null;
   createdBy: string;
   createdAt: string;
   lastUpdated: string;
   lastActive: string;
+  expires: string;
 }
 
 interface KeyInfoHeaderProps {
@@ -39,6 +42,94 @@ interface KeyInfoHeaderProps {
   backButtonText?: string;
   regenerateDisabled?: boolean;
   regenerateTooltip?: string;
+}
+
+function UserField({
+  userAlias,
+  userEmail,
+  userId,
+}: {
+  userAlias?: string | null;
+  userEmail: string;
+  userId: string;
+}) {
+  const labelEl = (
+    <Space size={4}>
+      <Text type="secondary"><UserOutlined /></Text>
+      <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        User
+      </Text>
+    </Space>
+  );
+
+  const isEmpty = !userAlias && !userEmail && !userId;
+  if (isEmpty) {
+    return (
+      <div>
+        {labelEl}
+        <div><Text strong>-</Text></div>
+      </div>
+    );
+  }
+
+  const isDefaultAdmin = userId === "default_user_id";
+  const displayValue = userAlias || userEmail || userId;
+
+  const popoverContent = (
+    <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+      {[
+        { label: "User Alias", value: userAlias ?? null },
+        { label: "User Email", value: userEmail || null },
+        { label: "User ID", value: userId || null },
+      ].map(({ label, value }) => (
+        <div key={label} className="flex flex-col min-w-0">
+          <span className="text-gray-400">{label}</span>
+          {value ? (
+            <Typography.Text
+              className="font-mono text-xs"
+              style={{ maxWidth: 220 }}
+              ellipsis={{ tooltip: value }}
+              copyable
+            >
+              {value}
+            </Typography.Text>
+          ) : (
+            <span className="font-mono">-</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
+  if (isDefaultAdmin && !userAlias && !userEmail) {
+    return (
+      <div>
+        {labelEl}
+        <div>
+          <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+            <span className="cursor-default"><DefaultProxyAdminTag userId={userId} /></span>
+          </Popover>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {labelEl}
+      <div>
+        <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+          <Text
+            strong
+            ellipsis
+            style={{ cursor: "default", maxWidth: 200, display: "block" }}
+          >
+            {displayValue}
+          </Text>
+        </Popover>
+      </div>
+    </div>
+  );
 }
 
 export function KeyInfoHeader({
@@ -101,15 +192,8 @@ export function KeyInfoHeader({
 
       <Flex align="stretch" gap={40} style={{ marginBottom: 40 }}>
         <Space direction="vertical" size={16}>
-          <LabeledField label="User Email" value={data.userEmail} icon={<MailOutlined />} />
-          <LabeledField
-            label="User ID"
-            value={data.userId}
-            icon={<UserOutlined />}
-            truncate
-            copyable
-            defaultUserIdCheck
-          />
+          <UserField userAlias={data.userAlias} userEmail={data.userEmail} userId={data.userId} />
+          <LabeledField label="Expires" value={data.expires} icon={<FieldTimeOutlined />} />
         </Space>
 
         <Divider type="vertical" style={{ height: "auto" }} />

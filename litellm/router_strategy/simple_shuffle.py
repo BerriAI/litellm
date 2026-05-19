@@ -48,6 +48,13 @@ def simple_shuffle(
             ]
             verbose_router_logger.debug(f"\nweight {weights}")
             total_weight = sum(weights)
+            if total_weight <= 0:
+                # All remaining candidates have weight 0 for this metric (e.g.
+                # after a weighted-failover exclusion left only zero-weight
+                # backups). Skip to the next metric (rpm/tpm) which may still
+                # provide a meaningful weighted pick; if none do, we fall
+                # through to the uniform random pick at the end.
+                continue
             weights = [weight / total_weight for weight in weights]
             verbose_router_logger.debug(f"\n weights {weights} by {weight_by}")
             # Perform weighted random pick

@@ -157,16 +157,16 @@ async def test_bedrock_retrieve_batch():
     """
     print("Testing bedrock batch retrieval")
 
-    # Mock bedrock batch response
     mock_bedrock_response = {
         "jobArn": "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
         "jobName": "test-job-123",
         "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "roleArn": "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForAgents_TEST",
-        "status": "InProgress",
-        "message": "Job is in progress",
+        "status": "Completed",
+        "message": "",
         "submitTime": "2024-01-01T12:00:00Z",
         "lastModifiedTime": "2024-01-01T12:30:00Z",
+        "endTime": "2024-01-01T13:00:00Z",
         "inputDataConfig": {
             "s3InputDataConfig": {"s3Uri": "s3://test-bucket/input/test-input.jsonl"}
         },
@@ -175,43 +175,38 @@ async def test_bedrock_retrieve_batch():
         },
     }
 
-    # Mock the HTTP response
-    mock_response = MagicMock()
-    mock_response.json.return_value = mock_bedrock_response
-    mock_response.status_code = 200
+    mock_bedrock_client = MagicMock()
+    mock_bedrock_client.get_model_invocation_job.return_value = mock_bedrock_response
+    mock_creds = MagicMock(access_key="ak", secret_key="sk", token="tok")
 
-    # Print the mock response to debug
-    print("MOCK RESPONSE DATA:", mock_bedrock_response)
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-    ) as mock_get:
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
-
-        # Test retrieve batch
+    with (
+        patch("boto3.client", return_value=mock_bedrock_client),
+        patch(
+            "litellm.llms.bedrock.batches.transformation.BedrockBatchesConfig.get_credentials",
+            return_value=mock_creds,
+        ),
+    ):
         batch_response = await litellm.aretrieve_batch(
             batch_id="arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
             custom_llm_provider="bedrock",
             model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         )
 
-        print("MOCKED BATCH RESPONSE=", batch_response)
-
-        # Validate the response
         assert (
             batch_response.id
             == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
         )
         assert batch_response.object == "batch"
-        assert (
-            batch_response.status == "in_progress"
-        )  # Bedrock "InProgress" maps to "in_progress"
+        assert batch_response.status == "completed"
         assert batch_response.endpoint == "/v1/chat/completions"
 
-        # Validate input and output file IDs in the final transformed response
         assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
-        assert batch_response.output_file_id == "s3://test-bucket/output/"
+        # Bedrock returns only the output *prefix*; the handler predicts the
+        # actual output object as <prefix>/<job-id>/<basename(input)>.out.
+        assert (
+            batch_response.output_file_id
+            == "s3://test-bucket/output/test-job-123/test-input.jsonl.out"
+        )
 
 
 def test_bedrock_batch_with_encryption_key_in_post_request():

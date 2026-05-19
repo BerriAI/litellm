@@ -53,6 +53,7 @@ export interface KeyResponse {
   organization_id: string | null;
   org_id?: string | null;
   created_at: string;
+  created_by?: string;
   updated_at: string;
   last_active: string | null;
   team_spend: number;

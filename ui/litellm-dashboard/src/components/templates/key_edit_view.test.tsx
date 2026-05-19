@@ -158,8 +158,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -176,8 +176,8 @@ describe("KeyEditView", () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -194,8 +194,8 @@ describe("KeyEditView", () => {
     const { getByLabelText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -219,7 +219,7 @@ describe("KeyEditView", () => {
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={onCancelMock}
-        onSubmit={async () => { }}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -241,8 +241,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -259,8 +259,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -277,8 +277,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -295,8 +295,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -314,7 +314,7 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -344,8 +344,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={keyDataWithManagementRoutes}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -367,8 +367,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={keyDataWithInfoRoutes}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -385,8 +385,8 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
-        onSubmit={async () => { }}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
         accessToken={"test-token"}
         userID={""}
         userRole={""}
@@ -404,7 +404,7 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -434,10 +434,14 @@ describe("KeyEditView", () => {
 
   it("should handle empty allowed routes string on submit", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
     renderWithProviders(
       <KeyEditView
-        keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        keyData={keyDataWithRoutes}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -463,6 +467,101 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should omit allowed_routes from submit when value is unchanged", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const aiApisKeyData = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={aiApisKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  it("should omit allowed_routes from submit when keyData.allowed_routes is null and form is untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataNullRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: null as unknown as string[],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataNullRoutes}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  it("should omit allowed_routes from submit when server returned routes in a different order", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataReordered = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["beta_routes", "alpha_routes"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataReordered}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
 
   it("should pass access_group_ids to onSubmit when saving key with access groups", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
@@ -554,7 +653,7 @@ describe("KeyEditView", () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
-        onCancel={() => { }}
+        onCancel={() => {}}
         onSubmit={onSubmitMock}
         accessToken={"test-token"}
         userID={"test-user"}
@@ -576,10 +675,13 @@ describe("KeyEditView", () => {
     });
 
     // Wait for the cancel button to actually be disabled (state update may take a moment)
-    await waitFor(() => {
-      const cancelButton = screen.getByRole("button", { name: /cancel/i });
-      expect(cancelButton).toBeDisabled();
-    }, { timeout: 3000 });
+    await waitFor(
+      () => {
+        const cancelButton = screen.getByRole("button", { name: /cancel/i });
+        expect(cancelButton).toBeDisabled();
+      },
+      { timeout: 3000 },
+    );
 
     // Clean up: resolve the promise to allow the form to complete
     if (resolveSubmit) {

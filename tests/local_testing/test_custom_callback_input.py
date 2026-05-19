@@ -930,7 +930,7 @@ def test_image_generation_openai():
 
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="openai/dall-e-3",
+            model="openai/gpt-image-1",
             api_key=os.getenv("OPENAI_API_KEY"),
         )
 
@@ -948,7 +948,7 @@ def test_image_generation_openai():
         try:
             response = litellm.image_generation(
                 prompt="A cute baby sea otter",
-                model="dall-e-2",
+                model="gpt-image-1",
                 api_key="my-bad-api-key",
             )
         except Exception:

@@ -232,3 +232,23 @@ def test_transform_messages_helper_removes_provider_specific_fields():
     )
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+def test_transform_messages_helper_strips_thinking_blocks():
+    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+    config = FireworksAIConfig()
+    messages = [
+        {"role": "user", "content": "Translate a poem."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "internal", "signature": ""}
+            ],
+        },
+    ]
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
+    )
+    assert "thinking_blocks" not in out[1]
+    assert out[1]["content"] == "I can help."

@@ -250,6 +250,33 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should pass model_info.id to disambiguate duplicate model_name deployments", async () => {
+    // Regression test: when two deployments share `model_name` (e.g.
+    // wildcard `openai/*` with different `api_base` values), the UI
+    // must forward the clicked row's `model_info.id` to the backend.
+    // Otherwise /health/test_connection silently probes deployments[0]
+    // instead of the deployment the user actually selected.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: /test connection/i });
+    await user.click(testButton);
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+    });
+
+    const callArgs = mockTestConnectionRequest.mock.calls[0];
+    // Signature: (accessToken, litellm_params, model_info, mode)
+    const modelInfoArg = callArgs[2] as Record<string, unknown>;
+    expect(modelInfoArg).toBeDefined();
+    expect(modelInfoArg.id).toBe("123");
+  });
+
   it("should display error notification when connection test fails", async () => {
     const user = userEvent.setup();
     mockTestConnectionRequest.mockRejectedValue(new Error("Connection failed"));

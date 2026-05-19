@@ -1299,9 +1299,18 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
+                    # Strip Gemini thought-signature suffix from id (mirrors streaming
+                    # path below); base64 chars (+ / =) violate Anthropic's
+                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    raw_id = tool_call.id or ""
+                    base_id = (
+                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+                        else raw_id
+                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=tool_call.id,
+                        id=base_id,
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,

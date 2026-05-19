@@ -16,6 +16,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
 from litellm.integrations.s3 import get_s3_object_key
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -53,15 +54,25 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        s3_callback_params_override: Optional[dict] = None,
         **kwargs,
     ):
         try:
-            verbose_logger.debug(
-                f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
-            )
+            _masker = SensitiveDataMasker()
+            if s3_callback_params_override is not None:
+                verbose_logger.debug(
+                    f"in init s3 logger (audit override) - "
+                    f"{_masker.mask_dict(dict(s3_callback_params_override))}"
+                )
+            else:
+                verbose_logger.debug(
+                    f"in init s3 logger - s3_callback_params "
+                    f"{_masker.mask_dict(dict(litellm.s3_callback_params or {}))}"
+                )
 
             # Initialize S3 params first to get the correct s3_verify value
             self._init_s3_params(
+                params_source=s3_callback_params_override,
                 s3_bucket_name=s3_bucket_name,
                 s3_region_name=s3_region_name,
                 s3_api_version=s3_api_version,
@@ -139,94 +150,85 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        params_source: Optional[dict] = None,
     ):
         """
-        Initialize the s3 params for this logging callback
+        Initialize the s3 params for this logging callback. Reads from
+        `params_source` if given (e.g. `s3_audit_callback_params` for the
+        audit-log instance), otherwise falls back to `litellm.s3_callback_params`.
+        Resolves `os.environ/X` markers into a local dict; never mutates the source.
         """
-        litellm.s3_callback_params = litellm.s3_callback_params or {}
-        # read in .env variables - example os.environ/AWS_BUCKET_NAME
-        for key, value in litellm.s3_callback_params.items():
-            if isinstance(value, str) and value.startswith("os.environ/"):
-                litellm.s3_callback_params[key] = litellm.get_secret(value)
+        if params_source is None:
+            params_source = litellm.s3_callback_params or {}
+        params: dict = {
+            key: (
+                litellm.get_secret(value)
+                if isinstance(value, str) and value.startswith("os.environ/")
+                else value
+            )
+            for key, value in params_source.items()
+        }
 
-        self.s3_bucket_name = (
-            litellm.s3_callback_params.get("s3_bucket_name") or s3_bucket_name
-        )
-        self.s3_region_name = (
-            litellm.s3_callback_params.get("s3_region_name") or s3_region_name
-        )
-        self.s3_api_version = (
-            litellm.s3_callback_params.get("s3_api_version") or s3_api_version
-        )
+        self.s3_bucket_name = params.get("s3_bucket_name") or s3_bucket_name
+        self.s3_region_name = params.get("s3_region_name") or s3_region_name
+        self.s3_api_version = params.get("s3_api_version") or s3_api_version
         self.s3_use_ssl = (
-            litellm.s3_callback_params.get("s3_use_ssl", True)
-            if litellm.s3_callback_params.get("s3_use_ssl") is not None
+            params.get("s3_use_ssl", True)
+            if params.get("s3_use_ssl") is not None
             else s3_use_ssl
         )
         self.s3_verify = (
-            litellm.s3_callback_params.get("s3_verify")
-            if litellm.s3_callback_params.get("s3_verify") is not None
+            params.get("s3_verify")
+            if params.get("s3_verify") is not None
             else s3_verify
         )
-        self.s3_endpoint_url = (
-            litellm.s3_callback_params.get("s3_endpoint_url") or s3_endpoint_url
-        )
+        self.s3_endpoint_url = params.get("s3_endpoint_url") or s3_endpoint_url
         self.s3_aws_access_key_id = (
-            litellm.s3_callback_params.get("s3_aws_access_key_id")
-            or s3_aws_access_key_id
+            params.get("s3_aws_access_key_id") or s3_aws_access_key_id
         )
 
         self.s3_aws_secret_access_key = (
-            litellm.s3_callback_params.get("s3_aws_secret_access_key")
-            or s3_aws_secret_access_key
+            params.get("s3_aws_secret_access_key") or s3_aws_secret_access_key
         )
 
         self.s3_aws_session_token = (
-            litellm.s3_callback_params.get("s3_aws_session_token")
-            or s3_aws_session_token
+            params.get("s3_aws_session_token") or s3_aws_session_token
         )
 
         self.s3_aws_session_name = (
-            litellm.s3_callback_params.get("s3_aws_session_name") or s3_aws_session_name
+            params.get("s3_aws_session_name") or s3_aws_session_name
         )
 
         self.s3_aws_profile_name = (
-            litellm.s3_callback_params.get("s3_aws_profile_name") or s3_aws_profile_name
+            params.get("s3_aws_profile_name") or s3_aws_profile_name
         )
 
-        self.s3_aws_role_name = (
-            litellm.s3_callback_params.get("s3_aws_role_name") or s3_aws_role_name
-        )
+        self.s3_aws_role_name = params.get("s3_aws_role_name") or s3_aws_role_name
 
         self.s3_aws_web_identity_token = (
-            litellm.s3_callback_params.get("s3_aws_web_identity_token")
-            or s3_aws_web_identity_token
+            params.get("s3_aws_web_identity_token") or s3_aws_web_identity_token
         )
 
         self.s3_aws_sts_endpoint = (
-            litellm.s3_callback_params.get("s3_aws_sts_endpoint") or s3_aws_sts_endpoint
+            params.get("s3_aws_sts_endpoint") or s3_aws_sts_endpoint
         )
 
-        self.s3_config = litellm.s3_callback_params.get("s3_config") or s3_config
-        self.s3_path = litellm.s3_callback_params.get("s3_path") or s3_path
-        # done reading litellm.s3_callback_params
+        self.s3_config = params.get("s3_config") or s3_config
+        self.s3_path = params.get("s3_path") or s3_path
         self.s3_use_team_prefix = (
-            bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
-            or s3_use_team_prefix
+            bool(params.get("s3_use_team_prefix", False)) or s3_use_team_prefix
         )
 
         self.s3_use_key_prefix = (
-            bool(litellm.s3_callback_params.get("s3_use_key_prefix", False))
-            or s3_use_key_prefix
+            bool(params.get("s3_use_key_prefix", False)) or s3_use_key_prefix
         )
 
         self.s3_strip_base64_files = (
-            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
-            or s3_strip_base64_files
+            bool(params.get("s3_strip_base64_files", False)) or s3_strip_base64_files
         )
 
         self.s3_use_virtual_hosted_style = (
-            bool(litellm.s3_callback_params.get("s3_use_virtual_hosted_style", False))
+            bool(params.get("s3_use_virtual_hosted_style", False))
             or s3_use_virtual_hosted_style
         )
 

@@ -460,6 +460,104 @@ async def test_assemble_user_object_does_not_override_metadata_max_budget(
     ), "max_budget from metadata must not be replaced by the DB value"
 
 
+async def test_assemble_user_object_populates_user_email_and_alias_from_db(
+    prometheus_logger,
+):
+    db_user = MagicMock()
+    db_user.max_budget = None
+    db_user.budget_reset_at = None
+    db_user.user_email = "alice@example.com"
+    db_user.user_alias = "Alice"
+
+    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
+        mock_get_user.return_value = db_user
+        user_object = await prometheus_logger._assemble_user_object(
+            user_id="user-abc-123",
+            spend=10.0,
+            max_budget=None,
+            response_cost=0.5,
+        )
+
+    assert user_object.user_email == "alice@example.com"
+    assert user_object.user_alias == "Alice"
+
+
+def test_set_user_budget_metrics_default_no_email_alias_labels(
+    prometheus_logger,
+):
+    """By default (flag off), only user label is emitted."""
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    litellm.prometheus_user_budget_label_include_email_alias = False
+
+    user = LiteLLM_UserTable(
+        user_id="user-abc-123",
+        user_email="alice@example.com",
+        user_alias="Alice",
+        spend=25.0,
+        max_budget=100.0,
+        budget_reset_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+
+    prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
+
+    prometheus_logger._set_user_budget_metrics(user)
+
+    prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(
+        user="user-abc-123",
+    )
+
+
+def test_set_user_budget_metrics_includes_user_email_and_alias_labels_when_opted_in(
+    prometheus_logger,
+):
+    """When prometheus_user_budget_label_include_email_alias=True, email+alias labels appear."""
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    litellm.prometheus_user_budget_label_include_email_alias = True
+
+    user = LiteLLM_UserTable(
+        user_id="user-abc-123",
+        user_email="alice@example.com",
+        user_alias="Alice",
+        spend=25.0,
+        max_budget=100.0,
+        budget_reset_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+
+    prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
+
+    try:
+        prometheus_logger._set_user_budget_metrics(user)
+
+        prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(
+            user="user-abc-123",
+            user_email="alice@example.com",
+            user_alias="Alice",
+        )
+        prometheus_logger.litellm_remaining_user_budget_metric.labels().set.assert_called_once_with(
+            75.0
+        )
+        prometheus_logger.litellm_user_max_budget_metric.labels.assert_called_once_with(
+            user="user-abc-123",
+            user_email="alice@example.com",
+            user_alias="Alice",
+        )
+        prometheus_logger.litellm_user_budget_remaining_hours_metric.labels.assert_called_once_with(
+            user="user-abc-123",
+            user_email="alice@example.com",
+            user_alias="Alice",
+        )
+    finally:
+        litellm.prometheus_user_budget_label_include_email_alias = False
+
+
 async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
     prometheus_logger,
 ):

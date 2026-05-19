@@ -317,16 +317,16 @@ def test_get_model_cost_information():
 
     # Test with valid model
     result = StandardLoggingPayloadSetup.get_model_cost_information(
-        base_model="gpt-3.5-turbo",
+        base_model="gpt-5-mini",
         custom_pricing=False,
         custom_llm_provider="openai",
         init_response_obj={},
     )
     litellm_info_gpt_3_5_turbo_model_map_value = litellm.get_model_info(
-        model="gpt-3.5-turbo", custom_llm_provider="openai"
+        model="gpt-5-mini", custom_llm_provider="openai"
     )
     print("result", result)
-    assert result["model_map_key"] == "gpt-3.5-turbo"
+    assert result["model_map_key"] == "gpt-5-mini"
     assert result["model_map_value"] is not None
     assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
     # assert all fields in StandardLoggingModelInformation are present
@@ -515,7 +515,7 @@ def test_get_error_information():
     litellm_exception = litellm.exceptions.RateLimitError(
         message="Test error",
         llm_provider="openai",
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         response=None,
         litellm_debug_info=None,
         max_retries=None,
@@ -603,7 +603,7 @@ def test_cost_breakdown_in_standard_logging_payload():
 
     # Create a mock logging object with cost breakdown
     logging_obj = Logging(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello"}],
         stream=False,
         call_type="completion",
@@ -624,7 +624,7 @@ def test_cost_breakdown_in_standard_logging_payload():
     mock_response = {
         "id": "chatcmpl-123",
         "object": "chat.completion",
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "usage": {
             "prompt_tokens": 10,
             "completion_tokens": 20,
@@ -644,7 +644,7 @@ def test_cost_breakdown_in_standard_logging_payload():
 
     # Create kwargs
     kwargs = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "Hello"}],
         "response_cost": 0.0035,
         "custom_llm_provider": "openai",
@@ -687,7 +687,7 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
 
     # Create a mock logging object without cost breakdown
     logging_obj = Logging(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello"}],
         stream=False,
         call_type="embedding",  # Non-completion call type
@@ -702,12 +702,12 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     mock_response = {
         "object": "list",
         "data": [{"embedding": [0.1, 0.2, 0.3]}],
-        "model": "text-embedding-ada-002",
+        "model": "text-embedding-3-small",
         "usage": {"prompt_tokens": 10, "total_tokens": 10},
     }
 
     kwargs = {
-        "model": "text-embedding-ada-002",
+        "model": "text-embedding-3-small",
         "input": ["Hello"],
         "response_cost": 0.0001,
         "custom_llm_provider": "openai",
@@ -756,7 +756,7 @@ def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
     from datetime import datetime
 
     logging_obj = Logging(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hi"}],
         stream=False,
         call_type="completion",
@@ -768,7 +768,7 @@ def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
     mock_response = {
         "id": "chatcmpl-usage-test",
         "object": "chat.completion",
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "usage": {
             "prompt_tokens": 42,
             "completion_tokens": 58,
@@ -784,7 +784,7 @@ def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
     }
 
     kwargs = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "Hi"}],
         "response_cost": 0.01,
         "custom_llm_provider": "openai",

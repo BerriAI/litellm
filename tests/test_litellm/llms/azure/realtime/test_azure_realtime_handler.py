@@ -247,6 +247,10 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         assert "model=gpt-4o-realtime-preview" in called_url
         assert "api-version" not in called_url
         assert "deployment" not in called_url
+        assert (
+            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
+            is False
+        )
 
 
 @pytest.mark.asyncio
@@ -419,3 +423,7 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/realtime?" in called_url
         assert "/openai/v1/realtime" not in called_url
+        assert (
+            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
+            is True
+        )

@@ -13,7 +13,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.realtime_streaming import (
+    RealTimeStreaming,
+    client_sent_openai_beta_realtime_header,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
@@ -78,6 +81,175 @@ def test_realtime_streaming_store_message():
     )
     streaming.store_message(other_msg)
     assert len(streaming.messages) == 2  # Should not store the new message
+
+
+def test_remap_beta_session_to_ga_normalizes_modalities_and_audio():
+    out = RealTimeStreaming._remap_beta_session_to_ga(
+        {"modalities": ["audio", "text"], "voice": "alloy"}
+    )
+    assert out["type"] == "realtime"
+    assert out["output_modalities"] == ["audio"]
+    assert out["audio"]["output"]["voice"] == "alloy"
+
+
+def test_remap_beta_session_to_ga_preserves_ga_audio_format_dicts():
+    input_format = {"type": "audio/pcm", "rate": 24000}
+    output_format = {"type": "audio/G711-ulaw", "rate": 8000}
+
+    out = RealTimeStreaming._remap_beta_session_to_ga(
+        {
+            "input_audio_format": input_format,
+            "output_audio_format": output_format,
+        }
+    )
+
+    assert out["audio"]["input"]["format"] == input_format
+    assert out["audio"]["output"]["format"] == output_format
+
+
+def test_make_disable_auto_response_message_produces_ga_shape():
+    """_make_disable_auto_response_message must produce a GA-shaped session.update.
+
+    The GA Realtime API requires:
+      - session.type = "realtime"
+      - turn_detection nested at session.audio.input.turn_detection
+    The old beta-style flat ``session.turn_detection`` is rejected by GA upstreams.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    raw = streaming._make_disable_auto_response_message()
+    msg = json.loads(raw)
+
+    assert msg["type"] == "session.update"
+    session = msg["session"]
+    assert (
+        session.get("type") == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    # turn_detection must NOT be at the flat beta location
+    assert (
+        "turn_detection" not in session
+    ), "turn_detection must not be at the top-level session (beta shape); use audio.input"
+    # turn_detection must be nested under audio.input
+    assert session["audio"]["input"]["turn_detection"]["create_response"] is False
+
+
+def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients():
+    websocket = MagicMock()
+    websocket.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    raw = streaming._make_disable_auto_response_message()
+    msg = json.loads(raw)
+
+    assert msg["type"] == "session.update"
+    session = msg["session"]
+    assert session == {"turn_detection": {"create_response": False}}
+
+
+@pytest.mark.asyncio
+async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    session_update = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "modalities": ["audio", "text"],
+                "voice": "alloy",
+                "turn_detection": {"create_response": False},
+            },
+        }
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            session_update,
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    session = sent_to_backend["session"]
+    assert session["modalities"] == ["audio", "text"]
+    assert session["voice"] == "alloy"
+    assert session["turn_detection"] == {"create_response": False}
+    assert "type" not in session
+    assert "output_modalities" not in session
+    assert "audio" not in session
+
+
+@pytest.mark.asyncio
+async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
+    client_ws = MagicMock()
+    session_update = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "modalities": ["audio", "text"],
+                "voice": "alloy",
+                "turn_detection": {"create_response": False},
+            },
+        }
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            session_update,
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=True
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    session = sent_to_backend["session"]
+    assert session["modalities"] == ["audio", "text"]
+    assert session["voice"] == "alloy"
+    assert session["turn_detection"] == {"create_response": False}
+    assert "type" not in session
+    assert "output_modalities" not in session
+    assert "audio" not in session
+
+
+def test_translate_event_to_beta_renames_delta_types():
+    ev = RealTimeStreaming._translate_event_to_beta(
+        {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
+    )
+    assert ev is not None
+    assert ev["type"] == "response.audio.delta"
+
+
+def test_translate_event_to_beta_drops_conversation_item_done():
+    assert (
+        RealTimeStreaming._translate_event_to_beta({"type": "conversation.item.done"})
+        is None
+    )
+
+
+def test_client_sent_openai_beta_realtime_header_detects_header():
+    ws = MagicMock()
+    ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    assert client_sent_openai_beta_realtime_header(ws) is True
+    empty = MagicMock()
+    empty.scope = {"headers": []}
+    assert client_sent_openai_beta_realtime_header(empty) is False
 
 
 def test_collect_user_input_from_text_conversation_item():
@@ -761,7 +933,14 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     assert (
         len(session_updates) == 1
     ), f"Expected one session.update injected to backend, got: {sent_to_backend}"
-    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+    # GA shape: turn_detection must be nested under audio.input, not at top-level session
+    injected_session = session_updates[0]["session"]
+    assert (
+        injected_session["type"] == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
+    ), "GA session.update must nest turn_detection under audio.input"
 
     litellm.callbacks = []  # cleanup
 
@@ -818,7 +997,14 @@ async def test_realtime_session_created_injects_session_update_for_pre_call_guar
     assert (
         len(session_updates) == 1
     ), f"pre_call guardrail should inject session.update to gate audio responses, got: {sent_to_backend}"
-    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+    # GA shape: turn_detection must be nested under audio.input, not at top-level session
+    injected_session = session_updates[0]["session"]
+    assert (
+        injected_session["type"] == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
+    ), "GA session.update must nest turn_detection under audio.input"
 
     litellm.callbacks = []  # cleanup
 

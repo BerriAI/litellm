@@ -2170,3 +2170,86 @@ class TestEnsureOutputItemContentPartAdded:
 
         events = iterator._pending_response_events
         assert len(events) == 2
+
+
+class TestCacheControlPreservation:
+    def test_cache_control_preserved_in_content_transformation(self):
+        """cache_control injected by AnthropicCacheControlHook must survive
+        the Responses API -> Chat Completion content transformation."""
+        content = [
+            {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_content_without_cache_control_unaffected(self):
+        """Content blocks that don't have cache_control should be unaffected."""
+        content = [{"type": "text", "text": "hello"}]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "cache_control" not in result[0]
+
+    def test_cache_control_preserved_in_input_item_transformation(self):
+        """cache_control survives the full input-item -> messages transformation."""
+        input_item = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "long context",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(messages) == 1
+        msg_content = (
+            messages[0].get("content")
+            if isinstance(messages[0], dict)
+            else getattr(messages[0], "content", None)
+        )
+        assert isinstance(msg_content, list)
+        assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_file_block(self):
+        content = [
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_image_block(self):
+        content = [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/img.png",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
