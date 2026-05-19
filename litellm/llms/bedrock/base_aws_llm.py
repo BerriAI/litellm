@@ -1523,9 +1523,7 @@ class BaseAWSLLM:
         for header_name, header_value in headers.items():
             if header_value is not None:
                 request_headers_dict[header_name] = header_value
-        if (
-            headers is not None and "Authorization" in headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
+        if "authorization" in headers:  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["authorization"]
 
         return request_headers_dict, request.body
