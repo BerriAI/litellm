@@ -138,6 +138,11 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
         name: str,
     ) -> AgentCreateResponse:
+        """
+        Gemini returns:
+          {"id": "my-agent", "base_agent": "waverunner",
+           "system_instruction": "...", "base_environment": {...}}
+        """
         self._raise_for_status(raw_response)
         try:
             data: Dict[str, Any] = raw_response.json()
@@ -146,8 +151,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
                 "GeminiAgentsConfig: non-JSON create response (status=%d).",
                 raw_response.status_code,
             )
-            data = {"name": name}
-        data.setdefault("name", name)
+            data = {"id": name}
+        # Gemini uses "id" as the identifier; normalise to both fields.
+        data.setdefault("id", name)
+        data.setdefault("name", data["id"])
         verbose_logger.debug("GeminiAgentsConfig create response: %s", data)
         return AgentCreateResponse(**data)
 
@@ -201,12 +208,14 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
         name: str,
     ) -> AgentCreateResponse:
+        """Same shape as create response — Gemini returns "id" as identifier."""
         self._raise_for_status(raw_response)
         try:
             data = raw_response.json()
         except Exception:
-            data = {"name": name}
-        data.setdefault("name", name)
+            data = {"id": name}
+        data.setdefault("id", name)
+        data.setdefault("name", data["id"])
         verbose_logger.debug("GeminiAgentsConfig get response: %s", data)
         return AgentCreateResponse(**data)
 
@@ -227,11 +236,12 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
         name: str,
     ) -> GeminiAgentDeleteResult:
+        """Gemini returns an empty body ``{}`` with HTTP 200 on success."""
         self._raise_for_status(raw_response)
         verbose_logger.debug(
-            "GeminiAgentsConfig delete response (status=%d): %s",
+            "GeminiAgentsConfig delete (status=%d) agent '%s'",
             raw_response.status_code,
-            raw_response.text,
+            name,
         )
         return GeminiAgentDeleteResult(name=name, deleted=True)
 
@@ -258,6 +268,10 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         raw_response: httpx.Response,
         name: str,
     ) -> GeminiAgentVersionsResponse:
+        """
+        Gemini returns:
+          {"agentVersions": [{"agent": "waverunner", "name": "agents/.../versions/uuid", ...}]}
+        """
         self._raise_for_status(raw_response)
         try:
             data = raw_response.json()
@@ -267,6 +281,6 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             "GeminiAgentsConfig list_versions response for '%s': %s", name, data
         )
         return GeminiAgentVersionsResponse(
-            versions=data.get("versions", []),
+            agent_versions=data.get("agentVersions", []),
             next_page_token=data.get("nextPageToken"),
         )
