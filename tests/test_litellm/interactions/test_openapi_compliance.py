@@ -175,7 +175,10 @@ class TestResponseCompliance:
         """Verify status enum values match spec."""
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026)
+        # Google Interactions API uses lowercase status values (updated Feb 2026).
+        # Keep this an exact match: this test intentionally breaks CI when
+        # Google changes the live spec — that breakage is how we get notified
+        # to review the change.
         expected_statuses = [
             "in_progress",
             "requires_action",
