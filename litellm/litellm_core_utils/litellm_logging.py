@@ -527,12 +527,18 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_router_model_id(self) -> Optional[str]:
         """Extract the router deployment model_id from litellm_params.
 
-        Checks both litellm_metadata and metadata for model_info.id.
+        Checks direct model_info, litellm_metadata and metadata for model_info.id.
         Used by cost calculators to look up custom pricing registered
         under the deployment's model_info.id in litellm.model_cost.
         """
         if not hasattr(self, "litellm_params"):
             return None
+
+        info = self.litellm_params.get("model_info", {}) or {}
+        model_id = info.get("id")
+        if model_id is not None:
+            return model_id
+
         for key in ("litellm_metadata", "metadata"):
             meta = self.litellm_params.get(key, {}) or {}
             info = meta.get("model_info", {}) or {}
@@ -1767,16 +1773,22 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-        elif "response_cost" in hidden_params:
+        elif (
+            "response_cost" in hidden_params
+            and hidden_params["response_cost"] is not None
+        ):
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
         elif self.model_call_details.get("response_cost") is not None:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly)
             pass
         else:
-            self.model_call_details["response_cost"] = self._response_cost_calculator(
+            calculated_response_cost = self._response_cost_calculator(
                 result=logging_result
             )
+            self.model_call_details["response_cost"] = calculated_response_cost
+            if isinstance(hidden_params, dict):
+                hidden_params["response_cost"] = calculated_response_cost
 
         self.model_call_details["standard_logging_object"] = (
             self._build_standard_logging_payload(logging_result, start_time, end_time)
@@ -4613,6 +4625,13 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     for key in matching_keys:
         if litellm_params.get(key) is not None:
             return True
+
+    model_info: dict = litellm_params.get("model_info", {}) or {}
+    if model_info:
+        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+        for key in matching_keys:
+            if model_info.get(key) is not None:
+                return True
 
     # Check model_info from metadata or litellm_metadata (generic_api_call routes
     # like /responses and /messages store model_info under litellm_metadata)

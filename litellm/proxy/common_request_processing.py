@@ -570,6 +570,13 @@ class ProxyBaseLLMRequestProcessing:
             litellm_logging_obj=litellm_logging_obj
         )
 
+        if (
+            response_cost in exclude_values
+            and litellm_logging_obj is not None
+            and getattr(litellm_logging_obj, "model_call_details", None) is not None
+        ):
+            response_cost = litellm_logging_obj.model_call_details.get("response_cost")
+
         # Calculate updated spend for header (include current response_cost)
         current_spend = user_api_key_dict.spend or 0.0
         updated_spend = current_spend
