@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+import fnmatch
 from typing import Any, Dict, List, Optional, Set
 
 import litellm
@@ -190,6 +191,70 @@ def get_team_models(
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
+
+
+def get_user_models(
+    user_models: List[str],
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+    include_model_access_groups: Optional[bool] = False,
+) -> List[str]:
+    """
+    Returns:
+    - List of model name strings allowed by `LiteLLM_UserTable.models`
+      (the "Personal Models" field).
+    - Empty list if no models set.
+    - Mirrors `get_team_models` semantics (sans `all-team-models`,
+      which has no meaning at the user scope).
+
+    Used by `/v1/models` to apply per-user access restrictions on the
+    listing path so it stays consistent with `can_user_call_model` at
+    inference time (see BerriAI/litellm#26420).
+    """
+    all_models_set: Set[str] = set()
+    if len(user_models) > 0:
+        all_models_set.update(user_models)
+        if SpecialModelNames.all_proxy_models.value in all_models_set:
+            all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
+
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups,
+        all_models=list(all_models_set),
+        include_model_access_groups=include_model_access_groups,
+    )
+
+    # deduplicate while preserving order
+    all_models = list(dict.fromkeys(all_models))
+
+    verbose_proxy_logger.debug("ALL USER MODELS - {}".format(len(all_models)))
+    return all_models
+
+
+def filter_models_by_user_access(
+    models: List[str],
+    user_allowed_models: List[str],
+) -> List[str]:
+    """
+    Return the subset of `models` that the user is allowed to see, given
+    the (already-expanded) `user_allowed_models` list. Supports exact
+    match plus `fnmatch` wildcards (e.g. `anthropic/*`, `*`).
+
+    Caller is responsible for short-circuiting before calling when
+    `user_allowed_models` is empty, contains `all-proxy-models`
+    (no filter), or contains `no-default-models` (empty result).
+    Order of `models` is preserved.
+    """
+    exact = {m for m in user_allowed_models if "*" not in m}
+    patterns = [m for m in user_allowed_models if "*" in m]
+    out: List[str] = []
+    for m in models:
+        if m in exact:
+            out.append(m)
+        elif patterns and any(fnmatch.fnmatchcase(m, p) for p in patterns):
+            out.append(m)
+    return out
 
 
 def get_complete_model_list(
