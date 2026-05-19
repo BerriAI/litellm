@@ -455,6 +455,13 @@ def _override_openai_response_model(
         response_obj["model"] = requested_model
         return
 
+    # Passthrough routes (e.g. /bedrock, /anthropic) return the upstream provider's raw
+    # httpx.Response. The response body is already in the provider's native shape and there
+    # is no OpenAI-compatible `model` field on the object to override — skip silently rather
+    # than logging an error for an expected, well-defined response type.
+    if isinstance(response_obj, httpx.Response):
+        return
+
     if not hasattr(response_obj, "model"):
         verbose_proxy_logger.error(
             "%s: cannot override response model; missing `model` attribute. response_type=%s",

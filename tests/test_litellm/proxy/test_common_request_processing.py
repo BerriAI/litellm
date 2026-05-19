@@ -1828,6 +1828,26 @@ class TestOverrideOpenAIResponseModel:
 
         assert response_obj.model == requested_model
 
+    def test_passthrough_httpx_response_is_noop_without_error_log(self, caplog):
+        """
+        Passthrough routes (e.g. /bedrock, /anthropic) return a raw httpx.Response.
+        That object has no `.model` field to override and the body is already in the
+        provider's native shape, so the function should short-circuit silently rather
+        than logging an error.
+        """
+        import logging
+
+        import httpx
+
+        response_obj = httpx.Response(status_code=200)
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model="bedrock/claude-sonnet-4-6",
+                log_context="test_context",
+            )
+        assert "cannot override response model" not in caplog.text
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
