@@ -137,7 +137,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+    ) -> Tuple[dict, bytes]:
         return sign_oci_request(
             headers=headers,
             optional_params=optional_params,

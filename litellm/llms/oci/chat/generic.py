@@ -403,9 +403,11 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     elif oci_finish_reason == "TOOL_CALLS":
         finish_reason = "tool_calls"
     elif oci_finish_reason is not None:
-        # OCI GENERIC can emit non-OpenAI finish reasons (e.g. ``ERROR``,
-        # ``CONTENT_FILTERED``, ``CANCELLED``). Normalize to ``"stop"`` so
-        # downstream consumers switching on ``finish_reason`` keep working.
+        # OCI can emit error/cancel finish reasons (e.g. ``ERROR``,
+        # ``ERROR_TOXIC``, ``ERROR_LIMIT``, ``USER_CANCEL``) that aren't part
+        # of OpenAI's standard set. Normalize them to ``"stop"`` so downstream
+        # consumers switching on ``finish_reason`` keep working — matches the
+        # Cohere stream handler's behaviour.
         finish_reason = "stop"
     else:
         finish_reason = None
