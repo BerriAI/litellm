@@ -1,4 +1,5 @@
 """Per-test isolation for the capability_endpoints module cache."""
+
 import pytest
 
 

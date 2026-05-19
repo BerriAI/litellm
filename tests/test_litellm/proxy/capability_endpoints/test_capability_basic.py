@@ -413,3 +413,124 @@ class TestCapabilitiesCache:
             c1.get("/v1/capabilities", headers={"Authorization": "Bearer kA"})
             c2.get("/v1/capabilities", headers={"Authorization": "Bearer kB"})
             assert self.fake_registry.get_agent_list.call_count == 2
+
+
+# ============================================================================
+# S1-05: public /.well-known/xct-capabilities
+# ============================================================================
+
+
+class TestPublicCapabilities:
+    """Anonymous discovery surface.
+
+    Verifies:
+      - no auth header required (anonymous client)
+      - only entities flagged public are returned
+      - mcp summaries strip transport/auth_type/access_groups
+      - private agents / non-allowlisted models are dropped
+    """
+
+    @pytest.fixture(autouse=True)
+    def _wire(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                "model-public": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "max_input_tokens": 8000,
+                },
+                "model-private": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "max_input_tokens": 8000,
+                },
+            },
+        )
+        monkeypatch.setattr(
+            litellm, "public_model_groups", ["model-public"], raising=False
+        )
+        monkeypatch.setattr(litellm, "public_agent_groups", ["agent-public"])
+        monkeypatch.setattr(
+            litellm, "public_mcp_groups", ["mcp-public"], raising=False
+        )
+
+        agent_pub = MagicMock(
+            agent_id="agent-public",
+            agent_name="PubAgent",
+            agent_card_params={"capabilities": {"streaming": True}},
+        )
+        agent_priv = MagicMock(
+            agent_id="agent-private",
+            agent_name="PrivAgent",
+            agent_card_params={"capabilities": {}},
+        )
+        self.fake_registry = MagicMock()
+        self.fake_registry.get_agent_list.return_value = [agent_pub, agent_priv]
+
+        # MagicMock(name="...") sets the mock's own name, not a .name attribute,
+        # so we assign each field explicitly.
+        srv_pub = MagicMock()
+        srv_pub.server_id = "mcp-public"
+        srv_pub.name = "pub-mcp"
+        srv_pub.auth_type = "api_key"
+        srv_pub.transport = "http"
+        srv_pub.mcp_access_groups = ["secret-tag"]
+        srv_priv = MagicMock()
+        srv_priv.server_id = "mcp-private"
+        srv_priv.name = "priv-mcp"
+        srv_priv.auth_type = "oauth2"
+        srv_priv.transport = "sse"
+        srv_priv.mcp_access_groups = ["secret-tag"]
+        self.fake_manager = MagicMock()
+        self.fake_manager.get_registered_mcp_servers.return_value = [srv_pub, srv_priv]
+
+    def test_anonymous_request_returns_only_public_entities(self):
+        # No dependency override -> no auth required at all.
+        app = FastAPI()
+        app.include_router(router)
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+        ):
+            resp = TestClient(app).get("/.well-known/xct-capabilities")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["schema_version"] == CAPABILITIES_SCHEMA_VERSION
+        # only the allowlisted model
+        assert {m["id"] for m in body["models"]} == {"model-public"}
+        # only the public agent
+        assert {a["agent_id"] for a in body["agents"]} == {"agent-public"}
+        # only the public mcp; private oauth one is NOT leaked
+        assert {m["server_id"] for m in body["mcps"]} == {"mcp-public"}
+        # public mcp summary scrubs deployment-y fields
+        public_mcp = body["mcps"][0]
+        assert public_mcp.get("transport") in (None, "")
+        assert public_mcp.get("auth_type") in (None, "")
+        assert public_mcp.get("access_groups") in ([], None)
+
+    def test_public_response_is_cached(self):
+        app = FastAPI()
+        app.include_router(router)
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+        ):
+            client = TestClient(app)
+            client.get("/.well-known/xct-capabilities")
+            client.get("/.well-known/xct-capabilities")
+            assert self.fake_registry.get_agent_list.call_count == 1

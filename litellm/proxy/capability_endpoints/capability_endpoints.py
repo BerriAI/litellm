@@ -41,6 +41,7 @@ from litellm.types.capabilities import (
     McpSummary,
     ModelCapabilityFlags,
     ModelSummary,
+    PublicCapabilitiesResponse,
     SkillSummary,
 )
 
@@ -364,3 +365,101 @@ async def invalidate_capabilities_cache_for_caller(
         await cache.async_set_cache(
             _capabilities_cache_key(user_api_key_dict), None, ttl=1
         )
+
+
+# ============================================================================
+# S1-05: public capabilities discovery (unauthenticated)
+# ============================================================================
+
+# Wider TTL — public data changes much less often than per-caller scopes.
+PUBLIC_CAPABILITIES_CACHE_TTL = int(
+    os.environ.get("LITELLM_PUBLIC_CAPABILITIES_CACHE_TTL", "300")
+)
+_PUBLIC_CACHE_KEY = "capabilities:public"
+
+
+def _public_model_allowlist() -> set:
+    """Public-model allowlist source — same convention as public_agent_groups.
+
+    Mirrors ``litellm.public_agent_groups``: a list configured at startup
+    (via config.yaml or env) of model names that are safe to advertise
+    anonymously. Empty/unset == nothing public.
+    """
+    return set(getattr(litellm, "public_model_groups", None) or [])
+
+
+def _public_mcp_allowlist() -> set:
+    """Public-mcp allowlist source. Empty == nothing public."""
+    return set(getattr(litellm, "public_mcp_groups", None) or [])
+
+
+def _build_public_response() -> PublicCapabilitiesResponse:
+    """Snapshot only public-flagged entities. Credential / server URL omitted."""
+    model_costs: Dict[str, Any] = getattr(litellm, "model_cost", {}) or {}
+    public_models = _public_model_allowlist()
+    public_mcps = _public_mcp_allowlist()
+    public_agents = set(getattr(litellm, "public_agent_groups", None) or [])
+
+    models = [
+        _build_model_summary(name, info)
+        for name, info in model_costs.items()
+        if isinstance(info, dict) and name in public_models
+    ]
+
+    agents: List[AgentSummary] = []
+    try:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        for agent in global_agent_registry.get_agent_list():
+            if agent.agent_id in public_agents:
+                agents.append(_build_agent_summary(agent))
+    except Exception as e:
+        verbose_proxy_logger.debug("public capabilities: skipped agents (%s)", e)
+
+    mcps: List[McpSummary] = []
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        for server in global_mcp_server_manager.get_registered_mcp_servers():
+            if server.server_id not in public_mcps:
+                continue
+            # The public summary intentionally omits transport / auth_type /
+            # access_groups — those leak deployment topology. Keep only the
+            # bare minimum a marketing page would need.
+            mcps.append(
+                McpSummary(
+                    server_id=server.server_id,
+                    server_name=server.name,
+                    needs_oauth=getattr(server, "auth_type", None) == "oauth2",
+                )
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug("public capabilities: skipped mcps (%s)", e)
+
+    return PublicCapabilitiesResponse(
+        models=models, agents=agents, mcps=mcps, skills=[]
+    )
+
+
+@router.get(
+    "/.well-known/xct-capabilities",
+    response_model=PublicCapabilitiesResponse,
+    tags=["[beta] Capabilities"],
+)
+async def get_public_capabilities() -> PublicCapabilitiesResponse:
+    """Anonymous discovery — only public-flagged entities. 5-min cache."""
+    cache = _get_capabilities_cache()
+    hit = await cache.async_get_cache(_PUBLIC_CACHE_KEY)
+    if hit is not None:
+        if isinstance(hit, PublicCapabilitiesResponse):
+            return hit
+        if isinstance(hit, dict):
+            return PublicCapabilitiesResponse(**hit)
+
+    response = _build_public_response()
+    await cache.async_set_cache(
+        _PUBLIC_CACHE_KEY, response, ttl=PUBLIC_CAPABILITIES_CACHE_TTL
+    )
+    return response
