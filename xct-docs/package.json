@@ -1,0 +1,32 @@
+{
+  "name": "xct-litellm-docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation site for the xct-litellm capability provider.",
+  "scripts": {
+    "docusaurus": "docusaurus",
+    "start": "docusaurus start --port 3010",
+    "build": "docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear",
+    "gen:api": "node scripts/generate-api-reference.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@docusaurus/core": "^3.5.0",
+    "@docusaurus/preset-classic": "^3.5.0",
+    "@mdx-js/react": "^3.0.0",
+    "clsx": "^2.1.0",
+    "prism-react-renderer": "^2.4.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "^3.5.0",
+    "@docusaurus/types": "^3.5.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
