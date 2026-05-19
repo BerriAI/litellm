@@ -393,20 +393,8 @@ def test_multiple_function_call():
                     "role": "model",
                     "parts": [
                         {"text": "test"},
-                        {
-                            "function_call": {
-                                "name": "test",
-                                "args": {"arg": "test"},
-                                "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
-                            }
-                        },
-                        {
-                            "function_call": {
-                                "name": "test2",
-                                "args": {"arg": "test2"},
-                                "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
-                            }
-                        },
+                        {"function_call": {"name": "test", "args": {"arg": "test"}}},
+                        {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
                     ],
                 },
                 {
@@ -416,14 +404,12 @@ def test_multiple_function_call():
                             "function_response": {
                                 "name": "test",
                                 "response": {"content": "42"},
-                                "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
                             }
                         },
                         {
                             "function_response": {
                                 "name": "test2",
                                 "response": {"content": "15"},
-                                "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
                             }
                         },
                     ],
@@ -516,20 +502,8 @@ def test_multiple_function_call_changed_text_pos():
                 "role": "model",
                 "parts": [
                     {"text": "test"},
-                    {
-                        "function_call": {
-                            "name": "test",
-                            "args": {"arg": "test"},
-                            "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
-                        }
-                    },
-                    {
-                        "function_call": {
-                            "name": "test2",
-                            "args": {"arg": "test2"},
-                            "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
-                        }
-                    },
+                    {"function_call": {"name": "test", "args": {"arg": "test"}}},
+                    {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
                 ],
             },
             {
@@ -539,14 +513,12 @@ def test_multiple_function_call_changed_text_pos():
                         "function_response": {
                             "name": "test2",
                             "response": {"content": "15"},
-                            "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
                         }
                     },
                     {
                         "function_response": {
                             "name": "test",
                             "response": {"content": "42"},
-                            "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
                         }
                     },
                 ],

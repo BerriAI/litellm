@@ -1249,7 +1249,6 @@ def _gemini_tool_call_invoke_helper(
         name=name,
         args=arguments_dict,
     )
-    # Gemini 3.5+ requires the `id` to be echoed back on `functionCall` parts so
     if tool_call_id:
         clean_id = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
         if clean_id:
@@ -1390,13 +1389,23 @@ def convert_to_gemini_tool_call_invoke(
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
 
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        forward_tool_call_id = bool(
+            model and VertexGeminiConfig._is_gemini_3_or_newer(model)
+        )
+
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
                     gemini_function_call: Optional[VertexFunctionCall] = (
                         _gemini_tool_call_invoke_helper(
                             function_call_params=tool["function"],
-                            tool_call_id=tool.get("id"),
+                            tool_call_id=(
+                                tool.get("id") if forward_tool_call_id else None
+                            ),
                         )
                     )
                     if gemini_function_call is not None:
@@ -1436,10 +1445,6 @@ def convert_to_gemini_tool_call_invoke(
                     thought_signature = provider_fields.get("thought_signature")
 
                 # If no signature found and model is gemini-3, use dummy signature
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                    VertexGeminiConfig,
-                )
-
                 if (
                     not thought_signature
                     and model
@@ -1469,6 +1474,7 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
+    model: Optional[str] = None,
 ) -> Union[VertexPartType, List[VertexPartType]]:
     """
     OpenAI message with a tool result looks like:
@@ -1610,12 +1616,19 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                 name = tool.get("function", {}).get("name", "")
 
     # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).
+    # Only Gemini 3+ accepts (and returns) an `id` on function_response parts;
+    # older Gemini models reject the field with a 400.
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
     gemini_call_id: Optional[str] = None
-    raw_tool_call_id = message.get("tool_call_id")
-    if raw_tool_call_id and isinstance(raw_tool_call_id, str):
-        stripped_id = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
-        if stripped_id:
-            gemini_call_id = stripped_id
+    if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+        raw_tool_call_id = message.get("tool_call_id")
+        if raw_tool_call_id and isinstance(raw_tool_call_id, str):
+            stripped_id = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+            if stripped_id:
+                gemini_call_id = stripped_id
 
     if not name:
         raise Exception(
