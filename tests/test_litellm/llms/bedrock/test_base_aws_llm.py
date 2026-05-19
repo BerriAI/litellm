@@ -869,14 +869,18 @@ def test_different_roles_without_session_names_should_not_share_cache():
         ({}, {"verify": True}),
         (
             {"aws_region_name": "us-east-1"},
-            {"region_name": "us-east-1", "verify": True},
+            {"verify": True},
         ),
         (
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
-            {"endpoint_url": "https://sts.eu-west-1.amazonaws.com", "verify": True},
+            {
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+                "verify": True,
+            },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -926,6 +930,106 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
 
 
 @pytest.mark.parametrize(
+    "endpoint,expected_region",
+    [
+        ("https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        ("https://sts.us-east-1.amazonaws.com", "us-east-1"),
+        (
+            "https://vpce-abc123.sts.eu-west-1.vpce.amazonaws.com",
+            "eu-west-1",
+        ),
+        ("https://sts.amazonaws.com", None),
+        ("https://invalid.example.com", None),
+    ],
+)
+def test_parse_sts_region_from_endpoint(endpoint, expected_region):
+    assert BaseAWSLLM._parse_sts_region_from_endpoint(endpoint) == expected_region
+
+
+def test_sts_uses_workload_region_not_bedrock_region():
+    """Air-gapped: Bedrock in eu-central-1, STS VPC endpoint in eu-west-1 via AWS_REGION."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+def test_sts_endpoint_region_matches_bedrock_region_param():
+    """aws_sts_endpoint signing region must not follow aws_region_name when they differ."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    env_without_irsa = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (
+            "AWS_ROLE_ARN",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+        )
+    }
+    with patch.dict(env_without_irsa, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+                aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+@pytest.mark.parametrize(
     "role_kwargs,expected_client_kwargs",
     [
         (
@@ -940,7 +1044,6 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
         (
             {"aws_region_name": "us-east-1"},
             {
-                "region_name": "us-east-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -951,6 +1054,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
             {
                 "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -958,7 +1062,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
