@@ -77,6 +77,57 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
+def _get_public_agent_ids() -> set:
+    """Return the set of agent_ids currently marked as public."""
+    return set(litellm.public_agent_groups or [])
+
+
+async def _resolve_visible_agent_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> set:
+    """
+    Resolve the set of agent_ids a non-admin caller is allowed to read
+    (list / get_by_id).
+
+    Combines three sources, **never** falling back to "see everything":
+      1. Explicit grants from object_permission (key + team + access_groups),
+         resolved via ``AgentRequestHandler.get_allowed_agents``.
+      2. Public agents from ``litellm.public_agent_groups``.
+      3. Agents the caller created (``created_by == user_id``).
+
+    Empty explicit grants do **not** mean "no restrictions"; an unscoped key
+    only sees public + owned agents. This mirrors the defensive pattern
+    already in place for ``get_agent_daily_activity``.
+    """
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    explicit_ids = set(
+        await AgentRequestHandler.get_allowed_agents(
+            user_api_key_auth=user_api_key_dict
+        )
+    )
+    public_ids = _get_public_agent_ids()
+
+    owned_ids: set = set()
+    if user_api_key_dict.user_id is not None and prisma_client is not None:
+        try:
+            owned_records = await prisma_client.db.litellm_agentstable.find_many(
+                where={"created_by": user_api_key_dict.user_id},
+            )
+            owned_ids = {row.agent_id for row in owned_records}
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Failed to look up owned agents for %s: %s",
+                user_api_key_dict.user_id,
+                e,
+            )
+
+    return explicit_ids | public_ids | owned_ids
+
+
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
     os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
 )
@@ -154,9 +205,6 @@ async def get_agents(
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-    )
 
     try:
         returned_agents: List[AgentResponse] = []
@@ -168,20 +216,13 @@ async def get_agents(
         ):
             returned_agents = global_agent_registry.get_agent_list()
         else:
-            # Get allowed agents from object_permission (key/team level)
-            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
-                user_api_key_auth=user_api_key_dict
-            )
-
-            # If no restrictions (empty list), return all agents
-            if len(allowed_agent_ids) == 0:
-                returned_agents = global_agent_registry.get_agent_list()
-            else:
-                # Filter agents by allowed IDs
-                all_agents = global_agent_registry.get_agent_list()
-                returned_agents = [
-                    agent for agent in all_agents if agent.agent_id in allowed_agent_ids
-                ]
+            # Non-admin: union of explicit grants + public agents + owned agents.
+            # Empty grants must NOT fall back to "see everything".
+            visible_ids = await _resolve_visible_agent_ids(user_api_key_dict)
+            all_agents = global_agent_registry.get_agent_list()
+            returned_agents = [
+                agent for agent in all_agents if agent.agent_id in visible_ids
+            ]
 
         # Fetch current spend from DB for all returned agents
         from litellm.proxy.proxy_server import prisma_client
@@ -398,14 +439,10 @@ async def get_agent_by_id(
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
     if not is_admin:
-        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-            AgentRequestHandler,
-        )
-
-        is_allowed = await AgentRequestHandler.is_agent_allowed(
-            agent_id=agent_id, user_api_key_auth=user_api_key_dict
-        )
-        if not is_allowed:
+        # Non-admin: explicit grants + public + owned. Empty grants must NOT
+        # silently allow access; use the same visibility set as list_agents.
+        visible_ids = await _resolve_visible_agent_ids(user_api_key_dict)
+        if agent_id not in visible_ids:
             raise HTTPException(
                 status_code=403,
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",

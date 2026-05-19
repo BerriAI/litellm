@@ -295,6 +295,13 @@ class TestAgentRBACInternalUser:
         assert resp.status_code == 200
 
     def test_should_allow_internal_user_to_get_agent_by_id(self, monkeypatch):
+        """Internal user can read an agent that has been granted to them.
+
+        Note: post-S3-01, simply being authenticated is no longer enough;
+        the agent must be in explicit grants, public, or owned. Here we mark
+        agent-123 as public so the test asserts the RBAC-allowed path.
+        """
+        monkeypatch.setattr("litellm.public_agent_groups", ["agent-123"])
         self.mock_registry.get_agent_by_id = MagicMock(
             return_value=_sample_agent_response()
         )
@@ -302,6 +309,7 @@ class TestAgentRBACInternalUser:
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
+            mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
             resp = self.internal_client.get(
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
             )
@@ -370,6 +378,163 @@ class TestAgentRBACInternalUserViewOnly:
             "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
         )
         assert resp.status_code == 403
+
+
+class TestAgentReadACLNonAdmin:
+    """
+    Read-ACL enforcement on GET /v1/agents and GET /v1/agents/{id}.
+
+    Regression for S3-01: non-admin callers with no explicit agent grants must
+    NOT silently see every agent in the registry. They should see only:
+    explicit grants ∪ public agents ∪ agents they created.
+    """
+
+    AGENT_GRANTED = "agent-granted"
+    AGENT_PUBLIC = "agent-public"
+    AGENT_OTHER = "agent-other"
+    AGENT_OWNED = "agent-owned"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        self.client = _make_app_with_role(LitellmUserRoles.INTERNAL_USER)
+        self.mock_registry = MagicMock()
+        # Registry holds four agents; the ACL decides which are visible.
+        self.mock_registry.get_agent_list = MagicMock(
+            return_value=[
+                _sample_agent_response(
+                    agent_id=self.AGENT_GRANTED, agent_name="Granted"
+                ),
+                _sample_agent_response(agent_id=self.AGENT_PUBLIC, agent_name="Public"),
+                _sample_agent_response(agent_id=self.AGENT_OTHER, agent_name="Other"),
+                _sample_agent_response(agent_id=self.AGENT_OWNED, agent_name="Owned"),
+            ]
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            self.mock_registry,
+        )
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
+        # Mark exactly one agent public.
+        monkeypatch.setattr("litellm.public_agent_groups", [self.AGENT_PUBLIC])
+
+    def _patch_owned(self, owned_ids):
+        owned_records = [MagicMock(agent_id=a) for a in owned_ids]
+        prisma = MagicMock()
+        prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=owned_records)
+        prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+        return patch("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    # -- list endpoint -------------------------------------------------------
+
+    def test_list_returns_only_explicit_grants_plus_public_plus_owned(
+        self, monkeypatch
+    ):
+        """The happy path: explicit grants resolve, plus public, plus owned."""
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[self.AGENT_GRANTED]),
+        )
+        with self._patch_owned([self.AGENT_OWNED]):
+            resp = self.client.get("/v1/agents", headers={"Authorization": "Bearer k"})
+        assert resp.status_code == 200
+        ids = {a["agent_id"] for a in resp.json()}
+        assert ids == {self.AGENT_GRANTED, self.AGENT_PUBLIC, self.AGENT_OWNED}
+        assert self.AGENT_OTHER not in ids
+
+    def test_list_with_no_grants_returns_only_public_and_owned(self, monkeypatch):
+        """
+        Branch 3 from CLAUDE.md: name does not resolve at all.
+        Empty allowed_agent_ids must NOT silently fall back to "all agents".
+        """
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[]),
+        )
+        with self._patch_owned([self.AGENT_OWNED]):
+            resp = self.client.get("/v1/agents", headers={"Authorization": "Bearer k"})
+        assert resp.status_code == 200
+        ids = {a["agent_id"] for a in resp.json()}
+        # Critically: AGENT_OTHER and AGENT_GRANTED must NOT leak through.
+        assert ids == {self.AGENT_PUBLIC, self.AGENT_OWNED}
+
+    def test_list_with_no_grants_and_no_owned_returns_only_public(self, monkeypatch):
+        """Unscoped caller with no owned agents sees only public agents."""
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[]),
+        )
+        with self._patch_owned([]):
+            resp = self.client.get("/v1/agents", headers={"Authorization": "Bearer k"})
+        assert resp.status_code == 200
+        ids = {a["agent_id"] for a in resp.json()}
+        assert ids == {self.AGENT_PUBLIC}
+
+    # -- detail endpoint -----------------------------------------------------
+
+    def test_get_by_id_allowed_when_explicit_grant(self, monkeypatch):
+        """Branch 1: name resolves and UUID is allowed -> 200."""
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[self.AGENT_GRANTED]),
+        )
+        self.mock_registry.get_agent_by_id = MagicMock(
+            return_value=_sample_agent_response(agent_id=self.AGENT_GRANTED)
+        )
+        with self._patch_owned([]):
+            resp = self.client.get(
+                f"/v1/agents/{self.AGENT_GRANTED}",
+                headers={"Authorization": "Bearer k"},
+            )
+        assert resp.status_code == 200
+
+    def test_get_by_id_blocked_when_grant_does_not_cover_target(self, monkeypatch):
+        """
+        Branch 2: name resolves but UUID is not allowed -> 403.
+        Even with a non-empty allowed_agent_ids, an agent outside the set is blocked.
+        """
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[self.AGENT_GRANTED]),
+        )
+        with self._patch_owned([]):
+            resp = self.client.get(
+                f"/v1/agents/{self.AGENT_OTHER}",
+                headers={"Authorization": "Bearer k"},
+            )
+        assert resp.status_code == 403
+
+    def test_get_by_id_blocked_when_no_grants_at_all(self, monkeypatch):
+        """
+        Branch 3 (the silent-fallback bug): empty allowed list + agent not
+        public/owned -> 403. Pre-fix, this returned 200 because is_agent_allowed
+        defaulted to True on empty list.
+        """
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[]),
+        )
+        with self._patch_owned([]):
+            resp = self.client.get(
+                f"/v1/agents/{self.AGENT_OTHER}",
+                headers={"Authorization": "Bearer k"},
+            )
+        assert resp.status_code == 403
+
+    def test_get_by_id_allowed_for_public_agent_without_grants(self, monkeypatch):
+        """Public agents are reachable even without explicit grants."""
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            AsyncMock(return_value=[]),
+        )
+        self.mock_registry.get_agent_by_id = MagicMock(
+            return_value=_sample_agent_response(agent_id=self.AGENT_PUBLIC)
+        )
+        with self._patch_owned([]):
+            resp = self.client.get(
+                f"/v1/agents/{self.AGENT_PUBLIC}",
+                headers={"Authorization": "Bearer k"},
+            )
+        assert resp.status_code == 200
 
 
 class TestAgentRBACProxyAdmin:
