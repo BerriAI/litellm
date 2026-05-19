@@ -2,14 +2,21 @@
 Test Azure AI cost calculator, especially Model Router flat cost.
 """
 
+import os
+
 import pytest
 
+import litellm
 from litellm.llms.azure_ai.cost_calculator import (
     _is_azure_model_router,
     cost_per_token,
 )
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
+
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+litellm.model_cost = get_model_cost_map(url="")
 
 # Get the flat cost from model_prices_and_context_window.json
 _model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
@@ -459,18 +466,21 @@ class TestAzureAIServiceTierCostCalculation:
     @pytest.fixture(autouse=True)
     def register_test_model(self):
         import litellm
-        litellm.register_model(model_cost={
-            "test-azure-ai-model": {
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-                "input_cost_per_token_priority": 0.01,
-                "output_cost_per_token_priority": 0.02,
-                "input_cost_per_token_flex": 0.0005,
-                "output_cost_per_token_flex": 0.001,
-                "litellm_provider": "azure_ai",
-                "max_tokens": 8192,
+
+        litellm.register_model(
+            model_cost={
+                "test-azure-ai-model": {
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                    "input_cost_per_token_priority": 0.01,
+                    "output_cost_per_token_priority": 0.02,
+                    "input_cost_per_token_flex": 0.0005,
+                    "output_cost_per_token_flex": 0.001,
+                    "litellm_provider": "azure_ai",
+                    "max_tokens": 8192,
+                }
             }
-        })
+        )
 
     def test_service_tier_priority_higher_cost(self):
         """Priority tier should cost more than standard for azure_ai."""
@@ -499,3 +509,49 @@ class TestAzureAIServiceTierCostCalculation:
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["azure_ai/deepseek-v4-pro"],
+)
+def test_azure_ai_deepseek_v4_pro_model_info(model_name: str):
+    model_info = get_model_info(model=model_name)
+
+    assert model_info["litellm_provider"] == "azure_ai"
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 1_000_000
+    assert model_info["max_output_tokens"] == 1_000_000
+    assert model_info["max_tokens"] == 1_000_000
+    assert model_info["input_cost_per_token"] == pytest.approx(1.74e-06)
+    assert model_info["output_cost_per_token"] == pytest.approx(3.48e-06)
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+
+
+def test_azure_ai_deepseek_v4_pro_raw_model_cost_entry():
+    model_info = litellm.model_cost["azure_ai/deepseek-v4-pro"]
+
+    assert model_info["supported_modalities"] == ["text"]
+    assert model_info["supported_output_modalities"] == ["text"]
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["deepseek-v4-pro"],
+)
+def test_azure_ai_deepseek_v4_pro_cost_per_token(model_name: str):
+    usage = Usage(
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        total_tokens=2_000_000,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(model=model_name, usage=usage)
+
+    assert prompt_cost == pytest.approx(1.74)
+    assert completion_cost == pytest.approx(3.48)
