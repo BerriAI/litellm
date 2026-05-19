@@ -2620,6 +2620,16 @@ jobs:
             # writes to the working directory and no CI step collects
             # them, so reviewers can't pull the per-cell pass/fail
             # breakdown when a red gate needs triage.
+            #
+            # `long_context_1m` is excluded from the pytest run:
+            # the row sends a ~210k-token prompt to Sonnet + Opus
+            # across five providers (~$19 / run by the row's own
+            # cost note). That price tag is acceptable on the daily
+            # cron but not on a per-PR merge gate -- a busy main
+            # branch would burn hundreds of dollars/day on this one
+            # row alone. The daily cron in
+            # tests/claude_code/cron_vm/run_daily.sh still exercises
+            # it and publishes the cell.
             env -i \
               PATH="$PATH" \
               HOME="$HOME" \
@@ -2637,6 +2647,7 @@ jobs:
                 --ignore=tests/claude_code/_builder_unit_tests \
                 --ignore=tests/claude_code/_publisher_unit_tests \
                 --ignore=tests/claude_code/_pr_gate_unit_tests \
+                --ignore=tests/claude_code/long_context_1m \
                 --junitxml=test-results/junit.xml \
                 --durations=10
           no_output_timeout: 30m
