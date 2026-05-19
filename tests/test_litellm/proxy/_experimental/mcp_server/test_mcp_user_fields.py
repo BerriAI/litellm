@@ -474,6 +474,10 @@ async def test_get_user_field_values_endpoint_reports_missing():
             "litellm.proxy._experimental.mcp_server.db.get_user_field_values",
             AsyncMock(return_value=None),
         ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[server_row]),
+        ),
     ):
         # Call the endpoint function directly to skip FastAPI auth wiring.
         from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
@@ -546,6 +550,10 @@ async def test_post_user_field_values_rejects_undeclared_keys():
         patch(
             "litellm.proxy._experimental.mcp_server.server._invalidate_user_fields_cache"
         ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[server_row]),
+        ),
     ):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -587,9 +595,15 @@ async def test_post_user_field_values_rejects_server_with_no_declared_fields():
         return_value=server_row
     )
 
-    with patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-        return_value=prisma_client,
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[server_row]),
+        ),
     ):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -606,3 +620,58 @@ async def test_post_user_field_values_rejects_server_with_no_declared_fields():
             "/v1/mcp/server/srv-1/user-field-values", json={"values": {"X": "y"}}
         )
         assert res.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_user_field_value_endpoints_404_when_server_not_in_allowed_set():
+    """Non-admin callers must not be able to probe servers outside their allowed set.
+
+    Without this gate, an authenticated user who knows another team's
+    ``server_id`` could call GET/POST/DELETE on the user-field-values
+    endpoints and leak the admin-declared field descriptors (header names,
+    env var names) for that server.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+    server_row = _server_row_with_user_fields()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=server_row
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app = FastAPI()
+        app.include_router(mod.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed", user_id="outsider"
+        )
+        client = TestClient(app)
+
+        get_res = client.get("/v1/mcp/server/srv-1/user-field-values")
+        assert get_res.status_code == 404
+        post_res = client.post(
+            "/v1/mcp/server/srv-1/user-field-values",
+            json={"values": {"GMAIL_TOKEN": "tok"}},
+        )
+        assert post_res.status_code == 404
+        del_res = client.delete("/v1/mcp/server/srv-1/user-field-values")
+        assert del_res.status_code == 404
+
+        # find_unique must never be reached — the access gate fails first,
+        # before any server metadata is read or returned.
+        prisma_client.db.litellm_mcpservertable.find_unique.assert_not_called()

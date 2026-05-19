@@ -2100,6 +2100,28 @@ if MCP_AVAILABLE:
     # their own values via these endpoints; values are injected at request
     # time as either HTTP headers (http/sse) or env vars (stdio).
 
+    async def _assert_user_can_access_mcp_server(
+        prisma_client: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+        server_id: str,
+    ) -> None:
+        """Refuse access to MCP servers the caller is not permitted to see.
+
+        Returns ``404`` (rather than ``403``) on failure so callers can't
+        probe for the existence of servers outside their allowed set by
+        comparing status codes. Admin viewers bypass the check.
+        """
+        if _user_has_admin_view(user_api_key_dict):
+            return
+        allowed_servers = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        if not does_mcp_server_exist(allowed_servers, server_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+
     def _build_user_fields_status(
         server: "LiteLLM_MCPServerTable",
         stored_values: Optional[Dict[str, str]],
@@ -2161,6 +2183,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _assert_user_can_access_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
@@ -2194,6 +2219,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _assert_user_can_access_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
@@ -2277,6 +2305,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _assert_user_can_access_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
