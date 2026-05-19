@@ -116,6 +116,11 @@ def supports_gemini_image_size(model: str) -> bool:
     return "2.5-flash" not in model
 
 
+def is_gemini_image_model(model: str) -> bool:
+    base_model = model.split("/", 1)[-1]
+    return "gemini" in base_model
+
+
 def map_openai_image_params_to_gemini(
     params: Dict[str, Any],
     model: str,
@@ -139,7 +144,7 @@ def map_openai_image_params_to_gemini(
             model,
         )
         if image_config is not None:
-            if "gemini" in model:
+            if is_gemini_image_model(model):
                 mapped_params["imageConfig"] = image_config
             else:
                 mapped_params["aspectRatio"] = image_config["aspectRatio"]

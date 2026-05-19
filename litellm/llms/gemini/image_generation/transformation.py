@@ -7,6 +7,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 )
 from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
+    is_gemini_image_model,
     map_openai_image_params_to_gemini,
 )
 from litellm.llms.gemini.image_usage_transformation import (
@@ -39,7 +40,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         https://ai.google.dev/gemini-api/docs/imagen
         """
         supported_params = ["n", "size"]
-        if "gemini" in model:
+        if is_gemini_image_model(model):
             supported_params.append("imageConfig")
         return supported_params  # type: ignore[return-value]
 
@@ -79,7 +80,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
 
         # Gemini Flash Image Preview models use generateContent endpoint
-        if "gemini" in model:
+        if is_gemini_image_model(model):
             complete_url = f"{complete_url}/models/{model}:generateContent"
         else:
             # All other Imagen models use predict endpoint
@@ -131,7 +132,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         }
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
-        if "gemini" in model:
+        if is_gemini_image_model(model):
             request_body: dict = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": get_gemini_image_generation_config(
@@ -184,7 +185,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Handle different response formats based on model
-        if "gemini" in model:
+        if is_gemini_image_model(model):
             # Gemini Flash Image Preview models return in candidates format
             candidates = response_data.get("candidates", [])
             for candidate in candidates:

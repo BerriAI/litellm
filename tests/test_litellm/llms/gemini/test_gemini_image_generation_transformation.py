@@ -47,6 +47,63 @@ def test_gemini_image_generation_map_openai_params_maps_n_size_and_image_config(
     }
 
 
+def test_imagen_generation_with_provider_prefix_uses_imagen_params_and_response():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "n": 1,
+            "size": "1024x1024",
+        },
+        optional_params={},
+        model="gemini/imagen-4.0-generate-001",
+        drop_params=False,
+    )
+    assert mapped == {
+        "sampleCount": 1,
+        "aspectRatio": "1:1",
+        "imageSize": "1K",
+    }
+
+    request = config.transform_image_generation_request(
+        model="gemini/imagen-4.0-generate-001",
+        prompt="Generate a simple app icon",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+    assert request == {
+        "instances": [{"prompt": "Generate a simple app icon"}],
+        "parameters": {
+            "sampleCount": 1,
+            "aspectRatio": "1:1",
+            "imageSize": "1K",
+        },
+    }
+
+    result = config.transform_image_generation_response(
+        model="gemini/imagen-4.0-generate-001",
+        raw_response=httpx.Response(
+            status_code=200,
+            json={
+                "predictions": [
+                    {
+                        "bytesBase64Encoded": "fake-imagen-image",
+                    }
+                ]
+            },
+        ),
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    assert result.data is not None
+    assert result.data[0].b64_json == "fake-imagen-image"
+
+
 def test_gemini_image_generation_usage_includes_chat_token_details():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(
