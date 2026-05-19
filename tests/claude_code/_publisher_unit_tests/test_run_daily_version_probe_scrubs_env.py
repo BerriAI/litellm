@@ -24,7 +24,7 @@ RUN_DAILY = REPO_ROOT / "tests" / "claude_code" / "cron_vm" / "run_daily.sh"
 def _version_probe_block() -> str:
     body = RUN_DAILY.read_text()
     start = body.index("CLAUDE_CODE_VERSION=")
-    end = body.index("[[ -n \"${CLAUDE_CODE_VERSION}\" ]]", start)
+    end = body.index('[[ -n "${CLAUDE_CODE_VERSION}" ]]', start)
     return body[start:end]
 
 
@@ -59,3 +59,34 @@ def test_version_probe_env_i_excludes_provider_secrets() -> None:
             f"not pass {forbidden} through. Found it inside the probe "
             f"block."
         )
+
+
+def test_version_probe_uses_isolated_home_not_runtime_user_home() -> None:
+    """Pin: the `claude --version` probe runs under a fresh empty HOME.
+
+    `ProtectHome=read-only` in the systemd unit allows reads of the
+    runtime user's real home directory. If the probe's `env -i`
+    block forwards `HOME=${HOME}`, a compromised `claude` package
+    can `os.path.expanduser("~/.config/gh/hosts.yml")` or
+    `os.path.expanduser("~/.ssh/...")` and exfiltrate the contents
+    before the proxy or test harness ever starts. The probe must
+    point HOME at a per-run tmpdir under `${WORKDIR}` so the CLI
+    sees an empty HOME instead.
+    """
+    block = _version_probe_block()
+    body = RUN_DAILY.read_text()
+
+    assert "CLAUDE_PROBE_HOME=" in body, (
+        "run_daily.sh: must define a `CLAUDE_PROBE_HOME` per-run tmpdir "
+        "for the `claude --version` probe so the CLI never sees the "
+        "runtime user's real $HOME."
+    )
+    assert 'HOME="${CLAUDE_PROBE_HOME}"' in block, (
+        "run_daily.sh: the probe's `env -i` block must set HOME to "
+        "the per-run isolated tmpdir, not to the runtime user's $HOME."
+    )
+    assert 'HOME="${HOME}"' not in block, (
+        "run_daily.sh: the probe's `env -i` block must not forward the "
+        "runtime user's $HOME to `claude --version`. Use the isolated "
+        "$CLAUDE_PROBE_HOME tmpdir instead."
+    )

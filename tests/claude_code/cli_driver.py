@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -39,18 +41,25 @@ DEFAULT_TIMEOUT_SECONDS = float(
 )
 
 # Env vars the `claude` Node CLI legitimately needs to function:
-# locating its own binary + node, finding HOME for ~/.claude config,
-# basic locale/terminal plumbing. Deliberately excludes every
-# credential-bearing var that the surrounding CI job sets for the
-# proxy (ANTHROPIC_API_KEY, AWS_*, AZURE_*, VERTEXAI_CREDENTIALS,
-# GITHUB_TOKEN, OPENAI_API_KEY, DATABASE_URL, ...). The CLI talks to
-# the proxy via the explicit ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
-# we set below — it has no business reading the proxy's upstream
-# credentials, and a compromised CLI release shouldn't be able to
-# exfiltrate them out of the CI environment.
+# locating its own binary + node, basic locale/terminal plumbing.
+# Deliberately excludes every credential-bearing var that the
+# surrounding CI job sets for the proxy (ANTHROPIC_API_KEY, AWS_*,
+# AZURE_*, VERTEXAI_CREDENTIALS, GITHUB_TOKEN, OPENAI_API_KEY,
+# DATABASE_URL, ...). The CLI talks to the proxy via the explicit
+# ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN we set below — it has no
+# business reading the proxy's upstream credentials, and a
+# compromised CLI release shouldn't be able to exfiltrate them out
+# of the CI environment.
+#
+# `HOME` is intentionally NOT in this list: see `_make_isolated_home`
+# below. We give the CLI a fresh empty per-invocation HOME so a
+# compromised claude package or a model-directed `Read` tool call
+# can't reach files like `~/.config/gh/hosts.yml`, `~/.ssh/id_rsa`,
+# or `~/.bash_history` on the cron VM (and on the CircleCI executor
+# the same isolation prevents accidentally exposing checkout-adjacent
+# files even though the runner home is ephemeral there).
 _CLI_ENV_ALLOWLIST: tuple = (
     "PATH",
-    "HOME",
     "USER",
     "LOGNAME",
     "SHELL",
@@ -63,6 +72,29 @@ _CLI_ENV_ALLOWLIST: tuple = (
     "NVM_DIR",
     "NVM_BIN",
 )
+
+
+def _make_isolated_home() -> str:
+    """Create a fresh empty HOME directory for a single `claude` subprocess.
+
+    The CLI needs *a* writable HOME (it caches per-session state under
+    `$HOME/.claude/projects/<sha>/`), but it has no legitimate need
+    for the *user's* HOME. Handing it the real one means a compromised
+    `@anthropic-ai/claude-code` release, or a model-directed `Read`
+    tool call during a PDF/vision cell, can read host files like
+    `~/.config/gh/hosts.yml` (GitHub CLI host token), `~/.ssh/`,
+    `~/.bash_history`, or any other dotfile under the runtime user's
+    home. On the cron VM the runtime user is a real interactive
+    account (`mateo`) with a populated home directory, so this is a
+    real exfiltration surface.
+
+    The directory is created under `tempfile.gettempdir()` (which is
+    `/tmp` on Linux; under systemd's `PrivateTmp=true` that's a
+    per-service tmpfs that the service user can't otherwise reach).
+    Caller is responsible for `shutil.rmtree`-ing it after the
+    subprocess exits.
+    """
+    return tempfile.mkdtemp(prefix="claude-cli-home-")
 
 
 class ClaudeCLIError(RuntimeError):
@@ -171,6 +203,12 @@ def run_claude(
     }
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    # Hand the CLI a fresh empty HOME so a compromised claude package
+    # or a model-directed Read tool call can't see the runtime user's
+    # real dotfiles. Created here, removed in the `finally` below
+    # regardless of how the subprocess exits.
+    isolated_home = _make_isolated_home()
+    env["HOME"] = isolated_home
     if extra_env:
         env.update(extra_env)
 
@@ -185,21 +223,31 @@ def run_claude(
 
     run_fn = runner or subprocess.run
     try:
-        completed = run_fn(
-            cmd,
-            env=env,
-            input=stdin_input,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise ClaudeCLIError(
-            f"claude CLI not found at {cli_path!r}; install with `npm i -g @anthropic-ai/claude-code`"
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ClaudeCLIError(f"claude CLI timed out after {timeout}s") from exc
+        try:
+            completed = run_fn(
+                cmd,
+                env=env,
+                input=stdin_input,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise ClaudeCLIError(
+                f"claude CLI not found at {cli_path!r}; install with `npm i -g @anthropic-ai/claude-code`"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ClaudeCLIError(f"claude CLI timed out after {timeout}s") from exc
+    finally:
+        # Best-effort cleanup. If the subprocess wrote a `.claude/`
+        # session dir under the isolated HOME, we remove it here so
+        # parallel matrix runs don't accumulate per-call tmpdirs.
+        # `ignore_errors=True` because rmtree races with any
+        # not-yet-reaped child (SIGTERM'd `claude` on a host-side
+        # timeout) are benign — the next matrix run starts from a
+        # fresh tmpdir anyway.
+        shutil.rmtree(isolated_home, ignore_errors=True)
 
     events = _parse_stream_json(completed.stdout or "")
     text = _extract_assistant_text(events)

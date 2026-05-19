@@ -122,7 +122,7 @@ def test_run_claude_extra_env_is_added_to_subprocess_env():
 
 
 def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
-    """Process-runtime vars (PATH, HOME) flow through; credentials don't.
+    """Process-runtime vars (PATH) flow through; credentials don't.
 
     The `claude` CLI is a Node binary installed dynamically from npm in
     CI. If the package were ever compromised, inheriting the entire
@@ -131,6 +131,9 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     Pin the contract: only the small allowlist of runtime vars is
     inherited; everything else is dropped unless the caller passes it
     explicitly via extra_env.
+
+    `HOME` is *not* on the allowlist anymore — see the dedicated
+    isolated-HOME test below for the reason.
     """
     monkeypatch.setenv("PATH", "/usr/bin:/usr/local/bin")
     monkeypatch.setenv("HOME", "/home/runner")
@@ -150,12 +153,138 @@ def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
     )
     env = captured["env"]
     assert env["PATH"] == "/usr/bin:/usr/local/bin"
-    assert env["HOME"] == "/home/runner"
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert "ANTHROPIC_API_KEY" not in env
     assert "AZURE_FOUNDRY_API_KEY" not in env
     assert "VERTEXAI_CREDENTIALS" not in env
     assert "GITHUB_TOKEN" not in env
+
+
+def test_run_claude_uses_isolated_per_invocation_home(monkeypatch, tmp_path):
+    """`claude` subprocess never sees the runtime user's real $HOME.
+
+    The CLI needs *a* HOME (it caches per-session state under
+    `$HOME/.claude/projects/<sha>/`), but it has no business reading
+    the runtime user's real one. On the cron VM the runtime user is a
+    real interactive account with a populated home directory
+    (~/.config/gh/hosts.yml carrying a GitHub token, ~/.ssh/, etc.);
+    handing /home/mateo to a compromised npm package — or to a
+    model-directed `Read` tool call during the PDF/vision cells —
+    would let it exfiltrate those files. We hand the CLI a fresh
+    empty per-invocation tmpdir instead.
+    """
+    monkeypatch.setenv("HOME", "/home/runner")
+
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        runner=runner,
+    )
+    env = captured["env"]
+    assert "HOME" in env, "claude CLI needs HOME to find ~/.claude session dir"
+    assert (
+        env["HOME"] != "/home/runner"
+    ), "HOME must not leak the parent process's HOME to claude"
+    # The isolated HOME is a fresh tmpdir prefixed `claude-cli-home-`;
+    # see `_make_isolated_home` in cli_driver.py. It exists during the
+    # subprocess call and is removed afterwards (cleanup runs in a
+    # `finally`, so by the time this assertion runs the dir is gone —
+    # we only check the *prefix* of the path string we captured).
+    assert "claude-cli-home-" in env["HOME"]
+
+
+def test_run_claude_isolated_home_is_distinct_per_invocation(monkeypatch):
+    """Two consecutive calls get two different isolated HOMEs.
+
+    Reusing a single tmpdir across calls would defeat the isolation
+    in the parallel matrix run (a compromised CLI could plant a file
+    in HOME on one model's run and read it on the next). Pin: each
+    `run_claude` invocation gets its own freshly-created HOME.
+    """
+    monkeypatch.setenv("HOME", "/home/runner")
+
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        runner=runner,
+    )
+    home_a = captured["env"]["HOME"]
+
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        runner=runner,
+    )
+    home_b = captured["env"]["HOME"]
+
+    assert home_a != home_b
+
+
+def test_run_claude_isolated_home_cleaned_up_after_run(monkeypatch):
+    """The per-invocation HOME tmpdir is rm-rf'd when run_claude returns.
+
+    Without cleanup, a long matrix run would accumulate one tmpdir
+    per cell × per model × per CLI call (~75 dirs per cron run,
+    growing without bound across days).
+    """
+    import os as _os
+
+    monkeypatch.setenv("HOME", "/home/runner")
+
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        runner=runner,
+    )
+    isolated_home = captured["env"]["HOME"]
+    assert not _os.path.exists(
+        isolated_home
+    ), f"isolated HOME {isolated_home!r} should be removed after run_claude returns"
+
+
+def test_run_claude_isolated_home_cleaned_up_on_subprocess_failure(monkeypatch):
+    """Cleanup runs even when the CLI subprocess raises.
+
+    If the CLI is missing or times out, `run_claude` raises
+    `ClaudeCLIError` — but the per-invocation HOME tmpdir must still
+    be removed (the `finally` clause), otherwise long failure-prone
+    runs leak tmpdirs.
+    """
+    import os as _os
+
+    monkeypatch.setenv("HOME", "/home/runner")
+
+    captured: dict = {}
+
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
+        captured["env"] = env
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    with pytest.raises(ClaudeCLIError):
+        run_claude(
+            prompt="hi",
+            model="claude-opus-4-7",
+            base_url="http://localhost",
+            api_key="sk-abc",
+            runner=runner,
+        )
+
+    isolated_home = captured["env"]["HOME"]
+    assert not _os.path.exists(
+        isolated_home
+    ), f"isolated HOME {isolated_home!r} should be removed even on timeout"
 
 
 def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(monkeypatch):

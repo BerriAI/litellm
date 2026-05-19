@@ -173,9 +173,20 @@ log "resolved litellm: ${LITELLM_VERSION}"
 # the proxy or test harness ever starts. Probe under `env -i` with the
 # same minimal allowlist the PR-gate uses (the matrix run itself goes
 # through cli_driver.py, which already scrubs the CLI env).
+#
+# The probe also runs under a fresh empty HOME instead of the runtime
+# user's real $HOME. `ProtectHome=read-only` in the systemd unit
+# blocks *writes* to /home/mateo but still allows reads, so a
+# compromised claude package invoked here with HOME=/home/mateo could
+# read ~/.config/gh/hosts.yml (the gh-host token), ~/.bash_history,
+# or ~/.ssh/. Pointing HOME at a per-run dir under ${WORKDIR} hides
+# those entirely from the subprocess; ${WORKDIR} is rm -rf'd by the
+# script-wide cleanup() trap regardless of probe outcome.
+CLAUDE_PROBE_HOME="${WORKDIR}/claude-probe-home"
+mkdir -p "${CLAUDE_PROBE_HOME}"
 CLAUDE_CODE_VERSION="$(env -i \
   PATH="${PATH}" \
-  HOME="${HOME}" \
+  HOME="${CLAUDE_PROBE_HOME}" \
   USER="${USER:-mateo}" \
   TERM="${TERM:-dumb}" \
   LANG="${LANG:-C.UTF-8}" \
@@ -385,7 +396,14 @@ FORK_OWNER="${FORK_OWNER:-agent-shin}"
 FORK_REPO="${FORK_REPO:-${FORK_OWNER}/litellm-docs}"
 
 log "cloning ${DOCS_REPO}@${DOCS_BRANCH}"
-gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
+# Use the agent-shin token inline rather than the host gh-cli config.
+# `BerriAI/litellm-docs` is a public repo so unauthenticated clone
+# would also work, but passing the token explicitly means the systemd
+# unit can hide `~/.config/gh` (`InaccessiblePaths=`) without breaking
+# this clone — closing the model-directed `Read("/home/mateo/.config/gh/...")`
+# exfiltration path on the cron VM.
+GH_TOKEN="${AGENT_SHIN_GITHUB_TOKEN}" \
+  gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
 
 cd "${DOCS_CLONE}"
 git config user.email "litellm-bot@berri.ai"
