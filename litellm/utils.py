@@ -5709,15 +5709,17 @@ def _get_model_info_helper(  # noqa: PLR0915
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
         if provider_config is not None:
-            try:
-                provider_model_info = provider_config.get_model_info(
-                    model=model,
-                    api_base=api_base,
-                )
-                if provider_model_info is not None:
-                    return provider_model_info
-            except Exception:
-                verbose_logger.debug("Could not get dynamic model info.")
+            get_model_info = getattr(provider_config, "get_model_info", None)
+            if callable(get_model_info):
+                try:
+                    provider_model_info = get_model_info(
+                        model=model,
+                        api_base=api_base,
+                    )
+                    if provider_model_info is not None:
+                        return provider_model_info
+                except Exception:
+                    verbose_logger.debug("Could not get dynamic model info.")
 
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)

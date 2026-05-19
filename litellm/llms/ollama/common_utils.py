@@ -1,12 +1,9 @@
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import httpx
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-if TYPE_CHECKING:
-    from litellm.types.utils import ModelInfoBase
 
 
 class OllamaError(BaseLLMException):
@@ -180,9 +177,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
     def get_runtime_model_info(
         self, model: str, api_base: Optional[str] = None
-    ) -> "ModelInfoBase":
+    ) -> dict[str, Any]:
         from litellm import module_level_client
-        from litellm.types.utils import ModelInfoBase
 
         model = self._strip_ollama_model_prefix(model)
         api_base = self.get_server_api_base(api_base)
@@ -197,35 +193,35 @@ class OllamaModelInfo(BaseLLMModelInfo):
             )
         except Exception:
             verbose_logger.debug("OllamaError: Could not get model info.")
-            return ModelInfoBase(
-                key=model,
-                litellm_provider="ollama",
-                mode="chat",
-                input_cost_per_token=0.0,
-                output_cost_per_token=0.0,
-                max_tokens=None,
-                max_input_tokens=None,
-                max_output_tokens=None,
-            )
+            return {
+                "key": model,
+                "litellm_provider": "ollama",
+                "mode": "chat",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "max_tokens": None,
+                "max_input_tokens": None,
+                "max_output_tokens": None,
+            }
 
         model_info = response.json()
         max_tokens = self._get_max_tokens(model_info)
 
-        return ModelInfoBase(
-            key=model,
-            litellm_provider="ollama",
-            mode="chat",
-            supports_function_calling=self._supports_function_calling(model_info),
-            input_cost_per_token=0.0,
-            output_cost_per_token=0.0,
-            max_tokens=max_tokens,
-            max_input_tokens=max_tokens,
-            max_output_tokens=max_tokens,
-        )
+        return {
+            "key": model,
+            "litellm_provider": "ollama",
+            "mode": "chat",
+            "supports_function_calling": self._supports_function_calling(model_info),
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "max_tokens": max_tokens,
+            "max_input_tokens": max_tokens,
+            "max_output_tokens": max_tokens,
+        }
 
     def get_model_info(
         self, model: str, api_base: Optional[str] = None
-    ) -> Optional["ModelInfoBase"]:
+    ) -> Optional[dict[str, Any]]:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base)
