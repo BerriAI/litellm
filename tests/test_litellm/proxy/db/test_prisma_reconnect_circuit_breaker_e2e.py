@@ -66,7 +66,7 @@ async def main() -> None:
 
     breaker_action = os.environ["REPRO_BREAKER_ACTION"]
     print(f"Breaker action: {breaker_action}")
-    print(f"DATABASE_URL: {os.environ['DATABASE_URL']}")
+    print("DATABASE_URL: <redacted>")
     if breaker_action == "exit":
         print("Expected: engine death opens breaker and sends SIGTERM.")
         await client.attempt_db_reconnect(
