@@ -588,14 +588,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         # leaves a list with zero tool-search entries, which must still skip
         # the ``tool-search-tool-2025-10-19`` beta.
         # Ref: https://github.com/BerriAI/litellm/issues/28083
+        # ``normalize_bedrock_invoke_tool_search_tools`` (called above) rewrites
+        # every dated regex entry to bare ``tool_search_tool_regex`` and drops
+        # the BM25 variant, so that bare form is the only tool-search type that
+        # can appear in ``anthropic_messages_request["tools"]`` at this point.
         if tool_search_used and not any(
-            isinstance(t, dict)
-            and t.get("type")
-            in {
-                "tool_search_tool_regex",
-                "tool_search_tool_regex_20251119",
-                "tool_search_tool_bm25_20251119",
-            }
+            isinstance(t, dict) and t.get("type") == "tool_search_tool_regex"
             for t in anthropic_messages_request.get("tools") or []
         ):
             tool_search_used = False
