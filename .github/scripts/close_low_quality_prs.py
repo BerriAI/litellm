@@ -44,15 +44,19 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-# Share the auto-close marker with the sibling Agent Shin script instead of
-# duplicating the literal — the reconsider provenance check
-# (`was_auto_closed_by_agent_shin`) keys off this exact phrase, so a drift
-# between the two files would silently break reconsider for Greptile-closed
-# PRs without any test catching it.
+# Share constants with the sibling Agent Shin script instead of duplicating
+# them. `AGENT_SHIN_AUTO_CLOSE_MARKER` is the literal phrase the reconsider
+# provenance check keys off, and `INTERNAL_ASSOCIATIONS` is the exempt-author
+# set; drift between the two files would silently break reconsider for
+# Greptile-closed PRs (marker) or let one script close a PR the other would
+# skip (associations), with no test catching it.
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
-from triage_with_llm import AGENT_SHIN_AUTO_CLOSE_MARKER  # noqa: E402
+from triage_with_llm import (  # noqa: E402
+    AGENT_SHIN_AUTO_CLOSE_MARKER,
+    INTERNAL_ASSOCIATIONS,
+)
 
 # Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
 # and `greptile-apps` in `gh pr view --json` output. Accept either form.
@@ -66,10 +70,6 @@ SCORE_PATTERN = re.compile(
     r"confidence\s*score\s*[:\-]?\s*(\d+)\s*/\s*5",
     re.IGNORECASE,
 )
-
-# `author_association` values for internal BerriAI contributors who should be
-# exempt from auto-triage.
-INTERNAL_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 # Default labels that exempt a PR from auto-close. Defined at module scope (not
 # as a mutable argparse default) so that `--optout-label foo` REPLACES the
@@ -159,7 +159,7 @@ def is_external_pr_author(pr: dict, repo: str | None) -> bool:
     # Fail-safe: if the API lookup failed (empty string), treat the author as
     # internal so we don't auto-close their PR. Auto-close is destructive, so
     # an unknown association should never make a PR eligible for closing.
-    if not association or association in INTERNAL_AUTHOR_ASSOCIATIONS:
+    if not association or association in INTERNAL_ASSOCIATIONS:
         return False
     return True
 
