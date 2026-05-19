@@ -1499,10 +1499,14 @@ class BaseAWSLLM:
         )
 
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        if headers is not None:
-            headers = {"Content-Type": "application/json", **headers}
-        else:
-            headers = {"Content-Type": "application/json"}
+        # Normalize header keys to lowercase before merging to prevent duplicate
+        # Content-Type/content-type entries in the SigV4 canonical string.  If
+        # both cases survive as separate dict keys, botocore joins their values
+        # ("application/json, application/json") and the resulting signature
+        # doesn't match the single-value header sent over the wire (401).
+        normalized: dict = {k.lower(): v for k, v in (headers or {}).items()}
+        normalized.setdefault("content-type", "application/json")
+        headers = normalized
 
         aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(

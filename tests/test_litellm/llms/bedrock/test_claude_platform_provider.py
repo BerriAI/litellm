@@ -1,8 +1,9 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from botocore.credentials import Credentials
 
 
 def _anthropic_response(url: str) -> httpx.Response:
@@ -310,3 +311,73 @@ async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api
     assert requests[0]["body"]["messages"] == [{"role": "user", "content": "hello"}]
     assert requests[0]["body"]["max_tokens"] == 10
     assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+
+
+def test_sigv4_no_duplicate_content_type_in_canonical_string():
+    """
+    Regression test: when the caller already sets content-type (lowercase) and
+    _sign_request also sets Content-Type (uppercase), both keys survive in a
+    plain Python dict and botocore joins their values into
+    "application/json, application/json" in the SigV4 canonical string.  The
+    actual request only sends one value, so the signature never matches → 401.
+
+    After the fix, header keys are normalised to lowercase before signing so
+    content-type appears exactly once regardless of what the caller sent.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    llm = BaseAWSLLM()
+
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    mock_sigv4 = MagicMock()
+
+    captured_aws_request_headers: list[dict] = []
+
+    def fake_aws_request(method, url, data, headers):
+        captured_aws_request_headers.append(dict(headers))
+        req = MagicMock()
+        req.headers = {
+            "Authorization": "AWS4-HMAC-SHA256 Credential=test",
+            "content-type": "application/json",
+            "x-amz-date": "20260101T000000Z",
+        }
+        req.body = data.encode() if isinstance(data, str) else data
+        return req
+
+    with (
+        patch("botocore.auth.SigV4Auth", return_value=mock_sigv4),
+        patch(
+            "botocore.awsrequest.AWSRequest",
+            side_effect=fake_aws_request,
+        ),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-east-1"),
+    ):
+        llm._sign_request(
+            service_name="aws-external-anthropic",
+            # Simulate headers that already carry lowercase content-type,
+            # as set by get_anthropic_headers() before sign_request is called.
+            headers={
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01",
+            },
+            optional_params={"aws_region_name": "us-east-1"},
+            request_data={
+                "model": "claude-sonnet-4-6",
+                "messages": [],
+                "max_tokens": 10,
+            },
+            api_base="https://aws-external-anthropic.us-east-1.api.aws/v1/messages",
+        )
+
+    assert len(captured_aws_request_headers) == 1
+    signed_headers = captured_aws_request_headers[0]
+
+    # content-type must appear exactly once — no "Content-Type" duplicate key
+    ct_keys = [k for k in signed_headers if k.lower() == "content-type"]
+    assert len(ct_keys) == 1, (
+        f"Expected exactly one content-type key, got {ct_keys}. "
+        "Duplicate keys cause SigV4 canonical string to contain "
+        "'application/json, application/json' and a 401 from AWS."
+    )
+    assert signed_headers[ct_keys[0]] == "application/json"
