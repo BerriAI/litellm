@@ -741,7 +741,10 @@ def triage(
         # fail -> leave closed + post a "still failing" comment so the
         # contributor can iterate again. When `close=False` we preview
         # the action instead of actually posting/reopening.
-        if decision != "fail":
+        # Only an explicit "pass" verdict triggers a reopen — any other
+        # value (including missing/malformed verdicts) is fail-safe and
+        # leaves the PR/issue closed.
+        if decision == "pass":
             reopen_body = format_reopen_comment(kind)
             if not close:
                 return {
