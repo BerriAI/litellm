@@ -5066,6 +5066,66 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_passes_through_google_native_sse_bytes():
+    """
+    Google-native streamGenerateContent yields raw SSE bytes; they must not be
+    re-wrapped as data: b'data: {...}'.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+    gemini_event = b'data: {"candidates": [{"content": "hi"}]}\n\n'
+    gemini_event_without_terminator = b'data: {"candidates": [{"content": "there"}]}'
+    raw_payload = b'{"partial": true}'
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield gemini_event
+            yield gemini_event_without_terminator
+            yield raw_payload
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text[0] == gemini_event.decode("utf-8")
+    assert yielded_text[1] == gemini_event_without_terminator.decode("utf-8") + "\n\n"
+    assert yielded_text[2] == f'data: {raw_payload.decode("utf-8")}\n\n'
+    assert "b'data:" not in "".join(yielded_text)
+    assert yielded_text[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_cleanup_on_normal_completion():
     """
     Test that async_data_generator calls response.aclose() even on normal completion.
