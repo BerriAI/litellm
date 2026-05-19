@@ -1406,6 +1406,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1431,6 +1432,19 @@ class MCPServerManager:
                 if extra_headers is None:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
+
+            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook)
+            if user_api_key_auth is not None and not server.spec_path:
+                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                    inject_mcp_jwt_headers_for_upstream,
+                )
+
+                extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                    user_api_key_dict=user_api_key_auth,
+                    extra_headers=extra_headers,
+                    raw_headers=raw_headers,
+                    for_list_tools=True,
+                )
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -2822,9 +2836,19 @@ class MCPServerManager:
         """
         start_time = datetime.datetime.now()
 
-        # Get the MCP server
-        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
-        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        # Resolve server (REST may pass server_name + prefixed or unprefixed tool name)
+        mcp_server: Optional[MCPServer] = None
+        for candidate in self.get_registry().values():
+            if normalize_server_name(candidate.name) == normalize_server_name(
+                server_name
+            ):
+                mcp_server = candidate
+                break
+        if mcp_server is None:
+            prefixed_tool_name = add_server_prefix_to_name(name, server_name)
+            mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        if mcp_server is None:
+            mcp_server = self._get_mcp_server_from_tool_name(name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 

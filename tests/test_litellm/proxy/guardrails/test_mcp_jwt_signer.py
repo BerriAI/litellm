@@ -338,7 +338,7 @@ async def test_hook_skips_non_mcp_call_types():
     user_dict = _make_user_api_key_dict()
     data = {"messages": [{"role": "user", "content": "hello"}]}
 
-    for call_type in ("completion", "acompletion", "embedding", "list_mcp_tools"):
+    for call_type in ("completion", "acompletion", "embedding"):
         original_data = {**data}
         result = await signer.async_pre_call_hook(
             user_api_key_dict=user_dict,
@@ -349,6 +349,30 @@ async def test_hook_skips_non_mcp_call_types():
         assert "extra_headers" not in (
             result or {}
         ), f"extra_headers should not be set for {call_type}"
+
+
+@pytest.mark.asyncio
+async def test_hook_signs_list_mcp_tools():
+    """async_pre_call_hook() signs JWT for list_mcp_tools with list scope."""
+    signer = _make_signer(
+        issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
+    )
+    user_dict = _make_user_api_key_dict(user_id="alice", team_id="backend")
+    data = {"mcp_tool_name": "should_be_cleared"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="list_mcp_tools",
+    )
+
+    assert isinstance(result, dict)
+    assert "extra_headers" in result
+    assert result["extra_headers"]["Authorization"].startswith("Bearer ")
+    token = result["extra_headers"]["Authorization"].removeprefix("Bearer ")
+    decoded = _decode_unverified(token)
+    assert "mcp:tools/list" in decoded["scope"]
 
 
 @pytest.mark.asyncio
