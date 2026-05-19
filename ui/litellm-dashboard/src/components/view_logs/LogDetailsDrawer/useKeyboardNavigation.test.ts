@@ -167,4 +167,51 @@ describe("useKeyboardNavigation", () => {
     expect(onSelectLog).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("does not re-register the keydown listener when callback identities are stable", () => {
+    // Regression guard: the effect deps include the page handlers, so unstable
+    // (inline) functions from the parent caused remove/addEventListener to fire
+    // on every render. With the parent passing stable refs (useCallback'd),
+    // a re-render with identical props must not churn the listener.
+    const logs = makeLogs();
+    const onSelectLog = vi.fn();
+    const onClose = vi.fn();
+    const onPreviousPage = vi.fn();
+    const onNextPage = vi.fn();
+
+    const addSpy = vi.spyOn(window, "addEventListener");
+
+    const { rerender } = renderHook(
+      (props) => useKeyboardNavigation(props),
+      {
+        initialProps: {
+          isOpen: true,
+          currentLog: logs[0],
+          allLogs: logs,
+          onClose,
+          onSelectLog,
+          onPreviousPage,
+          onNextPage,
+        },
+      },
+    );
+
+    const callsAfterMount = addSpy.mock.calls.filter(([type]) => type === "keydown").length;
+
+    // Re-render with the exact same prop references — should not re-attach.
+    rerender({
+      isOpen: true,
+      currentLog: logs[0],
+      allLogs: logs,
+      onClose,
+      onSelectLog,
+      onPreviousPage,
+      onNextPage,
+    });
+
+    const callsAfterRerender = addSpy.mock.calls.filter(([type]) => type === "keydown").length;
+    expect(callsAfterRerender).toBe(callsAfterMount);
+
+    addSpy.mockRestore();
+  });
 });

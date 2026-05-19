@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Drawer } from "antd";
 import {
   CheckOutlined,
@@ -154,17 +154,20 @@ export function LogDetailsDrawer({
   const canGoPreviousPage = isSessionMode && sessionPage > 1;
   const canGoNextPage = isSessionMode && sessionPage < sessionTotalPages;
 
-  const goToPreviousPage = () => {
+  // useCallback so the function identity only changes when the boundary
+  // flag flips, preventing the keydown listener in useKeyboardNavigation
+  // from churning on every parent re-render.
+  const goToPreviousPage = useCallback(() => {
     if (!canGoPreviousPage) return;
     setSelectedSessionRequestId(null);
     setSessionPage((p) => p - 1);
-  };
+  }, [canGoPreviousPage]);
 
-  const goToNextPage = () => {
+  const goToNextPage = useCallback(() => {
     if (!canGoNextPage) return;
     setSelectedSessionRequestId(null);
     setSessionPage((p) => p + 1);
-  };
+  }, [canGoNextPage]);
 
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
@@ -223,8 +226,11 @@ export function LogDetailsDrawer({
       }
       onSelectLog?.(selected);
     },
-    onPreviousPage: canGoPreviousPage ? goToPreviousPage : undefined,
-    onNextPage: canGoNextPage ? goToNextPage : undefined,
+    // goToPreviousPage / goToNextPage are useCallback'd and self-guard
+    // against out-of-bounds, so pass them directly to keep the reference
+    // stable across renders.
+    onPreviousPage: goToPreviousPage,
+    onNextPage: goToNextPage,
   });
 
   // Lazy-load log details (messages/response) only when drawer is open.
