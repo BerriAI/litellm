@@ -44,6 +44,26 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_initialize_instructions,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.mcp_otel import (
+    ATTR_MCP_ALLOWED_SERVER_COUNT,
+    ATTR_MCP_AUTH_TYPE,
+    ATTR_MCP_IS_BYOK,
+    ATTR_MCP_OPERATION,
+    ATTR_MCP_RESULT_IS_ERROR,
+    ATTR_MCP_SERVER_ID,
+    ATTR_MCP_SERVER_NAME,
+    ATTR_MCP_TOOL_COUNT,
+    ATTR_MCP_TOOL_NAME,
+    ATTR_MCP_TRANSPORT,
+    ATTR_MCP_USER_ID,
+    SPAN_MCP_EXECUTE_TOOL,
+    SPAN_MCP_LIST_TOOLS,
+    SPAN_MCP_PROTOCOL_CALL_TOOL,
+    SPAN_MCP_PROTOCOL_LIST_TOOLS,
+    mcp_span,
+    set_mcp_span_attribute,
+    set_mcp_span_attributes,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -322,50 +342,63 @@ if MCP_AVAILABLE:
         """
         List all available tools
         """
-        try:
-            # Get user authentication from context variable
-            (
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_servers,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers,
-                _client_ip,
-            ) = get_auth_context()
-            verbose_logger.debug(
-                f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
-            )
-            verbose_logger.debug(
-                f"MCP list_tools - MCP servers from context: {mcp_servers}"
-            )
-            verbose_logger.debug(
-                f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
-            )
-            # Get mcp_servers from context variable
-            verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
-            tools = await _list_mcp_tools(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                log_list_tools_to_spendlogs=True,
-                list_tools_log_source="mcp_protocol",
-            )
-            verbose_logger.info(
-                f"MCP list_tools - Successfully returned {len(tools)} tools"
-            )
-            return tools
-        except Exception as e:
-            verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
-            # Return empty list instead of failing completely
-            # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+        # Get user authentication from context variable
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            _client_ip,
+        ) = get_auth_context()
+        with mcp_span(
+            SPAN_MCP_PROTOCOL_LIST_TOOLS,
+            attributes={
+                ATTR_MCP_OPERATION: "list_tools",
+                ATTR_MCP_USER_ID: getattr(user_api_key_auth, "user_id", None),
+            },
+        ) as span:
+            try:
+                verbose_logger.debug(
+                    f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
+                )
+                verbose_logger.debug(
+                    f"MCP list_tools - MCP servers from context: {mcp_servers}"
+                )
+                verbose_logger.debug(
+                    f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+                )
+                # Get mcp_servers from context variable
+                verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
+                tools = await _list_mcp_tools(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    log_list_tools_to_spendlogs=True,
+                    list_tools_log_source="mcp_protocol",
+                )
+                verbose_logger.info(
+                    f"MCP list_tools - Successfully returned {len(tools)} tools"
+                )
+                set_mcp_span_attribute(span, ATTR_MCP_TOOL_COUNT, len(tools))
+                return tools
+            except Exception as e:
+                # The MCP protocol handler returns [] on error instead of
+                # propagating — keep that behaviour but make the failure
+                # visible in tracing.
+                verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
+                set_mcp_span_attribute(span, "mcp.error", str(e))
+                # Return empty list instead of failing completely. This
+                # prevents the HTTP stream from failing and allows the
+                # client to get a response.
+                return []
 
     @server.call_tool()
-    async def mcp_server_tool_call(
+    async def mcp_server_tool_call(  # noqa: PLR0915
         name: str, arguments: Dict[str, Any] | None
     ) -> CallToolResult:
         """
@@ -431,78 +464,107 @@ if MCP_AVAILABLE:
                     )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
-        try:
-            # Create a body date for logging
-            body_data = {"name": name, "arguments": arguments}
-            # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
-            chain_id = get_chain_id_from_headers(raw_headers)
-            if chain_id:
-                body_data["litellm_trace_id"] = chain_id
-                body_data["litellm_session_id"] = chain_id
+        with mcp_span(
+            SPAN_MCP_PROTOCOL_CALL_TOOL,
+            attributes={
+                ATTR_MCP_OPERATION: "call_tool",
+                ATTR_MCP_TOOL_NAME: name,
+                ATTR_MCP_USER_ID: getattr(user_api_key_auth, "user_id", None),
+            },
+        ) as span:
+            try:
+                # Create a body date for logging
+                body_data = {"name": name, "arguments": arguments}
+                # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
+                chain_id = get_chain_id_from_headers(raw_headers)
+                if chain_id:
+                    body_data["litellm_trace_id"] = chain_id
+                    body_data["litellm_session_id"] = chain_id
 
-            request = Request(
-                scope={
-                    "type": "http",
-                    "method": "POST",
-                    "path": "/mcp/tools/call",
-                    "headers": [(b"content-type", b"application/json")],
-                }
-            )
-            if user_api_key_auth is not None:
-                data = await add_litellm_data_to_request(
-                    data=body_data,
-                    request=request,
-                    user_api_key_dict=user_api_key_auth,
-                    proxy_config=proxy_config,
+                request = Request(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/mcp/tools/call",
+                        "headers": [(b"content-type", b"application/json")],
+                    }
                 )
-            else:
-                data = body_data
-
-            response = await call_mcp_tool(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                host_progress_callback=host_progress_callback,
-                **data,  # for logging
-            )
-        except BlockedPiiEntityError as e:
-            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        text=f"Error: Blocked PII entity detected - {str(e)}",
-                        type="text",
+                if user_api_key_auth is not None:
+                    data = await add_litellm_data_to_request(
+                        data=body_data,
+                        request=request,
+                        user_api_key_dict=user_api_key_auth,
+                        proxy_config=proxy_config,
                     )
-                ],
-                isError=True,
-            )
-        except GuardrailRaisedException as e:
-            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
-            return CallToolResult(
-                content=[
-                    TextContent(
-                        text=f"Error: Guardrail violation - {str(e)}", type="text"
-                    )
-                ],
-                isError=True,
-            )
-        except HTTPException as e:
-            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
-            return CallToolResult(
-                content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
-                isError=True,
-            )
-        except Exception as e:
-            verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
-            return CallToolResult(
-                content=[TextContent(text=f"Error: {str(e)}", type="text")],
-                isError=True,
-            )
+                else:
+                    data = body_data
 
-        return response
+                response = await call_mcp_tool(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    host_progress_callback=host_progress_callback,
+                    **data,  # for logging
+                )
+            except BlockedPiiEntityError as e:
+                verbose_logger.error(
+                    f"BlockedPiiEntityError in MCP tool call: {str(e)}"
+                )
+                # These exceptions are caught and converted into CallToolResult
+                # with isError=True so the MCP client gets a structured response.
+                # Record the failure on the span so it's visible in tracing.
+                set_mcp_span_attribute(span, "mcp.error", str(e))
+                set_mcp_span_attribute(span, ATTR_MCP_RESULT_IS_ERROR, True)
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            text=f"Error: Blocked PII entity detected - {str(e)}",
+                            type="text",
+                        )
+                    ],
+                    isError=True,
+                )
+            except GuardrailRaisedException as e:
+                verbose_logger.error(
+                    f"GuardrailRaisedException in MCP tool call: {str(e)}"
+                )
+                set_mcp_span_attribute(span, "mcp.error", str(e))
+                set_mcp_span_attribute(span, ATTR_MCP_RESULT_IS_ERROR, True)
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            text=f"Error: Guardrail violation - {str(e)}",
+                            type="text",
+                        )
+                    ],
+                    isError=True,
+                )
+            except HTTPException as e:
+                verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+                set_mcp_span_attribute(span, "mcp.error", str(e))
+                set_mcp_span_attribute(span, ATTR_MCP_RESULT_IS_ERROR, True)
+                return CallToolResult(
+                    content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                    isError=True,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
+                set_mcp_span_attribute(span, "mcp.error", str(e))
+                set_mcp_span_attribute(span, ATTR_MCP_RESULT_IS_ERROR, True)
+                return CallToolResult(
+                    content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                    isError=True,
+                )
+
+            set_mcp_span_attribute(
+                span,
+                ATTR_MCP_RESULT_IS_ERROR,
+                bool(getattr(response, "isError", False)),
+            )
+            return response
 
     @server.list_prompts()
     async def list_prompts() -> List[Prompt]:
@@ -1752,33 +1814,48 @@ if MCP_AVAILABLE:
         if not MCP_AVAILABLE:
             return []
 
-        # Resolve toolset permissions and merge into the key's object_permission
-        # so that the existing filter_tools_by_key_team_permissions logic picks them up.
-        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
+        with mcp_span(
+            SPAN_MCP_LIST_TOOLS,
+            attributes={
+                ATTR_MCP_OPERATION: "list_tools",
+                ATTR_MCP_USER_ID: getattr(user_api_key_auth, "user_id", None),
+                ATTR_MCP_ALLOWED_SERVER_COUNT: (
+                    len(mcp_servers) if mcp_servers else None
+                ),
+            },
+        ) as span:
+            # Resolve toolset permissions and merge into the key's
+            # object_permission so that the existing
+            # filter_tools_by_key_team_permissions logic picks them up.
+            user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
 
-        # Get tools from managed MCP servers with error handling
-        managed_tools = []
-        try:
-            managed_tools = await _get_tools_from_mcp_servers(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
-                list_tools_log_source=list_tools_log_source,
-            )
-            verbose_logger.debug(
-                f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"
-            )
-        except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from managed MCP servers: {str(e)}"
-            )
-            # Continue with empty managed tools list instead of failing completely
+            # Get tools from managed MCP servers with error handling
+            managed_tools = []
+            try:
+                managed_tools = await _get_tools_from_mcp_servers(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
+                    list_tools_log_source=list_tools_log_source,
+                )
+                verbose_logger.debug(
+                    f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error getting tools from managed MCP servers: {str(e)}"
+                )
+                # Continue with empty managed tools list instead of failing
+                # completely. Record the failure on the span so operators
+                # can still see why a list_tools returned no results.
+                set_mcp_span_attribute(span, "mcp.error", str(e))
 
-        return managed_tools
+            set_mcp_span_attribute(span, ATTR_MCP_TOOL_COUNT, len(managed_tools))
+            return managed_tools
 
     async def _list_mcp_prompts(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -2072,6 +2149,55 @@ if MCP_AVAILABLE:
         Returns:
             CallToolResult: Tool execution result
         """
+        # OTEL span for the full execute_tool flow. Attributes are
+        # backfilled below as we resolve the canonical server/tool names
+        # — the span is opened first so any nested helper that emits its
+        # own MCP span (or upstream HTTP span) is parented underneath.
+        with mcp_span(
+            SPAN_MCP_EXECUTE_TOOL,
+            attributes={
+                ATTR_MCP_OPERATION: "execute_tool",
+                ATTR_MCP_TOOL_NAME: name,
+                ATTR_MCP_USER_ID: getattr(user_api_key_auth, "user_id", None),
+                ATTR_MCP_ALLOWED_SERVER_COUNT: len(allowed_mcp_servers),
+            },
+        ) as _execute_tool_span:
+            return await _execute_mcp_tool_inner(
+                name=name,
+                arguments=arguments,
+                allowed_mcp_servers=allowed_mcp_servers,
+                start_time=start_time,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                host_progress_callback=host_progress_callback,
+                _otel_span=_execute_tool_span,
+                **kwargs,
+            )
+
+    async def _execute_mcp_tool_inner(  # noqa: PLR0915
+        name: str,
+        arguments: Dict[str, Any],
+        allowed_mcp_servers: List[MCPServer],
+        start_time: datetime,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
+        _otel_span: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> CallToolResult:
+        """Inner implementation of :func:`execute_mcp_tool`.
+
+        Split out so the wrapping OTEL span in :func:`execute_mcp_tool`
+        does not need to indent the whole body. ``_otel_span`` is the span
+        yielded by ``mcp_span`` — used here to backfill the resolved
+        ``server_name`` / ``server_id`` once we have them.
+        """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
 
@@ -2089,6 +2215,33 @@ if MCP_AVAILABLE:
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
         if mcp_server is not None:
             server_name = mcp_server.name
+
+        # Backfill resolved-server attributes onto the OTEL span. We do
+        # this *before* permission/BYOK checks so the span carries the
+        # right context even when the request is rejected.
+        set_mcp_span_attributes(
+            _otel_span,
+            {
+                ATTR_MCP_TOOL_NAME: original_tool_name,
+                ATTR_MCP_SERVER_NAME: server_name,
+                ATTR_MCP_SERVER_ID: (
+                    mcp_server.server_id if mcp_server is not None else None
+                ),
+                ATTR_MCP_TRANSPORT: (
+                    str(mcp_server.transport)
+                    if mcp_server is not None and mcp_server.transport is not None
+                    else None
+                ),
+                ATTR_MCP_AUTH_TYPE: (
+                    str(mcp_server.auth_type)
+                    if mcp_server is not None and mcp_server.auth_type is not None
+                    else None
+                ),
+                ATTR_MCP_IS_BYOK: (
+                    bool(mcp_server.is_byok) if mcp_server is not None else None
+                ),
+            },
+        )
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2278,6 +2431,16 @@ if MCP_AVAILABLE:
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
+        # Record whether the resolved tool call reported a tool-side error
+        # (CallToolResult.isError is True even on a successful HTTP round
+        # trip if the tool itself returned an error). Surfacing this on
+        # the span lets dashboards distinguish "transport ok / tool failed"
+        # from "transport failed".
+        set_mcp_span_attribute(
+            _otel_span,
+            ATTR_MCP_RESULT_IS_ERROR,
+            bool(getattr(response, "isError", False)),
+        )
         return response
 
     @client

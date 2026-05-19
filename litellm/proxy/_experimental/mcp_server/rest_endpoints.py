@@ -5,6 +5,14 @@ from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set,
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.mcp_otel import (
+    ATTR_MCP_OPERATION,
+    ATTR_MCP_REQUESTED_SERVER_ID,
+    ATTR_MCP_USER_ID,
+    SPAN_MCP_REST_CALL_TOOL,
+    SPAN_MCP_REST_LIST_TOOLS,
+    with_mcp_span,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
@@ -544,6 +552,14 @@ if MCP_AVAILABLE:
         }
 
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
+    @with_mcp_span(
+        SPAN_MCP_REST_LIST_TOOLS,
+        attribute_factory=lambda *args, **kwargs: {
+            ATTR_MCP_OPERATION: "list_tools",
+            ATTR_MCP_REQUESTED_SERVER_ID: kwargs.get("server_id"),
+            ATTR_MCP_USER_ID: getattr(kwargs.get("user_api_key_dict"), "user_id", None),
+        },
+    )
     async def list_tool_rest_api(
         request: Request,
         server_id: Optional[str] = Query(
@@ -707,6 +723,13 @@ if MCP_AVAILABLE:
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    @with_mcp_span(
+        SPAN_MCP_REST_CALL_TOOL,
+        attribute_factory=lambda *args, **kwargs: {
+            ATTR_MCP_OPERATION: "call_tool",
+            ATTR_MCP_USER_ID: getattr(kwargs.get("user_api_key_dict"), "user_id", None),
+        },
+    )
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
