@@ -75,9 +75,16 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
     return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
   };
 
+  const previewStatusLine =
+    defs.length === 0
+      ? "No fields defined."
+      : missing.length === 0
+        ? "All fields configured."
+        : `Missing field${missing.length === 1 ? "" : "s"}:`;
+
   const errorPreview = `Error: MCP server "${serverDisplayName}" requires user configuration before use.
 
-${missing.length > 0 ? `Missing field${missing.length === 1 ? "" : "s"}:` : "No fields defined."}
+${previewStatusLine}
 ${missing.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
 
 Please configure your fields at:
