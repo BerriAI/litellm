@@ -447,6 +447,52 @@ class TestMainOptoutLabelDefault:
             assert default not in captured["optout_labels"], default
 
 
+class TestMainLimitFlag:
+    """`--limit N` must cap closures in both dry-run and real mode."""
+
+    def _patch_three_closeable_prs(self, closer_module, monkeypatch):
+        prs = [
+            {
+                "number": i,
+                "title": f"p{i}",
+                "createdAt": "2026-05-10T00:00:00Z",
+                "isDraft": False,
+                "labels": [],
+                "author": {"login": f"ext{i}"},
+            }
+            for i in (1, 2, 3)
+        ]
+        monkeypatch.setattr(closer_module, "fetch_open_prs", lambda repo: prs)
+        monkeypatch.setattr(
+            closer_module,
+            "evaluate_pr",
+            lambda pr, now, mad, ms, repo, ol: ("close", 2, 30),
+        )
+        called: list[int] = []
+
+        def fake_close_pr(pr, **kwargs):
+            called.append(pr["number"])
+
+        monkeypatch.setattr(closer_module, "close_pr", fake_close_pr)
+        return called
+
+    def test_should_stop_at_limit_in_dry_run(self, closer_module, monkeypatch):
+        called = self._patch_three_closeable_prs(closer_module, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["close_low_quality_prs.py", "--limit", "2"])
+        rc = closer_module.main()
+        assert rc == 0
+        assert len(called) == 2
+
+    def test_should_stop_at_limit_when_closing(self, closer_module, monkeypatch):
+        called = self._patch_three_closeable_prs(closer_module, monkeypatch)
+        monkeypatch.setattr(
+            sys, "argv", ["close_low_quality_prs.py", "--limit", "2", "--close"]
+        )
+        rc = closer_module.main()
+        assert rc == 0
+        assert len(called) == 2
+
+
 class TestFetchOpenPrsLimitWarning:
     """`fetch_open_prs` must surface a warning when the gh CLI cap is hit."""
 

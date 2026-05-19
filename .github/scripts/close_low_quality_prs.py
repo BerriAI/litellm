@@ -392,7 +392,11 @@ def main() -> int:
         "--limit",
         type=int,
         default=None,
-        help="Maximum number of PRs to close in one run (safety net).",
+        help=(
+            "Maximum number of PRs to close in one run (safety net). "
+            "Applied in dry-run too so `--limit N` previews exactly the "
+            "first N closures."
+        ),
     )
     args = parser.parse_args()
 
@@ -446,11 +450,11 @@ def main() -> int:
             label=args.close_label,
         )
 
-        if not dry_run:
-            closed += 1
-            if args.limit is not None and closed >= args.limit:
-                print(f"\nReached --limit={args.limit}; stopping.")
-                break
+        closed += 1
+        if args.limit is not None and closed >= args.limit:
+            verb = "Would close" if dry_run else "Closed"
+            print(f"\nReached --limit={args.limit} ({verb} count); stopping.")
+            break
 
     print("\n=== Summary ===")
     for key, value in summary.items():
