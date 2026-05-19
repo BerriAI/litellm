@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES, PrismaClient
 
 
 class MockPrismaClient:
@@ -312,3 +312,70 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+def test_prisma_client_jsonify_object_strips_null_bytes_from_strings():
+    """PrismaClient.jsonify_object must strip \\x00 from string values (PostgreSQL text error fix)."""
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "request_id": "abc\x00def",
+            "metadata": '{"key": "val\x00ue"}',
+            "spend": 1.5,
+        },
+    )
+    assert "\x00" not in result["request_id"]
+    assert result["request_id"] == "abcdef"
+    assert "\x00" not in result["metadata"]
+    assert result["spend"] == 1.5
+
+
+def test_prisma_client_jsonify_object_strips_null_bytes_from_dicts():
+    """PrismaClient.jsonify_object must strip null bytes from JSON-serialized dict values.
+
+    json.dumps encodes \\x00 as the 6-char JSON escape \\u0000; both forms must be stripped
+    so PostgreSQL text columns don't receive unsupported Unicode escape sequences.
+    """
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "response": {"content": "hello\x00world"},
+            "messages": {"role": "user", "content": "test\x00"},
+        },
+    )
+    assert "\x00" not in result["response"]
+    assert "\\u0000" not in result["response"]
+    assert "\x00" not in result["messages"]
+    assert "\\u0000" not in result["messages"]
+    assert "helloworld" in result["response"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_strips_null_bytes_before_db_write():
+    """Spend logs containing \\x00 must be sanitized before create_many is called."""
+    prisma_client = MockPrismaClient()
+    # Use the real PrismaClient.jsonify_object instead of the identity mock
+    prisma_client.jsonify_object = lambda obj: PrismaClient.jsonify_object(None, obj)
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    prisma_client.spend_log_transactions = [
+        {
+            "request_id": "req\x001",
+            "messages": "hello\x00world",
+            "response": {"content": "text\x00with\x00nulls"},
+            "spend": 0.01,
+        }
+    ]
+
+    create_many_mock = AsyncMock(return_value=None)
+    prisma_client.db.litellm_spendlogs.create_many = create_many_mock
+
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert create_many_mock.call_count == 1
+    written_data = create_many_mock.call_args[1]["data"]
+    assert len(written_data) == 1
+    row = written_data[0]
+    assert "\x00" not in row["request_id"]
+    assert "\x00" not in row["messages"]
+    assert "\x00" not in row["response"]
