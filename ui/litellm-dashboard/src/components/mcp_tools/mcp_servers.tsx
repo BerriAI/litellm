@@ -22,7 +22,7 @@ import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
 import UserFieldsModal from "./UserFieldsModal";
-import { getMissingUserFields, getUserFieldDefs } from "./userFields";
+import { getMissingUserFields, getUserFieldDefs, removeUserFieldDefs } from "./userFields";
 import { ExclamationCircleFilled } from "@ant-design/icons";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
@@ -231,6 +231,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     try {
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
+      removeUserFieldDefs(serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
       refetch();
     } catch (error) {

@@ -67,6 +67,11 @@ export function setUserFieldValues(
   );
 }
 
+export function removeUserFieldDefs(serverId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(DEFS_KEY(serverId));
+}
+
 export function getMissingUserFields(
   serverId: string,
   userId: string,
