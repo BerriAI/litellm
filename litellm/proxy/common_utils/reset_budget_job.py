@@ -735,7 +735,7 @@ class ResetBudgetJob:
 
     async def reset_budget_windows(self) -> None:
         """
-        For keys and teams with budget_limits, reset any individual windows where
+        For keys, teams, and users with budget_limits, reset any individual windows where
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
 
@@ -746,7 +746,7 @@ class ResetBudgetJob:
         # Note on raw SQL: prisma-client-python does not support null-filtering
         # on `Json?` columns (no DbNull/JsonNull sentinel — see
         # RobertCraigie/prisma-client-py#714). We use `query_raw` with
-        # `IS NOT NULL` so we don't materialize every key/team row on each
+        # `IS NOT NULL` so we don't materialize every key/team/user row on each
         # tick of the reset job. Writes still go through the ORM.
 
         # --- Keys ---
@@ -805,6 +805,34 @@ class ResetBudgetJob:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Failed to reset budget windows for teams: %s", e
+            )
+
+        # --- Users ---
+        try:
+            user_rows = await self.prisma_client.db.query_raw(
+                'SELECT user_id, budget_limits FROM "LiteLLM_UserTable" '
+                "WHERE budget_limits IS NOT NULL"
+            )
+            for row in user_rows:
+                raw = row["budget_limits"]
+                if not raw:
+                    continue
+                windows = raw if isinstance(raw, list) else json.loads(raw)
+                changed = False
+                for window in windows:
+                    counter_key = f"spend:user:{row['user_id']}:window:{window['budget_duration']}"
+                    if await ResetBudgetJob._reset_expired_window(
+                        window, counter_key, spend_counter_cache, now
+                    ):
+                        changed = True
+                if changed:
+                    await self.prisma_client.db.litellm_usertable.update(
+                        where={"user_id": row["user_id"]},
+                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Failed to reset budget windows for users: %s", e
             )
 
     @staticmethod
