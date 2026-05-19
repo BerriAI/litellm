@@ -12,6 +12,8 @@ import {
   GuardrailProviders,
   skipSystemMessageToChoice,
   choiceToSkipSystemForCreate,
+  skipToolMessageToChoice,
+  choiceToSkipToolForCreate,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -213,6 +215,20 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipSystemForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipSystemForCreate("yes")).toBe(true);
       expect(choiceToSkipSystemForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("skipToolMessageToChoice / choiceToSkipToolForCreate", () => {
+    it("maps API values to form choices and back for create", () => {
+      expect(skipToolMessageToChoice(undefined)).toBe("inherit");
+      expect(skipToolMessageToChoice(null)).toBe("inherit");
+      expect(skipToolMessageToChoice(true)).toBe("yes");
+      expect(skipToolMessageToChoice(false)).toBe("no");
+
+      expect(choiceToSkipToolForCreate("inherit")).toBeUndefined();
+      expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
+      expect(choiceToSkipToolForCreate("yes")).toBe(true);
+      expect(choiceToSkipToolForCreate("no")).toBe(false);
     });
   });
 });

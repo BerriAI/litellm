@@ -1,0 +1,88 @@
+region = "us-west-2"
+azs    = ["us-west-2a", "us-west-2b"]
+
+# Resource naming: every AWS resource the stack creates is named
+# `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
+# tenant="acme" + env="stage" → ALB `acme-litellm-stage`, ECS service
+# `acme-litellm-stage-gateway`, etc.
+tenant = "acme"
+env    = "stage"
+
+# Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
+# TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
+# end up in a committed tfvars file. All three are optional — when
+# omitted the stack auto-generates a master key, runs without a license,
+# and falls back to LITELLM_MASTER_KEY for UI login.
+# litellm_master_key = "sk-..."
+# litellm_license    = "lic-..."
+# ui_password        = "..."
+
+# TLS: provide an ACM cert for production. Without one, plan fails unless
+# allow_plaintext_alb = true is set explicitly (trial/dev only).
+# acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+# allow_plaintext_alb = true
+
+# Storage retention: false (default) makes `terraform destroy` refuse on a
+# non-empty bucket. Flip to true only for ephemeral / CI stacks.
+# s3_force_destroy = false
+
+# Component images. Defaults pin all four to the same GHCR release tag —
+# bump them together when bumping LiteLLM. Override here to pull from a
+# private registry or to mix-and-match versions.
+# gateway_image    = "ghcr.io/berriai/litellm-gateway:1.86.0-dev"
+# backend_image    = "ghcr.io/berriai/litellm-backend:1.86.0-dev"
+# ui_image         = "ghcr.io/berriai/litellm-ui:1.86.0-dev"
+# migrations_image = "ghcr.io/berriai/litellm-migrations:1.86.0-dev"
+
+# Per-task sizing for the gateway. Defaults are 1 vCPU / 4 GiB / 1 worker.
+# uvicorn rule of thumb for CPU-bound work is (2 * vCPU) + 1 workers.
+# gateway_cpu         = 1024   # 1024 = 1 vCPU
+# gateway_memory      = 4096   # MiB
+# gateway_num_workers = 1
+
+# ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
+# proxy_config = {
+#   model_list = [
+#     {
+#       model_name = "gpt-4o"
+#       litellm_params = {
+#         model   = "openai/gpt-4o"
+#         api_key = "os.environ/OPENAI_API_KEY"
+#       }
+#     },
+#     {
+#       model_name = "claude-sonnet-4-6"
+#       litellm_params = {
+#         model   = "anthropic/claude-sonnet-4-6"
+#         api_key = "os.environ/ANTHROPIC_API_KEY"
+#       }
+#     },
+#   ]
+#   general_settings = {
+#     master_key   = "os.environ/LITELLM_MASTER_KEY"
+#     database_url = "os.environ/DATABASE_URL"
+#   }
+# }
+
+# ---------- Extra env / secrets ----------
+# Plain-text env vars (non-sensitive). Land directly in the ECS task def.
+# gateway_extra_env = {
+#   LANGFUSE_HOST = "https://us.cloud.langfuse.com"
+# }
+
+# Backend env vars commonly tuned in prod: SSO redirect, docs branding,
+# UI admin username. UI_PASSWORD is its own first-class var (see top).
+# backend_extra_env = {
+#   AUTO_REDIRECT_UI_LOGIN_TO_SSO = "true"
+#   DOCS_TITLE                    = "Acme LiteLLM"
+#   UI_USERNAME                   = "admin"
+# }
+
+# Provider API keys, sourced from existing Secrets Manager entries. The
+# execution role auto-gains GetSecretValue on each ARN listed here. The
+# values you reference above as `os.environ/OPENAI_API_KEY` must appear
+# here. Same shape works for backend_extra_secrets.
+# gateway_extra_secrets = {
+#   OPENAI_API_KEY    = "arn:aws:secretsmanager:us-west-2:111122223333:secret:openai-api-key-AbCdEf"
+#   ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-west-2:111122223333:secret:anthropic-api-key-GhIjKl"
+# }

@@ -38,7 +38,7 @@ Additional Test Scenarios:
 # Upstream model the proxy is configured with (spend_tracking_config.yaml).
 # The proxy computes spend using this model's pricing; the local ground-truth
 # calculation uses the same pricing table via litellm.cost_per_token.
-UPSTREAM_MODEL = "gpt-3.5-turbo"
+UPSTREAM_MODEL = "gpt-5-mini"
 
 # Batch writer flush cadence in CI is ~2-7s (PROXY_BATCH_WRITE_AT=2 + up to 5s jitter).
 # Poll every 2s for 60s — plenty of headroom for multiple ticks to land.

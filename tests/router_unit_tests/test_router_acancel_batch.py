@@ -21,9 +21,9 @@ def router():
     return Router(
         model_list=[
             {
-                "model_name": "gpt-4",
+                "model_name": "gpt-5.5",
                 "litellm_params": {
-                    "model": "gpt-4",
+                    "model": "gpt-5.5",
                     "api_key": "fake-key",
                 },
             }
@@ -44,7 +44,7 @@ async def test_router_acancel_batch(router):
         # This tests that the router method exists and can be called
         # The actual API call is mocked
         response = await router.acancel_batch(
-            model="gpt-4",
+            model="gpt-5.5",
             batch_id="batch_123",
         )
 

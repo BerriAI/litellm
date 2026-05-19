@@ -1428,7 +1428,13 @@ class BaseAWSLLM:
 
     def _sign_request(
         self,
-        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore", "s3vectors"],
+        service_name: Literal[
+            "bedrock",
+            "sagemaker",
+            "bedrock-agentcore",
+            "s3vectors",
+            "aws-external-anthropic",
+        ],
         headers: dict,
         optional_params: dict,
         request_data: dict,

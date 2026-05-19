@@ -633,6 +633,16 @@ class BaseLitellmParams(
         ),
     )
 
+    skip_tool_message_in_guardrail: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails skip tool-role messages when building "
+            "evaluation inputs (texts and structured_messages). When False, tool "
+            "messages are included even if litellm_settings sets a global skip. When "
+            "None, use the global litellm.skip_tool_message_in_guardrail setting."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,

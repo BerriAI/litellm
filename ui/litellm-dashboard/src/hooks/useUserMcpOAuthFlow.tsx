@@ -224,6 +224,7 @@ export const useUserMcpOAuthFlow = ({
         clientSecret: flowState.clientSecret,
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
+        accessToken,
       });
 
       // Persist the token for this user via the backend.

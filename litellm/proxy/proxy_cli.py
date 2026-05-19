@@ -805,7 +805,8 @@ def run_server(  # noqa: PLR0915
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Starts optional due to config fallback checks; guaranteed non-None before use.
+        db_connection_timeout: Optional[Union[int, float]] = 60
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -813,7 +814,12 @@ def run_server(  # noqa: PLR0915
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
-            db_port = os.getenv("DATABASE_PORT")
+            # Default to the Postgres standard port. Without a default,
+            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
+            # and botocore stringifies it to `"None"` while building the
+            # presigned URL, which then blows up with `ValueError: Port could
+            # not be cast to integer value as 'None'` during signing.
+            db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
@@ -909,10 +915,15 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
-            db_connection_timeout = general_settings.get(
-                "database_connection_pool_timeout",
-                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
-            )
+            db_connection_timeout = general_settings.get("database_connection_timeout")
+            if db_connection_timeout is None:
+                db_connection_timeout = general_settings.get(
+                    "database_connection_pool_timeout"
+                )
+            if db_connection_timeout is None:
+                db_connection_timeout = (
+                    LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+                )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is

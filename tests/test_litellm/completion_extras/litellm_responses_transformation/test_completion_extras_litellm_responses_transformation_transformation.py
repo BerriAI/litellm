@@ -2098,6 +2098,56 @@ def test_map_optional_params_preserves_reasoning_summary():
     assert responses_api_request["reasoning"]["summary"] == "detailed"
 
 
+def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
+    """Chat tool_choice must become Responses ToolChoiceFunction (top-level name)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {
+            "stream": False,
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "Echo"},
+            },
+        },
+        responses_api_request,
+    )
+    assert responses_api_request["tool_choice"] == {
+        "type": "function",
+        "name": "Echo",
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ("auto", "auto"),
+        ("none", "none"),
+        (
+            {"type": "function", "name": "Echo"},
+            {"type": "function", "name": "Echo"},
+        ),
+        (
+            {"type": "function", "name": "foo", "function": {"name": "bar"}},
+            {"type": "function", "name": "foo"},
+        ),
+        ({"type": "required"}, {"type": "required"}),
+    ],
+)
+def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    assert handler._normalize_tool_choice_for_responses_api(tool_choice) == expected
+
+
 def test_convert_chat_completion_file_type_to_input_file():
     """
     Test that Chat Completion content with type 'file' is correctly mapped

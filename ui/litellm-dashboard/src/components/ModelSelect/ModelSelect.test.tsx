@@ -535,6 +535,21 @@ describe("ModelSelect", () => {
     });
   });
 
+  it("should not render an empty optgroup when includeSpecialOptions is omitted", async () => {
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="global" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-select")).toBeInTheDocument();
+    });
+
+    const optgroups = document.querySelectorAll("optgroup");
+    // Wildcard Options + Models — no blank leading group
+    expect(optgroups.length).toBe(2);
+    optgroups.forEach((g) => {
+      expect(g.getAttribute("label")).toBeTruthy();
+    });
+  });
+
   it("should render maxTagPlaceholder when many items are selected", async () => {
     // Create many models to trigger maxTagCount responsive behavior
     const manyModels: ProxyModel[] = Array.from({ length: 20 }, (_, i) => ({

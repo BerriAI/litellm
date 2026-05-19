@@ -53,7 +53,7 @@ def test_mantle_url_construction():
         optional_params={"aws_region_name": "us-east-1"},
         litellm_params={},
     )
-    assert url == "https://bedrock-mantle.us-east-1.api.aws/v1/messages"
+    assert url == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
 
 
 def test_mantle_url_construction_different_region():
@@ -65,7 +65,7 @@ def test_mantle_url_construction_different_region():
         optional_params={"aws_region_name": "us-west-2"},
         litellm_params={},
     )
-    assert url == "https://bedrock-mantle.us-west-2.api.aws/v1/messages"
+    assert url == "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
 
 
 def test_get_bedrock_chat_config_returns_mantle_config():
@@ -89,7 +89,7 @@ def test_mantle_messages_url_construction():
         optional_params={"aws_region_name": "us-east-1"},
         litellm_params={},
     )
-    assert url == "https://bedrock-mantle.us-east-1.api.aws/v1/messages"
+    assert url == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
 
 
 def test_mantle_transform_request_strips_prefix_and_adds_model():

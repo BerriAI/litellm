@@ -239,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
@@ -353,8 +354,10 @@ class LiteLLMRoutes(enum.Enum):
         # realtime
         "/realtime",
         "/v1/realtime",
+        "/openai/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        "/openai/v1/realtime?{model}",
         # responses API
         "/responses",
         "/v1/responses",
@@ -539,6 +542,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -674,6 +678,10 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity",
             "/global/activity/model",
             "/global/activity/cache_hits",
+            # Tag usage endpoints scope internal users to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
@@ -686,7 +694,16 @@ class LiteLLMRoutes(enum.Enum):
         + compliance_check_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = (
+        spend_tracking_routes
+        + compliance_check_routes
+        + [
+            # Tag usage endpoints scope internal viewers to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
+        ]
+    )
 
     self_managed_routes = [
         "/team/member_add",
@@ -708,6 +725,8 @@ class LiteLLMRoutes(enum.Enum):
         # Project read routes - endpoint scopes results to caller's teams (non-admin)
         "/project/list",
         "/project/info",
+        # Endpoint enforces proxy-admin vs team-admin model access itself.
+        "/health/test_connection",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
@@ -1256,6 +1275,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1338,6 +1358,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1409,6 +1430,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -2381,6 +2403,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "limit concurrent health checks per cycle; when unset, "
             "health checks run without a concurrency cap"
+        ),
+    )
+    health_check_skip_disabled_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.disable_background_health_check "
+            "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
     alerting: Optional[List] = Field(
@@ -4343,10 +4372,16 @@ class JWTRoutingOverride(BaseModel):
 
     A rule matches when all provided selectors match token claims.
     If matched, request is routed to the configured auth path.
+
+    Wildcard selectors use shell-style patterns (* and ?) and are matched with
+    case-sensitive semantics; use the same casing your IdP emits in JWT claims.
+    Space-delimited tokenization applies only to the ``scope`` claim (OAuth/OIDC
+    scope strings), not to ``iss``, ``aud``, or ``client_id``.
     """
 
     iss: Union[str, List[str]]
     client_id: Optional[Union[str, List[str]]] = None
+    scope: Optional[Union[str, List[str]]] = None
     aud: Optional[Union[str, List[str]]] = None
     path: Literal["oauth2"] = "oauth2"
 
@@ -4462,6 +4497,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
+        # ``config_file_path`` is a non-field kwarg threaded by the
+        # startup-load path so an operator-configured
+        # ``custom_validate: s3://bucket/module.fn`` resolves through
+        # the documented config-file flow. Pop before the invalid-keys
+        # check; the runtime gate in ``get_instance_fn`` refuses
+        # ``s3://`` / ``gcs://`` when this is None.
+        config_file_path = kwargs.pop("config_file_path", None)
+
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
@@ -4475,7 +4518,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         custom_validate = kwargs.get("custom_validate")
 
         if custom_validate is not None:
-            fn = get_instance_fn(custom_validate)
+            fn = get_instance_fn(custom_validate, config_file_path=config_file_path)
             validate_custom_validate_return_type(fn)
             kwargs["custom_validate"] = fn
 
@@ -4507,6 +4550,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
     litellm_params: str
     model_info: str
+    blocked: bool
     updated_at: str
     updated_by: str
 

@@ -100,6 +100,7 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_auth_checks.py
               tests/proxy_unit_tests/test_user_api_key_auth.py
+              tests/proxy_unit_tests/test_deprecated_key_grace_period.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -142,6 +143,7 @@ jobs:
               tests/proxy_unit_tests/test_proxy_pass_user_config.py
               tests/proxy_unit_tests/test_proxy_token_counter.py
               tests/proxy_unit_tests/test_request_size_limit_middleware.py
+              tests/proxy_unit_tests/test_multipart_bypass_repro.py
             workers: 4
             dist: loadscope
             timeout: 15

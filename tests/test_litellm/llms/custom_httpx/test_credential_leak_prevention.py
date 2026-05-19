@@ -104,6 +104,31 @@ class TestMaskedHTTPStatusError:
         # The attached request must be the masked one, not the original.
         assert "KEY_X" not in str(req.url)
 
+    def test_handles_streaming_request_content(self):
+        """MaskedHTTPStatusError must not crash when request body is streamed."""
+        streaming_request = httpx.Request(
+            "POST",
+            "https://api.openai.com/v1/images/edits?key=SECRET_KEY",
+            stream=httpx.ByteStream(b"multipart-data"),
+        )
+        response = httpx.Response(
+            400,
+            request=streaming_request,
+            content=b'{"error": "bad request"}',
+        )
+        orig = httpx.HTTPStatusError(
+            message="400 Bad Request",
+            request=streaming_request,
+            response=response,
+        )
+
+        masked = MaskedHTTPStatusError(orig)
+
+        assert masked.status_code == 400
+        assert masked.response.status_code == 400
+        assert masked.response.request is not None
+        assert "SECRET_KEY" not in str(masked.request.url)
+
     def test_strips_content_encoding_to_avoid_double_decode(self):
         """If the upstream response declared Content-Encoding (e.g. gzip),
         the rebuilt Response must not carry that header over — otherwise httpx

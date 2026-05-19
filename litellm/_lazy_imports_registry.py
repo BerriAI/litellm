@@ -131,6 +131,7 @@ LLM_CONFIG_NAMES = (
     "OpenrouterConfig",
     "DataRobotConfig",
     "AnthropicConfig",
+    "BedrockClaudePlatformConfig",
     "AnthropicTextConfig",
     "GroqSTTConfig",
     "TritonConfig",
@@ -170,6 +171,7 @@ LLM_CONFIG_NAMES = (
     "SagemakerNovaConfig",
     "CohereChatConfig",
     "AnthropicMessagesConfig",
+    "BedrockClaudePlatformMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
     "TogetherAIConfig",
@@ -374,7 +376,6 @@ UTILS_MODULE_NAMES = (
     "HTTPHandler",
     "get_num_retries_from_retry_policy",
     "reset_retry_policy",
-    "get_secret",
     "get_coroutine_checker",
     "get_litellm_logging_class",
     "get_set_callbacks",
@@ -610,6 +611,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OpenrouterConfig": (".llms.openrouter.chat.transformation", "OpenrouterConfig"),
     "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
     "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
+    "BedrockClaudePlatformConfig": (
+        ".llms.bedrock.claude_platform.transformation",
+        "BedrockClaudePlatformConfig",
+    ),
     "AnthropicTextConfig": (
         ".llms.anthropic.completion.transformation",
         "AnthropicTextConfig",
@@ -711,6 +716,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AnthropicMessagesConfig": (
         ".llms.anthropic.experimental_pass_through.messages.transformation",
         "AnthropicMessagesConfig",
+    ),
+    "BedrockClaudePlatformMessagesConfig": (
+        ".llms.bedrock.claude_platform.messages_transformation",
+        "BedrockClaudePlatformMessagesConfig",
     ),
     "AmazonAnthropicClaudeMessagesConfig": (
         ".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
@@ -1274,7 +1283,6 @@ _UTILS_MODULE_IMPORT_MAP = {
         "litellm.router_utils.get_retry_from_policy",
         "reset_retry_policy",
     ),
-    "get_secret": ("litellm.secret_managers.main", "get_secret"),
     "get_coroutine_checker": (
         "litellm.litellm_core_utils.cached_imports",
         "get_coroutine_checker",

@@ -413,3 +413,71 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
             f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}"
         )
         assert call_kwargs["response_cost"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_pushes_redis_increments_when_redis_configured():
+    """
+    Virtual-key model max budget limiter does not run RouterBudgetLimiting.__init__,
+    so the periodic Redis flush task never starts. After logging spend we must call
+    _push_in_memory_increments_to_redis when Redis is wired so other workers see spend.
+    """
+    dual_cache = DualCache()
+    dual_cache.redis_cache = object()  # truthy placeholder; push only checks is not None
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    model = "gpt-4"
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.01,
+            "model": model,
+            "metadata": {"user_api_key_hash": "vk-hash"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {
+                    model: {"budget_limit": 10.0, "time_period": "1d"},
+                },
+            },
+        },
+    }
+    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock):
+        with patch.object(
+            limiter,
+            "_push_in_memory_increments_to_redis",
+            new_callable=AsyncMock,
+        ) as mock_push:
+            await limiter.async_log_success_event(
+                kwargs, response_obj=None, start_time=None, end_time=None
+            )
+            mock_push.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_redis_push_without_redis(budget_limiter):
+    """When dual_cache has no Redis backend, do not await _push_in_memory_increments_to_redis."""
+    assert budget_limiter.dual_cache.redis_cache is None
+    model = "gpt-4"
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.01,
+            "model": model,
+            "metadata": {"user_api_key_hash": "vk-hash"},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {
+                    model: {"budget_limit": 10.0, "time_period": "1d"},
+                },
+            },
+        },
+    }
+    with patch.object(budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock):
+        with patch.object(
+            budget_limiter,
+            "_push_in_memory_increments_to_redis",
+            new_callable=AsyncMock,
+        ) as mock_push:
+            await budget_limiter.async_log_success_event(
+                kwargs, response_obj=None, start_time=None, end_time=None
+            )
+            mock_push.assert_not_awaited()

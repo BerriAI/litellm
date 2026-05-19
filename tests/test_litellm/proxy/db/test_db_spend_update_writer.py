@@ -1513,3 +1513,146 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "bucket_name,input_dict,table_attr,method_name,where_key,expected_order",
+    [
+        pytest.param(
+            "user_list_transactions",
+            {"user_c": 0.1, "user_a": 0.2, "user_b": 0.3},
+            "litellm_usertable",
+            "update_many",
+            "user_id",
+            ["user_a", "user_b", "user_c"],
+            id="user",
+        ),
+        pytest.param(
+            "key_list_transactions",
+            {"tok_c": 0.1, "tok_a": 0.2, "tok_b": 0.3},
+            "litellm_verificationtoken",
+            "update_many",
+            "token",
+            ["tok_a", "tok_b", "tok_c"],
+            id="key",
+        ),
+        pytest.param(
+            "team_list_transactions",
+            {"team_c": 0.1, "team_a": 0.2, "team_b": 0.3},
+            "litellm_teamtable",
+            "update_many",
+            "team_id",
+            ["team_a", "team_b", "team_c"],
+            id="team",
+        ),
+        pytest.param(
+            "team_member_list_transactions",
+            {
+                "team_id::team_c::user_id::user_x": 0.1,
+                "team_id::team_a::user_id::user_x": 0.2,
+                "team_id::team_b::user_id::user_x": 0.3,
+            },
+            "litellm_teammembership",
+            "update_many",
+            "team_id",
+            ["team_a", "team_b", "team_c"],
+            id="team_member",
+        ),
+        pytest.param(
+            "org_list_transactions",
+            {"org_c": 0.1, "org_a": 0.2, "org_b": 0.3},
+            "litellm_organizationtable",
+            "update_many",
+            "organization_id",
+            ["org_a", "org_b", "org_c"],
+            id="org",
+        ),
+        pytest.param(
+            "end_user_list_transactions",
+            {"eu_c": 0.1, "eu_a": 0.2, "eu_b": 0.3},
+            "litellm_endusertable",
+            "upsert",
+            "user_id",
+            ["eu_a", "eu_b", "eu_c"],
+            id="end_user",
+        ),
+        pytest.param(
+            "tag_list_transactions",
+            {"prod": 0.1, "customer-x": 0.2, "test": 0.3},
+            "litellm_tagtable",
+            "update_many",
+            "tag_name",
+            ["customer-x", "prod", "test"],
+            id="tag",
+        ),
+        pytest.param(
+            "agent_list_transactions",
+            {"agent_c": 0.1, "agent_a": 0.2, "agent_b": 0.3},
+            "litellm_agentstable",
+            "update_many",
+            "agent_id",
+            ["agent_a", "agent_b", "agent_c"],
+            id="agent",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_commit_spend_updates_iterates_in_sorted_order(
+    bucket_name, input_dict, table_attr, method_name, where_key, expected_order
+):
+    """
+    Every spend-bucket code path in _commit_spend_updates_to_db must iterate
+    in sorted order so concurrent pods acquire row locks in the same order
+    and avoid PostgreSQL deadlocks. Covers the 5 direct loops (user/key/team/
+    team_member/org), the end_user path in ProxyUpdateSpend.update_end_user_spend,
+    and the shared _update_entity_spend_in_db helper (tag, agent).
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    captured_where_values = []
+
+    def capture(*, where, data):
+        captured_where_values.append(where[where_key])
+
+    mock_batcher = MagicMock()
+    table_mock = MagicMock()
+    setattr(table_mock, method_name, MagicMock(side_effect=capture))
+    setattr(mock_batcher, table_attr, table_mock)
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details = {}
+
+    buckets = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    buckets[bucket_name] = input_dict
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=buckets,
+    )
+
+    assert captured_where_values == expected_order

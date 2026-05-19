@@ -1386,7 +1386,7 @@ export const teamInfoCall = async (accessToken: string, teamID: string | null) =
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
     if (teamID) {
-      url = `${url}?team_id=${teamID}`;
+      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
     }
     console.log("in teamInfoCall");
     const response = await fetch(url, {
@@ -7288,9 +7288,28 @@ export const tagInfoCall = async (accessToken: string, tagNames: string[]): Prom
   }
 };
 
-export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
+const formatYmd = (value: Date): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const tagListCall = async (
+  accessToken: string,
+  startTime?: Date | null,
+  endTime?: Date | null,
+): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
+
+    if (startTime && endTime) {
+      const params = new URLSearchParams({
+        start_date: formatYmd(startTime),
+        end_date: formatYmd(endTime),
+      });
+      url = `${url}?${params.toString()}`;
+    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -8781,6 +8800,7 @@ interface ExchangeMcpOAuthTokenParams {
   clientSecret?: string;
   codeVerifier: string;
   redirectUri: string;
+  accessToken?: string | null;
 }
 
 export const exchangeMcpOAuthToken = async ({
@@ -8790,6 +8810,7 @@ export const exchangeMcpOAuthToken = async ({
   clientSecret,
   codeVerifier,
   redirectUri,
+  accessToken,
 }: ExchangeMcpOAuthTokenParams) => {
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
@@ -8807,11 +8828,16 @@ export const exchangeMcpOAuthToken = async ({
   body.set("code_verifier", codeVerifier);
   body.set("redirect_uri", redirectUri);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: body.toString(),
   });
 

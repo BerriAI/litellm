@@ -184,6 +184,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_job.unified_object_id = unified_object_id
     mock_job.created_by = "user-A"
     mock_job.id = "job-1"
+    mock_job.team_id = None
 
     # Mock prisma
     mock_prisma = MagicMock()
@@ -196,6 +197,10 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_proxy_logging = MagicMock()
     mock_managed_files_hook = MagicMock()
     mock_managed_files_hook.afile_content = AsyncMock()
+    mock_managed_files_hook.store_unified_file_id = AsyncMock()
+    mock_managed_files_hook.get_unified_output_file_id.return_value = (
+        "bGl0ZWxsbV9wcm94eTo6bWFuYWdlZA=="
+    )
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=mock_managed_files_hook)
 
     # Mock the batch response (completed, with output file)

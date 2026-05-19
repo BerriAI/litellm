@@ -12,12 +12,13 @@ All /tag management endpoints
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Dict, List, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -37,6 +38,72 @@ if TYPE_CHECKING:
     from litellm.types.router import Deployment
 
 router = APIRouter()
+
+
+async def _get_internal_user_api_keys(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    user_role = user_api_key_dict.user_role
+    if user_role is None or not user_role.is_internal_user_role:
+        return []
+
+    user_api_keys = set()
+    if user_api_key_dict.api_key:
+        user_api_keys.add(user_api_key_dict.api_key)
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        return sorted(user_api_keys)
+
+    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"user_id": user_id},
+        select={"token": True},
+    )
+    user_api_keys.update(
+        key_record.token
+        for key_record in key_records
+        if getattr(key_record, "token", None)
+    )
+
+    return sorted(user_api_keys)
+
+
+async def _get_tag_list_scope(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, dict]]:
+    user_role = user_api_key_dict.user_role
+    if user_api_key_has_admin_view(user_api_key_dict) or (
+        user_role is None or not user_role.is_internal_user_role
+    ):
+        return None
+
+    scoped_api_keys = await _get_internal_user_api_keys(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
+    return {"api_key": {"in": scoped_api_keys}}
+
+
+async def _get_tag_daily_activity_api_key_filter(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+    requested_api_key: Optional[str],
+) -> Optional[Union[str, List[str]]]:
+    user_role = user_api_key_dict.user_role
+    if user_api_key_has_admin_view(user_api_key_dict) or (
+        user_role is None or not user_role.is_internal_user_role
+    ):
+        return requested_api_key
+
+    scoped_api_keys = await _get_internal_user_api_keys(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if requested_api_key is not None:
+        return requested_api_key if requested_api_key in scoped_api_keys else []
+    return scoped_api_keys
 
 
 async def _get_model_names(prisma_client, model_ids: list) -> Dict[str, str]:
@@ -395,6 +462,32 @@ async def info_tag(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _validate_tag_list_date_range(
+    start_date: Optional[str], end_date: Optional[str]
+) -> None:
+    """Require both dates together, and enforce YYYY-MM-DD format with start <= end."""
+    if (start_date is None) != (end_date is None):
+        raise HTTPException(
+            status_code=400,
+            detail="start_date and end_date must be provided together",
+        )
+    if start_date is None:
+        return
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")  # type: ignore[arg-type]
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format, expected YYYY-MM-DD: {e}",
+        )
+    if start > end:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be on or before end_date",
+        )
+
+
 @router.get(
     "/tag/list",
     tags=["tag management"],
@@ -402,6 +495,18 @@ async def info_tag(
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    start_date: Optional[str] = Query(
+        None,
+        description=(
+            "Optional start date (YYYY-MM-DD). When provided together with "
+            "end_date, dynamic tags are limited to those active in the window. "
+            "Stored tags are always returned."
+        ),
+    ),
+    end_date: Optional[str] = Query(
+        None,
+        description="Optional end date (YYYY-MM-DD). Must be given with start_date.",
+    ),
 ):
     """
     List all available tags with their budget information.
@@ -411,10 +516,44 @@ async def list_tags(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
+    _validate_tag_list_date_range(start_date, end_date)
+
     try:
+        tag_scope = await _get_tag_list_scope(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        ## QUERY DYNAMIC TAGS ##
+        # Use group_by instead of find_many(distinct=["tag"]).
+        # Prisma's distinct fetches all columns for all rows and deduplicates
+        # in application code, which is extremely slow on large tables.
+        # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
+        dynamic_tag_where: Dict[str, Any] = {"tag": {"not": None}}
+        if tag_scope:
+            dynamic_tag_where = {**dynamic_tag_where, **tag_scope}
+        if start_date is not None and end_date is not None:
+            dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
+
+        dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
+            by=["tag"],
+            where=dynamic_tag_where,
+            min={"created_at": True},
+            max={"updated_at": True},
+        )
+
+        used_tag_names = [row["tag"] for row in dynamic_tag_rows if row["tag"]]
+        if tag_scope is not None and not used_tag_names:
+            return []
+
+        stored_tag_where = (
+            {"tag_name": {"in": used_tag_names}} if tag_scope is not None else None
+        )
+
         ## QUERY STORED TAGS ##
         tag_records = await prisma_client.db.litellm_tagtable.find_many(
-            include={"litellm_budget_table": True}
+            where=stored_tag_where,
+            include={"litellm_budget_table": True},
         )
 
         stored_tag_names = set()
@@ -447,18 +586,6 @@ async def list_tags(
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             list_of_tags.append(tag_dict)
-
-        ## QUERY DYNAMIC TAGS ##
-        # Use group_by instead of find_many(distinct=["tag"]).
-        # Prisma's distinct fetches all columns for all rows and deduplicates
-        # in application code, which is extremely slow on large tables.
-        # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
-        dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
-            by=["tag"],
-            where={"tag": {"not": None}},
-            min={"created_at": True},
-            max={"updated_at": True},
-        )
 
         dynamic_tag_config = [
             {
@@ -527,6 +654,7 @@ async def get_tag_daily_activity(
     api_key: Optional[str] = None,
     page: int = 1,
     page_size: int = 10,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific tags or all tags.
@@ -545,8 +673,18 @@ async def get_tag_daily_activity(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
     # Convert comma-separated tags string to list if provided
     tag_list = tags.split(",") if tags else None
+    scoped_api_key_filter = await _get_tag_daily_activity_api_key_filter(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        requested_api_key=api_key,
+    )
+    if scoped_api_key_filter == []:
+        return SpendAnalyticsPaginatedResponse(results=[])
 
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -557,7 +695,7 @@ async def get_tag_daily_activity(
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=api_key,
+        api_key=scoped_api_key_filter,
         page=page,
         page_size=page_size,
         # metadata_metrics_func=None because litellm_dailytagspend rows are

@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-MANTLE_ENDPOINT_TEMPLATE = "https://bedrock-mantle.{region}.api.aws/v1/messages"
+MANTLE_ENDPOINT_TEMPLATE = (
+    "https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
+)
 
 
 class AmazonMantleConfig(AmazonAnthropicClaudeConfig):

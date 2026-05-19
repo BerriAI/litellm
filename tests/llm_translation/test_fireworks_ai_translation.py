@@ -93,20 +93,32 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     [True, False],
 )
 def test_document_inlining_example(disable_add_transform_inline_image_block):
-    litellm.set_verbose = True
-    if disable_add_transform_inline_image_block is True:
-        with pytest.raises(Exception):
-            completion = litellm.completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+    """
+    Document inlining appends ``#transform=inline`` to image/PDF URLs in the
+    outgoing request unless explicitly disabled. Assert the transform on the
+    serialized payload rather than making a live Fireworks call — the live
+    call only proved the model responded and broke whenever Fireworks rotated
+    its serverless model catalog.
+    """
+    from unittest.mock import patch
+
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    pdf_url = "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
-                                },
+                                "image_url": {"url": pdf_url},
                             },
                             {
                                 "type": "text",
@@ -116,19 +128,19 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
                     }
                 ],
                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+                client=client,
             )
-    else:
-        completion = litellm.completion(
-            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                },
-            ],
-            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
-        )
-        print(completion)
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        sent_url = json_data["messages"][0]["content"][0]["image_url"]["url"]
+        if disable_add_transform_inline_image_block is True:
+            assert sent_url == pdf_url
+            assert "#transform=inline" not in sent_url
+        else:
+            assert sent_url == pdf_url + "#transform=inline"
 
 
 @pytest.mark.parametrize(
@@ -215,7 +227,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
                 messages=[
                     {
                         "role": "user",

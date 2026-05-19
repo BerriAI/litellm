@@ -2037,7 +2037,7 @@ def test_drop_store_param_for_anthropic():
     Ref: https://github.com/BerriAI/litellm/issues/19700
     """
     optional_params = get_optional_params(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
         drop_params=True,
         store=True,
@@ -2053,7 +2053,7 @@ def test_additional_drop_params_store_for_anthropic():
     Ref: https://github.com/BerriAI/litellm/issues/19700
     """
     optional_params = get_optional_params(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
         additional_drop_params=["store"],
         store=True,

@@ -15,10 +15,18 @@ vi.mock("@heroicons/react/outline", () => ({
 
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
+  // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
+  // leaks through and its useTooltip(300) schedules a native setTimeout that can fire
+  // post-teardown -> "window is not defined".
   return {
     ...actual,
     Icon: ({ icon: IconComp, onClick, className }: any) =>
       React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
+    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
+      React.createElement("button", { ...props, ref }, children),
+    ),
+    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
   };
 });
 

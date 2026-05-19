@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
@@ -349,7 +351,6 @@ if TYPE_CHECKING:
         get_num_retries_from_retry_policy,
         reset_retry_policy,
     )
-    from litellm.secret_managers.main import get_secret
 
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -381,6 +382,8 @@ if TYPE_CHECKING:
         ChatCompletionToolCallFunctionChunk,
     )
     from litellm.types.router import LiteLLM_Params
+
+from litellm.secret_managers.main import get_secret
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -4405,6 +4408,10 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+            if bedrock_route == "claude_platform":
+                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
+                    passed_params=passed_params, optional_params=optional_params
+                )
     elif custom_llm_provider == "cloudflare":
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
@@ -4975,6 +4982,33 @@ def _get_order_filtered_deployments(
 
         return filtered_deployments
     return healthy_deployments
+
+
+def _get_excluded_filtered_deployments(
+    healthy_deployments: List[Dict],
+    excluded_deployment_ids: Optional[Iterable[str]] = None,
+) -> List:
+    """
+    Filter out deployments whose `model_info.id` appears in `excluded_deployment_ids`.
+
+    Used by weighted-routing failover so a single logical request can re-pick
+    across the remaining deployments in the same model group after one of them
+    has failed.
+
+    If the filter would leave no deployments, an empty list is returned so the
+    caller raises its usual no-deployments error and the weighted-failover
+    helper falls through to the cross-group fallback path. Returning the
+    original unfiltered list here would re-include the just-failed deployment.
+    """
+    if not excluded_deployment_ids:
+        return healthy_deployments
+
+    excluded_set = set(excluded_deployment_ids)
+    return [
+        d
+        for d in healthy_deployments
+        if (d.get("model_info") or {}).get("id") not in excluded_set
+    ]
 
 
 def _get_model_region(
@@ -8368,6 +8402,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.embed.transformation import (
+                DashScopeEmbeddingConfig,
+            )
+
+            return DashScopeEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
@@ -8447,6 +8487,12 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.rerank.transformation import (
+                DashScopeRerankConfig,
+            )
+
+            return DashScopeRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8493,6 +8539,12 @@ class ProviderConfigManager:
             )
 
             return MinimaxMessagesConfig()
+        elif litellm.LlmProviders.DEEPSEEK == provider:
+            from litellm.llms.deepseek.messages.transformation import (
+                DeepSeekAnthropicMessagesConfig,
+            )
+
+            return DeepSeekAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -9494,6 +9546,49 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     }  # model-specific params - pass them straight to the model/provider
 
     return non_default_params
+
+
+def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
+
+
+def strip_reasoning_summary_aliases_from_optional_params(
+    optional_params: dict,
+) -> Tuple[dict, Optional[Any]]:
+    """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
+    op = dict(optional_params)
+    rs_val = op.pop("reasoningSummary", None)
+    snake_rs_val = op.pop("reasoning_summary", None)
+    if rs_val is None:
+        rs_val = snake_rs_val
+    eb = op.get("extra_body")
+    if isinstance(eb, dict):
+        eb = dict(eb)
+        eb_rs_val = eb.pop("reasoningSummary", None)
+        eb_snake_rs_val = eb.pop("reasoning_summary", None)
+        if rs_val is None:
+            rs_val = eb_rs_val
+            if rs_val is None:
+                rs_val = eb_snake_rs_val
+        if eb:
+            op["extra_body"] = eb
+        else:
+            op.pop("extra_body", None)
+    return op, rs_val
 
 
 def get_non_default_transcription_params(kwargs: dict) -> dict:

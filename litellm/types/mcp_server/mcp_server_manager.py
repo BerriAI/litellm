@@ -68,6 +68,12 @@ class MCPServer(BaseModel):
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    # When True AND auth_type == oauth2, MCP requests targeting this server
+    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
+    # completes PKCE directly with the upstream MCP server. Honored only for
+    # auth_type=oauth2; ignored for any other auth_type. See
+    # MCPRequestHandler._target_servers_delegate_auth_to_upstream.
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None

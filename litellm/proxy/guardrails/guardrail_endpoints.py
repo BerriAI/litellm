@@ -242,6 +242,10 @@ async def list_guardrails_v2(
             gid = guardrail.get("guardrail_id")
             if gid in seen_guardrail_ids:
                 continue
+            # Skip stale DB-backed entries — the DB row was deleted (likely by
+            # another pod) and reconciliation hasn't fired yet on this pod.
+            if gid is not None and IN_MEMORY_GUARDRAIL_HANDLER.get_source(gid) == "db":
+                continue
             if not is_admin:
                 g_team_id = guardrail.get("team_id")
                 if g_team_id is not None and g_team_id not in caller_team_ids:
@@ -360,7 +364,7 @@ async def create_guardrail(
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                guardrail=cast(Guardrail, result)
+                guardrail=cast(Guardrail, result), source="db"
             )
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
@@ -1017,7 +1021,7 @@ async def approve_guardrail_submission(
         }
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                guardrail=cast(Guardrail, guardrail_dict)
+                guardrail=cast(Guardrail, guardrail_dict), source="db"
             )
             verbose_proxy_logger.info(
                 "Approved guardrail %s (ID: %s) and initialized in memory",
@@ -1295,10 +1299,18 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
         if result is None:
-            result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
+            in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
-            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+            # Only return config-loaded entries here. A DB-backed entry that's
+            # missing from the DB is stale (deleted on another pod, awaiting
+            # reconciliation on this one) and must surface as 404.
+            if (
+                in_memory is not None
+                and IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail_id) == "config"
+            ):
+                result = in_memory
+                guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(

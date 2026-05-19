@@ -232,3 +232,207 @@ def test_combine_usage_handles_none_details():
     combined = llm_caching_handler.combine_usage(usage_a, usage_c)
     assert combined.prompt_tokens_details is not None
     assert combined.prompt_tokens_details.image_count == 1
+
+
+def test_is_chat_completion_cached_dict():
+    from litellm.caching.caching_handler import _is_chat_completion_cached_dict
+
+    assert _is_chat_completion_cached_dict(
+        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "other", "object": "chat.completion.chunk", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "no-object", "choices": [{"index": 0}]}
+    )
+    assert not _is_chat_completion_cached_dict(
+        {"id": "resp_abc", "object": "response", "output": []}
+    )
+
+
+def _build_logging_obj(call_type: str, stream: bool):
+    import uuid as _uuid
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    return LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=call_type,
+        model="gpt-5.4",
+        messages=[],
+        function_id=str(_uuid.uuid4()),
+        stream=stream,
+        start_time=datetime.now(),
+    )
+
+
+def test_convert_cached_aresponses_bridge_chat_completion_stream():
+    """openai/responses chat-completions bridge: streaming cache hit replays as chat stream."""
+    from litellm import aresponses
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-cache-test",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.aresponses.value,
+        kwargs={
+            "model": "gpt-5.4",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        logging_obj=_build_logging_obj(CallTypes.aresponses.value, stream=True),
+        model="gpt-5.4",
+        args=(),
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
+
+
+def test_convert_cached_responses_bridge_chat_completion_nonstream():
+    """openai/responses chat-completions bridge: non-streaming cache hit replays as ModelResponse."""
+    from litellm import responses
+    from litellm.types.utils import CallTypes, ModelResponse
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-nonstream",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={
+            "model": "gpt-5.4",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=False),
+        model="gpt-5.4",
+        args=(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hi!"
+
+
+def test_convert_cached_responses_legacy_nonstream_path():
+    """Genuine ResponsesAPIResponse dict (no chatcmpl/choices) falls through legacy path."""
+    from litellm import responses
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "resp_legacy_nonstream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_legacy",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "legacy response",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "hi", "stream": False},
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=False),
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "resp_legacy_nonstream"
+
+
+def test_convert_cached_responses_legacy_stream_path():
+    """Genuine ResponsesAPIResponse dict (no chatcmpl/choices) on stream falls through legacy path."""
+    from litellm import responses
+    from litellm.responses.streaming_iterator import (
+        CachedResponsesAPIStreamingIterator,
+    )
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "resp_legacy_stream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_legacy_stream",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "legacy stream",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "hi", "stream": True},
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=True),
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, CachedResponsesAPIStreamingIterator)
