@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.integrations.agentcogs import AgentCOGSLogger
+from litellm.integrations.agentcogs import AgentCOGSLogger, _resolve_customer_id
 
 
 class TestAgentCOGSIntegration:
@@ -18,6 +18,7 @@ class TestAgentCOGSIntegration:
             "AGENTCOGS_API_KEY",
             "AGENTCOGS_WORKSPACE_ID",
             "AGENTCOGS_ENDPOINT",
+            "AGENTCOGS_CHARGE_BY",
         ):
             os.environ.pop(key, None)
 
@@ -58,7 +59,8 @@ class TestAgentCOGSIntegration:
         }
         assert logger._build_event(kwargs, {}, status="completed") is None
 
-    def test_build_event_customer_from_metadata(self):
+    def test_build_event_customer_from_metadata_sdk_mode(self):
+        """SDK/direct calls (no proxy): metadata.agentcogs_customer_id is allowed."""
         logger = AgentCOGSLogger()
         kwargs = {
             "litellm_params": {
@@ -70,6 +72,49 @@ class TestAgentCOGSIntegration:
         event = logger._build_event(kwargs, {}, status="completed")
         assert event is not None
         assert event["customer_id"] == "meta_tenant"
+
+    def test_run_id_uses_litellm_call_id(self):
+        logger = AgentCOGSLogger()
+        kwargs = {
+            "user": "acme",
+            "litellm_call_id": "call-abc-123",
+            "model": "gpt-4",
+            "response_cost": 0.001,
+        }
+        event = logger._build_event(kwargs, {}, status="completed")
+        assert event is not None
+        assert event["run_id"] == "call-abc-123"
+
+    def test_proxy_uses_end_user_from_body(self):
+        kwargs = {
+            "litellm_params": {
+                "proxy_server_request": {"body": {"user": "proxy_tenant"}},
+                "metadata": {
+                    "agentcogs_customer_id": "malicious_tenant",
+                    "user_api_key_user_id": "key_user",
+                },
+            },
+        }
+        assert _resolve_customer_id(kwargs) == "proxy_tenant"
+
+    def test_proxy_ignores_client_metadata_customer_id(self):
+        kwargs = {
+            "litellm_params": {
+                "proxy_server_request": {"body": {}},
+                "metadata": {"agentcogs_customer_id": "malicious_tenant"},
+            },
+        }
+        assert _resolve_customer_id(kwargs) is None
+
+    def test_proxy_charge_by_team_id(self):
+        os.environ["AGENTCOGS_CHARGE_BY"] = "team_id"
+        kwargs = {
+            "litellm_params": {
+                "proxy_server_request": {"body": {"user": "end_user"}},
+                "metadata": {"user_api_key_team_id": "team-99"},
+            },
+        }
+        assert _resolve_customer_id(kwargs) == "team-99"
 
     def test_build_event_error_status(self):
         logger = AgentCOGSLogger()

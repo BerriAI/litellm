@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -57,6 +57,50 @@ def _metadata_from_kwargs(kwargs: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def _resolve_customer_id(kwargs: dict) -> Optional[str]:
+    """
+    Resolve tenant id for AgentCOGS ingest.
+
+    Proxy mode (default): same attribution sources as Lago — end_user_id from proxy
+    body, or authenticated key metadata (user_id / team_id). Client-supplied
+    metadata.agentcogs_customer_id is not trusted on proxy requests.
+
+    Direct SDK mode (no proxy_server_request): kwargs user or metadata.agentcogs_customer_id.
+    """
+    litellm_params = kwargs.get("litellm_params", {}) or {}
+    meta = litellm_params.get("metadata", {}) or {}
+    proxy_server_request = litellm_params.get("proxy_server_request")
+    is_proxy = bool(proxy_server_request)
+
+    proxy_body = (proxy_server_request or {}).get("body") or {}
+    end_user_id = proxy_body.get("user") or kwargs.get("user")
+    user_id = meta.get("user_api_key_user_id")
+    team_id = meta.get("user_api_key_team_id")
+
+    charge_by: Literal["end_user_id", "team_id", "user_id"] = "end_user_id"
+    if os.getenv("AGENTCOGS_CHARGE_BY") is not None and isinstance(
+        os.environ["AGENTCOGS_CHARGE_BY"], str
+    ):
+        if os.environ["AGENTCOGS_CHARGE_BY"] in ("end_user_id", "user_id", "team_id"):
+            charge_by = os.environ["AGENTCOGS_CHARGE_BY"]  # type: ignore
+        else:
+            raise Exception("invalid AGENTCOGS_CHARGE_BY set")
+
+    if charge_by == "end_user_id":
+        customer_id = end_user_id
+    elif charge_by == "team_id":
+        customer_id = team_id
+    else:
+        customer_id = user_id
+
+    if customer_id is None and not is_proxy:
+        customer_id = _metadata_from_kwargs(kwargs).get("agentcogs_customer_id")
+
+    if customer_id is None:
+        return None
+    return str(customer_id)
+
+
 class AgentCOGSLogger(CustomLogger):
     """POST per-completion cost to AgentCOGS /v1/ingest for B2B per-customer margin."""
 
@@ -97,11 +141,11 @@ class AgentCOGSLogger(CustomLogger):
         start_time: Any = None,
         error: Optional[str] = None,
     ) -> Optional[dict]:
-        meta = _metadata_from_kwargs(kwargs)
-        customer_id = kwargs.get("user") or meta.get("agentcogs_customer_id")
+        customer_id = _resolve_customer_id(kwargs)
         if not customer_id:
             return None
 
+        meta = _metadata_from_kwargs(kwargs)
         model = kwargs.get("model") or "unknown"
         cost = float(kwargs.get("response_cost") or 0)
         usage = _extract_usage(kwargs, response_obj)
@@ -113,9 +157,9 @@ class AgentCOGSLogger(CustomLogger):
             ts = int(time.time())
 
         return {
-            "run_id": str(uuid.uuid4()),
+            "run_id": str(kwargs.get("litellm_call_id") or uuid.uuid4()),
             "workspace_id": os.environ["AGENTCOGS_WORKSPACE_ID"],
-            "customer_id": str(customer_id),
+            "customer_id": customer_id,
             "workflow_id": meta.get("agentcogs_workflow_id", "default"),
             "ts": ts,
             "status": status,
@@ -141,7 +185,7 @@ class AgentCOGSLogger(CustomLogger):
             )
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.debug("AgentCOGS callback error: {}".format(e))
+            verbose_logger.warning("AgentCOGS callback error: {}".format(e))
 
     def _sync_post(self, event: dict) -> None:
         try:
@@ -152,7 +196,7 @@ class AgentCOGSLogger(CustomLogger):
             )
             response.raise_for_status()
         except Exception as e:
-            verbose_logger.debug("AgentCOGS callback error: {}".format(e))
+            verbose_logger.warning("AgentCOGS callback error: {}".format(e))
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         event = self._build_event(
