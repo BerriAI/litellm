@@ -182,6 +182,29 @@ async def get_agents(
         False,
         description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
     ),
+    q: Optional[str] = Query(
+        None, description="Free-text match against agent name + description."
+    ),
+    category: Optional[str] = Query(
+        None,
+        description="Filter to agents whose agent_card_params['categories'] contains this value.",
+    ),
+    tag: Optional[str] = Query(
+        None,
+        description="Filter to agents whose agent_card_params['tags'] contains this value.",
+    ),
+    supports_streaming: Optional[bool] = Query(
+        None,
+        description="When set, returns only agents whose capabilities.streaming matches.",
+    ),
+    is_public: Optional[bool] = Query(
+        None,
+        description="When set, returns only agents whose public flag matches.",
+    ),
+    cursor: Optional[str] = Query(
+        None, description="agent_id of the previous page tail for cursor pagination."
+    ),
+    limit: int = Query(50, ge=1, le=200),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -246,6 +269,64 @@ async def get_agents(
                 litellm.public_agent_groups is not None
                 and (agent.agent_id in litellm.public_agent_groups)
             )
+
+        # S3-02: free-text + category/tag/capability filters. Applied
+        # in-memory because most installs have hundreds of agents in the
+        # registry (config-loaded) plus some DB rows — no benefit to going
+        # back to Prisma for an index-less scan.
+        if q:
+            ql = q.lower()
+            returned_agents = [
+                a
+                for a in returned_agents
+                if ql in (a.agent_name or "").lower()
+                or ql in ((a.agent_card_params or {}).get("description") or "").lower()
+            ]
+        if category:
+            returned_agents = [
+                a
+                for a in returned_agents
+                if category in ((a.agent_card_params or {}).get("categories") or [])
+            ]
+        if tag:
+            returned_agents = [
+                a
+                for a in returned_agents
+                if tag in ((a.agent_card_params or {}).get("tags") or [])
+            ]
+        if supports_streaming is not None:
+            returned_agents = [
+                a
+                for a in returned_agents
+                if bool(
+                    ((a.agent_card_params or {}).get("capabilities") or {}).get(
+                        "streaming"
+                    )
+                )
+                == supports_streaming
+            ]
+        if is_public is not None:
+            returned_agents = [
+                a
+                for a in returned_agents
+                if bool((a.litellm_params or {}).get("is_public")) == is_public
+            ]
+
+        # Stable order so cursor pagination is meaningful.
+        returned_agents.sort(key=lambda a: a.agent_id)
+
+        # Cursor pagination: cursor is the agent_id we just sent as the last
+        # row. Skip past it; take limit+1 to compute has_more.
+        if cursor:
+            try:
+                cut = next(
+                    i for i, a in enumerate(returned_agents) if a.agent_id == cursor
+                )
+                returned_agents = returned_agents[cut + 1 :]
+            except StopIteration:
+                # Cursor not found — caller asked for a stale page. Return empty.
+                returned_agents = []
+        returned_agents = returned_agents[:limit]
 
         # Redact sensitive fields for non-admin users
         is_admin = (

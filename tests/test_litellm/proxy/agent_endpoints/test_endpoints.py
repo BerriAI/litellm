@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.endpoints import (
@@ -824,3 +825,104 @@ class TestCheckAgentUrlHealth:
         )
         result = await _check_agent_url_health(agent)
         assert result["healthy"] is True
+
+
+# ============================================================================
+# S3-02: list filters (q / category / tag / supports_streaming / is_public)
+# ============================================================================
+
+
+class TestListAgentsFilters:
+    """Each filter narrows the registry as expected; cursor pagination works."""
+
+    def _make_agent(self, agent_id, **card):
+        return _sample_agent_response(
+            agent_id=agent_id, agent_name=card.get("name", agent_id)
+        )
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        # Build a small registry where each card has distinct attributes.
+        def _a(aid, name, description="", category=None, tag=None, streaming=False):
+            base = AgentResponse(
+                agent_id=aid,
+                agent_name=name,
+                agent_card_params={
+                    "description": description,
+                    "categories": [category] if category else [],
+                    "tags": [tag] if tag else [],
+                    "capabilities": {"streaming": streaming},
+                },
+                litellm_params={},
+            )
+            return base
+
+        self.registry = MagicMock()
+        self.registry.get_agent_list.return_value = [
+            _a(
+                "a-1",
+                "alpha",
+                description="research helper",
+                category="research",
+                tag="science",
+            ),
+            _a(
+                "a-2",
+                "beta",
+                description="writing assistant",
+                category="writing",
+                streaming=True,
+            ),
+            _a(
+                "a-3",
+                "gamma",
+                description="another research thing",
+                category="research",
+            ),
+        ]
+        monkeypatch.setattr(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            self.registry,
+        )
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.registry)
+        monkeypatch.setattr(litellm, "public_agent_groups", [])
+        # Prisma stub for spend lookup + visibility helpers.
+        prisma = MagicMock()
+        prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+        self.client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
+
+    def test_q_filter_matches_name_and_description(self):
+        resp = self.client.get(
+            "/v1/agents?q=research", headers={"Authorization": "Bearer k"}
+        )
+        ids = {a["agent_id"] for a in resp.json()}
+        assert ids == {"a-1", "a-3"}
+
+    def test_category_filter(self):
+        resp = self.client.get(
+            "/v1/agents?category=writing", headers={"Authorization": "Bearer k"}
+        )
+        ids = {a["agent_id"] for a in resp.json()}
+        assert ids == {"a-2"}
+
+    def test_supports_streaming_filter(self):
+        resp = self.client.get(
+            "/v1/agents?supports_streaming=true",
+            headers={"Authorization": "Bearer k"},
+        )
+        ids = {a["agent_id"] for a in resp.json()}
+        assert ids == {"a-2"}
+
+    def test_cursor_pagination(self):
+        # First page of size 1 -> a-1 (sorted by agent_id).
+        r1 = self.client.get(
+            "/v1/agents?limit=1", headers={"Authorization": "Bearer k"}
+        )
+        body1 = r1.json()
+        assert [a["agent_id"] for a in body1] == ["a-1"]
+        # Next page using a-1 as cursor -> a-2.
+        r2 = self.client.get(
+            "/v1/agents?limit=1&cursor=a-1", headers={"Authorization": "Bearer k"}
+        )
+        assert [a["agent_id"] for a in r2.json()] == ["a-2"]
