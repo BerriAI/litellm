@@ -15,7 +15,7 @@ Environment variables (all optional — fall back to ~/.oci/config values):
   OCI_TEST_COMPARTMENT_ID  compartment OCID (default: tenancy root from config)
 
 Run only these tests:
-    pytest tests/llm_translation/test_oci_integration.py -v
+    pytest tests/integration/test_oci_integration.py -v
 """
 
 import math
@@ -25,7 +25,7 @@ from typing import NamedTuple, Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, os.path.abspath("../.."))
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
