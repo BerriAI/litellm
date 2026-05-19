@@ -13,13 +13,20 @@ resolution / injection logic.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_MCPServerTable
 
-def coerce_user_fields(server: MCPServer) -> List[Dict[str, Any]]:
+    UserFieldServer = Union[MCPServer, LiteLLM_MCPServerTable]
+else:
+    UserFieldServer = MCPServer
+
+
+def coerce_user_fields(server: UserFieldServer) -> List[Dict[str, Any]]:
     """Return the server's declared user fields as a list of plain dicts.
 
     The column is stored as JSONB but Prisma sometimes hands it back as a
@@ -44,13 +51,13 @@ def coerce_user_fields(server: MCPServer) -> List[Dict[str, Any]]:
     return []
 
 
-def server_has_user_fields(server: MCPServer) -> bool:
+def server_has_user_fields(server: UserFieldServer) -> bool:
     """True iff the server declares any user fields at all."""
     return bool(coerce_user_fields(server))
 
 
 def compute_missing_user_fields(
-    server: MCPServer, stored_values: Optional[Dict[str, str]]
+    server: UserFieldServer, stored_values: Optional[Dict[str, str]]
 ) -> List[Dict[str, Any]]:
     """Return the declared field definitions the user has yet to fill in.
 
