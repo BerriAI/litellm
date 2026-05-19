@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES, PrismaClient
 
 
 class MockPrismaClient:
@@ -312,3 +312,110 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+def test_prisma_client_jsonify_object_strips_null_bytes_from_strings():
+    """PrismaClient.jsonify_object must strip \\x00 from string values (PostgreSQL text error fix)."""
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "request_id": "abc\x00def",
+            "metadata": '{"key": "val\x00ue"}',
+            "spend": 1.5,
+        },
+    )
+    assert "\x00" not in result["request_id"]
+    assert result["request_id"] == "abcdef"
+    assert "\x00" not in result["metadata"]
+    assert result["spend"] == 1.5
+
+
+def test_prisma_client_jsonify_object_strips_json_escaped_null_in_preserialized_strings():
+    """jsonify_object must strip \\u0000 from pre-serialized JSON strings.
+
+    Real-world flow: safe_dumps(metadata_dict) encodes \\x00 as the 6-char escape \\u0000
+    in the resulting JSON string. That string lands in the 'str' branch of jsonify_object,
+    where only .replace('\\x00', '') was applied — leaving \\u0000 intact and causing
+    PostgreSQL 22P05 on json/text columns.
+    """
+    import json
+
+    # Simulate what safe_dumps produces when metadata contains a null byte
+    preserialized_metadata = json.dumps({"key": "val\x00ue"})  # produces \u0000 escape
+    preserialized_response = json.dumps({"content": "hello\x00world"})
+
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "metadata": preserialized_metadata,
+            "response": preserialized_response,
+            "request_id": "clean-id",
+        },
+    )
+    assert "\\u0000" not in result["metadata"], "pre-serialized \\u0000 must be stripped from metadata"
+    assert "\x00" not in result["metadata"]
+    assert "\\u0000" not in result["response"], "pre-serialized \\u0000 must be stripped from response"
+    assert "\x00" not in result["response"]
+    assert "value" in result["metadata"] or "valye" in result["metadata"] or '"key"' in result["metadata"]
+
+
+def test_prisma_client_jsonify_object_strips_null_bytes_from_dicts():
+    """PrismaClient.jsonify_object must strip null bytes from JSON-serialized dict values.
+
+    json.dumps encodes \\x00 as the 6-char JSON escape \\u0000; both forms must be stripped
+    so PostgreSQL text columns don't receive unsupported Unicode escape sequences.
+    """
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "response": {"content": "hello\x00world"},
+            "messages": {"role": "user", "content": "test\x00"},
+        },
+    )
+    assert "\x00" not in result["response"]
+    assert "\\u0000" not in result["response"]
+    assert "\x00" not in result["messages"]
+    assert "\\u0000" not in result["messages"]
+    assert "helloworld" in result["response"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_strips_null_bytes_before_db_write():
+    """Spend logs containing \\x00 must be sanitized before create_many is called."""
+    prisma_client = MockPrismaClient()
+    # Use the real PrismaClient.jsonify_object instead of the identity mock
+    prisma_client.jsonify_object = lambda obj: PrismaClient.jsonify_object(None, obj)
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    import json as _json
+
+    # Realistic payload: metadata and response are already JSON-serialized strings
+    # (as produced by safe_dumps in get_transaction_spend_payload), so \x00 bytes
+    # appear as the 6-char \u0000 JSON escape — NOT as raw null bytes.
+    preserialized_metadata = _json.dumps({"user": "test\x00user", "trace": "val\x00"})
+    preserialized_response = _json.dumps({"content": "text\x00with\x00nulls"})
+    prisma_client.spend_log_transactions = [
+        {
+            "request_id": "req\x001",
+            "messages": "hello\x00world",  # raw null in a plain string field
+            "metadata": preserialized_metadata,  # \u0000 already JSON-escaped
+            "response": preserialized_response,  # \u0000 already JSON-escaped
+            "spend": 0.01,
+        }
+    ]
+
+    create_many_mock = AsyncMock(return_value=None)
+    prisma_client.db.litellm_spendlogs.create_many = create_many_mock
+
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    assert create_many_mock.call_count == 1
+    written_data = create_many_mock.call_args[1]["data"]
+    assert len(written_data) == 1
+    row = written_data[0]
+    assert "\x00" not in row["request_id"]
+    assert "\x00" not in row["messages"]
+    assert "\x00" not in row["metadata"]
+    assert "\\u0000" not in row["metadata"], "JSON-escaped null must be stripped from pre-serialized metadata"
+    assert "\x00" not in row["response"]
+    assert "\\u0000" not in row["response"], "JSON-escaped null must be stripped from pre-serialized response"

@@ -2409,12 +2409,16 @@ def jsonify_object(data: dict) -> dict:
     for k, v in db_data.items():
         if isinstance(v, dict):
             try:
-                db_data[k] = json.dumps(v).replace("\x00", "")
+                # json.dumps encodes \x00 as the 6-char escape \u0000; strip both forms
+                db_data[k] = json.dumps(v).replace("\\u0000", "").replace("\x00", "")
             except Exception:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
         elif isinstance(v, str):
-            db_data[k] = v.replace("\x00", "")
+            # Strip both raw null bytes and the 6-char JSON escape form (\u0000).
+            # Pre-serialized JSON fields (metadata, response, etc.) already had \x00
+            # encoded as \u0000 by json.dumps; PostgreSQL rejects both forms in text/json.
+            db_data[k] = v.replace("\\u0000", "").replace("\x00", "")
     return db_data
 
 
@@ -2601,10 +2605,18 @@ class PrismaClient:
         for k, v in db_data.items():
             if isinstance(v, dict):
                 try:
-                    db_data[k] = json.dumps(v)
+                    # json.dumps encodes \x00 as the 6-char escape \u0000; strip both forms
+                    db_data[k] = (
+                        json.dumps(v).replace("\\u0000", "").replace("\x00", "")
+                    )
                 except Exception:
                     # This avoids Prisma retrying this 5 times, and making 5 clients
                     db_data[k] = "failed-to-serialize-json"
+            elif isinstance(v, str):
+                # Strip both raw null bytes and the 6-char JSON escape form (\u0000).
+                # Pre-serialized JSON fields (metadata, response, etc.) already had \x00
+                # encoded as \u0000 by json.dumps; PostgreSQL rejects both forms in text/json.
+                db_data[k] = v.replace("\\u0000", "").replace("\x00", "")
         return db_data
 
     @backoff.on_exception(
