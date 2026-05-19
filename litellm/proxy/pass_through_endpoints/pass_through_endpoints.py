@@ -60,8 +60,8 @@ from litellm.proxy.utils import get_server_root_path, normalize_route_for_root_p
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -1192,22 +1192,18 @@ async def _parse_request_data_by_content_type(
             # Handle requests with no body (e.g., DELETE requests)
             pass
     elif "multipart/form-data" in content_type:
-        # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
-        # If that fails, skip parsing - pass_through_request will handle actual multipart
-        try:
-            body = await request.json()
-            # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
-            # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
-        except (json.JSONDecodeError, Exception):
-            # Not JSON - this is actual multipart data
-            # Skip parsing here to avoid consuming the request body stream
-            # make_multipart_http_request will handle it
-            pass
+        # ✅ Skip parsing for multipart/form-data - let make_multipart_http_request handle it
+        #
+        # CRITICAL: Do NOT call request.json() or request.body() here for multipart requests.
+        # Binary files (PDFs, images, etc.) cannot be decoded as UTF-8 and will cause:
+        # UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc4 in position X: invalid continuation byte
+        #
+        # The pass_through_request function checks is_multipart and calls make_multipart_http_request
+        # which properly handles multipart/form-data with files.
+        #
+        # Edge case: If a misconfigured client sends JSON with multipart content-type,
+        # that client needs to fix their Content-Type header.
+        pass
 
     elif "application/x-www-form-urlencoded" in content_type:
         # ✅ Handle URL-encoded form data
