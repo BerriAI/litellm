@@ -153,6 +153,54 @@ def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
             tool["name"] = f"litellm_unnamed_tool_{i}"
 
 
+def normalize_bedrock_invoke_tool_search_tools(request_body: dict) -> None:
+    """
+    Bedrock Invoke does not accept Anthropic's dated tool-search server-side tool
+    types. Pydantic's tool-type discriminator rejects the request client-side with
+    ``Input tag 'tool_search_tool_regex_20251119' ... does not match any of the
+    expected tags`` before the call ever reaches Bedrock.
+
+    In-place normalization:
+
+    - ``tool_search_tool_regex_20251119`` is rewritten to the SDK-version-bare
+      ``tool_search_tool_regex`` (the canonical ``name`` Anthropic and Bedrock
+      both accept on the wire). ``name`` defaults to ``tool_search_tool_regex``
+      when missing.
+    - ``tool_search_tool_bm25_20251119`` is dropped entirely. Bedrock Invoke does
+      not support the BM25 variant of Anthropic tool-search.
+    - All other tool entries pass through unchanged.
+
+    Args:
+        request_body: The request dictionary to modify in-place.
+
+    Ref: https://github.com/BerriAI/litellm/issues/28083
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+
+    normalized_tools: List[Any] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            normalized_tools.append(tool)
+            continue
+        tool_type = tool.get("type")
+        if tool_type == "tool_search_tool_bm25_20251119":
+            # Bedrock Invoke does not support the BM25 variant, so skip it.
+            continue
+        if tool_type == "tool_search_tool_regex_20251119":
+            normalized_tool = tool.copy()
+            normalized_tool["type"] = "tool_search_tool_regex"
+            normalized_tool["name"] = normalized_tool.get(
+                "name", "tool_search_tool_regex"
+            )
+            normalized_tools.append(normalized_tool)
+            continue
+        normalized_tools.append(tool)
+
+    request_body["tools"] = normalized_tools
+
+
 class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass

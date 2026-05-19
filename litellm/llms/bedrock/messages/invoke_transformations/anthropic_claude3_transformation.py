@@ -35,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_invoke_tool_search_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -563,6 +564,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        # Rewrite/drop Anthropic tool-search server-side tool types so Bedrock
+        # Invoke's Pydantic tool-type discriminator does not reject
+        # ``tool_search_tool_regex_20251119`` client-side. Runs before
+        # ``ensure_bedrock_anthropic_messages_tool_names`` so the canonical
+        # ``tool_search_tool_regex`` name default is preserved rather than
+        # masked by the unnamed-tool fallback.
+        # Ref: https://github.com/BerriAI/litellm/issues/28083
+        normalize_bedrock_invoke_tool_search_tools(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
@@ -570,6 +579,26 @@ class AmazonAnthropicClaudeMessagesConfig(
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
         tool_search_used = anthropic_model_info.is_tool_search_used(tools)
+        # Suppress tool-search beta injection when no tool-search tool
+        # survives normalization. ``normalize_bedrock_invoke_tool_search_tools``
+        # rewrites ``tool_search_tool_regex_20251119`` to bare
+        # ``tool_search_tool_regex`` (kept) and drops
+        # ``tool_search_tool_bm25_20251119``. A non-empty tools list alone is
+        # insufficient — a BM25 entry sent alongside a regular function tool
+        # leaves a list with zero tool-search entries, which must still skip
+        # the ``tool-search-tool-2025-10-19`` beta.
+        # Ref: https://github.com/BerriAI/litellm/issues/28083
+        if tool_search_used and not any(
+            isinstance(t, dict)
+            and t.get("type")
+            in {
+                "tool_search_tool_regex",
+                "tool_search_tool_regex_20251119",
+                "tool_search_tool_bm25_20251119",
+            }
+            for t in anthropic_messages_request.get("tools") or []
+        ):
+            tool_search_used = False
         programmatic_tool_calling_used = (
             anthropic_model_info.is_programmatic_tool_calling_used(tools)
         )

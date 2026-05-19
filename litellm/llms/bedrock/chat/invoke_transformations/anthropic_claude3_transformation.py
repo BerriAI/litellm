@@ -16,6 +16,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
+    normalize_bedrock_invoke_tool_search_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -297,28 +298,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict:
         """
         Convert tool search entries to the format supported by the Bedrock Invoke API.
+
+        Delegates to ``normalize_bedrock_invoke_tool_search_tools`` so the
+        ``/v1/messages`` Bedrock handler can reuse the same normalization. See
+        that helper for the full rewrite/drop rules.
         """
-        tools = optional_params.get("tools")
-        if not tools or not isinstance(tools, list):
-            return optional_params
-
-        normalized_tools = []
-        for tool in tools:
-            tool_type = tool.get("type")
-            if tool_type == "tool_search_tool_bm25_20251119":
-                # Bedrock Invoke does not support the BM25 variant, so skip it.
-                continue
-            if tool_type == "tool_search_tool_regex_20251119":
-                normalized_tool = tool.copy()
-                normalized_tool["type"] = "tool_search_tool_regex"
-                normalized_tool["name"] = normalized_tool.get(
-                    "name", "tool_search_tool_regex"
-                )
-                normalized_tools.append(normalized_tool)
-                continue
-            normalized_tools.append(tool)
-
-        optional_params["tools"] = normalized_tools
+        normalize_bedrock_invoke_tool_search_tools(optional_params)
         return optional_params
 
     def transform_response(
