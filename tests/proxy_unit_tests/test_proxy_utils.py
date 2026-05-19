@@ -167,13 +167,9 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
 
     print(f"team_sl_metadata: {team_sl_metadata}")
     mock_request.url.path = "/chat/completions"
-    # Opt the key into client-supplied tags so request_tags are preserved
-    # and merged with admin-configured key/team tags. Without this flag,
-    # request_tags would be stripped by add_litellm_data_to_request.
     key_metadata = {
         "tags": key_tags,
         "spend_logs_metadata": key_sl_metadata,
-        "allow_client_tags": True,
     }
     team_metadata = {
         "tags": team_tags,
@@ -587,12 +583,21 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         user_api_key_dict=user_api_key_dict,
     )
 
+    # All header values must be str/bytes so httpx won't reject them when the
+    # downstream client builds the request (regression: #27458).
+    for k, v in data.items():
+        assert isinstance(v, (str, bytes)), (
+            f"header {k!r} has non-str value {v!r} ({type(v).__name__}); "
+            "httpx will raise 'Header value must be str or bytes' when the LLM "
+            "request is built."
+        )
+
     expected_data = {
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
-        "x-litellm-user_api_key_spend": 0.0,
-        "x-litellm-user_api_key_auth_metadata": {},
+        "x-litellm-user_api_key_spend": "0.0",
+        "x-litellm-user_api_key_auth_metadata": "{}",
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -900,13 +905,12 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata. Opt into client-supplied tags so the
-    # request_tags are preserved for the merge under test.
+    # Setup key with tags in metadata.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={"tags": key_tags, "allow_client_tags": True},
+        metadata={"tags": key_tags},
     )
 
     # Setup request data with tags

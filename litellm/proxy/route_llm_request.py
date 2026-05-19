@@ -430,7 +430,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                         deployment = llm_router.get_deployment_by_model_group_name(
                             model_group_name=model
                         )
-                        if deployment and deployment.litellm_params:
+                        if (
+                            deployment
+                            and deployment.litellm_params
+                            and not llm_router._is_deployment_blocked(deployment)
+                        ):
                             deployment_creds = deployment.litellm_params.model_dump(
                                 exclude_none=True
                             )
@@ -529,6 +533,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_list",
+                "avector_store_update",
+                "avector_store_delete",
                 "avector_store_file_create",
                 "avector_store_file_list",
                 "avector_store_file_retrieve",
