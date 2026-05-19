@@ -169,8 +169,48 @@ def test_coerce_user_fields_accepts_list():
 def test_coerce_user_fields_accepts_json_string():
     srv = _gmail_server(user_fields=None)
     # Prisma occasionally hands JSONB columns back as a string.
-    srv.user_fields = json.loads(json.dumps([{"field_key": "X", "required": True}]))
+    srv.user_fields = json.dumps([{"field_key": "X", "required": True}])
     assert coerce_user_fields(srv) == [{"field_key": "X", "required": True}]
+
+
+def test_coerce_user_fields_returns_empty_for_invalid_json_string():
+    srv = _gmail_server(user_fields=None)
+    srv.user_fields = "not-valid-json{"
+    assert coerce_user_fields(srv) == []
+
+
+def test_coerce_user_fields_returns_empty_for_non_list_json_string():
+    srv = _gmail_server(user_fields=None)
+    # Well-formed JSON but not a list — must not crash and must yield [].
+    srv.user_fields = json.dumps({"field_key": "X"})
+    assert coerce_user_fields(srv) == []
+
+
+def test_coerce_user_fields_returns_empty_for_unsupported_type():
+    """Anything that isn't a list or a string (e.g. a stray int from a bad
+    migration) must drop to the safe empty fallback rather than raise."""
+    srv = _gmail_server(user_fields=None)
+    srv.user_fields = 42  # type: ignore[assignment]
+    assert coerce_user_fields(srv) == []
+
+
+def test_coerce_user_fields_drops_entries_without_model_dump():
+    """Entries that are neither dicts nor model_dump-able are silently dropped."""
+    srv = _gmail_server(user_fields=None)
+    srv.user_fields = ["a-bare-string", 7]  # type: ignore[list-item]
+    assert coerce_user_fields(srv) == []
+
+
+def test_coerce_user_fields_drops_entries_when_model_dump_raises():
+    """A model_dump that blows up should not bring down request dispatch."""
+
+    class _Boom:
+        def model_dump(self):
+            raise RuntimeError("kaboom")
+
+    srv = _gmail_server(user_fields=None)
+    srv.user_fields = [_Boom()]  # type: ignore[list-item]
+    assert coerce_user_fields(srv) == []
 
 
 def test_coerce_user_fields_empty_when_missing():
@@ -223,6 +263,21 @@ def test_compute_missing_optional_field_unaffected():
     assert missing == []
 
 
+def test_compute_missing_skips_entries_without_valid_field_key():
+    """Malformed entries (no field_key, non-string field_key, empty string) are
+    dropped instead of being surfaced as missing."""
+    srv = _gmail_server(
+        user_fields=[
+            {"field_key": "", "required": True},
+            {"required": True},
+            {"field_key": 5, "required": True},
+            {"field_key": "REAL", "required": True},
+        ]
+    )
+    missing = compute_missing_user_fields(srv, None)
+    assert [f["field_key"] for f in missing] == ["REAL"]
+
+
 def test_resolve_user_field_headers_applies_template():
     srv = _gmail_server()
     headers = resolve_user_field_headers(
@@ -255,6 +310,21 @@ def test_resolve_user_field_headers_falls_back_on_bad_template():
     assert headers == {"Authorization": "raw"}
 
 
+def test_resolve_user_field_headers_skips_entries_missing_header_name():
+    """Stdio-only fields (no header_name) must not produce empty-name headers."""
+    srv = MCPServer(
+        server_id="s4",
+        name="local",
+        transport=MCPTransport.http,
+        user_fields=[
+            {"field_key": "ONLY_ENV", "env_var_name": "SECRET", "required": True},
+            {"field_key": "WS", "header_name": "X-Workspace", "required": False},
+        ],
+    )
+    headers = resolve_user_field_headers(srv, {"ONLY_ENV": "x", "WS": "ws1"})
+    assert headers == {"X-Workspace": "ws1"}
+
+
 def test_resolve_user_field_env_for_stdio():
     srv = MCPServer(
         server_id="s3",
@@ -266,6 +336,28 @@ def test_resolve_user_field_env_for_stdio():
     )
     env = resolve_user_field_env(srv, {"GH_TOKEN": "ghs_xxx"})
     assert env == {"GITHUB_TOKEN": "ghs_xxx"}
+
+
+def test_resolve_user_field_env_skips_entries_without_env_var_name():
+    """HTTP-only fields (no env_var_name) and empty stored values are skipped."""
+    srv = MCPServer(
+        server_id="s5",
+        name="local",
+        transport=MCPTransport.stdio,
+        user_fields=[
+            {
+                "field_key": "HTTP_ONLY",
+                "header_name": "Authorization",
+                "required": True,
+            },
+            {"field_key": "GH_TOKEN", "env_var_name": "GITHUB_TOKEN", "required": True},
+            {"field_key": "EMPTY", "env_var_name": "EMPTY_VAR", "required": False},
+        ],
+    )
+    env = resolve_user_field_env(
+        srv, {"HTTP_ONLY": "x", "GH_TOKEN": "ghs", "EMPTY": ""}
+    )
+    assert env == {"GITHUB_TOKEN": "ghs"}
 
 
 def test_build_user_fields_missing_error_uses_proxy_base_url():
