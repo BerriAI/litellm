@@ -280,6 +280,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         - gemini-3-pro-preview
         - gemini-3-flash
         - gemini-3-flash-preview (Gemini 3 Flash)
+        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
+        - gemini-3.5-flash
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
@@ -300,6 +302,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         supported_params = [
             "temperature",
             "top_p",
+            "top_k",
             "max_tokens",
             "max_completion_tokens",
             "stream",
@@ -362,6 +365,50 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Google doesn't support user_location or search_context_size params
         """
         return Tools(googleSearch={})
+
+    @staticmethod
+    def _maybe_enable_server_side_tool_invocations(optional_params: dict) -> None:
+        """
+        Gemini 3+ requires toolConfig.includeServerSideToolInvocations when mixing
+        function declarations with built-in tools (googleSearch, code_execution, etc.).
+
+        web_search_options is mapped separately from tools, so this must run after
+        map_openai_params merges both into optional_params["tools"].
+        """
+        if optional_params.get("include_server_side_tool_invocations"):
+            return
+
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return
+
+        builtin_tool_keys = {
+            VertexToolName.GOOGLE_SEARCH.value,
+            VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
+            VertexToolName.ENTERPRISE_WEB_SEARCH.value,
+            VertexToolName.URL_CONTEXT.value,
+            VertexToolName.CODE_EXECUTION.value,
+            VertexToolName.GOOGLE_MAPS.value,
+            VertexToolName.COMPUTER_USE.value,
+            "google_search",
+            "google_search_retrieval",
+            "enterprise_web_search",
+            "urlContext",
+            "codeExecution",
+        }
+
+        has_function_declarations = False
+        has_builtin_tool = False
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("function_declarations"):
+                has_function_declarations = True
+            if any(key in tool for key in builtin_tool_keys):
+                has_builtin_tool = True
+
+        if has_function_declarations and has_builtin_tool:
+            optional_params["include_server_side_tool_invocations"] = True
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """
@@ -689,6 +736,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
         _tools_list: List[Tools] = []
 
+        has_builtin_tool = any(
+            v is not None
+            for v in [
+                code_execution,
+                googleSearch,
+                googleSearchRetrieval,
+                enterpriseWebSearch,
+                urlContext,
+                googleMaps,
+                computerUse,
+            ]
+        )
+        if gtool_func_declarations and has_builtin_tool:
+            optional_params["include_server_side_tool_invocations"] = True
+
         (
             googleSearch,
             googleSearchRetrieval,
@@ -884,9 +946,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
+        # gemini-3.5-flash, and any future 3.x-flash variants.
         is_gemini3flash = model and (
-            "gemini-3-flash" in model.lower() or "gemini-3.1-flash" in model.lower()
+            "flash" in model.lower() and "gemini-3" in model.lower()
         )
         is_gemini31pro = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
@@ -984,6 +1047,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         is_gemini3flash = (
                             "gemini-3-flash-preview" in model.lower()
                             or "gemini-3-flash" in model.lower()
+                            or "gemini-3.1-flash" in model.lower()
+                            or "gemini-3.5-flash" in model.lower()
                         )
                         params["thinkingLevel"] = (
                             "minimal" if is_gemini3flash else "low"
@@ -1077,6 +1142,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1086,9 +1152,41 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "can cause infinite loops, degraded reasoning performance, and failure on complex tasks. "
                             "Strongly recommended to use temperature = 1.0 (default)."
                         )
+                    if not gemini_sampling_params_warned:
+                        verbose_logger.warning(
+                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                            f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                            "future release. Move sampling guidance into the `system` "
+                            "instructions instead."
+                        )
+                        gemini_sampling_params_warned = True
                 optional_params["temperature"] = value
             elif param == "top_p":
+                if (
+                    VertexGeminiConfig._is_gemini_3_or_newer(model)
+                    and not gemini_sampling_params_warned
+                ):
+                    verbose_logger.warning(
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                        "future release. Move sampling guidance into the `system` "
+                        "instructions instead."
+                    )
+                    gemini_sampling_params_warned = True
                 optional_params["top_p"] = value
+            elif param == "top_k":
+                if (
+                    VertexGeminiConfig._is_gemini_3_or_newer(model)
+                    and not gemini_sampling_params_warned
+                ):
+                    verbose_logger.warning(
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                        "future release. Move sampling guidance into the `system` "
+                        "instructions instead."
+                    )
+                    gemini_sampling_params_warned = True
+                optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
@@ -1139,11 +1237,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
-                if value is False and not (
-                    drop_params or litellm.drop_params
-                ):  # if drop params is True, then we should just ignore this
-                    self.validate_parallel_tool_calls(value, non_default_params)
-                else:
+                tools_list = non_default_params.get(
+                    "tools", non_default_params.get("functions")
+                )
+                num_tools = len(tools_list) if isinstance(tools_list, list) else 0
+                # Gemini does not support parallel_tool_calls=False with multiple
+                # tools. Drop the param instead of failing — Responses API clients
+                # often send parallel_tool_calls=false by default.
+                if not (value is False and num_tools > 1):
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value
@@ -1215,6 +1316,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
+
+        self._maybe_enable_server_side_tool_invocations(optional_params)
 
         return optional_params
 
@@ -1588,6 +1691,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 }
                 # Extract thought signature if present
                 thought_signature = part.get("thoughtSignature")
+                # Gemini 3.5+ returns a stable `id` per function call to enable
+                # strict response matching. Preserve it as the OpenAI
+                # tool_call_id so it can be echoed back unchanged.
+                gemini_call_id = part["functionCall"].get("id")
 
                 if is_function_call is True:
                     function_dict: Dict[str, Any] = dict(_function_chunk)
@@ -1605,6 +1712,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "function": _function_chunk,
                         "index": cumulative_tool_call_idx,
                     }
+                    # Gemini 3.5+ returns a stable native `id`; prefer it over
+                    # the synthetic call_<uuid> so the same value can be echoed
+                    # back on the matching `functionResponse`.
+                    if gemini_call_id:
+                        _tool_response_chunk["id"] = gemini_call_id
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
