@@ -67,6 +67,64 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
         )
 
 
+def _sse_headers() -> Dict[str, str]:
+    """Headers for an SSE response — disable buffering everywhere."""
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # nginx/CF: don't coalesce chunks
+    }
+
+
+def _wants_sse(accept_header: Optional[str]) -> bool:
+    """Return True when the caller asked for ``text/event-stream``.
+
+    Compatible with multi-value Accept headers (e.g. browsers send
+    ``text/event-stream, */*;q=0.8``).
+    """
+    if not accept_header:
+        return False
+    parts = [
+        p.strip().split(";", 1)[0].strip().lower() for p in accept_header.split(",")
+    ]
+    return "text/event-stream" in parts
+
+
+def _serialize_sse_chunk(request_id: str, chunk: Any) -> str:
+    """SSE frame for an A2A streaming chunk.
+
+    Each event:
+        event: a2a.message
+        data: <one-line JSON>
+
+    A blank line terminates the event per the W3C SSE spec; we emit
+    ``\\n\\n`` so partial-line readers (incl. EventSource) flush
+    immediately. Multi-line JSON gets folded to a single line so the
+    spec's "data:" prefix rules don't require multi-line escaping.
+    """
+    if hasattr(chunk, "model_dump"):
+        obj = chunk.model_dump(mode="json", exclude_none=True)
+    else:
+        obj = chunk
+    payload = json.dumps(obj, ensure_ascii=False)
+    return f"event: a2a.message\ndata: {payload}\n\n"
+
+
+def _serialize_sse_error(request_id: str, exc: Any) -> str:
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32603,
+                "message": getattr(exc, "message", f"Streaming error: {exc!s}"),
+            },
+        },
+        ensure_ascii=False,
+    )
+    return f"event: a2a.error\ndata: {payload}\n\n"
+
+
 async def _handle_stream_message(
     api_base: Optional[str],
     request_id: str,
@@ -80,12 +138,19 @@ async def _handle_stream_message(
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     request_data: Optional[dict] = None,
     proxy_logging_obj: Optional[Any] = None,
+    sse: bool = False,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
     When user_api_key_dict, request_data, and proxy_logging_obj are provided,
     uses common_request_processing.async_streaming_data_generator with NDJSON
     serializers so proxy hooks and cost injection apply.
+
+    S3-06: when ``sse=True`` (caller sent ``Accept: text/event-stream``), the
+    same chunks are wrapped as SSE frames (``event: a2a.message`` / ``a2a.error``)
+    and the response Content-Type flips to ``text/event-stream`` so browser
+    EventSource consumers work directly. NDJSON stays the default for backwards
+    compatibility with existing A2A SDK clients.
     """
     from litellm.a2a_protocol import asend_message_streaming
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
@@ -93,7 +158,7 @@ async def _handle_stream_message(
     if not A2A_SDK_AVAILABLE:
 
         async def _error_stream():
-            yield json.dumps(
+            err_payload = json.dumps(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -102,9 +167,17 @@ async def _handle_stream_message(
                         "message": "Server error: 'a2a' package not installed",
                     },
                 }
-            ) + "\n"
+            )
+            if sse:
+                yield f"event: a2a.error\ndata: {err_payload}\n\n"
+            else:
+                yield err_payload + "\n"
 
-        return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
+        return StreamingResponse(
+            _error_stream(),
+            media_type="text/event-stream" if sse else "application/x-ndjson",
+            headers=_sse_headers() if sse else None,
+        )
 
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
 
@@ -140,31 +213,38 @@ async def _handle_stream_message(
                     ProxyBaseLLMRequestProcessing,
                 )
 
-                def _ndjson_chunk(chunk: Any) -> str:
-                    if hasattr(chunk, "model_dump"):
-                        obj = chunk.model_dump(mode="json", exclude_none=True)
-                    else:
-                        obj = chunk
-                    return json.dumps(obj) + "\n"
-
-                def _ndjson_error(proxy_exc: Any) -> str:
-                    return (
-                        json.dumps(
-                            {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "error": {
-                                    "code": -32603,
-                                    "message": getattr(
-                                        proxy_exc,
-                                        "message",
-                                        f"Streaming error: {proxy_exc!s}",
-                                    ),
-                                },
-                            }
-                        )
-                        + "\n"
+                if sse:
+                    serialize_chunk = lambda chunk: _serialize_sse_chunk(
+                        request_id, chunk
                     )
+                    serialize_error = lambda exc: _serialize_sse_error(request_id, exc)
+                else:
+
+                    def serialize_chunk(chunk: Any) -> str:
+                        if hasattr(chunk, "model_dump"):
+                            obj = chunk.model_dump(mode="json", exclude_none=True)
+                        else:
+                            obj = chunk
+                        return json.dumps(obj) + "\n"
+
+                    def serialize_error(proxy_exc: Any) -> str:
+                        return (
+                            json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": getattr(
+                                            proxy_exc,
+                                            "message",
+                                            f"Streaming error: {proxy_exc!s}",
+                                        ),
+                                    },
+                                }
+                            )
+                            + "\n"
+                        )
 
                 async for (
                     line
@@ -173,13 +253,15 @@ async def _handle_stream_message(
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                     proxy_logging_obj=proxy_logging_obj,
-                    serialize_chunk=_ndjson_chunk,
-                    serialize_error=_ndjson_error,
+                    serialize_chunk=serialize_chunk,
+                    serialize_error=serialize_error,
                 ):
                     yield line
             else:
                 async for chunk in a2a_stream:
-                    if hasattr(chunk, "model_dump"):
+                    if sse:
+                        yield _serialize_sse_chunk(request_id, chunk)
+                    elif hasattr(chunk, "model_dump"):
                         yield json.dumps(
                             chunk.model_dump(mode="json", exclude_none=True)
                         ) + "\n"
@@ -202,15 +284,25 @@ async def _handle_stream_message(
                     e = transformed_exception
             if isinstance(e, HTTPException):
                 raise
-            yield json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
-                }
-            ) + "\n"
+            if sse:
+                yield _serialize_sse_error(request_id, e)
+            else:
+                yield json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": f"Streaming error: {str(e)}",
+                        },
+                    }
+                ) + "\n"
 
-    return StreamingResponse(stream_response(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        stream_response(),
+        media_type="text/event-stream" if sse else "application/x-ndjson",
+        headers=_sse_headers() if sse else None,
+    )
 
 
 @router.get(
@@ -503,6 +595,8 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             )
 
         elif method == "message/stream":
+            # S3-06: honor Accept: text/event-stream for browser EventSource clients.
+            sse_wanted = _wants_sse(request.headers.get("accept"))
             return await _handle_stream_message(
                 api_base=agent_url,
                 request_id=request_id,
@@ -515,6 +609,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
+                sse=sse_wanted,
             )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")
