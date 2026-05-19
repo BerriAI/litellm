@@ -20,9 +20,9 @@ from litellm import utils, Router
 COMPLETION_TOKENS = 5
 base_model_list = [
     {
-        "model_name": "gpt-3.5-turbo",
+        "model_name": "gpt-5-mini",
         "litellm_params": {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "api_key": os.getenv("OPENAI_API_KEY"),
             "max_tokens": COMPLETION_TOKENS,
         },
@@ -74,14 +74,14 @@ def calculate_limits(list_of_messages):
 
 async def async_call(router: Router, list_of_messages) -> Any:
     tasks = [
-        router.acompletion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
+        router.acompletion(model="gpt-5-mini", messages=m) for m in list_of_messages
     ]
     return await asyncio.gather(*tasks)
 
 
 def sync_call(router: Router, list_of_messages) -> Any:
     return [
-        router.completion(model="gpt-3.5-turbo", messages=m) for m in list_of_messages
+        router.completion(model="gpt-5-mini", messages=m) for m in list_of_messages
     ]
 
 

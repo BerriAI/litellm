@@ -38,6 +38,19 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class RoutingGroup(BaseModel):
+    """
+    A group of models that share a routing strategy.
+    """
+
+    group_name: str
+    models: List[str]
+    routing_strategy: str
+    routing_strategy_args: Optional[dict] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class RouterConfig(BaseModel):
     model_list: List[ModelConfig]
 
@@ -65,6 +78,7 @@ class RouterConfig(BaseModel):
         "usage-based-routing",
         "latency-based-routing",
     ] = "simple-shuffle"
+    routing_groups: Optional[List[RoutingGroup]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -76,6 +90,7 @@ class UpdateRouterConfig(BaseModel):
 
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
+    routing_groups: Optional[List[RoutingGroup]] = None
     model_group_retry_policy: Optional[dict] = None
     model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
@@ -201,6 +216,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
+    use_chat_completions_api: Optional[bool] = None
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -236,6 +252,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Vector Store Params
     vector_store_id: Optional[str] = None
     milvus_text_field: Optional[str] = None
+    milvus_db_name: Optional[str] = None
+    milvus_partition_names: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -327,6 +345,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
+    ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
+    use_chat_completions_api: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
