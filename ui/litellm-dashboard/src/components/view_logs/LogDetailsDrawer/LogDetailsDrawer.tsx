@@ -116,14 +116,16 @@ export function LogDetailsDrawer({
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+  const [sessionPage, setSessionPage] = useState(1);
+  const SESSION_PAGE_SIZE = 50;
 
-  const { data: sessionLogs = [] } = useQuery({
-    queryKey: ["sessionLogs", sessionId],
+  const { data: sessionQueryResult } = useQuery({
+    queryKey: ["sessionLogs", sessionId, sessionPage],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return [];
-      const response = await sessionSpendLogsCall(accessToken, sessionId);
+      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], totalPages: 1 };
+      const response = await sessionSpendLogsCall(accessToken, sessionId, sessionPage, SESSION_PAGE_SIZE);
       const allSessionLogs: LogEntry[] = response.data || response || [];
-      return allSessionLogs
+      const logs = allSessionLogs
         .map((row) => ({
           ...row,
           request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
@@ -134,9 +136,27 @@ export function LogDetailsDrawer({
           if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
           return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
         });
+      return { logs, totalPages: response.total_pages ?? 1 };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
+
+  const sessionLogs = sessionQueryResult?.logs ?? [];
+  const sessionTotalPages = sessionQueryResult?.totalPages ?? 1;
+  const canGoPreviousPage = isSessionMode && sessionPage > 1;
+  const canGoNextPage = isSessionMode && sessionPage < sessionTotalPages;
+
+  const goToPreviousPage = () => {
+    if (!canGoPreviousPage) return;
+    setSelectedSessionRequestId(null);
+    setSessionPage((p) => p - 1);
+  };
+
+  const goToNextPage = () => {
+    if (!canGoNextPage) return;
+    setSelectedSessionRequestId(null);
+    setSessionPage((p) => p + 1);
+  };
 
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
@@ -166,7 +186,10 @@ export function LogDetailsDrawer({
     if (open) {
       setIsSidebarCollapsed(false);
     } else {
-      if (isSessionMode) setSelectedSessionRequestId(null);
+      if (isSessionMode) {
+        setSelectedSessionRequestId(null);
+        setSessionPage(1);
+      }
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
@@ -183,6 +206,8 @@ export function LogDetailsDrawer({
       }
       onSelectLog?.(selected);
     },
+    onPreviousPage: canGoPreviousPage ? goToPreviousPage : undefined,
+    onNextPage: canGoNextPage ? goToNextPage : undefined,
   });
 
   // Lazy-load log details (messages/response) only when drawer is open.
@@ -390,6 +415,11 @@ export function LogDetailsDrawer({
               onClose={onClose}
               onPrevious={selectPreviousLog}
               onNext={selectNextLog}
+              onPreviousPage={isSessionMode ? goToPreviousPage : undefined}
+              onNextPage={isSessionMode ? goToNextPage : undefined}
+              canGoPreviousPage={canGoPreviousPage}
+              canGoNextPage={canGoNextPage}
+              showPageControls={isSessionMode}
               statusLabel={statusLabel}
               statusColor={statusColor}
               environment={environment}
