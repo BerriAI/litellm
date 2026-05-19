@@ -882,12 +882,14 @@ if MCP_AVAILABLE:
             # Decrypt once and classify, instead of paying the crypto
             # cost twice (once for user-fields detection, once for BYOK).
             decoded = _decode_user_credential(row.credential_b64)
-            if not decoded:
-                continue
-            payload = _parse_user_fields_plaintext(decoded)
+            payload = _parse_user_fields_plaintext(decoded) if decoded else None
             if payload is not None:
                 user_fields_by_server[row.server_id] = payload
             else:
+                # Either a BYOK credential or an undecryptable row (e.g.
+                # after a salt-key rotation). Either way, a credential row
+                # exists for this (user, server), so surface it as present
+                # instead of silently telling the user to reconnect.
                 byok_set.add(row.server_id)
         for server in servers:
             if getattr(server, "is_byok", False):

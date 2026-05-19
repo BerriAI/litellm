@@ -680,11 +680,20 @@ async def delete_user_credential(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if existing is None:
-        raise RecordNotFoundError()
+        raise RecordNotFoundError(
+            data={"error": {"message": "no BYOK credential row", "meta": {}}}
+        )
     if _decode_user_fields_payload(existing.credential_b64) is not None:
         # Treat as "no BYOK credential present" so the endpoint reports
         # has_credential=False without clobbering the user-fields row.
-        raise RecordNotFoundError()
+        raise RecordNotFoundError(
+            data={
+                "error": {
+                    "message": "row holds user-fields payload, not a BYOK credential",
+                    "meta": {},
+                }
+            }
+        )
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
