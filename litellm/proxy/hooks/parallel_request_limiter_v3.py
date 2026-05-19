@@ -3028,6 +3028,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ttl=self.window_size,
                 )
             )
+        elif is_centralized_redis_cache_incremented:
+            _litellm_params = kwargs.get("litellm_params") or {}
+            _lp_metadata = _litellm_params.get("metadata") or {}
+            _lp_litellm_metadata = _litellm_params.get("litellm_metadata") or {}
+            verbose_proxy_logger.debug(
+                "MPR success-path decrement skipped because user_api_key_hash was not resolved. "
+                "standard_logging_object_present=%s, standard_logging_metadata_present=%s, "
+                "stream=%r, call_type=%r, cache_hit=%r, async_complete_streaming_response_present=%s, "
+                "model=%r, litellm_params.metadata.user_api_key=%r, "
+                "litellm_params.litellm_metadata.user_api_key=%r",
+                bool(kwargs.get("standard_logging_object")),
+                bool(standard_logging_metadata),
+                kwargs.get("stream"),
+                kwargs.get("call_type"),
+                kwargs.get("cache_hit"),
+                "async_complete_streaming_response" in kwargs,
+                kwargs.get("model"),
+                _lp_metadata.get("user_api_key"),
+                _lp_litellm_metadata.get("user_api_key"),
+            )
 
         # ----------------------------------------------------------------
         # TPM reconciliation
