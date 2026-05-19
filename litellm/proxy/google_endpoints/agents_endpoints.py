@@ -187,11 +187,13 @@ async def list_gemini_agents(
     """
     List all custom agents on the Gemini side.
 
-    Pass per-request Gemini credentials via ``litellm_params_template``
-    (JSON-encoded) or as flat query parameters:
+    Pass per-request Gemini credentials via the JSON-encoded
+    ``litellm_params_template`` query parameter. Flat query parameters
+    (e.g. ``?api_key=AIza...``) are intentionally ignored — see
+    ``_merge_query_params_into_data`` for the rationale.
 
     ```bash
-    curl "http://localhost:4000/v1beta/agents?api_key=AIza..." \\
+    curl "http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
         -H "Authorization: Bearer sk-..."
     ```
     """
@@ -242,11 +244,13 @@ async def get_gemini_agent(
     """
     Get a specific custom agent by name.
 
-    Pass per-request Gemini credentials via ``litellm_params_template``
-    (JSON-encoded) or as flat query parameters:
+    Pass per-request Gemini credentials via the JSON-encoded
+    ``litellm_params_template`` query parameter. Flat query parameters
+    (e.g. ``?api_key=AIza...``) are intentionally ignored — see
+    ``_merge_query_params_into_data`` for the rationale.
 
     ```bash
-    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent?api_key=AIza..." \\
+    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
         -H "Authorization: Bearer sk-..."
     ```
     """
@@ -297,11 +301,13 @@ async def delete_gemini_agent(
     """
     Delete a custom agent by name.
 
-    Pass per-request Gemini credentials via ``litellm_params_template``
-    (JSON-encoded) or as flat query parameters:
+    Pass per-request Gemini credentials via the JSON-encoded
+    ``litellm_params_template`` query parameter. Flat query parameters
+    (e.g. ``?api_key=AIza...``) are intentionally ignored — see
+    ``_merge_query_params_into_data`` for the rationale.
 
     ```bash
-    curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent?api_key=AIza..." \\
+    curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
         -H "Authorization: Bearer sk-..."
     ```
     """
@@ -352,11 +358,13 @@ async def list_gemini_agent_versions(
     """
     List versions of a custom agent.
 
-    Pass per-request Gemini credentials via ``litellm_params_template``
-    (JSON-encoded) or as flat query parameters:
+    Pass per-request Gemini credentials via the JSON-encoded
+    ``litellm_params_template`` query parameter. Flat query parameters
+    (e.g. ``?api_key=AIza...``) are intentionally ignored — see
+    ``_merge_query_params_into_data`` for the rationale.
 
     ```bash
-    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?api_key=AIza..." \\
+    curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
         -H "Authorization: Bearer sk-..."
     ```
     """
