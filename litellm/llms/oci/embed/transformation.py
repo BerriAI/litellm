@@ -275,6 +275,10 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
                 prompt_tokens=parsed.usage.promptTokens,
                 total_tokens=parsed.usage.totalTokens,
             )
+        else:
+            # Neither field returned — default to zero so downstream consumers
+            # can always rely on usage being populated.
+            model_response.usage = Usage(prompt_tokens=0, total_tokens=0)
 
         return model_response
 
