@@ -330,6 +330,35 @@ def test_prisma_client_jsonify_object_strips_null_bytes_from_strings():
     assert result["spend"] == 1.5
 
 
+def test_prisma_client_jsonify_object_strips_json_escaped_null_in_preserialized_strings():
+    """jsonify_object must strip \\u0000 from pre-serialized JSON strings.
+
+    Real-world flow: safe_dumps(metadata_dict) encodes \\x00 as the 6-char escape \\u0000
+    in the resulting JSON string. That string lands in the 'str' branch of jsonify_object,
+    where only .replace('\\x00', '') was applied — leaving \\u0000 intact and causing
+    PostgreSQL 22P05 on json/text columns.
+    """
+    import json
+
+    # Simulate what safe_dumps produces when metadata contains a null byte
+    preserialized_metadata = json.dumps({"key": "val\x00ue"})  # produces \u0000 escape
+    preserialized_response = json.dumps({"content": "hello\x00world"})
+
+    result = PrismaClient.jsonify_object(
+        None,
+        {
+            "metadata": preserialized_metadata,
+            "response": preserialized_response,
+            "request_id": "clean-id",
+        },
+    )
+    assert "\\u0000" not in result["metadata"], "pre-serialized \\u0000 must be stripped from metadata"
+    assert "\x00" not in result["metadata"]
+    assert "\\u0000" not in result["response"], "pre-serialized \\u0000 must be stripped from response"
+    assert "\x00" not in result["response"]
+    assert "value" in result["metadata"] or "valye" in result["metadata"] or '"key"' in result["metadata"]
+
+
 def test_prisma_client_jsonify_object_strips_null_bytes_from_dicts():
     """PrismaClient.jsonify_object must strip null bytes from JSON-serialized dict values.
 
@@ -358,11 +387,19 @@ async def test_update_spend_logs_strips_null_bytes_before_db_write():
     prisma_client.jsonify_object = lambda obj: PrismaClient.jsonify_object(None, obj)
     proxy_logging_obj = create_mock_proxy_logging()
 
+    import json as _json
+
+    # Realistic payload: metadata and response are already JSON-serialized strings
+    # (as produced by safe_dumps in get_transaction_spend_payload), so \x00 bytes
+    # appear as the 6-char \u0000 JSON escape — NOT as raw null bytes.
+    preserialized_metadata = _json.dumps({"user": "test\x00user", "trace": "val\x00"})
+    preserialized_response = _json.dumps({"content": "text\x00with\x00nulls"})
     prisma_client.spend_log_transactions = [
         {
             "request_id": "req\x001",
-            "messages": "hello\x00world",
-            "response": {"content": "text\x00with\x00nulls"},
+            "messages": "hello\x00world",  # raw null in a plain string field
+            "metadata": preserialized_metadata,  # \u0000 already JSON-escaped
+            "response": preserialized_response,  # \u0000 already JSON-escaped
             "spend": 0.01,
         }
     ]
@@ -378,4 +415,7 @@ async def test_update_spend_logs_strips_null_bytes_before_db_write():
     row = written_data[0]
     assert "\x00" not in row["request_id"]
     assert "\x00" not in row["messages"]
+    assert "\x00" not in row["metadata"]
+    assert "\\u0000" not in row["metadata"], "JSON-escaped null must be stripped from pre-serialized metadata"
     assert "\x00" not in row["response"]
+    assert "\\u0000" not in row["response"], "JSON-escaped null must be stripped from pre-serialized response"
