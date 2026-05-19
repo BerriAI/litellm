@@ -656,9 +656,15 @@ def test_stream_chunk_builder_openai_audio_output_usage():
             stream=True,
             stream_options={"include_usage": True},
         )
+    except litellm.Timeout:
+        pytest.skip("Skipping test due to timeout calling gpt-4o-audio-preview")
     except Exception as e:
-        if "openai-internal" in str(e):
-            pytest.skip("Skipping test due to openai-internal error")
+        # gpt-4o-audio-preview is a preview model that frequently returns
+        # transient errors (5xx, "openai-internal", unavailable, etc.).
+        # When the upstream call fails we cannot exercise the downstream
+        # streaming-chunk assertions, so skip rather than silently fall
+        # through to an UnboundLocalError on `completion`.
+        pytest.skip(f"Skipping test due to upstream API error: {e}")
 
     chunks = []
     for chunk in completion:
