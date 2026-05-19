@@ -479,7 +479,7 @@ def format_pr_close_comment(verdict: dict) -> str:
     missing_lines = _format_missing(verdict.get("missing") or [])
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this repository.\n"
+        f"👋 Hi, thanks for the PR! {AGENT_SHIN_AUTO_CLOSE_MARKER}, the automated triage bot for this repository.\n"
         "\n"
         "This PR is being **auto-closed** because it does not yet meet the bar described in our "
         "[pull-request template](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
@@ -513,7 +513,7 @@ def format_issue_close_comment(verdict: dict) -> str:
     missing_lines = _format_missing(verdict.get("missing") or [])
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this repository.\n"
+        f"👋 Hi, thanks for filing this! {AGENT_SHIN_AUTO_CLOSE_MARKER}, the automated triage bot for this repository.\n"
         "\n"
         "This issue is being **auto-closed** because it doesn't yet have enough detail for a maintainer to act on. "
         "Specifically, I couldn't find:\n"
