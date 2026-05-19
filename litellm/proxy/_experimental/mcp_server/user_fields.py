@@ -168,10 +168,16 @@ def resolve_user_field_headers(
         if not value:
             continue
         template = entry.get("header_value_template") or "{value}"
+        # Use plain substitution rather than ``str.format``: the latter
+        # exposes attribute / item access (``{value.__class__}``, ``{value[0]}``)
+        # which an admin-supplied template could use — intentionally or by
+        # accident — to leak Python object internals into outbound HTTP
+        # headers. ``str.replace`` only matches the literal ``{value}`` token.
         try:
-            headers[header_name] = template.format(value=value)
-        except (KeyError, IndexError, ValueError):
-            # Malformed template — fall back to raw value rather than crashing.
+            headers[header_name] = template.replace("{value}", value)
+        except (TypeError, AttributeError):
+            # Non-string template (e.g. corrupt JSONB row) — fall back to
+            # raw value rather than crashing the request.
             verbose_logger.warning(
                 "MCP user_fields: invalid header_value_template %r for field %r "
                 "on server %s; falling back to raw value.",

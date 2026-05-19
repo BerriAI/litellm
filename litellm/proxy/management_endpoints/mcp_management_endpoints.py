@@ -859,6 +859,8 @@ if MCP_AVAILABLE:
         """Populate ``has_user_credential`` and ``missing_user_field_keys``
         for the calling user across BYOK / user-fields servers in a single
         batched query."""
+        import json as _json
+
         from litellm.proxy._experimental.mcp_server.db import (
             _decode_user_credential,
             _parse_user_fields_plaintext,
@@ -886,12 +888,24 @@ if MCP_AVAILABLE:
             payload = _parse_user_fields_plaintext(decoded) if decoded else None
             if payload is not None:
                 user_fields_by_server[row.server_id] = payload
-            else:
-                # Either a BYOK credential or an undecryptable row (e.g.
-                # after a salt-key rotation). Either way, a credential row
-                # exists for this (user, server), so surface it as present
-                # instead of silently telling the user to reconnect.
-                byok_set.add(row.server_id)
+                continue
+            # Skip OAuth2 rows so a server that's been reconfigured from
+            # OAuth2 to BYOK doesn't show "Connected" while the actual
+            # tool call would fail (``get_user_credential`` filters OAuth2
+            # rows out at execution time). Re-uses the already-decrypted
+            # plaintext, so no extra crypto cost.
+            if decoded is not None:
+                try:
+                    parsed = _json.loads(decoded)
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
+                    continue
+            # Either a BYOK credential or an undecryptable row (e.g.
+            # after a salt-key rotation). Either way, a credential row
+            # exists for this (user, server), so surface it as present
+            # instead of silently telling the user to reconnect.
+            byok_set.add(row.server_id)
         for server in servers:
             if getattr(server, "is_byok", False):
                 server.has_user_credential = server.server_id in byok_set

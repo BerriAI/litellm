@@ -293,8 +293,11 @@ def test_resolve_user_field_headers_skips_unset_values():
     assert headers == {"X-Workspace": "ws1"}
 
 
-def test_resolve_user_field_headers_falls_back_on_bad_template():
-    """A broken template must not crash the request path."""
+def test_resolve_user_field_headers_passes_unknown_placeholders_through():
+    """Templates with non-``{value}`` placeholders are preserved literally
+    instead of triggering format-string evaluation. ``str.replace`` only
+    matches the literal ``{value}`` token, so unrelated braces flow through
+    untouched and never crash the request path."""
     srv = _gmail_server(
         user_fields=[
             {
@@ -306,8 +309,25 @@ def test_resolve_user_field_headers_falls_back_on_bad_template():
         ]
     )
     headers = resolve_user_field_headers(srv, {"TOKEN": "raw"})
-    # Falls back to the raw value rather than raising.
-    assert headers == {"Authorization": "raw"}
+    assert headers == {"Authorization": "Bearer {unknown_placeholder}"}
+
+
+def test_resolve_user_field_headers_does_not_evaluate_attribute_access():
+    """A template containing ``{value.__class__}`` must NOT evaluate the
+    attribute traversal — that would leak Python internals into outbound
+    HTTP headers. With ``str.replace`` it is preserved as a literal token."""
+    srv = _gmail_server(
+        user_fields=[
+            {
+                "field_key": "TOKEN",
+                "header_name": "Authorization",
+                "header_value_template": "Bearer {value.__class__}",
+                "required": True,
+            }
+        ]
+    )
+    headers = resolve_user_field_headers(srv, {"TOKEN": "raw"})
+    assert headers == {"Authorization": "Bearer {value.__class__}"}
 
 
 def test_resolve_user_field_headers_skips_entries_missing_header_name():
