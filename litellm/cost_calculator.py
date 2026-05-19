@@ -367,9 +367,9 @@ def _get_max_input_tokens_for_cost_fallback(
     metadata_model_infos = _get_metadata_model_infos_for_cost_fallback(
         litellm_logging_obj=litellm_logging_obj
     )
-    for model_info in metadata_model_infos:
+    for metadata_model_info in metadata_model_infos:
         for token_limit_key in ("max_input_tokens", "max_tokens"):
-            token_limit = model_info.get(token_limit_key)
+            token_limit = metadata_model_info.get(token_limit_key)
             if _is_positive_finite_number(token_limit):
                 return cast(Union[int, float], token_limit)
     return None
