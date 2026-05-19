@@ -54,6 +54,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Tools / agents (registry & policy admin)
     "/v1/tool/",
     "/v1/agents",
+    # xct-native skills CRUD (admin/UI surface)
+    "/v1/xct-skills",
     # Guardrails admin
     "/v2/guardrails/",
     # MCP server admin + BYOK OAuth flow (UI-initiated) + dynamic per-server endpoints
