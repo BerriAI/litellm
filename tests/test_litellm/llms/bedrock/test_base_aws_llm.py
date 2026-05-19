@@ -946,6 +946,212 @@ def test_parse_sts_region_from_endpoint(endpoint, expected_region):
     assert BaseAWSLLM._parse_sts_region_from_endpoint(endpoint) == expected_region
 
 
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,expected_region",
+    [
+        ({}, None, None),
+        ({"AWS_REGION": "us-east-1"}, None, "us-east-1"),
+        ({"AWS_DEFAULT_REGION": "ap-southeast-1"}, None, "ap-southeast-1"),
+        ({}, "https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            "eu-west-1",
+        ),
+        ({}, "https://sts.amazonaws.com", None),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            "eu-central-1",
+        ),
+    ],
+    ids=[
+        "no_env_no_endpoint",
+        "env_region",
+        "env_default_region",
+        "parsed_from_endpoint",
+        "parsed_endpoint_over_env",
+        "global_endpoint",
+        "vpce_endpoint",
+    ],
+)
+def test_resolve_sts_region(env, aws_sts_endpoint, expected_region):
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            BaseAWSLLM._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
+            == expected_region
+        )
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,ssl_verify,expected",
+    [
+        ({}, None, None, {"verify": True}),
+        (
+            {"AWS_REGION": "us-east-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "us-east-1"},
+        ),
+        (
+            {},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {},
+            "https://sts.amazonaws.com",
+            None,
+            {"verify": True, "endpoint_url": "https://sts.amazonaws.com"},
+        ),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+                "region_name": "eu-central-1",
+            },
+        ),
+        ({}, None, False, {"verify": False}),
+        (
+            {"AWS_DEFAULT_REGION": "ap-southeast-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "ap-southeast-1"},
+        ),
+    ],
+    ids=[
+        "default_verify_only",
+        "env_region",
+        "endpoint_with_parsed_region",
+        "endpoint_parsed_over_env",
+        "global_endpoint_no_region",
+        "vpce_endpoint",
+        "ssl_verify_false",
+        "env_default_region",
+    ],
+)
+def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
+    base_aws_llm = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            base_aws_llm._build_sts_client_kwargs(
+                aws_sts_endpoint=aws_sts_endpoint,
+                ssl_verify=ssl_verify,
+            )
+            == expected
+        )
+
+
+def test_irsa_cross_account_sts_client_uses_resolved_region():
+    """IRSA cross-account path must use _build_sts_client_kwargs (env region, not Bedrock)."""
+    base_aws_llm = BaseAWSLLM()
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("test-web-identity-token")
+        token_file = f.name
+
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_WEB_IDENTITY_TOKEN_FILE": token_file,
+                "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/eks-service-account-role",
+                "AWS_REGION": "eu-west-1",
+            },
+            clear=True,
+        ):
+            mock_sts_client = MagicMock()
+            mock_sts_client.assume_role_with_web_identity.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "temp-key",
+                    "SecretAccessKey": "temp-secret",
+                    "SessionToken": "temp-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+            mock_sts_client.assume_role.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "assumed-key",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+
+            with patch(
+                "boto3.client", return_value=mock_sts_client
+            ) as mock_boto3_client:
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::222222222222:role/target-role",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                )
+
+                for call in mock_boto3_client.call_args_list:
+                    assert call.args == ("sts",)
+                    assert call.kwargs["region_name"] == "eu-west-1"
+                    assert call.kwargs["verify"] is True
+    finally:
+        os.unlink(token_file)
+
+
+def test_web_identity_token_sts_client_uses_build_sts_client_kwargs():
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "key",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        "PackedPolicySize": 0,
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            with patch(
+                "litellm.llms.bedrock.base_aws_llm.get_secret",
+                return_value="oidc-token",
+            ):
+                base_aws_llm._auth_with_web_identity_token(
+                    aws_web_identity_token="my-token",
+                    aws_role_name="arn:aws:iam::111111111111:role/target",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                    aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+                )
+
+                mock_boto3_client.assert_called_once_with(
+                    "sts",
+                    verify=True,
+                    endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                    region_name="eu-west-1",
+                )
+
+
 def test_sts_uses_workload_region_not_bedrock_region():
     """Air-gapped: Bedrock in eu-central-1, STS VPC endpoint in eu-west-1 via AWS_REGION."""
     base_aws_llm = BaseAWSLLM()
