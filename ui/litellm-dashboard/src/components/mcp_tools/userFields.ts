@@ -2,8 +2,10 @@
  * PROTOTYPE-ONLY mock storage for the MCP "user fields" feature.
  *
  * Real implementation will store defs server-side (per MCP server) and
- * encrypted per-user values in the DB / vault. This file fakes both using
- * localStorage so we can demo the flow without backend changes.
+ * encrypted per-user values in the DB / vault. This file fakes defs in
+ * localStorage so admins can keep editing them across sessions, and keeps
+ * per-user values (which may contain secrets like bearer tokens) in
+ * sessionStorage so they do not survive browser close.
  *
  * Do NOT model real auth/credential storage after this file.
  */
@@ -48,7 +50,7 @@ export function getUserFieldValues(
 ): Record<string, string> {
   if (typeof window === "undefined") return {};
   return safeParse<Record<string, string>>(
-    window.localStorage.getItem(VALUES_KEY(serverId, userId)),
+    window.sessionStorage.getItem(VALUES_KEY(serverId, userId)),
     {},
   );
 }
@@ -59,7 +61,7 @@ export function setUserFieldValues(
   values: Record<string, string>,
 ): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(
+  window.sessionStorage.setItem(
     VALUES_KEY(serverId, userId),
     JSON.stringify(values),
   );
