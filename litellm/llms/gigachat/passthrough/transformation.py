@@ -93,44 +93,50 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             if provider_chat_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
-            litellm_model_response: ModelResponse = provider_chat_config.transform_response(
-                model=model,
-                messages=request_data.get("messages", []),
-                raw_response=httpx_response,
-                model_response=ModelResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
-                api_key="",
-                request_data=request_data,
-                encoding=encoding,
+            litellm_model_response: ModelResponse = (
+                provider_chat_config.transform_response(
+                    model=model,
+                    messages=request_data.get("messages", []),
+                    raw_response=httpx_response,
+                    model_response=ModelResponse(),
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    litellm_params={},
+                    api_key="",
+                    request_data=request_data,
+                    encoding=encoding,
+                )
             )
 
             return litellm_model_response
-    
+
         if "embeddings" in endpoint:
-            
-            provider_embedding_config = ProviderConfigManager.get_provider_embedding_config(
-                provider=LlmProviders(custom_llm_provider),
-                model=model,
+
+            provider_embedding_config = (
+                ProviderConfigManager.get_provider_embedding_config(
+                    provider=LlmProviders(custom_llm_provider),
+                    model=model,
+                )
             )
 
             if provider_embedding_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
-            litellm_embedding_response: EmbeddingResponse = provider_embedding_config.transform_embedding_response(
-                model=model,
-                raw_response=httpx_response,
-                model_response=EmbeddingResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                request_data=request_data,
-                litellm_params={},
+            litellm_embedding_response: EmbeddingResponse = (
+                provider_embedding_config.transform_embedding_response(
+                    model=model,
+                    raw_response=httpx_response,
+                    model_response=EmbeddingResponse(),
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    api_key="",
+                    request_data=request_data,
+                    litellm_params={},
+                )
             )
 
             return litellm_embedding_response
-        
+
         return None
 
     def handle_logging_collected_chunks(

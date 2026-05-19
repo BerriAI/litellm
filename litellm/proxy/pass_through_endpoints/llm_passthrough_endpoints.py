@@ -2461,7 +2461,7 @@ async def gigachat_proxy_route(
     is_router_model = False
 
     model = request_body.get("model")
-    if model:    
+    if model:
         is_router_model = is_passthrough_request_using_router_model(
             request_body, llm_router
         )
@@ -2469,7 +2469,6 @@ async def gigachat_proxy_route(
         raise HTTPException(
             status_code=400, detail={"error": "Model is required in request body"}
         )
-
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -2582,8 +2581,6 @@ async def handle_gigachat_passthrough_router_model(
     Returns:
         Response or StreamingResponse depending on endpoint type
     """
-    from fastapi import Response as FastAPIResponse
-
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     # Detect streaming based on request body
@@ -2628,7 +2625,13 @@ async def handle_gigachat_passthrough_router_model(
     data["custom_llm_provider"] = "gigachat"
 
     # Remove sensitive keys from data
-    keys = ["gigachat_auth_url", "gigachat_access_token", "gigachat_scope", "api_base", "api_key"]
+    keys = [
+        "gigachat_auth_url",
+        "gigachat_access_token",
+        "gigachat_scope",
+        "api_base",
+        "api_key",
+    ]
     for key in keys:
         data.pop(key, None)
 

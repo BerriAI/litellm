@@ -147,9 +147,7 @@ async def get_access_token_async(
         )
 
     scope = scope or litellm_params.get("gigachat_scope") or _get_scope()
-    auth_url = (
-        auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
-    )
+    auth_url = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
 
     # Check cache
     cache_key = f"gigachat_token:{credentials[:16]}"

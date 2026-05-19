@@ -5632,9 +5632,10 @@ def emit_standard_logging_payload(payload: StandardLoggingPayload):
         try:
             print(json.dumps(payload, indent=4, default=str))  # noqa
         except Exception as e:
-            print(
-                "Error serializing standard logging payload for debug output:",
-                str(e),
+            verbose_logger.exception(
+                "Error serializing standard logging payload for debug output: {}".format(
+                    str(e)
+                )
             )
 
 
