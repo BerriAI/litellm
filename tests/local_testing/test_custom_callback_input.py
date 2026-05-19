@@ -1134,7 +1134,14 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 stream=stream,
             )
         except Exception as e:
-            pytest.skip(f"Skipping - upstream gpt-audio-1.5 call failed: {e}")
+            err = str(e).lower()
+            if (
+                "model_not_found" in err
+                or "does not exist" in err
+                or "openai-internal" in err
+            ):
+                pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
+            raise
 
         if stream:
             for chunk in response:
