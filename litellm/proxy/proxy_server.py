@@ -4727,6 +4727,7 @@ class ProxyConfig:
         if _id is not None:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
+            model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
         if premium_user is True:
             # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
@@ -6916,6 +6917,15 @@ async def async_data_generator(  # noqa: PLR0915
 
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
+            elif isinstance(chunk, bytes):
+                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
+                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
+                # Decode to str so the f-string below does not emit a Python b'...' literal,
+                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
+                chunk = chunk.decode("utf-8", errors="replace")
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                    continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -8089,6 +8099,11 @@ async def model_list(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Compute once — used in both branches below to hide paused models from the listing.
+    blocked_names = (
+        llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -8120,6 +8135,10 @@ async def model_list(
             include_model_access_groups=include_model_access_groups or False,
             only_model_access_groups=only_model_access_groups or False,
         )
+
+        # Hide paused models from the public listing (admins manage them via /model/info)
+        if blocked_names:
+            all_models = [m for m in all_models if m not in blocked_names]
 
         # Build response data with all proxy models
         model_data = []
@@ -8153,6 +8172,10 @@ async def model_list(
         return_wildcard_routes=return_wildcard_routes or False,
         user_api_key_cache=user_api_key_cache,
     )
+
+    # Hide paused models from the public listing (admins manage them via /model/info)
+    if blocked_names:
+        all_models = [m for m in all_models if m not in blocked_names]
 
     # Build response data
     model_data = []
