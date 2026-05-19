@@ -111,7 +111,7 @@ def map_openai_size_to_gemini_image_config(
     if is_gemini_image_model(model):
         if supports_gemini_image_size(model):
             image_config["imageSize"] = image_size
-    elif image_size in IMAGEN_SUPPORTED_IMAGE_SIZES:
+    elif is_imagen_model(model) and image_size in IMAGEN_SUPPORTED_IMAGE_SIZES:
         image_config["imageSize"] = image_size
     return image_config
 
@@ -125,6 +125,11 @@ def supports_gemini_image_size(model: str) -> bool:
 def is_gemini_image_model(model: str) -> bool:
     base_model = model.split("/", 1)[-1]
     return "gemini" in base_model
+
+
+def is_imagen_model(model: str) -> bool:
+    base_model = model.split("/", 1)[-1]
+    return "imagen" in base_model
 
 
 def map_openai_image_params_to_gemini(
