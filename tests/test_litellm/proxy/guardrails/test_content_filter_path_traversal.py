@@ -34,9 +34,10 @@ class TestContentFilterPathTraversal:
             "categories",
         )
         valid_file = os.path.join(categories_dir, "harmful_self_harm.yaml")
-        if os.path.exists(valid_file):
-            result = guardrail._resolve_category_file_path(valid_file)
-            assert result == valid_file
+        if not os.path.exists(valid_file):
+            pytest.skip("harmful_self_harm.yaml not present in this environment")
+        result = guardrail._resolve_category_file_path(valid_file)
+        assert result == valid_file
 
     def test_invalid_category_name_skipped(self):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (

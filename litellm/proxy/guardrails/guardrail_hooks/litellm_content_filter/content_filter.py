@@ -333,15 +333,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         resolved = os.path.realpath(path)
         allowed = os.path.realpath(categories_dir)
         try:
-            if os.path.commonpath([resolved, allowed]) != allowed:
-                raise ValueError(
-                    f"Category file path '{path}' is outside the allowed "
-                    f"categories directory '{categories_dir}'"
-                )
-        except ValueError as exc:
+            common = os.path.commonpath([resolved, allowed])
+        except ValueError:
+            # commonpath() raises ValueError on Windows when paths span different drives
             raise ValueError(
                 f"Category file path '{path}' is outside the allowed categories directory"
-            ) from exc
+            )
+        if common != allowed:
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed "
+                f"categories directory '{categories_dir}'"
+            )
 
     def _resolve_category_file_path(self, file_path: str) -> str:
         """
@@ -354,7 +356,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         file isn't found.
 
         Resolution order:
-        1. Return as-is if absolute or already exists (jailed to categories/).
+        1. Return as-is if absolute or already exists (jailed to module dir).
         2. Try joining the full path relative to this module's directory (jailed).
         3. Progressively strip leading path components and try each suffix
            relative to this module's directory (jailed).
@@ -367,20 +369,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             resolution fails (caller should check existence).
 
         Raises:
-            ValueError: If the resolved path escapes the categories directory.
+            ValueError: If the resolved path escapes the module directory.
         """
-        categories_dir = os.path.join(os.path.dirname(__file__), "categories")
+        module_dir = os.path.dirname(__file__)
 
         if os.path.isabs(file_path) or os.path.exists(file_path):
-            self._assert_within_categories_dir(file_path, categories_dir)
+            self._assert_within_categories_dir(file_path, module_dir)
             return file_path
-
-        module_dir = os.path.dirname(__file__)
 
         # Try the full relative path joined to the module directory
         candidate = os.path.join(module_dir, file_path)
         if os.path.exists(candidate):
-            self._assert_within_categories_dir(candidate, categories_dir)
+            self._assert_within_categories_dir(candidate, module_dir)
             return candidate
 
         # Progressively strip leading components to find a matching suffix
@@ -389,14 +389,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
             if os.path.exists(candidate):
-                self._assert_within_categories_dir(candidate, categories_dir)
+                self._assert_within_categories_dir(candidate, module_dir)
                 return candidate
 
         # File not found via any resolution strategy — jail the module-relative
         # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
         # regardless of CWD or whether the target file exists.
         self._assert_within_categories_dir(
-            os.path.join(module_dir, file_path), categories_dir
+            os.path.join(module_dir, file_path), module_dir
         )
         return file_path
 
@@ -445,7 +445,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Load category file (custom or default)
             if custom_file:
-                category_file_path = self._resolve_category_file_path(custom_file)
+                try:
+                    category_file_path = self._resolve_category_file_path(custom_file)
+                except ValueError as e:
+                    verbose_proxy_logger.warning(
+                        f"Category {category_name}: invalid category_file path, skipping. {e}"
+                    )
+                    continue
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
                 yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
