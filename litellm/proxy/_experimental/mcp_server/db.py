@@ -678,7 +678,26 @@ async def store_user_field_values(
     ``LiteLLM_MCPUserCredentials.credential_b64``. A ``"type"`` discriminator
     lets ``get_user_field_values`` tell user-fields rows apart from BYOK
     strings and OAuth2 payloads sharing the same column.
+
+    BYOK and OAuth2 credentials share the same ``(user_id, server_id)`` row.
+    Refuse to overwrite a non-user-fields credential so saving user-field
+    values does not silently destroy a stored BYOK API key or OAuth2 token.
     """
+
+    # Guard against silently overwriting a BYOK or OAuth2 credential that
+    # shares the same (user_id, server_id) row.
+    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if (
+        existing is not None
+        and _decode_user_fields_payload(existing.credential_b64) is None
+    ):
+        raise ValueError(
+            f"Existing credential for user {user_id} and server "
+            f"{server_id} is not a user-fields payload (likely BYOK or "
+            f"OAuth2). Refusing to overwrite."
+        )
 
     payload = json.dumps({"type": "user_fields", "values": values})
     encoded = encrypt_value_helper(payload)

@@ -13,8 +13,7 @@ resolution / injection logic.
 
 from __future__ import annotations
 
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -171,24 +170,3 @@ def resolve_user_field_env(
             continue
         env[env_var_name] = value
     return env
-
-
-def lookup_cached_user_fields(
-    cache: Dict[Tuple[str, str], Tuple[Optional[Dict[str, str]], float]],
-    user_id: str,
-    server_id: str,
-    ttl_seconds: int,
-) -> Tuple[bool, Optional[Dict[str, str]]]:
-    """Return (cache_hit, values) for the (user, server) cache pair.
-
-    Pulled out so server.py can pass its own cache dict in; keeping the
-    cache as module-level state in server.py preserves the existing
-    invalidation hooks called from the management endpoints.
-    """
-    cached = cache.get((user_id, server_id))
-    if cached is None:
-        return False, None
-    values, ts = cached
-    if time.monotonic() - ts >= ttl_seconds:
-        return False, None
-    return True, values

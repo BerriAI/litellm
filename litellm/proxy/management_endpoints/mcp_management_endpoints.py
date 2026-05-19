@@ -113,7 +113,6 @@ if MCP_AVAILABLE:
         delete_user_credential,
         get_all_mcp_servers_for_user,
         delete_user_field_values,
-        get_all_mcp_servers,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
@@ -125,6 +124,11 @@ if MCP_AVAILABLE:
         store_user_field_values,
         store_user_oauth_credential,
         update_mcp_server,
+    )
+    from litellm.proxy._experimental.mcp_server.user_fields import (
+        coerce_user_fields,
+        compute_missing_user_fields,
+        server_has_user_fields,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         authorize_with_server,
@@ -479,47 +483,6 @@ if MCP_AVAILABLE:
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
-
-    def _coerce_user_fields_list(raw: Any) -> List[Dict[str, Any]]:
-        """Normalize a server.user_fields value (JSON string or list) to a list of dicts.
-
-        Used by the BYOK-list-annotation block and any other site that needs
-        to inspect declared fields without instantiating MCPUserField models.
-        """
-        if not raw:
-            return []
-        if isinstance(raw, list):
-            return [e for e in raw if isinstance(e, dict)]
-        if isinstance(raw, str):
-            try:
-                parsed = json.loads(raw)
-            except (ValueError, TypeError):
-                return []
-            if isinstance(parsed, list):
-                return [e for e in parsed if isinstance(e, dict)]
-        return []
-
-    def _has_required_user_fields(raw: Any) -> bool:
-        """True iff the server declares at least one required user field."""
-        for entry in _coerce_user_fields_list(raw):
-            if entry.get("required", True):
-                return True
-        return False
-
-    def _compute_missing_user_field_keys(
-        raw: Any, stored_values: Dict[str, str]
-    ) -> List[str]:
-        """Field keys the user must still supply (required + currently empty)."""
-        missing: List[str] = []
-        for entry in _coerce_user_fields_list(raw):
-            field_key = entry.get("field_key")
-            if not isinstance(field_key, str) or not field_key:
-                continue
-            if not entry.get("required", True):
-                continue
-            if not stored_values.get(field_key):
-                missing.append(field_key)
-        return missing
 
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
@@ -1007,8 +970,7 @@ if MCP_AVAILABLE:
             relevant_server_ids = [
                 s.server_id
                 for s in redacted_mcp_servers
-                if getattr(s, "is_byok", False)
-                or _has_required_user_fields(getattr(s, "user_fields", None))
+                if getattr(s, "is_byok", False) or server_has_user_fields(s)
             ]
             if relevant_server_ids:
                 cred_rows = (
@@ -1036,13 +998,13 @@ if MCP_AVAILABLE:
                 for server in redacted_mcp_servers:
                     if getattr(server, "is_byok", False):
                         server.has_user_credential = server.server_id in byok_set
-                    if _has_required_user_fields(getattr(server, "user_fields", None)):
+                    if server_has_user_fields(server):
                         stored = user_fields_by_server.get(server.server_id, {})
-                        server.missing_user_field_keys = (
-                            _compute_missing_user_field_keys(
-                                getattr(server, "user_fields", None), stored
-                            )
-                        )
+                        server.missing_user_field_keys = [
+                            f["field_key"]
+                            for f in compute_missing_user_fields(server, stored)
+                            if isinstance(f.get("field_key"), str)
+                        ]
 
         # Virtual keys only get a sanitized discovery view.
         if is_restricted_virtual_key:
@@ -2245,16 +2207,10 @@ if MCP_AVAILABLE:
         # Pre-compute allowed keys from the server's declared fields, then
         # filter the incoming payload to only those keys. This prevents
         # callers from polluting the storage blob with arbitrary keys.
-        raw_fields = getattr(server, "user_fields", None) or []
-        if isinstance(raw_fields, str):
-            try:
-                raw_fields = json.loads(raw_fields)
-            except (ValueError, TypeError):
-                raw_fields = []
         declared_keys = {
             entry.get("field_key")
-            for entry in raw_fields
-            if isinstance(entry, dict) and entry.get("field_key")
+            for entry in coerce_user_fields(server)
+            if entry.get("field_key")
         }
         if not declared_keys:
             raise HTTPException(
@@ -2277,7 +2233,19 @@ if MCP_AVAILABLE:
             else:
                 merged[key] = value
 
-        await store_user_field_values(prisma_client, user_id, server_id, merged)
+        try:
+            await store_user_field_values(prisma_client, user_id, server_id, merged)
+        except ValueError as e:
+            # The (user, server) row already holds a BYOK or OAuth2 credential.
+            # Refuse rather than silently destroying the existing credential.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "credential_conflict",
+                    "message": str(e),
+                    "server_id": server_id,
+                },
+            )
 
         # Invalidate the BYOK credential cache for this (user, server) pair
         # so the next tool call re-reads the row. We piggyback on the
@@ -2353,7 +2321,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        all_servers = await get_all_mcp_servers(prisma_client)
+        # Only consider servers the calling user is permitted to see. This
+        # mirrors the per-user filtering used by the main MCP list endpoint
+        # and prevents leaking server IDs / user-field metadata (header
+        # names, env var names) to users without access.
+        all_servers = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
         # Pre-filter to servers that actually declare user_fields, then
         # batch-fetch every credential row for the calling user in one
         # query. The N+1 alternative (per-server get_user_field_values)
@@ -2361,13 +2335,7 @@ if MCP_AVAILABLE:
         relevant_servers: List["LiteLLM_MCPServerTable"] = []
         relevant_ids: List[str] = []
         for server in all_servers:
-            raw_fields = getattr(server, "user_fields", None) or []
-            if isinstance(raw_fields, str):
-                try:
-                    raw_fields = json.loads(raw_fields)
-                except (ValueError, TypeError):
-                    raw_fields = []
-            if not raw_fields:
+            if not server_has_user_fields(server):
                 continue
             relevant_servers.append(server)
             relevant_ids.append(server.server_id)
