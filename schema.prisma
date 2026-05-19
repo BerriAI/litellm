@@ -4,8 +4,9 @@ datasource client {
 }
 
 generator client {
-  provider = "prisma-client-py"
-  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
+  provider                    = "prisma-client-py"
+  binaryTargets               = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
+  enable_experimental_decimal = true
 }
 
 // Budget / Rate Limits for an org
