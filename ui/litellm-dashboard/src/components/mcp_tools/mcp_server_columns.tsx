@@ -273,10 +273,13 @@ export const mcpServerColumns = (
       const hasUserFields = declaredUserFields.length > 0;
       if (hasUserFields) {
         // missing_user_field_keys is populated by the proxy for the calling
-        // user on the list endpoint. Falling back to an empty array assumes
-        // "nothing missing" so old API responses don't show a false alarm.
-        const missing = server.missing_user_field_keys ?? [];
-        if (missing.length > 0) {
+        // user on the list endpoint. Distinguish `null`/`undefined`
+        // (annotation never ran — e.g. no user_id, no DB) from `[]`
+        // (annotation ran and all required fields are satisfied): rendering
+        // a green "Ready" badge for the unannotated case would lie to the
+        // user, since the actual tool call would still 401 on missing fields.
+        const missing = server.missing_user_field_keys;
+        if (missing && missing.length > 0) {
           return onUserFieldsConnect ? (
             <button
               className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors"
@@ -290,6 +293,26 @@ export const mcpServerColumns = (
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-red-50 text-red-700 border border-red-200">
               <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
               {missing.length} missing field{missing.length === 1 ? "" : "s"}
+            </span>
+          );
+        }
+        if (missing == null) {
+          return onUserFieldsConnect ? (
+            <button
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+              onClick={() => onUserFieldsConnect(server)}
+              title="Per-user field status is unavailable. Open to configure."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              Not verified
+            </button>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md bg-gray-50 text-gray-600 border border-gray-200"
+              title="Per-user field status is unavailable."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              Not verified
             </span>
           );
         }

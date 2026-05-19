@@ -2482,6 +2482,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        user_field_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2493,12 +2494,20 @@ class MCPServerManager:
         Args:
             tool_name: The full tool name (with prefix) to call
             arguments: Tool arguments to pass to the handler
+            user_field_headers: Optional admin-declared per-user header values
+                resolved from ``MCPServer.user_fields`` for the calling user.
+                Forwarded via the openapi generator's request ContextVar so
+                the closure-baked handler picks them up — mirrors the
+                local-registry dispatch path in ``server.execute_mcp_tool``.
 
         Returns:
             CallToolResult with the response from the API
         """
         from mcp.types import TextContent
 
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_user_field_headers,
+        )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
@@ -2514,6 +2523,11 @@ class MCPServerManager:
                 isError=True,
             )
 
+        _user_field_token = (
+            _request_user_field_headers.set(user_field_headers)
+            if user_field_headers
+            else None
+        )
         try:
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
@@ -2534,6 +2548,9 @@ class MCPServerManager:
                 content=[TextContent(type="text", text=error_msg)],
                 isError=True,
             )
+        finally:
+            if _user_field_token is not None:
+                _request_user_field_headers.reset(_user_field_token)
 
     async def pre_call_tool_check(
         self,
@@ -3006,9 +3023,34 @@ class MCPServerManager:
                     "transport to enable hook header injection.",
                     server_name,
                 )
+            # User-fields: resolve the calling user's stored values and forward
+            # them as upstream headers so admin-declared required fields reach
+            # the OpenAPI handler. Mirrors the local-registry dispatch path in
+            # ``server.execute_mcp_tool`` — without this, _enforce_user_fields
+            # would gate the call on the values being present but the values
+            # would be silently dropped before dispatch.
+            user_field_headers: Optional[Dict[str, str]] = None
+            from litellm.proxy._experimental.mcp_server.user_fields import (
+                resolve_user_field_headers,
+            )
+
+            stored_user_field_values = await self._resolve_user_field_values(
+                mcp_server, user_api_key_auth
+            )
+            if stored_user_field_values:
+                resolved = resolve_user_field_headers(
+                    mcp_server, stored_user_field_values
+                )
+                if resolved:
+                    user_field_headers = resolved
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server,
+                        name,
+                        arguments,
+                        user_field_headers=user_field_headers,
+                    )
                 )
             )
         else:
