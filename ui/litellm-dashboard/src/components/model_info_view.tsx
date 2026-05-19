@@ -263,6 +263,34 @@ export default function ModelInfoView({
         updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
       }
 
+      // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).
+      if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
+        if (
+          values.cache_read_cost !== undefined &&
+          values.cache_read_cost !== null &&
+          values.cache_read_cost !== ""
+        ) {
+          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
+        } else if (updatedLitellmParams.input_cost_per_token !== undefined) {
+          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
+        }
+      }
+
+      // Cache Write Cost: explicit value if provided, else clear the override
+      // so the backend falls back to the model-level default. Sending 0 here
+      // would persist a zero rate even when the user intended to unset it.
+      if (form.isFieldTouched("cache_write_cost")) {
+        if (
+          values.cache_write_cost !== undefined &&
+          values.cache_write_cost !== null &&
+          values.cache_write_cost !== ""
+        ) {
+          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
+        } else {
+          delete updatedLitellmParams.cache_creation_input_token_cost;
+        }
+      }
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
@@ -638,6 +666,22 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    cache_read_cost:
+                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_read_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_read_input_token_cost !== null
+                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
+                          : null,
+                    cache_write_cost:
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_creation_input_token_cost !== null
+                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
+                          : null,
                     cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
                     cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
@@ -720,6 +764,52 @@ export default function ModelInfoView({
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_read_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_read_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_read_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_read_input_token_cost !== null
+                                ? (localModelData.model_info.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Write Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_write_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData?.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_creation_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_creation_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_creation_input_token_cost !== null
+                                ? (localModelData.model_info.cache_creation_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
