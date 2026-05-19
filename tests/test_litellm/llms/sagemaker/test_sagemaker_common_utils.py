@@ -12,18 +12,46 @@ from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 
 # --------------------------------------------------------------------------- #
-# SAGEMAKER_RESPONSE_STREAM_SHAPE eager-load tests                            #
+# get_sagemaker_response_stream_shape lazy-load tests                         #
 # --------------------------------------------------------------------------- #
 
 
-def test_sagemaker_response_stream_shape_loaded_at_import():
+@pytest.fixture(autouse=True)
+def _reset_sagemaker_response_stream_shape_cache():
+    """Prevent lru_cache leakage between tests in this module."""
+    import litellm.llms.sagemaker.common_utils as mod
+
+    mod.get_sagemaker_response_stream_shape.cache_clear()
+    yield
+    mod.get_sagemaker_response_stream_shape.cache_clear()
+
+
+def test_sagemaker_response_stream_shape_lazy_loads_once():
     """
-    SAGEMAKER_RESPONSE_STREAM_SHAPE is resolved at module import time.
+    get_sagemaker_response_stream_shape() loads from botocore at most once per process.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    sentinel = MagicMock()
+    with patch.object(
+        mod, "_load_sagemaker_response_stream_shape", return_value=sentinel
+    ) as mock_load:
+        assert mod.get_sagemaker_response_stream_shape() is sentinel
+        assert mod.get_sagemaker_response_stream_shape() is sentinel
+        mock_load.assert_called_once()
+
+
+def test_sagemaker_response_stream_shape_loaded_on_first_access():
+    """
+    get_sagemaker_response_stream_shape() loads once on first use.
     In a standard environment with botocore installed it must be non-None.
     """
-    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+    pytest.importorskip("botocore")
+    from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
-    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None
+    assert get_sagemaker_response_stream_shape() is not None
 
 
 def test_sagemaker_response_stream_shape_load_failure_returns_none():
@@ -36,6 +64,7 @@ def test_sagemaker_response_stream_shape_load_failure_returns_none():
 
     import litellm.llms.sagemaker.common_utils as mod
 
+    pytest.importorskip("botocore")
     with patch(
         "botocore.loaders.Loader.load_service_model",
         side_effect=Exception("no data"),
@@ -49,14 +78,16 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     The loaded shape should be the botocore StructureShape for
     InvokeEndpointWithResponseStreamOutput, not a plain dict or any other type.
     """
+    pytest.importorskip("botocore")
     from botocore.model import StructureShape
 
-    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+    from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
-    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None, (
-        "SAGEMAKER_RESPONSE_STREAM_SHAPE is None — botocore may not be installed"
-    )
-    shape: StructureShape = SAGEMAKER_RESPONSE_STREAM_SHAPE  # remove Optional
+    shape = get_sagemaker_response_stream_shape()
+    assert (
+        shape is not None
+    ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
+    shape: StructureShape = shape  # remove Optional
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 
@@ -64,29 +95,25 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
 def test_sagemaker_response_stream_shape_not_reloaded_on_new_decoder():
     """
     Creating multiple AWSEventStreamDecoder instances must not trigger
-    additional botocore Loader calls — the shape is resolved once at import
-    time and reused.
+    additional botocore Loader calls — the shape is cached after first access.
     """
-    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+    from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
-    decoder_a = AWSEventStreamDecoder(model="test-model-a")
-    decoder_b = AWSEventStreamDecoder(model="test-model-b")
+    decoder_a = AWSEventStreamDecoder.__new__(AWSEventStreamDecoder)
+    decoder_b = AWSEventStreamDecoder.__new__(AWSEventStreamDecoder)
 
-    # Both decoders should use the same pre-loaded shape object (identity check)
     assert "_response_stream_shape_cache" not in decoder_a.__dict__
     assert "_response_stream_shape_cache" not in decoder_b.__dict__
-    # The module constant is still the same object
-    from litellm.llms.sagemaker.common_utils import (
-        SAGEMAKER_RESPONSE_STREAM_SHAPE as shape_after,
-    )
 
-    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is shape_after
+    first = get_sagemaker_response_stream_shape()
+    second = get_sagemaker_response_stream_shape()
+    assert first is second
 
 
 def test_sagemaker_parse_message_from_event_raises_on_none_shape():
     """
-    When SAGEMAKER_RESPONSE_STREAM_SHAPE is None (botocore unavailable),
-    _parse_message_from_event must raise ValueError before touching the
+    When get_sagemaker_response_stream_shape() returns None (botocore unavailable),
+    _parse_message_from_event must raise SagemakerError before touching the
     botocore parser — not an opaque AttributeError from inside botocore.
     """
     from unittest.mock import MagicMock, patch
@@ -94,10 +121,14 @@ def test_sagemaker_parse_message_from_event_raises_on_none_shape():
     import litellm.llms.sagemaker.common_utils as mod
     from litellm.llms.sagemaker.common_utils import SagemakerError
 
-    decoder = AWSEventStreamDecoder(model="test-model")
+    decoder = AWSEventStreamDecoder.__new__(AWSEventStreamDecoder)
+    decoder.model = "test-model"
+    decoder.parser = MagicMock()
+    decoder.content_blocks = []
+    decoder.is_messages_api = None
     mock_event = MagicMock()
 
-    with patch.object(mod, "SAGEMAKER_RESPONSE_STREAM_SHAPE", None):
+    with patch.object(mod, "get_sagemaker_response_stream_shape", return_value=None):
         with pytest.raises(SagemakerError) as exc_info:
             decoder._parse_message_from_event(mock_event)
 
