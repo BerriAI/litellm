@@ -881,6 +881,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                user_api_key_auth=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
