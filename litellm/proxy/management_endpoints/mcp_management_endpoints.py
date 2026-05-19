@@ -216,6 +216,33 @@ if MCP_AVAILABLE:
     def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
+        _validate_mcp_user_fields_byok_exclusive(payload)
+
+    def _validate_mcp_user_fields_byok_exclusive(payload: Any) -> None:
+        """Reject server configurations that combine is_byok with user_fields.
+
+        Both credential types share the same (user_id, server_id) row in
+        LiteLLM_MCPUserCredentials, and the store paths refuse to overwrite
+        the other type — so a user can save BYOK or user-fields for a given
+        server, never both. Allowing this combination at admin time would
+        trap end-users in an unresolvable state: every tool call would 401
+        on whichever check the user has not (and cannot) satisfy.
+        """
+        if not getattr(payload, "is_byok", False):
+            return
+        user_fields = getattr(payload, "user_fields", None) or []
+        if user_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "MCP servers cannot enable both is_byok and user_fields. "
+                        "Use user_fields if the server needs multiple per-user "
+                        "values; use is_byok only for a single legacy BYOK "
+                        "credential."
+                    )
+                },
+            )
 
     _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(NewMCPServerRequest.model_fields)
 

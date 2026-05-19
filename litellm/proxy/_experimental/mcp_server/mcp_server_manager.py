@@ -2827,7 +2827,16 @@ class MCPServerManager:
         if user_field_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(user_field_headers)
+            # Match the OpenAPI/local path's case-insensitive precedence: a
+            # user-field header replaces any existing header (e.g. from
+            # static_headers) whose name matches case-insensitively, instead
+            # of leaving two differently-cased duplicates on the wire.
+            existing_lower_names = {k.lower(): k for k in extra_headers}
+            for header_name, value in user_field_headers.items():
+                collision = existing_lower_names.get(header_name.lower())
+                if collision is not None and collision != header_name:
+                    del extra_headers[collision]
+                extra_headers[header_name] = value
 
         if hook_extra_headers:
             if extra_headers is None:
