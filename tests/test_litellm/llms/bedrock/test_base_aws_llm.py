@@ -934,6 +934,10 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     [
         ("https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
         ("https://sts.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.cn-north-1.amazonaws.com.cn", "cn-north-1"),
         (
             "https://vpce-abc123.sts.eu-west-1.vpce.amazonaws.com",
             "eu-west-1",
