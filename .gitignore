@@ -17,6 +17,7 @@ secrets.toml
 .gitignore
 litellm/proxy/litellm_secrets.toml
 litellm/proxy/api_log.json
+litellm/proxy/_experimental/out/
 .idea/
 router_config.yaml
 litellm_server/config.yaml
