@@ -35,36 +35,50 @@ else:
 DEFAULT_TIMEOUT = 600
 
 _BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 
+def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if addr falls in any blocked network."""
+    # Unwrap IPv4-mapped IPv6 (::ffff:10.0.0.1 → 10.0.0.1)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+
 def _assert_not_private_url(url: str) -> None:
-    """Raise ValueError if url resolves to a private/reserved IP (SSRF protection)."""
+    """Raise ValueError if url resolves to any private/reserved IP (SSRF protection).
+
+    Validates all DNS answers, not just the first, to prevent A-record rotation attacks.
+    """
     parsed = urlparse(url)
     hostname = parsed.hostname
     if not hostname:
         return
     try:
-        resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+        answers = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
         return  # DNS failure — request will fail naturally
-    try:
-        addr = ipaddress.ip_address(resolved_ip)
-    except ValueError:
-        return
-    for net in _BLOCKED_NETWORKS:
-        if addr in net:
+    for answer in answers:
+        raw_ip = answer[4][0]
+        try:
+            addr = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        if _is_blocked_address(addr):
             raise ValueError(
                 f"api_base '{url}' resolves to a private/reserved IP address "
-                f"({resolved_ip}) which is not allowed (SSRF protection)"
+                f"({raw_ip}) which is not allowed (SSRF protection)"
             )
 
 
@@ -236,6 +250,7 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
+                    allow_redirects=False,
                 )
                 if not response.ok:
                     response.raise_for_status()
@@ -272,6 +287,8 @@ class BaseLLMAIOHTTPHandler:
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
+
+        _assert_not_private_url(api_base)
 
         response: Optional[httpx.Response] = None
 
