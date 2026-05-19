@@ -77,8 +77,8 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
 
   const errorPreview = `Error: MCP server "${serverDisplayName}" requires user configuration before use.
 
-${defs.length > 0 ? `Missing field${defs.length === 1 ? "" : "s"}:` : "No fields defined."}
-${defs.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
+${missing.length > 0 ? `Missing field${missing.length === 1 ? "" : "s"}:` : "No fields defined."}
+${missing.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
 
 Please configure your fields at:
 ${buildDeepLinkUrl()}
