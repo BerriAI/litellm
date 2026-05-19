@@ -182,16 +182,18 @@ export function ToolTestPanel({
 
     Object.entries(values).forEach(([key, value]) => {
       const prop = schemaToUse.properties?.[key];
-      if (prop && value !== null && value !== undefined && value !== "") {
+      // Strip leading/trailing whitespace from string inputs before submitting
+      const normalizedValue = typeof value === "string" ? value.trim() : value;
+      if (prop && normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
         switch (prop.type) {
           case "boolean":
-            convertedValues[key] = value === "true" || value === true;
+            convertedValues[key] = normalizedValue === "true" || normalizedValue === true;
             break;
           case "number":
           case "integer": {
-            const numericValue = Number(value);
+            const numericValue = Number(normalizedValue);
             convertedValues[key] = Number.isNaN(numericValue)
-              ? value
+              ? normalizedValue
               : prop.type === "integer"
                 ? Math.trunc(numericValue)
                 : numericValue;
@@ -200,28 +202,28 @@ export function ToolTestPanel({
           case "object":
           case "array": {
             try {
-              const parsed = typeof value === "string" ? JSON.parse(value) : value;
+              const parsed = typeof normalizedValue === "string" ? JSON.parse(normalizedValue) : normalizedValue;
               const isValidObject =
                 prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
               const isValidArray = prop.type === "array" && Array.isArray(parsed);
               if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
                 convertedValues[key] = parsed;
               } else {
-                convertedValues[key] = value;
+                convertedValues[key] = normalizedValue;
               }
             } catch (err) {
-              convertedValues[key] = value;
+              convertedValues[key] = normalizedValue;
             }
             break;
           }
           case "string":
-            convertedValues[key] = String(value);
+            convertedValues[key] = String(normalizedValue);
             break;
           default:
-            convertedValues[key] = value;
+            convertedValues[key] = normalizedValue;
         }
-      } else if (value !== null && value !== undefined && value !== "") {
-        convertedValues[key] = value;
+      } else if (normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
+        convertedValues[key] = normalizedValue;
       }
     });
 
