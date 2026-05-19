@@ -697,3 +697,218 @@ async def test_user_field_value_endpoints_404_when_server_not_in_allowed_set():
         # find_unique must never be reached — the access gate fails first,
         # before any server metadata is read or returned.
         prisma_client.db.litellm_mcpservertable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_field_values_clears_stored_and_returns_status():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+    server_row = _server_row_with_user_fields()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=server_row
+    )
+
+    delete_calls: List[tuple] = []
+
+    async def fake_delete(prisma, user_id, server_id):
+        delete_calls.append((user_id, server_id))
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_field_values",
+            new=fake_delete,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[server_row]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache"
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._invalidate_user_fields_cache"
+        ),
+    ):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app = FastAPI()
+        app.include_router(mod.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed", user_id="user-del"
+        )
+        client = TestClient(app)
+        res = client.delete("/v1/mcp/server/srv-1/user-field-values")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["server_id"] == "srv-1"
+        assert body["stored_field_keys"] == []
+        assert "GMAIL_TOKEN" in body["missing_field_keys"]
+        assert delete_calls == [("user-del", "srv-1")]
+
+
+@pytest.mark.asyncio
+async def test_delete_user_field_values_swallows_record_not_found():
+    """DELETE on a row that was already removed should still succeed."""
+    from prisma.errors import RecordNotFoundError
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+    server_row = _server_row_with_user_fields()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=server_row
+    )
+
+    async def fake_delete(prisma, user_id, server_id):
+        raise RecordNotFoundError(data={"error": {"message": "no rows", "meta": {}}})
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_field_values",
+            new=fake_delete,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[server_row]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._invalidate_byok_cred_cache"
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._invalidate_user_fields_cache"
+        ),
+    ):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app = FastAPI()
+        app.include_router(mod.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed", user_id="user-del2"
+        )
+        client = TestClient(app)
+        res = client.delete("/v1/mcp/server/srv-1/user-field-values")
+        assert res.status_code == 200, res.text
+
+
+@pytest.mark.asyncio
+async def test_list_user_field_values_aggregates_per_server_status():
+    """GET /v1/mcp/user-field-values returns one entry per server with user_fields."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+    gmail_row = _server_row_with_user_fields()
+    no_fields_row = _server_row_with_user_fields()
+    no_fields_row.server_id = "srv-2"
+    no_fields_row.user_fields = []
+
+    other_row = _server_row_with_user_fields()
+    other_row.server_id = "srv-3"
+    other_row.user_fields = [
+        {
+            "field_key": "JIRA_TOKEN",
+            "header_name": "Authorization",
+            "header_value_template": "Bearer {value}",
+            "required": True,
+        }
+    ]
+
+    encoded = encrypt_value_helper(
+        json.dumps({"type": "user_fields", "values": {"JIRA_TOKEN": "jt"}})
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpusercredentials.find_many = AsyncMock(
+        return_value=[MagicMock(server_id="srv-3", credential_b64=encoded)]
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[gmail_row, no_fields_row, other_row]),
+        ),
+    ):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app = FastAPI()
+        app.include_router(mod.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed", user_id="user-list"
+        )
+        client = TestClient(app)
+        res = client.get("/v1/mcp/user-field-values")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        # Only servers with declared user_fields are returned.
+        ids = {entry["server_id"] for entry in body}
+        assert ids == {"srv-1", "srv-3"}
+
+        by_id = {entry["server_id"]: entry for entry in body}
+        # srv-1 has no stored values → required field missing.
+        assert "GMAIL_TOKEN" in by_id["srv-1"]["missing_field_keys"]
+        # srv-3 has the stored value → nothing missing.
+        assert by_id["srv-3"]["missing_field_keys"] == []
+        assert by_id["srv-3"]["stored_field_keys"] == ["JIRA_TOKEN"]
+
+
+@pytest.mark.asyncio
+async def test_list_user_field_values_returns_empty_when_no_servers_declare_fields():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+    plain_row = _server_row_with_user_fields()
+    plain_row.user_fields = []
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+            AsyncMock(return_value=[plain_row]),
+        ),
+    ):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app = FastAPI()
+        app.include_router(mod.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="hashed", user_id="user-empty"
+        )
+        client = TestClient(app)
+        res = client.get("/v1/mcp/user-field-values")
+        assert res.status_code == 200, res.text
+        assert res.json() == []
+        # Should short-circuit before hitting the credentials table.
+        prisma_client.db.litellm_mcpusercredentials.find_many.assert_not_called()
