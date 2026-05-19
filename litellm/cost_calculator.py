@@ -220,6 +220,42 @@ def _cost_per_token_custom_pricing_helper(
     return None
 
 
+_TOKEN_BASED_CUSTOM_PRICING_KEYS = frozenset(
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_creation_input_token_cost",
+        "cache_read_input_token_cost",
+        "input_cost_per_audio_token",
+        "output_cost_per_audio_token",
+        "output_cost_per_reasoning_token",
+    }
+)
+
+
+def _has_token_based_custom_pricing(model_info: Optional[dict]) -> bool:
+    if model_info is None:
+        return False
+    return any(
+        model_info.get(key) is not None for key in _TOKEN_BASED_CUSTOM_PRICING_KEYS
+    )
+
+
+def _resolve_effective_model_cost_info(
+    model: str,
+    model_cost_ref: dict,
+    custom_pricing: Optional[bool],
+) -> Optional[dict]:
+    if custom_pricing is not True:
+        return None
+
+    model_info = model_cost_ref.get(model)
+    if _has_token_based_custom_pricing(model_info=model_info):
+        return model_info
+
+    return None
+
+
 def _get_additional_costs(
     model: str,
     custom_llm_provider: Optional[str],
@@ -301,6 +337,7 @@ def cost_per_token(  # noqa: PLR0915
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
+    custom_pricing: Optional[bool] = None,
     ### NUMBER OF QUERIES ###
     number_of_queries: Optional[int] = None,
     ### USAGE OBJECT ###
@@ -329,6 +366,7 @@ def cost_per_token(  # noqa: PLR0915
         custom_llm_provider (str): The llm provider to whom the call was made (see init.py for full list)
         custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
         custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
+        custom_pricing: Optional[bool]: whether explicit custom pricing was configured for this call.
         call_type: Optional[str]: the call type
 
     Returns:
@@ -550,6 +588,21 @@ def cost_per_token(  # noqa: PLR0915
                 else None
             ),
         )
+
+    # Prefer explicit custom pricing before provider-specific dispatch (#25204).
+    custom_model_info = _resolve_effective_model_cost_info(
+        model=model,
+        model_cost_ref=model_cost_ref,
+        custom_pricing=custom_pricing,
+    )
+    if custom_model_info is not None:
+        return generic_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+        )
+
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -1597,6 +1650,7 @@ def completion_cost(  # noqa: PLR0915
                     cache_read_input_tokens=cache_read_input_tokens,
                     usage_object=cost_per_token_usage_object,
                     call_type=call_type,
+                    custom_pricing=custom_pricing,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
