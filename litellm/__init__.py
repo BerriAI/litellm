@@ -100,6 +100,7 @@ service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
+    "agentcogs",
     "lago",
     "openmeter",
     "logfire",
