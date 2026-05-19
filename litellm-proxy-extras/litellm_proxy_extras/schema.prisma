@@ -1145,11 +1145,6 @@ model LiteLLM_SkillsTable {
 
   @@index([source, team_id])
   @@index([source, user_id])
-}")
-  created_at     DateTime @default(now())
-  created_by     String?
-  updated_at     DateTime @default(now()) @updatedAt
-  updated_by     String?
 }
 
 // Policy table for storing guardrail policies (versioned)
