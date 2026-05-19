@@ -2473,7 +2473,27 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+            # `uv sync` resolves and installs Python packages declared
+            # in the PR's `pyproject.toml` / `uv.lock`. A malicious PR
+            # could add a dependency whose build backend or
+            # post-install hook reads ANTHROPIC_API_KEY / AWS_* /
+            # VERTEXAI_* / AZURE_FOUNDRY_* / GITHUB_TOKEN out of
+            # `os.environ` during the install and exfiltrates them.
+            # Run the install under `env -i` with the same minimal
+            # allowlist as the resolver / npm install / pytest steps
+            # below so PR-controlled install code cannot see provider
+            # credentials. Public PyPI does not require auth and uv's
+            # cache lives under `$HOME`, so this allowlist is
+            # sufficient.
+            env -i \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              USER="${USER:-circleci}" \
+              TERM="${TERM:-dumb}" \
+              LANG="${LANG:-C.UTF-8}" \
+              LC_ALL="${LC_ALL:-}" \
+              TMPDIR="${TMPDIR:-/tmp}" \
+              uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - attach_workspace:
           at: ~/project
