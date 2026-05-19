@@ -620,6 +620,53 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
     )
 
 
+def test_redis_semantic_cache_prompt_extraction_prefers_messages():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        messages=[{"content": "message prompt"}],
+        input="responses prompt",
+    )
+
+    assert prompt == "message prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ModelDumpInput:
+        def model_dump(self):
+            return {"content": [{"text": "model dump prompt"}]}
+
+    class DictInput:
+        def dict(self):
+            return {"content": [{"output_text": "dict prompt"}]}
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            ModelDumpInput(),
+            DictInput(),
+            {"content": [{"input_text": "inline prompt"}]},
+            {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
+        ]
+    )
+
+    assert prompt == "model dump prompt\ndict prompt\ninline prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    assert RedisSemanticCache._get_prompt_from_kwargs() is None
+    assert RedisSemanticCache._get_prompt_from_kwargs(input="   ") is None
+    assert (
+        RedisSemanticCache._get_prompt_from_kwargs(
+            input=[{"type": "input_image", "image_url": "https://example.com"}]
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_async_paths_use_responses_string_input():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
