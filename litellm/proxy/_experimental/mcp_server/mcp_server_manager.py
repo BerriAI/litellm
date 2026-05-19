@@ -1445,9 +1445,10 @@ class MCPServerManager:
                     inject_mcp_jwt_headers_for_upstream,
                 )
 
-                has_static_authorization = bool(server.static_headers) and any(
+                static_headers = server.static_headers or {}
+                has_static_authorization = any(
                     isinstance(k, str) and k.lower() == "authorization"
-                    for k in server.static_headers.keys()
+                    for k in static_headers.keys()
                 )
 
                 if get_mcp_jwt_signer() is not None and not has_static_authorization:

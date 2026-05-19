@@ -1856,6 +1856,7 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            user_api_key_auth=None,
         )
 
         # Verify the result
