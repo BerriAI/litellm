@@ -68,9 +68,9 @@ from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
-    BEDROCK_RESPONSE_STREAM_SHAPE,
     BedrockError,
     ModelResponseIterator,
+    get_bedrock_response_stream_shape,
     get_bedrock_tool_name,
 )
 
@@ -1828,7 +1828,8 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
-        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+        response_stream_shape = get_bedrock_response_stream_shape()
+        if response_stream_shape is None:
             raise BedrockError(
                 status_code=500,
                 message=(
@@ -1837,9 +1838,7 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(
-            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
-        )
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()
