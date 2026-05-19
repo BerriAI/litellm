@@ -709,6 +709,56 @@ async def test_get_users_redacts_scim_enterprise_metadata(mocker):
     assert "scim_enterprise" not in (listed.metadata or {})
 
 
+@pytest.mark.asyncio
+async def test_get_user_key_counts_returns_empty_for_no_user_ids(mocker):
+    mock_prisma_client = mocker.MagicMock()
+
+    assert await get_user_key_counts(mock_prisma_client, None) == {}
+    assert await get_user_key_counts(mock_prisma_client, []) == {}
+    assert mock_prisma_client.db.litellm_verificationtoken.group_by.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_user_key_counts_uses_group_by(mocker):
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    mock_prisma_client = mocker.MagicMock()
+    captured_kwargs = {}
+
+    async def mock_group_by(**kwargs):
+        captured_kwargs.update(kwargs)
+        return [
+            {"user_id": "user-a", "_count": {"user_id": 2}},
+            {"user_id": "user-c", "_count": {"user_id": 1}},
+            {"user_id": "user-d"},
+            {"user_id": None, "_count": {"user_id": 99}},
+        ]
+
+    async def mock_count(*args, **kwargs):
+        raise AssertionError("count() should not be called for user key counts")
+
+    mock_prisma_client.db.litellm_verificationtoken.group_by = mock_group_by
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count
+
+    result = await get_user_key_counts(
+        mock_prisma_client,
+        ["user-a", "user-b", "user-c", "user-d"],
+    )
+
+    assert result == {"user-a": 2, "user-b": 0, "user-c": 1, "user-d": 0}
+    assert captured_kwargs == {
+        "by": ["user_id"],
+        "where": {
+            "user_id": {"in": ["user-a", "user-b", "user-c", "user-d"]},
+            "OR": [
+                {"team_id": None},
+                {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+            ],
+        },
+        "count": {"user_id": True},
+    }
+
+
 def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
