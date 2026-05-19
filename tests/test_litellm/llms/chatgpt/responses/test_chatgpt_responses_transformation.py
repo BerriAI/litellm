@@ -201,3 +201,126 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+    def test_chatgpt_accumulates_output_item_done_when_completed_output_empty(
+        self,
+    ):
+        """
+        The ChatGPT Codex backend streams output items via
+        `response.output_item.done` events and emits a terminal
+        `response.completed` event with an empty `response.output`
+        (only carrying id/status/usage). The transformation must
+        accumulate those items so the assembled non-streaming response
+        is not empty.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        reasoning_item = {
+            "id": "rs_test",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "ENCRYPTED",
+        }
+        message_item = {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "hello world",
+                    "annotations": [],
+                }
+            ],
+        }
+        completed_payload_without_output = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.3-codex",
+            "output": [],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': reasoning_item})}",
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 1, 'item': message_item})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': completed_payload_without_output})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.3-codex",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert len(parsed.output) == 2
+        assert parsed.output[0].type == "reasoning"
+        assert parsed.output[1].type == "message"
+        assert parsed.output_text == "hello world"
+
+    def test_chatgpt_prefers_nonempty_completed_output_over_accumulated(self):
+        """
+        If a `response.completed` event already carries a populated
+        `response.output`, it should win over any accumulated
+        `output_item.done` items — the backend is the source of truth
+        when it chooses to populate the terminal event.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        stray_item = {
+            "id": "msg_stray",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "stray", "annotations": []}],
+        }
+        canonical_item = {
+            "id": "msg_canonical",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {"type": "output_text", "text": "canonical", "annotations": []}
+            ],
+        }
+        completed_payload_with_output = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.3-codex",
+            "output": [canonical_item],
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': stray_item})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': completed_payload_with_output})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.3-codex",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert len(parsed.output) == 1
+        assert parsed.output_text == "canonical"
