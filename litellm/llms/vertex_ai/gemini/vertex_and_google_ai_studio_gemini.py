@@ -422,8 +422,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             tool
             for tool in tools
             if not (
-                isinstance(tool, dict)
-                and any(key in tool for key in search_tool_keys)
+                isinstance(tool, dict) and any(key in tool for key in search_tool_keys)
             )
         ]
 
