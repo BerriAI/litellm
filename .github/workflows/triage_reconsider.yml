@@ -32,9 +32,16 @@ permissions:
 
 jobs:
   reconsider:
+    # Reconsider only makes sense on a CLOSED PR/issue — its job is to
+    # re-evaluate and (on pass) reopen. Gating the job here means a
+    # stray `@agent-shin reconsider` on an open PR/issue exits before
+    # checkout/Python/pip ever runs, instead of spinning up the runner
+    # to be a no-op. The triage script itself still re-checks state
+    # (`skip-not-closed`) as defense in depth.
     if: |
       github.repository == 'BerriAI/litellm'
       && contains(github.event.comment.body, '@agent-shin reconsider')
+      && github.event.issue.state == 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Authorize commenter

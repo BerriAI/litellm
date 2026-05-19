@@ -41,7 +41,18 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Iterable
+
+# Share the auto-close marker with the sibling Agent Shin script instead of
+# duplicating the literal — the reconsider provenance check
+# (`was_auto_closed_by_agent_shin`) keys off this exact phrase, so a drift
+# between the two files would silently break reconsider for Greptile-closed
+# PRs without any test catching it.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from triage_with_llm import AGENT_SHIN_AUTO_CLOSE_MARKER  # noqa: E402
 
 # Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
 # and `greptile-apps` in `gh pr view --json` output. Accept either form.
@@ -245,7 +256,7 @@ def close_pr(
         return
 
     comment_body = (
-        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage "
+        f"👋 Hi, thanks for the PR! {AGENT_SHIN_AUTO_CLOSE_MARKER}, the automated triage "
         "bot for this repository. Closing as part of automated PR triage.\n\n"
         f"Greptile's most recent review scored this PR **{score}/5**, below "
         f"our merge bar of **{threshold}/5**.\n\n"
