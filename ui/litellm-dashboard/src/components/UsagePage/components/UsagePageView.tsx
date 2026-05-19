@@ -59,6 +59,7 @@ interface UsagePageProps {
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const safeHref = /^https?:\/\//.test(window.location.href) ? window.location.href : "/";
   // Aggregated endpoint: try first, fall back to paginated if unavailable
   const [aggregatedData, setAggregatedData] = useState<{ results: DailyData[]; metadata: any } | null>(null);
   const [aggregatedFailed, setAggregatedFailed] = useState(false);
@@ -465,7 +466,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
                     {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving
                     off of this page will stop and reset this. To continue using the UI in the meantime,{" "}
-                    <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                    <a href={safeHref} target="_blank" rel="noopener noreferrer">
                       open a new tab <ExportOutlined />
                     </a>
                     .
