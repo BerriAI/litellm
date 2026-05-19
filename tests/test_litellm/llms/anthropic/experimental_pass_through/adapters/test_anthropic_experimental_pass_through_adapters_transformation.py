@@ -307,6 +307,100 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_populates_reasoning_content():
+    """
+    Reasoning models hosted behind OpenAI-compatible endpoints (Moonshot Kimi K2.5+,
+    DeepSeek R1, OpenAI o-series) require `reasoning_content` on every prior-turn
+    assistant message — if it's missing they 400 with
+    `The 'reasoning_content' in the thinking mode must be passed back to the API.`
+
+    Regression test for https://github.com/BerriAI/litellm/issues/27946 — when
+    converting Anthropic `thinking` content blocks to OpenAI format the adapter
+    must populate `reasoning_content` (concatenated across all `thinking`-type
+    blocks) in addition to the existing `thinking_blocks` field. Opaque
+    `redacted_thinking` blocks must not be inlined.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Plan the trip then book it."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1: pick a destination.",
+                    "signature": "sig-a",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "REDACTED",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2: confirm dates.",
+                    "signature": "sig-b",
+                },
+                {"type": "text", "text": "Sounds good — booking now."},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
+
+    assert len(result) == 2
+    assistant = result[1]
+    assert assistant["role"] == "assistant"
+
+    # Existing field stays intact and preserves all three blocks in order.
+    assert "thinking_blocks" in assistant
+    assert [b["type"] for b in assistant["thinking_blocks"]] == [
+        "thinking",
+        "redacted_thinking",
+        "thinking",
+    ]
+
+    # New behaviour: reasoning_content concatenates the two real thinking
+    # blocks; the redacted block is omitted (it's opaque to the upstream model).
+    assert "reasoning_content" in assistant
+    assert assistant["reasoning_content"] == (
+        "Step 1: pick a destination.\nStep 2: confirm dates."
+    )
+
+
+def test_translate_anthropic_messages_to_openai_skips_reasoning_content_without_thinking():
+    """
+    Assistant messages with no thinking blocks must NOT carry a `reasoning_content`
+    key — downstream non-reasoning providers reject the field as unknown.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "ping"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "pong"}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages
+    )
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert "reasoning_content" not in result[1]
+    assert "thinking_blocks" not in result[1] or not result[1]["thinking_blocks"]
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 

@@ -661,6 +661,20 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    # Populate reasoning_content from all real thinking blocks so
+                    # downstream reasoning models (Moonshot Kimi, DeepSeek R1, OpenAI
+                    # o-series) receive the prior-turn reasoning their APIs require.
+                    # Concatenate every thinking-type block; redacted_thinking blocks
+                    # are deliberately skipped (they're opaque to the upstream model).
+                    reasoning_text = "\n".join(
+                        block.get("thinking", "")
+                        for block in thinking_blocks
+                        if isinstance(block, dict)
+                        and block.get("type") == "thinking"
+                        and block.get("thinking")
+                    )
+                    if reasoning_text:
+                        assistant_message["reasoning_content"] = reasoning_text  # type: ignore
                 new_messages.append(assistant_message)
 
         return new_messages
