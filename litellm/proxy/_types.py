@@ -1819,6 +1819,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
+    model_max_budget: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
@@ -1906,6 +1907,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
+    model_max_budget: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = (
