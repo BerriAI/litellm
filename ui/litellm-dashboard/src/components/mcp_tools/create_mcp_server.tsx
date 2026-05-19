@@ -109,6 +109,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           searchValue,
           aliasManuallyEdited,
           logoUrl,
+          userFields,
         }),
       );
     } catch (err) {
@@ -212,6 +213,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (parsed.logoUrl) {
         setLogoUrl(parsed.logoUrl);
+      }
+      if (Array.isArray(parsed.userFields)) {
+        setUserFields(parsed.userFields);
       }
     } catch (err) {
       console.error("Failed to restore MCP create state", err);
