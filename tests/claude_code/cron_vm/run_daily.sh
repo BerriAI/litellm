@@ -351,9 +351,40 @@ fi
 
 log "running pytest"
 set +e
+# Pytest only needs to talk to the loopback proxy at 127.0.0.1:${PROXY_PORT}
+# — it has no legitimate reason to see ANTHROPIC_API_KEY /
+# AWS_BEARER_TOKEN_BEDROCK / VERTEXAI_* / AZURE_FOUNDRY_* /
+# AGENT_SHIN_GITHUB_TOKEN / GITHUB_TOKEN in its own env. The systemd
+# unit's EnvironmentFile injects all of those into this script for the
+# proxy to consume, and pytest inherits them by default. Wrap the
+# invocation in `env -i` so:
+#
+#   1. test code under tests/claude_code/ (or anything it imports)
+#      cannot read provider/agent-shin creds out of `os.environ` and
+#      exfiltrate them via an outbound call from inside a conftest hook
+#      or a fixture (a sibling vector to the model-controlled Bash/Read
+#      concern handled by `cli_driver.py`'s own env scrub);
+#   2. a model-directed `Read` tool call during a PDF/vision cell
+#      cannot reach /proc/<pytest-pid>/environ and pull the creds out
+#      of the parent process the way it can today;
+#   3. this matches the PR-gate pytest step in `.circleci/config.yml`,
+#      which already runs under `env -i` with the same minimal
+#      allowlist.
+#
+# `cli_driver.py` re-allowlists its own subset (PATH/USER/LOGNAME/etc.)
+# when spawning the `claude` binary, so the CLI still finds Node + the
+# claude shim on PATH and gets a fresh isolated HOME per invocation.
 (
   cd "${WORKTREE}" \
-    && LITELLM_PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}" \
+    && env -i \
+       PATH="${PATH}" \
+       HOME="${HOME}" \
+       USER="${USER:-mateo}" \
+       TERM="${TERM:-dumb}" \
+       LANG="${LANG:-C.UTF-8}" \
+       LC_ALL="${LC_ALL:-}" \
+       TMPDIR="${TMPDIR:-/tmp}" \
+       LITELLM_PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}" \
        LITELLM_PROXY_API_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
        "${WORKTREE_UV}" run pytest "${PYTEST_ARGS[@]}"
