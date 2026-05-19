@@ -11201,3 +11201,101 @@ async def test_ghsa_q775_admin_bypasses_budget_ceiling():
             litellm_changed_by=None,
         )
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_common_key_generation_helper_warms_auth_cache():
+    """
+    /key/generate must warm user_api_key_cache so the first authenticated
+    request after creation does not depend on instant DB visibility.
+
+    Regression for case 2026-05-13-zurich-invalid-proxy-token:
+    multi-replica deployments behind pooled/replicated Postgres saw
+    token_not_found_in_db on the very first request after key creation.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock()
+    mock_proxy_logging = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_prisma.return_value = AsyncMock()
+        mock_router.return_value = None
+        mock_generate_key.return_value = {
+            "key": "sk-test-warm-cache",
+            "token": "sk-test-warm-cache",
+            "token_id": "hashed-token-warm-cache",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    mock_cache.async_set_cache.assert_awaited()
+    call_kwargs = mock_cache.async_set_cache.await_args.kwargs
+    assert call_kwargs["key"] == "hashed-token-warm-cache"
+    assert isinstance(call_kwargs["value"], UserAPIKeyAuth)
+    assert call_kwargs["value"].token == "hashed-token-warm-cache"
+
+
+@pytest.mark.asyncio
+async def test_common_key_generation_helper_cache_warm_is_best_effort():
+    """
+    A Redis (or any cache-layer) failure during the post-create cache warm
+    must NOT cause /key/generate to fail. The key is already in Postgres.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_cache = MagicMock()
+    mock_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    mock_proxy_logging = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_prisma.return_value = AsyncMock()
+        mock_router.return_value = None
+        mock_generate_key.return_value = {
+            "key": "sk-test-cache-fail",
+            "token": "sk-test-cache-fail",
+            "token_id": "hashed-token-cache-fail",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+
+        # Must not raise — cache failure is logged, response is still returned.
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+        assert result.token == "hashed-token-cache-fail"

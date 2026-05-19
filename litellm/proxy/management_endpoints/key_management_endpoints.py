@@ -43,6 +43,7 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
     _delete_cache_key_object,
     can_team_access_model,
     get_org_object,
@@ -915,6 +916,30 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     response.token = (
         response.token_id
     )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+
+    # Warm the shared auth cache so the very first authenticated request with this
+    # key does not depend on instant DB visibility from /key/generate to the next
+    # replica's auth lookup. Best-effort: a Redis outage must not break key creation.
+    try:
+        from litellm.proxy.proxy_server import (
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if response.token is not None and user_api_key_cache is not None:
+            await _cache_key_object(
+                hashed_token=response.token,
+                user_api_key_obj=UserAPIKeyAuth(
+                    **response.model_dump(exclude_none=True)
+                ),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "generate_key_fn: failed to warm user_api_key_cache for newly created key (best-effort): %s",
+            str(e),
+        )
 
     asyncio.create_task(
         KeyManagementEventHooks.async_key_generated_hook(
