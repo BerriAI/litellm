@@ -44,14 +44,18 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
   const [isDarkMode, setIsDarkModeState] = useState<boolean>(false);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate dark mode from localStorage after mount to avoid SSR mismatch.
+  // Hydrate state from the value the inline init script already applied
+  // (see `darkModeInitScript` in app/layout.tsx). Until this runs we leave
+  // the DOM untouched so the SSR'd class set by the script survives.
   useEffect(() => {
     setIsDarkModeState(readInitialDarkMode());
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (!hydrated || typeof document === "undefined") return;
     const root = document.documentElement;
     if (isDarkMode) {
       root.classList.add("dark");
@@ -65,7 +69,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
     } catch {
       // ignore localStorage write errors
     }
-  }, [isDarkMode]);
+  }, [isDarkMode, hydrated]);
 
   const setIsDarkMode = useCallback((value: boolean) => {
     setIsDarkModeState(value);
