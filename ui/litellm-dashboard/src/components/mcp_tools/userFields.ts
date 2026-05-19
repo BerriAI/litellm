@@ -79,7 +79,3 @@ export function getMissingUserFields(
       values[f.name].trim() === "",
   );
 }
-
-export function hasAnyUserFields(serverId: string): boolean {
-  return getUserFieldDefs(serverId).length > 0;
-}

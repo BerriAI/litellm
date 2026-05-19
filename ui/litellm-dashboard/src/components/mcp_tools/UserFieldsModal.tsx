@@ -61,13 +61,23 @@ const UserFieldsModal: React.FC<UserFieldsModalProps> = ({
   };
 
   const serverDisplayName = server.server_name || server.alias || server.server_id;
+
+  const buildDeepLinkUrl = (): string => {
+    if (typeof window === "undefined") {
+      return `<dashboard-url>?openUserFields=${server.server_id}`;
+    }
+    const params = new URLSearchParams(window.location.search);
+    params.set("openUserFields", server.server_id);
+    return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+  };
+
   const errorPreview = `Error: MCP server "${serverDisplayName}" requires user configuration before use.
 
 ${missing.length > 0 ? `Missing field${missing.length === 1 ? "" : "s"}:` : "All fields configured."}
 ${missing.map((f) => `  • ${f.label || f.name}${f.description ? ` — ${f.description}` : ""}`).join("\n")}
 
 Please configure your fields at:
-${typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}?openUserFields=${server.server_id}` : `<dashboard-url>?openUserFields=${server.server_id}`}
+${buildDeepLinkUrl()}
 
 Once configured, retry your request.`;
 

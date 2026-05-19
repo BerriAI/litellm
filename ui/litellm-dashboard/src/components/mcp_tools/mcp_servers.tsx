@@ -103,12 +103,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     const target = serversWithHealth.find((s) => s.server_id === targetId);
     if (target) {
       setUserFieldsServer(target);
+      params.delete("openUserFields");
+      const remaining = params.toString();
+      const newUrl =
+        window.location.pathname + (remaining ? `?${remaining}` : "") + window.location.hash;
+      window.history.replaceState({}, "", newUrl);
     }
-    params.delete("openUserFields");
-    const remaining = params.toString();
-    const newUrl =
-      window.location.pathname + (remaining ? `?${remaining}` : "") + window.location.hash;
-    window.history.replaceState({}, "", newUrl);
   }, [serversWithHealth]);
 
   // Servers with one or more missing user fields for the current user (prototype)
