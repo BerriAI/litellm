@@ -238,6 +238,40 @@ class TestStreamingIterator:
         assert chunk.event_type == "interaction.start"
         assert chunk.id == f"interaction_{id(it)}"
 
+    def test_first_text_delta_not_dropped_when_no_prior_start_events(self):
+        """When OutputTextDeltaEvent arrives before any ResponseCreatedEvent or
+        ContentPartAddedEvent, the iterator must emit interaction.start *and*
+        immediately follow with a content.start that carries this delta's text,
+        so the first token is never silently dropped from the stream."""
+        events = [
+            self._make_text_delta("Hello"),
+            self._make_text_delta(" World"),
+        ]
+        wrapper = MagicMock()
+        wrapper.__iter__ = lambda self: iter(events)
+        wrapper.__next__ = lambda self, _it=iter(events): next(_it)
+        it = LiteLLMResponsesInteractionsStreamingIterator(
+            model="gpt-5.4",
+            litellm_custom_stream_wrapper=wrapper,
+            request_input="hi",
+            optional_params={},
+        )
+
+        first = it._transform_responses_chunk_to_interactions_chunk(events[0])
+        assert first is not None
+        assert first.event_type == "interaction.start"
+        assert it.sent_interaction_start is True
+        assert it.sent_content_start is True
+        assert len(it._pending_events) == 1
+        pending = it._pending_events[0]
+        assert pending.event_type == "content.start"
+        assert pending.delta == {"type": "text", "text": "Hello"}
+
+        second = it._transform_responses_chunk_to_interactions_chunk(events[1])
+        assert second is not None
+        assert second.event_type == "content.delta"
+        assert second.delta == {"type": "text", "text": " World"}
+
 
 class TestTransformRequest:
     def test_stream_param_included_in_request_body(self, config):

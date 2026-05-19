@@ -2,7 +2,7 @@
 Streaming iterator for transforming Responses API stream to Interactions API stream.
 """
 
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, cast
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -52,6 +52,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         self.collected_text = ""
         self.sent_interaction_start = False
         self.sent_content_start = False
+        self._pending_events: List[InteractionsAPIStreamingResponse] = []
 
     def _transform_responses_chunk_to_interactions_chunk(
         self,
@@ -81,9 +82,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             )
             self.collected_text += delta_text
 
-            # Fallback: emit interaction.start if ResponseCreatedEvent never arrived
+            # Fallback: emit interaction.start, and queue content.start carrying this
+            # delta so the first token is preserved in the stream.
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
+                self.sent_content_start = True
+                self._pending_events.append(
+                    InteractionsAPIStreamingResponse(
+                        event_type="content.start",
+                        id=getattr(responses_chunk, "item_id", None),
+                        object="content",
+                        delta={"type": "text", "text": delta_text},
+                    )
+                )
                 return InteractionsAPIStreamingResponse(
                     event_type="interaction.start",
                     id=getattr(responses_chunk, "item_id", None)
@@ -196,6 +207,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
+        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
+        # the interaction.start fallback for the first OutputTextDeltaEvent).
+        if self._pending_events:
+            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         sync_iterator = cast(
             SyncResponsesAPIStreamingIterator, self.responses_stream_iterator
@@ -261,6 +276,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
+        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
+        # the interaction.start fallback for the first OutputTextDeltaEvent).
+        if self._pending_events:
+            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         async_iterator = cast(
             ResponsesAPIStreamingIterator, self.responses_stream_iterator
