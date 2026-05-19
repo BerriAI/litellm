@@ -667,6 +667,28 @@ def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
     )
 
 
+def test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input={"text": "   ", "input_text": "fallback prompt"}
+    )
+
+    assert prompt == "fallback prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_skips_blank_object_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInput:
+        text = "   "
+        input_text = "fallback prompt"
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
+
+    assert prompt == "fallback prompt"
+
+
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_async_paths_use_responses_string_input():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache

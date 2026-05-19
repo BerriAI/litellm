@@ -259,7 +259,7 @@ class RedisSemanticCache(BaseCache):
                     stripped_text = text_value.strip()
                     if stripped_text:
                         prompt_parts.append(stripped_text)
-                    return
+                        return
             return
 
         content = getattr(value, "content", None)
@@ -273,7 +273,7 @@ class RedisSemanticCache(BaseCache):
                 stripped_text = text_value.strip()
                 if stripped_text:
                     prompt_parts.append(stripped_text)
-                return
+                    return
 
     @staticmethod
     def _coerce_response_input_value(value: Any) -> Any:
