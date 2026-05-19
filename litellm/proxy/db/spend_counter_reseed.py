@@ -178,15 +178,35 @@ class SpendCounterReseed:
             if db_spend is None:
                 return None
             # Warm even when 0 so subsequent reads hit cache, not DB.
+            # Use SET NX rather than INCRBYFLOAT so concurrent reseeds across
+            # pods (where the per-process singleflight lock above does not
+            # coordinate) are idempotent: only the first writer seeds db_spend,
+            # losers read the winner's value. Mirrors coalesced_window() below.
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    current_value = (
-                        await spend_counter_cache.redis_cache.async_increment(
-                            key=counter_key,
-                            value=db_spend,
-                            refresh_ttl=True,
-                        )
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=db_spend,
+                        nx=True,
                     )
+                    if seeded:
+                        current_value = db_spend
+                    else:
+                        current_cached_value = (
+                            await spend_counter_cache.redis_cache.async_get_cache(
+                                key=counter_key
+                            )
+                        )
+                        if current_cached_value is None:
+                            current_value = (
+                                await spend_counter_cache.redis_cache.async_increment(
+                                    key=counter_key,
+                                    value=db_spend,
+                                    refresh_ttl=True,
+                                )
+                            )
+                        else:
+                            current_value = float(current_cached_value)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,
