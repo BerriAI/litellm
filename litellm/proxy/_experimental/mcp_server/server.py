@@ -231,6 +231,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
+        _request_user_field_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -2363,13 +2364,35 @@ if MCP_AVAILABLE:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
 
+            # User-fields headers: enforce_user_fields above guarantees the
+            # required values are present; resolve them once and inject so
+            # OpenAPI/local tools see the same user-provided values that the
+            # managed MCP dispatch path injects.
+            user_field_headers: Optional[Dict[str, str]] = None
+            if server_has_user_fields(mcp_server):
+                from litellm.proxy._experimental.mcp_server.user_fields import (
+                    resolve_user_field_headers,
+                )
+
+                _, stored_field_values = await _get_user_field_values_cached(
+                    mcp_server, user_api_key_auth
+                )
+                if stored_field_values:
+                    resolved = resolve_user_field_headers(
+                        mcp_server, stored_field_values
+                    )
+                    if resolved:
+                        user_field_headers = resolved
+
             _auth_token = _request_auth_header.set(auth_header_value)
             _extra_token = _request_extra_headers.set(forwarded_headers)
+            _user_field_token = _request_user_field_headers.set(user_field_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
+                _request_user_field_headers.reset(_user_field_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)

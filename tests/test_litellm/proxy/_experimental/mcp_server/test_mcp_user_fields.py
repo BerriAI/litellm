@@ -493,6 +493,69 @@ async def test_build_stdio_env_returns_user_env_when_no_static_env():
     assert merged == {"X": "1"}
 
 
+def test_openapi_tool_merge_injects_user_field_headers_over_static():
+    """User-field headers override static_headers in the OpenAPI/local-tool
+    dispatch path, matching managed-MCP precedence.
+
+    Regression: stored user-field values were validated at enforcement time
+    but silently dropped for OpenAPI tools, so upstream calls failed even
+    after users provided required values.
+    """
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _merge_openapi_tool_request_headers,
+        _request_auth_header,
+        _request_extra_headers,
+        _request_user_field_headers,
+    )
+
+    extra_token = _request_extra_headers.set({"X-Trace": "abc"})
+    user_token = _request_user_field_headers.set(
+        {"Authorization": "Bearer user-tok", "X-Workspace": "ws1"}
+    )
+    auth_token = _request_auth_header.set(None)
+    try:
+        merged = _merge_openapi_tool_request_headers(
+            {"Authorization": "Bearer static-default", "X-Static": "keep"}
+        )
+    finally:
+        _request_auth_header.reset(auth_token)
+        _request_user_field_headers.reset(user_token)
+        _request_extra_headers.reset(extra_token)
+
+    # User-field Authorization wins over static.
+    assert merged["Authorization"] == "Bearer user-tok"
+    # Other user-field headers are added.
+    assert merged["X-Workspace"] == "ws1"
+    # Static headers without a user-field override survive.
+    assert merged["X-Static"] == "keep"
+    # Forwarded extras still come through when not colliding with static.
+    assert merged["X-Trace"] == "abc"
+
+
+def test_openapi_tool_merge_byok_auth_overrides_user_field_authorization():
+    """BYOK `_request_auth_header` is the final word on Authorization,
+    even when a user_field also targets Authorization. Matches the managed
+    path's `mcp_auth_header` parameter precedence."""
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _merge_openapi_tool_request_headers,
+        _request_auth_header,
+        _request_extra_headers,
+        _request_user_field_headers,
+    )
+
+    extra_token = _request_extra_headers.set(None)
+    user_token = _request_user_field_headers.set({"Authorization": "Bearer user-tok"})
+    auth_token = _request_auth_header.set("Bearer byok-tok")
+    try:
+        merged = _merge_openapi_tool_request_headers({})
+    finally:
+        _request_auth_header.reset(auth_token)
+        _request_user_field_headers.reset(user_token)
+        _request_extra_headers.reset(extra_token)
+
+    assert merged["Authorization"] == "Bearer byok-tok"
+
+
 # ---------------------------------------------------------------------------
 # HTTP endpoints — POST / GET / DELETE /v1/mcp/server/{id}/user-field-values
 # ---------------------------------------------------------------------------
