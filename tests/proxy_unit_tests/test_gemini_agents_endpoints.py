@@ -287,6 +287,8 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(
     mock_srv, user_api_key_dict
 ):
     """Path-param ``name`` must not be replaced by an attacker-controlled query param."""
+    from urllib.parse import quote
+
     from litellm.proxy.google_endpoints.agents_endpoints import get_gemini_agent
 
     with patch(
@@ -297,7 +299,12 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(
 
         # Even if a caller tries to inject "name" via flat query param, it is
         # ignored (flat params are not merged).  The path-param name wins.
-        request = _make_endpoint_request("name=INJECTED")
+        # ``api_key`` is supplied via the JSON template (required for non-admin
+        # callers — see test_*_non_admin_without_api_key_is_rejected below).
+        template = json.dumps({"api_key": "AIzaTest"})
+        request = _make_endpoint_request(
+            f"name=INJECTED&litellm_params_template={quote(template)}"
+        )
         await get_gemini_agent(
             request=request,
             name="real-agent",
@@ -334,3 +341,179 @@ async def test_list_agents_template_via_query_param(mock_srv, user_api_key_dict)
         assert init_data["api_key"] == "TemplateKey"
         assert init_data["vertex_project"] == "proj-x"
         assert "litellm_params_template" not in init_data
+
+
+# ---------------------------------------------------------------------------
+# Security guards (veria-flagged findings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def proxy_admin_user_api_key_dict():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_agents_non_admin_without_api_key_is_rejected(
+    mock_srv, user_api_key_dict
+):
+    """Non-admin callers must supply an explicit api_key — the proxy must not
+    silently fall back to the operator's shared GOOGLE_API_KEY/GEMINI_API_KEY.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
+
+    with patch(
+        "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
+    ) as MockProcessor:
+        instance = MockProcessor.return_value
+        instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
+
+        request = _make_endpoint_request("")
+        with pytest.raises(HTTPException) as excinfo:
+            await list_gemini_agents(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+        assert excinfo.value.status_code == 401
+        # Processor must never be invoked
+        instance.base_process_llm_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_non_admin_without_api_key_is_rejected(
+    mock_srv, user_api_key_dict
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy.google_endpoints.agents_endpoints import delete_gemini_agent
+
+    with patch(
+        "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
+    ) as MockProcessor:
+        instance = MockProcessor.return_value
+        instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
+
+        request = _make_endpoint_request("")
+        with pytest.raises(HTTPException) as excinfo:
+            await delete_gemini_agent(
+                request=request,
+                name="my-agent",
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+        assert excinfo.value.status_code == 401
+        instance.base_process_llm_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_agent_non_admin_without_api_key_is_rejected(
+    mock_srv, user_api_key_dict
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy.google_endpoints.agents_endpoints import create_gemini_agent
+
+    with (
+        patch(
+            "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor,
+        patch(
+            "litellm.proxy.google_endpoints.agents_endpoints._read_request_body",
+            new=AsyncMock(return_value={"name": "agent-1", "base_agent": "waverunner"}),
+        ),
+    ):
+        instance = MockProcessor.return_value
+        instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
+
+        request = _make_endpoint_request("")
+        with pytest.raises(HTTPException) as excinfo:
+            await create_gemini_agent(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+        assert excinfo.value.status_code == 401
+        instance.base_process_llm_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_agents_proxy_admin_may_use_env_fallback(
+    mock_srv, proxy_admin_user_api_key_dict
+):
+    """Proxy admins (master key) keep the env-fallback convenience."""
+    from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
+
+    with patch(
+        "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
+    ) as MockProcessor:
+        instance = MockProcessor.return_value
+        instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
+
+        request = _make_endpoint_request("")
+        await list_gemini_agents(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=proxy_admin_user_api_key_dict,
+        )
+
+        init_data = MockProcessor.call_args[1]["data"]
+        assert "api_key" not in init_data
+        instance.base_process_llm_request.assert_awaited_once()
+
+
+def test_validate_environment_rejects_api_base_override_without_explicit_key(
+    monkeypatch,
+):
+    """SECURITY: caller-supplied api_base must be paired with an explicit
+    api_key — otherwise the proxy's shared GOOGLE_API_KEY leaks to the
+    attacker-controlled host via the x-goog-api-key header.
+    """
+    from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
+
+    # Even if env-fallback is available, api_base override must require api_key.
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIzaSharedSecret")
+
+    cfg = GeminiAgentsConfig()
+    with pytest.raises(ValueError, match="api_base"):
+        cfg.validate_environment(
+            headers={},
+            litellm_params={"api_base": "https://attacker.example"},
+        )
+
+
+def test_validate_environment_allows_api_base_with_explicit_key(monkeypatch):
+    """api_base override is OK when paired with an explicit api_key."""
+    from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    cfg = GeminiAgentsConfig()
+    headers = cfg.validate_environment(
+        headers={},
+        litellm_params={
+            "api_base": "https://my-gemini-proxy.example",
+            "api_key": "AIzaCallerOwned",
+        },
+    )
+    assert headers["x-goog-api-key"] == "AIzaCallerOwned"
+
+
+def test_validate_environment_env_fallback_when_no_api_base_override(monkeypatch):
+    """Without api_base override, env fallback continues to work for SDK use."""
+    from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIzaFromEnv")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    cfg = GeminiAgentsConfig()
+    headers = cfg.validate_environment(headers={}, litellm_params={})
+    assert headers["x-goog-api-key"] == "AIzaFromEnv"

@@ -15,13 +15,30 @@ import pytest
 
 
 def _build_agents_client():
+    """Build a TestClient whose auth dependency is overridden to a PROXY_ADMIN
+    user. Using ``dependency_overrides`` is the only reliable way to bypass the
+    real ``user_api_key_auth`` for FastAPI route tests — patching the module-
+    level name does not affect the function reference captured by ``Depends``.
+    The PROXY_ADMIN role also bypasses the caller-supplied-api_key guard so
+    these tests can focus on the ``model=None`` invariant.
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.google_endpoints.agents_endpoints import router as agents_router
 
     app = FastAPI()
     app.include_router(agents_router)
+
+    async def _fake_user_api_key_auth():
+        return UserAPIKeyAuth(
+            api_key="sk-test",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _fake_user_api_key_auth
     return TestClient(app)
 
 
@@ -58,14 +75,13 @@ def _patch_base_process(return_value=None):
 
 
 def _patch_auth():
-    """Bypass FastAPI dependency injection for user_api_key_auth."""
-    from litellm.proxy._types import UserAPIKeyAuth
+    """Deprecated no-op kept for call-site compatibility.
 
-    fake_auth = UserAPIKeyAuth(api_key="sk-test")
-    return patch(
-        "litellm.proxy.google_endpoints.agents_endpoints.user_api_key_auth",
-        return_value=fake_auth,
-    )
+    ``_build_agents_client`` now installs a FastAPI ``dependency_overrides``
+    entry that injects a PROXY_ADMIN ``UserAPIKeyAuth``, so individual tests
+    no longer need to patch the module-level ``user_api_key_auth`` name.
+    """
+    return patch("os.getpid")
 
 
 class TestManagedAgentsModelParam:

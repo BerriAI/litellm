@@ -99,7 +99,20 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
     ) -> Dict[str, str]:
         headers = dict(headers)
         headers["Content-Type"] = "application/json"
-        api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+        explicit_api_key = litellm_params.get("api_key")
+        # SECURITY: when the caller overrides ``api_base``, refuse to fall back
+        # to the process-wide GOOGLE_API_KEY / GEMINI_API_KEY env vars. Otherwise
+        # an authenticated proxy user could set ``api_base`` to an attacker-
+        # controlled host and have the proxy ship its shared Gemini key in the
+        # ``x-goog-api-key`` header.
+        if litellm_params.get("api_base") and not explicit_api_key:
+            raise ValueError(
+                "When overriding api_base for Gemini agents, you must also "
+                "supply an explicit api_key. Falling back to GOOGLE_API_KEY / "
+                "GEMINI_API_KEY env vars with a custom api_base is refused "
+                "to prevent leaking the shared provider key to arbitrary hosts."
+            )
+        api_key = GeminiModelInfo.get_api_key(explicit_api_key)
         if not api_key:
             raise ValueError(
                 "Google API key is required. "

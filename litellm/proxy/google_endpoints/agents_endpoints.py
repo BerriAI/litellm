@@ -16,10 +16,10 @@ These are distinct from the A2A agent registry at /v1/agents.
 
 import json
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -28,6 +28,45 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 
 router = APIRouter(tags=["gemini managed agents"])
+
+
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+
+def _enforce_caller_supplied_provider_key(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    SECURITY: refuse to use the proxy's shared GOOGLE_API_KEY / GEMINI_API_KEY
+    env fallback for non-admin callers on Gemini managed-agent CRUD endpoints.
+
+    These endpoints are part of ``llm_api_routes`` so any authenticated LLM key
+    can reach them, but unlike ``/v1beta/models/...:generateContent`` they are
+    *not* routed through ``model_list`` — the only credential source is either
+    the per-request ``litellm_params_template`` or the env var fallback. Without
+    this guard, any ordinary proxy user could list, create, or delete managed
+    agents inside the operator's Gemini project using the operator's key.
+
+    Proxy admins (master key) keep the env-fallback convenience for ops use.
+    """
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    if data.get("api_key"):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=(
+            "Gemini managed-agent endpoints require a caller-supplied "
+            "Gemini api_key (via 'litellm_params_template'). Falling back to "
+            "the proxy's GOOGLE_API_KEY / GEMINI_API_KEY env vars is only "
+            "permitted for proxy admins."
+        ),
+    )
 
 
 def _merge_query_params_into_data(data: dict, request: Request) -> dict:
@@ -144,6 +183,7 @@ async def create_gemini_agent(
             if key not in data:
                 data[key] = value
     data.setdefault("custom_llm_provider", "gemini")
+    _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -200,6 +240,7 @@ async def list_gemini_agents(
     srv = _proxy_server_imports()
     data: dict = {"custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
+    _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -257,6 +298,7 @@ async def get_gemini_agent(
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
+    _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -314,6 +356,7 @@ async def delete_gemini_agent(
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
+    _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -371,6 +414,7 @@ async def list_gemini_agent_versions(
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
+    _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
