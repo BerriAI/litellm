@@ -2166,8 +2166,9 @@ if MCP_AVAILABLE:
                 user_fields.append(MCPUserField(**entry))
             except Exception:  # noqa: BLE001 — drop malformed entries silently
                 continue
+        declared_keys = {f.field_key for f in user_fields}
         stored: Dict[str, str] = stored_values or {}
-        stored_keys = [k for k, v in stored.items() if v]
+        stored_keys = [k for k, v in stored.items() if v and k in declared_keys]
         missing_keys = [
             f.field_key
             for f in user_fields

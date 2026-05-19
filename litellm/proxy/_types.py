@@ -1268,6 +1268,24 @@ class MCPUserField(LiteLLMPydanticObjectBase):
     env_var_name: Optional[str] = None
 
 
+def _validate_unique_user_field_keys(
+    user_fields: List[MCPUserField],
+) -> List[MCPUserField]:
+    seen: set = set()
+    duplicates: set = set()
+    for entry in user_fields:
+        key = entry.field_key
+        if key in seen:
+            duplicates.add(key)
+        else:
+            seen.add(key)
+    if duplicates:
+        raise ValueError(
+            f"user_fields contains duplicate field_key values: {sorted(duplicates)}"
+        )
+    return user_fields
+
+
 class MCPUserFieldValuesRequest(LiteLLMPydanticObjectBase):
     """Body for storing the calling user's values for an MCP server's user fields."""
 
@@ -1368,6 +1386,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @field_validator("user_fields")
+    @classmethod
+    def _user_fields_unique(cls, v: List[MCPUserField]) -> List[MCPUserField]:
+        return _validate_unique_user_field_keys(v)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1426,6 +1449,11 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                         "url or spec_path is required for HTTP/SSE transport"
                     )
         return values
+
+    @field_validator("user_fields")
+    @classmethod
+    def _user_fields_unique(cls, v: List[MCPUserField]) -> List[MCPUserField]:
+        return _validate_unique_user_field_keys(v)
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
