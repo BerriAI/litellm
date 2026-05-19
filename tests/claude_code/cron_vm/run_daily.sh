@@ -163,8 +163,8 @@ LITELLM_VERSION="$(
 [[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest v*-stable tag in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
 
-CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | awk '{print $1}')"
-[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not read 'claude --version'"
+CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' | head -n1)"
+[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not parse semver from 'claude --version'"
 log "local claude code: ${CLAUDE_CODE_VERSION}"
 
 # ---------------------------------------------------------------------------

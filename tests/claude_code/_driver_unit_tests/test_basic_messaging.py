@@ -146,7 +146,7 @@ def test_verify_streaming_fails_when_proxy_buffers(monkeypatch):
     outcome = DriverResult(text="1\n2\n3", events=_buffered_events())
     _install_fake_runner(monkeypatch, outcomes_by_model={model: outcome})
 
-    with pytest.raises(BaseException):
+    with pytest.raises(pytest.fail.Exception):
         run_basic_messaging_cell(
             compat_result=fake_result,
             models=[model],
@@ -189,7 +189,7 @@ def test_verify_streaming_requires_all_models_to_stream(monkeypatch):
     }
     _install_fake_runner(monkeypatch, outcomes_by_model=outcomes)
 
-    with pytest.raises(BaseException):
+    with pytest.raises(pytest.fail.Exception):
         run_basic_messaging_cell(
             compat_result=fake_result,
             models=list(outcomes.keys()),
