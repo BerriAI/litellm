@@ -109,20 +109,41 @@ async def test_async_completion_with_fallbacks_header_is_zero_when_primary_succe
     assert response.choices[0].message.content == "primary-resp"
 
 
-def test_process_response_headers_preserves_x_litellm_headers():
+def test_process_response_headers_preserves_x_litellm_headers_when_internal():
     """
     `process_response_headers` must not add the `llm_provider-` prefix to
-    LiteLLM's own internal headers (anything starting with `x-litellm-`).
-    These are markers set by LiteLLM (e.g. fallback / retry headers); the
-    proxy and other callers look up the bare key.
+    LiteLLM's own internal headers (anything starting with `x-litellm-`) when
+    the caller has marked the input as LiteLLM-owned. These are markers set by
+    LiteLLM (e.g. fallback / retry headers); the proxy and other callers look
+    up the bare key.
     """
     result = process_response_headers(
         {
             "x-litellm-attempted-fallbacks": 1,
             "x-litellm-model-group": "gpt-4",
             "x-stainless-arch": "arm64",
-        }
+        },
+        preserve_litellm_internal_headers=True,
     )
     assert result["x-litellm-attempted-fallbacks"] == 1
     assert result["x-litellm-model-group"] == "gpt-4"
+    assert result["llm_provider-x-stainless-arch"] == "arm64"
+
+
+def test_process_response_headers_prefixes_x_litellm_from_raw_provider():
+    """
+    On raw upstream-provider headers (default `preserve_litellm_internal_headers=False`),
+    a header whose name starts with `x-litellm-` MUST still get the
+    `llm_provider-` prefix. Otherwise a malicious provider could return
+    `x-litellm-attempted-fallbacks` and spoof a LiteLLM-internal marker,
+    bypassing the proxy model-override guard.
+    """
+    result = process_response_headers(
+        {
+            "x-litellm-attempted-fallbacks": 99,
+            "x-stainless-arch": "arm64",
+        }
+    )
+    assert "x-litellm-attempted-fallbacks" not in result
+    assert result["llm_provider-x-litellm-attempted-fallbacks"] == 99
     assert result["llm_provider-x-stainless-arch"] == "arm64"

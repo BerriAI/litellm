@@ -242,7 +242,18 @@ def _get_parent_otel_span_from_kwargs(
         return None
 
 
-def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> dict:
+def process_response_headers(
+    response_headers: Union[httpx.Headers, dict],
+    preserve_litellm_internal_headers: bool = False,
+) -> dict:
+    """
+    `preserve_litellm_internal_headers` must only be True when the input dict is
+    a LiteLLM-owned structure (e.g. `_hidden_params["additional_headers"]` that
+    has already been through one round of processing). For raw upstream
+    provider headers it must remain False, otherwise a malicious provider
+    returning `x-litellm-*` could spoof LiteLLM-internal markers
+    (e.g. `x-litellm-attempted-fallbacks`).
+    """
     from litellm.types.utils import OPENAI_RESPONSE_HEADERS
 
     openai_headers = {}
@@ -256,7 +267,7 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
             "llm_provider-"
         ):  # return raw provider headers (incl. openai-compatible ones)
             processed_headers[k] = v
-        elif k.startswith("x-litellm-"):
+        elif preserve_litellm_internal_headers and k.startswith("x-litellm-"):
             # LiteLLM's own internal headers (e.g. x-litellm-attempted-fallbacks,
             # x-litellm-model-group) are not LLM provider headers and must not be
             # prefixed. Downstream consumers (proxy override, callers checking
