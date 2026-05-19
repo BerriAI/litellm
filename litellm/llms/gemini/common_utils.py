@@ -93,8 +93,6 @@ GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
     (896, 1280): "3:4",
 }
 
-IMAGEN_SUPPORTED_IMAGE_SIZES = {"1K", "2K"}
-
 
 def map_openai_size_to_gemini_image_config(
     size: str, model: str
@@ -111,25 +109,22 @@ def map_openai_size_to_gemini_image_config(
     if is_gemini_image_model(model):
         if supports_gemini_image_size(model):
             image_config["imageSize"] = image_size
-    elif is_imagen_model(model) and image_size in IMAGEN_SUPPORTED_IMAGE_SIZES:
+    else:
         image_config["imageSize"] = image_size
     return image_config
 
 
 def supports_gemini_image_size(model: str) -> bool:
-    # Gemini 2.5 Flash image supports aspectRatio but rejects imageSize; newer
-    # Gemini image models are expected to support both fields.
+    # gemini-2.5-flash is a legacy model with reduced capability, a one-off
+    # exception. Newer Nano Banana and Imagen models all support imageSize, and
+    # newer Gemini image models are widely expected to support it too. Adding a
+    # model-map feature flag is not justified for this narrow case.
     return "2.5-flash" not in model
 
 
 def is_gemini_image_model(model: str) -> bool:
     base_model = model.split("/", 1)[-1]
     return "gemini" in base_model
-
-
-def is_imagen_model(model: str) -> bool:
-    base_model = model.split("/", 1)[-1]
-    return "imagen" in base_model
 
 
 def map_openai_image_params_to_gemini(

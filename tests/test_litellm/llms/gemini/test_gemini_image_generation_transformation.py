@@ -104,7 +104,7 @@ def test_imagen_generation_with_provider_prefix_uses_imagen_params_and_response(
     assert result.data[0].b64_json == "fake-imagen-image"
 
 
-def test_imagen_generation_omits_unsupported_openai_size_image_size():
+def test_imagen_generation_forwards_mapped_openai_size_image_size():
     config = GoogleImageGenConfig()
 
     mapped = config.map_openai_params(
@@ -115,7 +115,7 @@ def test_imagen_generation_omits_unsupported_openai_size_image_size():
         model="gemini/imagen-4.0-generate-001",
         drop_params=False,
     )
-    assert mapped == {"aspectRatio": "1:1"}
+    assert mapped == {"aspectRatio": "1:1", "imageSize": "512"}
 
     request = config.transform_image_generation_request(
         model="gemini/imagen-4.0-generate-001",
@@ -127,7 +127,7 @@ def test_imagen_generation_omits_unsupported_openai_size_image_size():
 
     assert request == {
         "instances": [{"prompt": "Generate a simple app icon"}],
-        "parameters": {"aspectRatio": "1:1"},
+        "parameters": {"aspectRatio": "1:1", "imageSize": "512"},
     }
 
 
