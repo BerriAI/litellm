@@ -1,25 +1,6 @@
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 
-export interface InteractionOutput {
-  type: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-export interface InteractionResponse {
-  id: string;
-  status: string;
-  object: string;
-  model?: string;
-  outputs?: InteractionOutput[];
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-  };
-}
-
 export async function makeInteractionsRequest(
   input: string,
   updateUI: (text: string, model?: string) => void,
