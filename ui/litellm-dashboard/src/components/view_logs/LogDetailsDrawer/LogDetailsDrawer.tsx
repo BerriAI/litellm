@@ -122,7 +122,9 @@ export function LogDetailsDrawer({
   const { data: sessionQueryResult } = useQuery({
     queryKey: ["sessionLogs", sessionId, sessionPage],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], totalPages: 1 };
+      if (!sessionId || !accessToken) {
+        return { logs: [] as LogEntry[], totalPages: 1, total: 0 };
+      }
       const response = await sessionSpendLogsCall(accessToken, sessionId, sessionPage, SESSION_PAGE_SIZE);
       const allSessionLogs: LogEntry[] = response.data || response || [];
       const logs = allSessionLogs
@@ -136,13 +138,19 @@ export function LogDetailsDrawer({
           if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
           return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
         });
-      return { logs, totalPages: response.total_pages ?? 1 };
+      return {
+        logs,
+        totalPages: response.total_pages ?? 1,
+        total: response.total ?? logs.length,
+      };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
 
   const sessionLogs = sessionQueryResult?.logs ?? [];
   const sessionTotalPages = sessionQueryResult?.totalPages ?? 1;
+  const sessionTotal = sessionQueryResult?.total ?? sessionLogs.length;
+  const isSessionPaginated = isSessionMode && sessionTotalPages > 1;
   const canGoPreviousPage = isSessionMode && sessionPage > 1;
   const canGoNextPage = isSessionMode && sessionPage < sessionTotalPages;
 
@@ -193,6 +201,15 @@ export function LogDetailsDrawer({
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
+
+  // If the parent swaps to a different session while the drawer stays open,
+  // reset page/selection so we don't request page N of a shorter session and
+  // render an empty sidebar.
+  useEffect(() => {
+    if (!isSessionMode) return;
+    setSessionPage(1);
+    setSelectedSessionRequestId(null);
+  }, [sessionId, isSessionMode]);
 
   // Keyboard navigation
   const { selectNextLog, selectPreviousLog } = useKeyboardNavigation({
@@ -330,7 +347,7 @@ export function LogDetailsDrawer({
                 </div>
               </div>
               <div className="mt-1 text-[11px] text-slate-500 font-mono">
-                {logsForList.length} req
+                {isSessionMode ? sessionTotal : logsForList.length} req
                 {[
                   isSessionMode
                     ? llmCount
@@ -358,6 +375,12 @@ export function LogDetailsDrawer({
                   <>
                     <span className="mx-1.5">·</span>
                     {sessionDurationSeconds}s
+                  </>
+                )}
+                {isSessionPaginated && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span>page {sessionPage}/{sessionTotalPages} (cost/duration/counts shown for this page)</span>
                   </>
                 )}
               </div>
