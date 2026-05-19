@@ -30,6 +30,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -1578,6 +1579,44 @@ class Router:
             cancel_interaction, call_type="cancel_interaction"
         )
 
+    def _initialize_managed_agents_endpoints(self):
+        """Initialize Google Managed Agents API endpoints (v1beta/agents)."""
+        from litellm.interactions.agents import acreate as acreate_agent
+        from litellm.interactions.agents import adelete as adelete_agent
+        from litellm.interactions.agents import aget as aget_agent
+        from litellm.interactions.agents import alist as alist_agents
+        from litellm.interactions.agents import alist_versions as alist_agent_versions
+        from litellm.interactions.agents import create as create_agent
+        from litellm.interactions.agents import delete as delete_agent
+        from litellm.interactions.agents import get as get_agent
+        from litellm.interactions.agents import list as list_agents
+        from litellm.interactions.agents import list_versions as list_agent_versions
+
+        self.acreate_agent = self.factory_function(
+            acreate_agent, call_type="acreate_agent"
+        )
+        self.create_agent = self.factory_function(
+            create_agent, call_type="create_agent"
+        )
+        self.alist_agents = self.factory_function(
+            alist_agents, call_type="alist_agents"
+        )
+        self.list_agents = self.factory_function(list_agents, call_type="list_agents")
+        self.aget_agent = self.factory_function(aget_agent, call_type="aget_agent")
+        self.get_agent = self.factory_function(get_agent, call_type="get_agent")
+        self.adelete_agent = self.factory_function(
+            adelete_agent, call_type="adelete_agent"
+        )
+        self.delete_agent = self.factory_function(
+            delete_agent, call_type="delete_agent"
+        )
+        self.alist_agent_versions = self.factory_function(
+            alist_agent_versions, call_type="alist_agent_versions"
+        )
+        self.list_agent_versions = self.factory_function(
+            list_agent_versions, call_type="list_agent_versions"
+        )
+
     def _initialize_specialized_endpoints(self):
         """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
         self._initialize_vector_store_endpoints()
@@ -1590,6 +1629,7 @@ class Router:
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
         self._initialize_interactions_endpoints()
+        self._initialize_managed_agents_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -5321,6 +5361,16 @@ class Router:
             "delete_interaction",
             "acancel_interaction",
             "cancel_interaction",
+            "acreate_agent",
+            "create_agent",
+            "alist_agents",
+            "list_agents",
+            "aget_agent",
+            "get_agent",
+            "adelete_agent",
+            "delete_agent",
+            "alist_agent_versions",
+            "list_agent_versions",
         ] = "assistants",
     ):
         """
@@ -5405,6 +5455,27 @@ class Router:
 
             return vector_store_file_sync_wrapper
 
+        if call_type in (
+            "create_agent",
+            "list_agents",
+            "get_agent",
+            "delete_agent",
+            "list_agent_versions",
+        ):
+
+            def managed_agents_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = "gemini"
+                return original_function(**kwargs)
+
+            return managed_agents_sync_wrapper
+
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: Optional[str] = None,
@@ -5468,8 +5539,6 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
-                "acreate_interaction",
-                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -5529,11 +5598,25 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "acreate_interaction",
+                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",
             ):
                 return await self._init_interactions_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_agent",
+                "alist_agents",
+                "aget_agent",
+                "adelete_agent",
+                "alist_agent_versions",
+            ):
+                return await self._init_managed_agents_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
                     **kwargs,
@@ -5642,6 +5725,34 @@ class Router:
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
         # Default to gemini for interactions API
+        if "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = "gemini"
+        # If the proxy accidentally passed agent name as model, clear it
+        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
+            kwargs["model"] = None
+        # Model-based interactions use deployment routing + fallbacks; agent-only calls
+        # must not enter model-group lookup (agent name is not a LiteLLM deployment).
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
+        return await original_function(**kwargs)
+
+    async def _init_managed_agents_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Managed Agents API endpoints on the router (v1beta/agents).
+
+        CRUD operations for Gemini managed agents don't need model-based routing,
+        so we call the original function directly with the custom_llm_provider.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
         if "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = "gemini"
         return await original_function(**kwargs)
@@ -6957,12 +7068,11 @@ class Router:
         unhealthy_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments:
-                continue
-            else:
-                healthy_deployments.append(deployment)
+        unhealthy_set = set(unhealthy_deployments)
+        healthy_deployments: list = [
+            d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         return healthy_deployments, _all_deployments
 
@@ -6990,10 +7100,12 @@ class Router:
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set = set(unhealthy_deployments)
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] not in unhealthy_deployments_set:
-                healthy_deployments.append(deployment)
+        healthy_deployments: list = [
+            d
+            for d in _all_deployments
+            if d["model_info"]["id"] not in unhealthy_deployments_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
@@ -8142,10 +8254,14 @@ class Router:
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
         """
-        Returns -> dict of credentials for a given model id
+        Returns -> dict of credentials for a given model id.
+
+        Returns None if the deployment is paused via `LiteLLM_ProxyModelTable.blocked`,
+        so file/batch/passthrough callers that resolve credentials directly cannot keep
+        using a paused deployment.
         """
         deployment = self.get_deployment(model_id=model_id)
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
         return CredentialLiteLLMParams(
             **deployment.litellm_params.model_dump(exclude_none=True)
@@ -8190,7 +8306,9 @@ class Router:
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
-            Returns None if model not found.
+            Returns None if model not found, or if the resolved deployment is
+            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
+            cannot bypass an admin pause by resolving credentials directly).
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
@@ -8216,7 +8334,7 @@ class Router:
                 elif isinstance(deployment_dict, Deployment):
                     deployment = deployment_dict
 
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
@@ -9243,6 +9361,29 @@ class Router:
 
         return model_names
 
+    def get_fully_blocked_model_names(self) -> Set[str]:
+        """
+        Returns the set of model_names where every backing deployment has `blocked=True`.
+
+        Used by `/v1/models` to hide paused models from client listings while still
+        surfacing them on admin endpoints (e.g. `/model/info`). A model with at least
+        one non-blocked deployment is still serviceable and remains visible.
+        """
+        deployments = self.get_model_list() or []
+        blocked_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            name = deployment.get("model_name") or ""
+            if not name:
+                continue
+            is_blocked = (deployment.get("model_info") or {}).get("blocked") is True
+            if name in blocked_by_name:
+                blocked_by_name[name] = blocked_by_name[name] and is_blocked
+            else:
+                blocked_by_name[name] = is_blocked
+        return {
+            name for name, fully_blocked in blocked_by_name.items() if fully_blocked
+        }
+
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
     ) -> Optional[str]:
@@ -10131,6 +10272,12 @@ class Router:
             )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         # Health-check-based filtering (before cooldown)
@@ -10163,6 +10310,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -10387,6 +10536,12 @@ class Router:
 
             # 3. If specific deployment returned, verify if it supports pass-through
             if isinstance(healthy_deployments, dict):
+                if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                    raise litellm.ServiceUnavailableError(
+                        message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                        model=model,
+                        llm_provider="",
+                    )
                 litellm_params = healthy_deployments.get("litellm_params", {})
                 if litellm_params.get("use_in_pass_through"):
                     return healthy_deployments
@@ -10555,6 +10710,12 @@ class Router:
         )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
@@ -10584,6 +10745,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -10704,6 +10867,12 @@ class Router:
 
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is administratively paused. Contact your proxy admin to unblock it.",
+                    model=model,
+                    llm_provider="",
+                )
             litellm_params = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
                 return healthy_deployments
@@ -10742,6 +10911,9 @@ class Router:
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
             cooldown_deployments=cooldown_deployments,
+        )
+        pass_through_deployments = self._filter_blocked_deployments(
+            pass_through_deployments
         )
 
         # 5. Apply pre-call checks (if enabled)
@@ -10831,6 +11003,36 @@ class Router:
             for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
         ]
+
+    def _filter_blocked_deployments(
+        self, healthy_deployments: List[Dict]
+    ) -> List[Dict]:
+        """
+        Filters out deployments that an admin has paused via `LiteLLM_ProxyModelTable.blocked`.
+
+        Applied alongside the cooldown filter on every routing entry point that calls
+        `_common_checks_available_deployment` directly — the primary sync/async path,
+        the sync pass-through path, and the retry / health-check helpers — so paused
+        deployments never serve a request. The async pass-through path inherits this
+        filter through its delegation to `async_get_healthy_deployments`.
+        """
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if (deployment.get("model_info") or {}).get("blocked") is not True
+        ]
+
+    @staticmethod
+    def _is_deployment_blocked(deployment: "Deployment") -> bool:
+        """
+        Returns True when a `Deployment` Pydantic instance carries the admin-paused
+        flag. Used by credential-lookup helpers so passthrough file / batch endpoints
+        cannot bypass the pause by resolving credentials directly.
+        """
+        model_info = getattr(deployment, "model_info", None)
+        if model_info is None:
+            return False
+        return getattr(model_info, "blocked", None) is True
 
     async def _async_filter_health_check_unhealthy_deployments(
         self,
