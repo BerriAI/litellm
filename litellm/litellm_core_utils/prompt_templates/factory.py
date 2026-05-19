@@ -1233,6 +1233,7 @@ def infer_protocol_value(
 
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
+    tool_call_id: Optional[str] = None,
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
@@ -1248,6 +1249,11 @@ def _gemini_tool_call_invoke_helper(
         name=name,
         args=arguments_dict,
     )
+    # Gemini 3.5+ requires the `id` to be echoed back on `functionCall` parts so
+    if tool_call_id:
+        clean_id = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if clean_id:
+            function_call["id"] = clean_id
     return function_call
 
 
@@ -1389,7 +1395,8 @@ def convert_to_gemini_tool_call_invoke(
                 if "function" in tool:
                     gemini_function_call: Optional[VertexFunctionCall] = (
                         _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
+                            function_call_params=tool["function"],
+                            tool_call_id=tool.get("id"),
                         )
                     )
                     if gemini_function_call is not None:
@@ -1602,6 +1609,14 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
             ):
                 name = tool.get("function", {}).get("name", "")
 
+    # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).
+    gemini_call_id: Optional[str] = None
+    raw_tool_call_id = message.get("tool_call_id")
+    if raw_tool_call_id and isinstance(raw_tool_call_id, str):
+        stripped_id = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if stripped_id:
+            gemini_call_id = stripped_id
+
     if not name:
         raise Exception(
             "Missing corresponding tool call for tool response message. Received - message={}, last_message_with_tool_calls={}".format(
@@ -1632,6 +1647,8 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
         name=name,
         response=response_data,  # type: ignore
     )
+    if gemini_call_id:
+        _function_response["id"] = gemini_call_id
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
