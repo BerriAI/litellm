@@ -1918,9 +1918,19 @@ if MCP_AVAILABLE:
                 detail={"error": "User ID not found in token"},
             )
         if payload.save:
-            await store_user_credential(
-                prisma_client, user_id, server_id, payload.credential
-            )
+            try:
+                await store_user_credential(
+                    prisma_client, user_id, server_id, payload.credential
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "credential_conflict",
+                        "message": str(e),
+                        "server_id": server_id,
+                    },
+                )
             from litellm.proxy._experimental.mcp_server.server import (
                 _invalidate_byok_cred_cache,
             )

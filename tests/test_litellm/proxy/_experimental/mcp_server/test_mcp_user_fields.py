@@ -179,6 +179,28 @@ def test_coerce_user_fields_empty_when_missing():
     assert server_has_user_fields(srv) is False
 
 
+def test_coerce_user_fields_accepts_litellm_mcp_server_table():
+    """LiteLLM_MCPServerTable.user_fields is List[MCPUserField] (Pydantic
+    instances), not List[dict]. The helper must normalise both shapes so
+    the management-layer annotation / enforcement paths don't silently
+    return empty results.
+    """
+    table = LiteLLM_MCPServerTable(
+        server_id="s3",
+        transport=MCPTransport.http,
+        user_fields=[
+            {"field_key": "TOKEN", "header_name": "Authorization", "required": True},
+            {"field_key": "WS", "header_name": "X-Workspace", "required": False},
+        ],
+    )
+    assert isinstance(table.user_fields[0], MCPUserField)
+    coerced = coerce_user_fields(table)
+    assert [f["field_key"] for f in coerced] == ["TOKEN", "WS"]
+    assert server_has_user_fields(table) is True
+    missing = compute_missing_user_fields(table, None)
+    assert [f["field_key"] for f in missing] == ["TOKEN"]
+
+
 def test_compute_missing_required_only():
     srv = _gmail_server()
     missing = compute_missing_user_fields(srv, None)
