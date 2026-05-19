@@ -2739,9 +2739,14 @@ def test_vertex_ai_multiple_tool_types_separate_objects():
 
 def test_vertex_ai_function_declarations_with_other_tools_separate():
     """
-    Test that when function declarations are mixed with search and non-search
-    built-in tools, all tools are preserved and server-side tool invocations
-    are enabled (Gemini 3+).
+    Test that when function declarations are mixed with search tools AND
+    non-search tools like code_execution, search tools are dropped but
+    non-search tools are preserved.
+
+    Vertex AI constraint: "Multiple tools are supported only when they are
+    all search tools." So mixing function declarations with googleSearch
+    would cause a 400 error. code_execution is NOT a search tool, so it
+    is preserved.
 
     Input:
         value=[
@@ -2753,7 +2758,6 @@ def test_vertex_ai_function_declarations_with_other_tools_separate():
     Expected Output:
         tools=[
             {"function_declarations": [{"name": "get_weather", "description": "Get weather"}]},
-            {"googleSearch": {}},
             {"code_execution": {}},
         ]
     """
@@ -2772,18 +2776,25 @@ def test_vertex_ai_function_declarations_with_other_tools_separate():
         optional_params=optional_params,
     )
 
-    assert len(tools) == 3, f"Expected 3 Tool objects, got {len(tools)}"
-    assert optional_params.get("include_server_side_tool_invocations") is True
+    # Should have 2 Tool objects: function declarations + code_execution
+    # googleSearch is dropped to avoid Vertex AI 400 error
+    assert len(tools) == 2, f"Expected 2 Tool objects, got {len(tools)}"
 
-    tool_keys = set()
+    # Find each tool type
+    func_tool = None
+    code_tool = None
+
     for tool in tools:
-        tool_keys.update(tool.keys())
+        if "function_declarations" in tool:
+            func_tool = tool
+        elif "code_execution" in tool:
+            code_tool = tool
 
-    assert "function_declarations" in tool_keys
-    assert "googleSearch" in tool_keys
-    assert "code_execution" in tool_keys
+    # Verify function declarations and code_execution are present
+    assert func_tool is not None, "function_declarations Tool should be present"
+    assert code_tool is not None, "code_execution Tool should be present"
 
-    func_tool = next(t for t in tools if "function_declarations" in t)
+    # Verify function declaration content
     assert func_tool["function_declarations"][0]["name"] == "get_weather"
 
 
@@ -2811,8 +2822,12 @@ def test_vertex_ai_single_tool_type_still_works():
 
 def test_vertex_ai_mixed_search_and_function_tools_drops_search():
     """
-    Test that when search tools and function declarations are mixed, all tools
-    are preserved and include_server_side_tool_invocations is enabled (Gemini 3+).
+    Test that when both search tools and function declarations are present,
+    search tools are dropped to avoid Vertex AI 400 error:
+    "Multiple tools are supported only when they are all search tools."
+
+    This happens when deployment config has search tools (enterpriseWebSearch,
+    urlContext) and user request adds function calling tools (e.g. via MCP).
 
     Ref: https://github.com/BerriAI/litellm/issues/23337
     """
@@ -2838,24 +2853,15 @@ def test_vertex_ai_mixed_search_and_function_tools_drops_search():
         optional_params=optional_params,
     )
 
-    assert len(tools) == 3, f"Expected 3 Tool objects, got {len(tools)}: {tools}"
-    assert optional_params.get("include_server_side_tool_invocations") is True
-
-    tool_keys = set()
-    for tool in tools:
-        tool_keys.update(tool.keys())
-    assert "function_declarations" in tool_keys
-    assert "enterpriseWebSearch" in tool_keys
-    assert "url_context" in tool_keys
-
-    func_tool = next(t for t in tools if "function_declarations" in t)
-    assert func_tool["function_declarations"][0]["name"] == "get_weather"
+    # Should only have function declarations (search tools dropped)
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}: {tools}"
+    assert "function_declarations" in tools[0]
+    assert tools[0]["function_declarations"][0]["name"] == "get_weather"
 
 
 def test_vertex_ai_mixed_google_search_and_function_tools_drops_search():
     """
-    Test that googleSearch is preserved when mixed with function declarations
-    and include_server_side_tool_invocations is enabled (Gemini 3+).
+    Test that googleSearch is also dropped when mixed with function declarations.
     """
     v = VertexGeminiConfig()
     optional_params = {}
@@ -2871,17 +2877,9 @@ def test_vertex_ai_mixed_google_search_and_function_tools_drops_search():
         optional_params=optional_params,
     )
 
-    assert len(tools) == 2
-    assert optional_params.get("include_server_side_tool_invocations") is True
-
-    tool_keys = set()
-    for tool in tools:
-        tool_keys.update(tool.keys())
-    assert "function_declarations" in tool_keys
-    assert "googleSearch" in tool_keys
-
-    func_tool = next(t for t in tools if "function_declarations" in t)
-    assert func_tool["function_declarations"][0]["name"] == "my_func"
+    assert len(tools) == 1
+    assert "function_declarations" in tools[0]
+    assert tools[0]["function_declarations"][0]["name"] == "my_func"
 
 
 def test_vertex_ai_search_tools_only_no_drop():
@@ -2961,10 +2959,10 @@ def test_vertex_ai_gemini3_tool_combination_no_drop():
     assert len(tools) == 3
 
 
-def test_vertex_ai_auto_enable_server_side_tool_invocations_mixed_tools():
+def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
     """
-    Codex sends function tools and web_search_options separately; Gemini 3.5+
-    requires include_server_side_tool_invocations when both are present.
+    When function tools and web_search_options are sent separately (Codex-style),
+    search tools are dropped unless include_server_side_tool_invocations is set.
     """
     v = VertexGeminiConfig()
     optional_params: dict = {}
@@ -2985,12 +2983,12 @@ def test_vertex_ai_auto_enable_server_side_tool_invocations_mixed_tools():
         drop_params=True,
     )
 
-    assert result.get("include_server_side_tool_invocations") is True
+    assert not result.get("include_server_side_tool_invocations")
     tool_keys = set()
     for tool in result.get("tools", []):
         tool_keys.update(tool.keys())
     assert "function_declarations" in tool_keys
-    assert "googleSearch" in tool_keys
+    assert "googleSearch" not in tool_keys
 
 
 def test_vertex_ai_openai_web_search_tool_transformation():
@@ -3056,8 +3054,8 @@ def test_vertex_ai_openai_web_search_preview_tool_transformation():
 def test_vertex_ai_openai_web_search_with_function_tools():
     """
     Test that when OpenAI-style web_search tool (transformed to googleSearch)
-    is mixed with function tools, both are preserved and
-    include_server_side_tool_invocations is enabled (Gemini 3+).
+    is mixed with function tools, search tools are dropped to avoid Vertex AI
+    400 error: "Multiple tools are supported only when they are all search tools."
 
     Input:
         value=[
@@ -3068,7 +3066,6 @@ def test_vertex_ai_openai_web_search_with_function_tools():
     Expected Output:
         tools=[
             {"function_declarations": [{"name": "get_weather", "description": "Get weather"}]},
-            {"googleSearch": {}},
         ]
     """
     v = VertexGeminiConfig()
@@ -3085,16 +3082,12 @@ def test_vertex_ai_openai_web_search_with_function_tools():
         optional_params=optional_params,
     )
 
-    assert len(tools) == 2, f"Expected 2 Tool objects, got {len(tools)}"
-    assert optional_params.get("include_server_side_tool_invocations") is True
+    # Should have 1 Tool object: function declarations only
+    # googleSearch (from web_search) is dropped to avoid Vertex AI 400 error
+    assert len(tools) == 1, f"Expected 1 Tool object, got {len(tools)}"
 
-    tool_keys = set()
-    for tool in tools:
-        tool_keys.update(tool.keys())
-    assert "function_declarations" in tool_keys
-    assert "googleSearch" in tool_keys
-
-    func_tool = next(t for t in tools if "function_declarations" in t)
+    func_tool = tools[0]
+    assert "function_declarations" in func_tool
     assert func_tool["function_declarations"][0]["name"] == "get_weather"
 
 

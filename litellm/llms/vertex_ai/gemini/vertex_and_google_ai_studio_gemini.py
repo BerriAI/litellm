@@ -367,13 +367,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return Tools(googleSearch={})
 
     @staticmethod
-    def _maybe_enable_server_side_tool_invocations(optional_params: dict) -> None:
-        """
-        Gemini 3+ requires toolConfig.includeServerSideToolInvocations when mixing
-        function declarations with built-in tools (googleSearch, code_execution, etc.).
+    def _search_tool_keys() -> set:
+        return {
+            VertexToolName.GOOGLE_SEARCH.value,
+            VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
+            VertexToolName.ENTERPRISE_WEB_SEARCH.value,
+            VertexToolName.URL_CONTEXT.value,
+            "google_search",
+            "google_search_retrieval",
+            "enterprise_web_search",
+            "urlContext",
+        }
 
-        web_search_options is mapped separately from tools, so this must run after
-        map_openai_params merges both into optional_params["tools"].
+    @classmethod
+    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
+        """
+        Drop search tools from optional_params when mixed with function declarations
+        and include_server_side_tool_invocations is not enabled.
+
+        Runs after map_openai_params merges tools and web_search_options so both
+        code paths (single _map_function call vs split tools + web_search_options)
+        get the same conflict resolution.
         """
         if optional_params.get("include_server_side_tool_invocations"):
             return
@@ -382,33 +396,36 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if not isinstance(tools, list) or not tools:
             return
 
-        builtin_tool_keys = {
-            VertexToolName.GOOGLE_SEARCH.value,
-            VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
-            VertexToolName.ENTERPRISE_WEB_SEARCH.value,
-            VertexToolName.URL_CONTEXT.value,
-            VertexToolName.CODE_EXECUTION.value,
-            VertexToolName.GOOGLE_MAPS.value,
-            VertexToolName.COMPUTER_USE.value,
-            "google_search",
-            "google_search_retrieval",
-            "enterprise_web_search",
-            "urlContext",
-            "codeExecution",
-        }
+        search_tool_keys = cls._search_tool_keys()
+        has_function_declarations = any(
+            isinstance(tool, dict) and tool.get("function_declarations")
+            for tool in tools
+        )
+        if not has_function_declarations:
+            return
 
-        has_function_declarations = False
-        has_builtin_tool = False
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            if tool.get("function_declarations"):
-                has_function_declarations = True
-            if any(key in tool for key in builtin_tool_keys):
-                has_builtin_tool = True
+        has_search_tools = any(
+            isinstance(tool, dict) and any(key in tool for key in search_tool_keys)
+            for tool in tools
+        )
+        if not has_search_tools:
+            return
 
-        if has_function_declarations and has_builtin_tool:
-            optional_params["include_server_side_tool_invocations"] = True
+        verbose_logger.warning(
+            "Vertex AI does not support mixing function declarations with "
+            "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+            "googleSearchRetrieval) in the same request. Dropping search "
+            "tools and keeping function declarations. To use search tools, "
+            "send a request without function calling tools."
+        )
+        optional_params["tools"] = [
+            tool
+            for tool in tools
+            if not (
+                isinstance(tool, dict)
+                and any(key in tool for key in search_tool_keys)
+            )
+        ]
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """
@@ -735,21 +752,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # Build list of Tool objects - each Tool should contain exactly one type
         # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
         _tools_list: List[Tools] = []
-
-        has_builtin_tool = any(
-            v is not None
-            for v in [
-                code_execution,
-                googleSearch,
-                googleSearchRetrieval,
-                enterpriseWebSearch,
-                urlContext,
-                googleMaps,
-                computerUse,
-            ]
-        )
-        if gtool_func_declarations and has_builtin_tool:
-            optional_params["include_server_side_tool_invocations"] = True
 
         (
             googleSearch,
@@ -1314,7 +1316,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
 
-        self._maybe_enable_server_side_tool_invocations(optional_params)
+        self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
 
