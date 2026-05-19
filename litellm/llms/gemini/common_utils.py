@@ -2,7 +2,7 @@ import base64
 import datetime
 import json
 import math
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import httpx
 
@@ -32,6 +32,8 @@ GEMINI_IMAGE_ASPECT_RATIOS: Dict[str, float] = {
     "21:9": 21 / 9,
 }
 
+# Supported aspect ratio dimensions from Google Gemini image generation docs:
+# https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
 GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
     (512, 512): "1:1",
     (1024, 1024): "1:1",
@@ -130,7 +132,7 @@ def is_gemini_image_model(model: str) -> bool:
 def map_openai_image_params_to_gemini(
     params: Dict[str, Any],
     model: str,
-    supported_params: List[str],
+    supported_params: Sequence[str],
     optional_params: Optional[Dict[str, Any]] = None,
     parse_image_config_string: bool = False,
 ) -> Dict[str, Any]:

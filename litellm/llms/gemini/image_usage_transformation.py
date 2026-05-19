@@ -1,3 +1,5 @@
+from typing import Any
+
 from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
 
 
@@ -57,14 +59,15 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
         if output_tokens > known_output_tokens:
             output_tokens_details.text_tokens += output_tokens - known_output_tokens
 
-    return ImageUsage(
-        input_tokens=usage_metadata.get("promptTokenCount", 0),
-        input_tokens_details=input_tokens_details,
-        output_tokens=output_tokens,
-        total_tokens=usage_metadata.get("totalTokenCount", 0),
-        prompt_tokens=usage_metadata.get("promptTokenCount", 0),
-        prompt_tokens_details=input_tokens_details.model_dump(),
-        completion_tokens=output_tokens,
-        completion_tokens_details=output_tokens_details.model_dump(),
-        output_tokens_details=output_tokens_details.model_dump(),
-    )
+    usage_payload: dict[str, Any] = {
+        "input_tokens": usage_metadata.get("promptTokenCount", 0),
+        "input_tokens_details": input_tokens_details,
+        "output_tokens": output_tokens,
+        "total_tokens": usage_metadata.get("totalTokenCount", 0),
+        "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
+        "prompt_tokens_details": input_tokens_details.model_dump(),
+        "completion_tokens": output_tokens,
+        "completion_tokens_details": output_tokens_details.model_dump(),
+        "output_tokens_details": output_tokens_details.model_dump(),
+    }
+    return ImageUsage(**usage_payload)
