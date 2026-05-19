@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol, Tuple
 from urllib.parse import urlparse
@@ -185,12 +186,23 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
     }
 
 
+_OCI_REGION_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
+
+
 def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
     """Return the OCI inference base URL, respecting any explicit api_base override."""
     if api_base:
         return api_base.rstrip("/")
     creds = resolve_oci_credentials(optional_params)
     region = creds["oci_region"]
+    if not isinstance(region, str) or not _OCI_REGION_RE.match(region):
+        raise OCIError(
+            status_code=400,
+            message=(
+                f"Invalid OCI region {region!r}: must match "
+                "^[a-z][a-z0-9-]{0,30}[a-z0-9]$ (e.g. 'us-ashburn-1')."
+            ),
+        )
     return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
 
 

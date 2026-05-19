@@ -157,6 +157,48 @@ def test_get_oci_base_url_from_region():
     assert url == "https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
 
 
+@pytest.mark.parametrize(
+    "region",
+    [
+        "evil.com/#",
+        "evil.com",
+        "us-ashburn-1/../attacker",
+        "ATTACKER",
+        "-leading-hyphen",
+        "trailing-hyphen-",
+        "a",
+        "a" * 33,
+        "us ashburn 1",
+        "us_ashburn_1",
+    ],
+)
+def test_get_oci_base_url_rejects_unsafe_region(region):
+    with pytest.raises(OCIError, match="Invalid OCI region"):
+        get_oci_base_url({"oci_region": region})
+
+
+def test_get_oci_base_url_empty_region_falls_back_to_default(monkeypatch):
+    monkeypatch.delenv("OCI_REGION", raising=False)
+    url = get_oci_base_url({"oci_region": ""})
+    assert url == "https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com"
+
+
+@pytest.mark.parametrize(
+    "region",
+    [
+        "us-ashburn-1",
+        "eu-frankfurt-1",
+        "ap-tokyo-1",
+        "us-chicago-1",
+        "us-phoenix-1",
+        "ap",
+    ],
+)
+def test_get_oci_base_url_accepts_valid_region(region):
+    url = get_oci_base_url({"oci_region": region})
+    assert url == f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+
+
 # ---------------------------------------------------------------------------
 # validate_oci_environment
 # ---------------------------------------------------------------------------
