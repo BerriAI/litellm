@@ -111,6 +111,8 @@ def resolve_pr_gate_version(
             continue
         if not isinstance(raw_ts, str):
             continue
+        if "-" in version:
+            continue
         published = _parse_npm_timestamp(raw_ts)
         if published <= cutoff:
             eligible.append((published, version))
