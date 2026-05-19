@@ -982,6 +982,113 @@ def test_completion_cost_azure_common_deployment_name():
         assert "azure/gpt-4" == mock_client.call_args.kwargs["base_model"]
 
 
+def test_completion_cost_uses_conservative_video_fallback_without_usage():
+    model = "openai/test-video-cost-fallback"
+    input_cost_per_token = 0.25
+    max_input_tokens = 8
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": 0.0,
+                "max_tokens": max_input_tokens,
+                "max_input_tokens": max_input_tokens,
+                "max_output_tokens": 4,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "video_metadata": {
+                            "duration_seconds": 0,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+
+    try:
+        cost = completion_cost(
+            completion_response={"model": model, "usage": {}},
+            model=model,
+            messages=messages,
+            custom_llm_provider="openai",
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    assert cost == pytest.approx(max_input_tokens * input_cost_per_token)
+
+
+def test_completion_cost_uses_provider_video_usage_when_present():
+    model = "openai/test-video-provider-usage"
+    input_cost_per_token = 0.25
+    output_cost_per_token = 0.5
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+                "max_tokens": 128,
+                "max_input_tokens": 128,
+                "max_output_tokens": 16,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "video_metadata": {
+                            "duration_seconds": 0,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+
+    try:
+        cost = completion_cost(
+            completion_response={
+                "model": model,
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 3,
+                    "total_tokens": 5,
+                },
+            },
+            model=model,
+            messages=messages,
+            custom_llm_provider="openai",
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    assert cost == pytest.approx(
+        (2 * input_cost_per_token) + (3 * output_cost_per_token)
+    )
+
+
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
