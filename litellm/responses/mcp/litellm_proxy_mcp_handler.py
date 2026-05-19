@@ -248,23 +248,36 @@ class LiteLLM_Proxy_MCP_Handler:
         active_toolset_id: Optional[str] = None
         if effective_filter and len(effective_filter) == 1:
             requested_scope = effective_filter[0]
-            if not global_mcp_server_manager.get_mcp_server_by_name(requested_scope):
-                try:
-                    from litellm.proxy.proxy_server import prisma_client
+            if global_mcp_server_manager.get_mcp_server_by_name(requested_scope):
+                return effective_filter, active_toolset_id
+            try:
+                from litellm.proxy.proxy_server import _is_mcp_access_group_cached
 
-                    if prisma_client is not None:
-                        toolset = (
-                            await global_mcp_server_manager.get_toolset_by_name_cached(
-                                prisma_client, requested_scope
-                            )
+                if await _is_mcp_access_group_cached(requested_scope):
+                    return effective_filter, active_toolset_id
+            except Exception as _e:
+                verbose_logger.debug(
+                    f"Could not resolve LazyMCP scope '{requested_scope}' as access group: {_e}"
+                )
+            try:
+                from litellm.proxy.proxy_server import prisma_client
+
+                if prisma_client is not None:
+                    toolset = (
+                        await global_mcp_server_manager.get_toolset_by_name_cached(
+                            prisma_client, requested_scope
                         )
-                        if toolset is not None:
-                            active_toolset_id = toolset.toolset_id
-                            effective_filter = None
-                except Exception as _e:
-                    verbose_logger.debug(
-                        f"Could not resolve LazyMCP scope '{requested_scope}' as toolset: {_e}"
                     )
+                    if toolset is not None:
+                        active_toolset_id = toolset.toolset_id
+                        effective_filter = None
+                    else:
+                        effective_filter = []
+            except Exception as _e:
+                verbose_logger.debug(
+                    f"Could not resolve LazyMCP scope '{requested_scope}' as toolset: {_e}"
+                )
+                effective_filter = []
         return effective_filter, active_toolset_id
 
     @staticmethod
@@ -463,6 +476,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 client_ip=client_ip,
             )
 
+        # LazyMCP keeps the sentinel so unresolved Responses/Chat client IPs
+        # remain fail-closed in the catalog/IP filter instead of broadening.
         standard_client_ip = (
             None if client_ip == INVALID_MCP_CLIENT_IP_SENTINEL else client_ip
         )

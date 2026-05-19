@@ -15869,6 +15869,23 @@ async def root_lazymcp_route(request: Request):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+async def _lazymcp_forward_as_path(path_segment: str, request: Request):
+    """Rewrite path to /lazymcp/{path_segment} and stream the LazyMCP response.
+
+    LazyMCP uses a separate session manager from the standard MCP endpoint, so
+    this stays as a small wrapper instead of sharing _mcp_forward_as_path.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_lazymcp,
+    )
+
+    scope = dict(request.scope)
+    scope["path"] = f"/lazymcp/{path_segment}"
+    return await _stream_mcp_asgi_response(
+        handle_streamable_http_lazymcp, scope, request.receive
+    )
+
+
 @app.api_route(
     "/lazymcp/{mcp_server_name}/",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
@@ -15878,7 +15895,7 @@ async def root_lazymcp_route(request: Request):
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def dynamic_lazymcp_route(mcp_server_name: str, request: Request):
-    """Handle dynamic LazyMCP server routes like /lazymcp/github_mcp."""
+    """Handle /lazymcp/{name} for MCP servers, toolsets, access groups, and CSV lists."""
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -15893,14 +15910,28 @@ async def dynamic_lazymcp_route(mcp_server_name: str, request: Request):
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
-        scope = dict(request.scope)
-        scope["path"] = f"/lazymcp/{mcp_server_name}"
 
-        if mcp_server is None and prisma_client is not None:
+        if mcp_server is not None:
+            return await _lazymcp_forward_as_path(mcp_server_name, request)
+
+        if "," in mcp_server_name:
+            resolved_tokens = await _resolve_mcp_csv_tokens(mcp_server_name, client_ip)
+            if not resolved_tokens:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No MCP server, toolset, or access group in "
+                        f"'{mcp_server_name}' resolved to a known target"
+                    ),
+                )
+            return await _lazymcp_forward_as_path(",".join(resolved_tokens), request)
+
+        if prisma_client is not None:
             toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
                 prisma_client, mcp_server_name
             )
             if toolset is not None:
+                scope = dict(request.scope)
                 scope["path"] = "/lazymcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:
@@ -15910,10 +15941,12 @@ async def dynamic_lazymcp_route(mcp_server_name: str, request: Request):
                 finally:
                     _mcp_active_toolset_id.reset(token)
 
-        # Defer all remaining names (server, access-group, or invalid target) to
-        # the LazyMCP handler, which applies the existing group/permission resolver.
-        return await _stream_mcp_asgi_response(
-            handle_streamable_http_lazymcp, scope, request.receive
+        if await _is_mcp_access_group_cached(mcp_server_name):
+            return await _lazymcp_forward_as_path(mcp_server_name, request)
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"MCP server, toolset, or access group '{mcp_server_name}' not found",
         )
     except HTTPException as e:
         raise e

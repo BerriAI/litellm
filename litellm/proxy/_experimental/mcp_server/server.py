@@ -805,6 +805,9 @@ if MCP_AVAILABLE:
                         match_list = [
                             s.lower() for s in iter_known_server_prefixes(server) if s
                         ]
+                        server_name = getattr(server, "name", None)
+                        if server_name:
+                            match_list.append(str(server_name).lower())
 
                         if server_or_group.lower() in match_list:
                             filtered_server[server.server_id] = server
@@ -827,6 +830,9 @@ if MCP_AVAILABLE:
                         verbose_logger.debug(
                             f"Could not resolve '{server_or_group}' as access group: {e}"
                         )
+
+        if mcp_servers is not None:
+            return list(filtered_server.values())
 
         if filtered_server:
             return list(filtered_server.values())
@@ -2005,6 +2011,9 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache
 
+            # DualCache does not expose prefix invalidation, so this intentionally
+            # mirrors existing targeted invalidation paths and only touches the
+            # process-local dict. Redis entries expire quickly via the cache TTL.
             in_mem = getattr(user_api_key_cache, "in_memory_cache", None)
             cache_dict = getattr(in_mem, "cache_dict", {}) if in_mem else {}
             for key in [k for k in cache_dict if str(k).startswith("lazymcp:")]:
@@ -2059,6 +2068,28 @@ if MCP_AVAILABLE:
         )
         return apply_tool_overrides(tools, server)
 
+    def _build_lazymcp_catalog_description(servers: List[Dict[str, Any]]) -> str:
+        description_lines = [
+            "Describe MCP servers and tools available through the LiteLLM LazyMCP gateway.",
+            "",
+            "Available MCP servers:",
+        ]
+        if servers:
+            description_lines.extend(
+                f"- {item['name']}: {item['description']}" for item in servers
+            )
+        else:
+            description_lines.append("- No MCP servers are available for this request.")
+        description_lines.extend(
+            [
+                "",
+                'Call mcp_describe with {"server":"<name>"} to list tools for one server with input schemas.',
+                'Call mcp_describe with {"server":"<name>","tool":"<tool_name>"} to get details for one tool with its input schema.',
+                'Call mcp_call with {"server":"<name>","tool":"<tool_name>","arguments":{...}} to execute a tool.',
+            ]
+        )
+        return "\n".join(description_lines)
+
     async def _get_lazymcp_catalog(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
@@ -2096,6 +2127,7 @@ if MCP_AVAILABLE:
             return {
                 **cached,
                 "servers": filtered_servers,
+                "description": _build_lazymcp_catalog_description(filtered_servers),
                 "server_count": len(filtered_servers),
                 "tool_count": sum(
                     server.get("tool_count", 0) for server in filtered_servers
@@ -2135,28 +2167,9 @@ if MCP_AVAILABLE:
                 }
             )
 
-        description_lines = [
-            "Describe MCP servers and tools available through the LiteLLM LazyMCP gateway.",
-            "",
-            "Available MCP servers:",
-        ]
-        if servers:
-            description_lines.extend(
-                f"- {item['name']}: {item['description']}" for item in servers
-            )
-        else:
-            description_lines.append("- No MCP servers are available for this request.")
-        description_lines.extend(
-            [
-                "",
-                'Call mcp_describe with {"server":"<name>"} to list tools for one server with input schemas.',
-                'Call mcp_describe with {"server":"<name>","tool":"<tool_name>"} to get details for one tool with its input schema.',
-                'Call mcp_call with {"server":"<name>","tool":"<tool_name>","arguments":{...}} to execute a tool.',
-            ]
-        )
         catalog = {
             "servers": servers,
-            "description": "\n".join(description_lines),
+            "description": _build_lazymcp_catalog_description(servers),
             "server_count": len(servers),
             "tool_count": sum(item["tool_count"] for item in servers),
         }

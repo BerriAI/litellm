@@ -284,7 +284,7 @@ def test_get_requested_mcp_servers_handles_lazymcp_variants():
 @pytest.mark.asyncio
 async def test_resolve_lazymcp_scope_handles_server_toolset_and_errors(monkeypatch):
     server_manager = types.SimpleNamespace(
-        get_mcp_server_by_name=MagicMock(side_effect=[object(), None, None]),
+        get_mcp_server_by_name=MagicMock(side_effect=[object(), None, None, None]),
         get_toolset_by_name_cached=AsyncMock(
             side_effect=[
                 types.SimpleNamespace(toolset_id="toolset-1"),
@@ -292,7 +292,10 @@ async def test_resolve_lazymcp_scope_handles_server_toolset_and_errors(monkeypat
             ]
         ),
     )
-    proxy_module = types.SimpleNamespace(prisma_client=object())
+    proxy_module = types.SimpleNamespace(
+        prisma_client=object(),
+        _is_mcp_access_group_cached=AsyncMock(return_value=False),
+    )
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
     assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
@@ -303,7 +306,25 @@ async def test_resolve_lazymcp_scope_handles_server_toolset_and_errors(monkeypat
     ) == (None, "toolset-1")
     assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
         ["broken"], server_manager
-    ) == (["broken"], None)
+    ) == ([], None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_lazymcp_scope_keeps_access_group(monkeypatch):
+    server_manager = types.SimpleNamespace(
+        get_mcp_server_by_name=MagicMock(return_value=None),
+        get_toolset_by_name_cached=AsyncMock(return_value=None),
+    )
+    proxy_module = types.SimpleNamespace(
+        prisma_client=object(),
+        _is_mcp_access_group_cached=AsyncMock(return_value=True),
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    assert await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+        ["dev_group"], server_manager
+    ) == (["dev_group"], None)
+    server_manager.get_toolset_by_name_cached.assert_not_awaited()
 
 
 @pytest.mark.asyncio

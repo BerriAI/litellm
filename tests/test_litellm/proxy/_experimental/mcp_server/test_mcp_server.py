@@ -479,6 +479,9 @@ async def test_lazymcp_cached_catalog_rechecks_current_visibility(monkeypatch):
     assert catalog["server_count"] == 1
     assert catalog["tool_count"] == 1
     assert [server["name"] for server in catalog["servers"]] == ["visible"]
+    assert "visible" in catalog["description"]
+    assert "revoked" not in catalog["description"]
+    assert "must not leak" not in catalog["description"]
 
 
 @pytest.mark.asyncio
@@ -521,6 +524,8 @@ async def test_lazymcp_cached_catalog_hides_all_revoked_servers(monkeypatch):
     assert catalog["server_count"] == 0
     assert catalog["tool_count"] == 0
     assert catalog["servers"] == []
+    assert "revoked" not in catalog["description"]
+    assert "No MCP servers are available" in catalog["description"]
 
 
 def test_invalidating_toolset_cache_tolerates_lazymcp_invalidation_error():
@@ -788,12 +793,6 @@ def test_lazymcp_dynamic_route_falls_back_for_non_toolset(monkeypatch):
     async def fake_get_toolset(_prisma_client, _toolset_name):
         return None
 
-    async def fake_stream_response(_handle_fn, scope, _receive):
-        from starlette.responses import Response
-
-        assert scope["path"] == "/lazymcp/github"
-        return Response("ok", media_type="text/event-stream")
-
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
     monkeypatch.setattr(
         "litellm.proxy.auth.ip_address_utils.IPAddressUtils.get_mcp_client_ip",
@@ -808,12 +807,13 @@ def test_lazymcp_dynamic_route_falls_back_for_non_toolset(monkeypatch):
         fake_get_toolset,
     )
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+        "litellm.proxy.proxy_server._is_mcp_access_group_cached",
+        AsyncMock(return_value=False),
     )
 
     response = TestClient(app).get("/lazymcp/github", follow_redirects=False)
 
-    assert response.status_code == 200
+    assert response.status_code == 404
 
 
 def test_lazymcp_toolset_route_returns_404_for_missing_toolset(monkeypatch):
