@@ -330,6 +330,25 @@ def test_resolve_user_field_headers_does_not_evaluate_attribute_access():
     assert headers == {"Authorization": "Bearer {value.__class__}"}
 
 
+def test_resolve_user_field_headers_falls_back_on_non_string_template():
+    """A corrupt JSONB row may carry a non-string ``header_value_template``
+    (e.g. an int from an external write that bypassed the API). The resolver
+    must catch the resulting ``AttributeError`` from ``int.replace`` and fall
+    back to the raw user value rather than crashing the request path."""
+    srv = _gmail_server(
+        user_fields=[
+            {
+                "field_key": "TOKEN",
+                "header_name": "Authorization",
+                "header_value_template": 42,
+                "required": True,
+            }
+        ]
+    )
+    headers = resolve_user_field_headers(srv, {"TOKEN": "raw-tok"})
+    assert headers == {"Authorization": "raw-tok"}
+
+
 def test_resolve_user_field_headers_skips_entries_missing_header_name():
     """Stdio-only fields (no header_name) must not produce empty-name headers."""
     srv = MCPServer(
