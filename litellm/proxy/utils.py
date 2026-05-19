@@ -6103,16 +6103,39 @@ def create_model_info_response(
         llm_router: LiteLLM router instance
 
     Returns:
-        Dictionary containing model information
+        Dictionary containing model information. Always includes a
+        ``capabilities`` sub-object (S1-06) and a ``context_window`` /
+        ``max_output_tokens`` pair so downstream apps can decide whether
+        a model supports vision / tools / structured output etc. without
+        keeping their own provider matrix.
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    model_info = {
+    model_info: dict = {
         "id": model_id,
         "object": "model",
         "created": DEFAULT_MODEL_CREATED_AT_TIME,
         "owned_by": provider,
     }
+
+    # Capability discovery fields (S1-06). Best-effort: any failure inside the
+    # helper just yields an empty capabilities dict — never breaks the listing.
+    try:
+        from litellm.proxy.capability_endpoints.capability_endpoints import (
+            _compute_model_capability_flags,
+        )
+
+        row = (getattr(litellm, "model_cost", {}) or {}).get(model_id) or {}
+        flags = _compute_model_capability_flags(model_id, row)
+        model_info["capabilities"] = flags.model_dump()
+        if row.get("max_input_tokens") or row.get("max_tokens"):
+            model_info["context_window"] = row.get("max_input_tokens") or row.get(
+                "max_tokens"
+            )
+        if row.get("max_output_tokens"):
+            model_info["max_output_tokens"] = row.get("max_output_tokens")
+    except Exception:  # pragma: no cover — strictly additive metadata
+        pass
 
     # Add metadata if requested
     if include_metadata:

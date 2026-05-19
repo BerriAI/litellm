@@ -96,6 +96,58 @@ def _build_caller(user_api_key_dict: UserAPIKeyAuth) -> CapabilityCaller:
     )
 
 
+def _compute_model_capability_flags(
+    model_name: str, info: Dict[str, Any]
+) -> ModelCapabilityFlags:
+    """Snap booleans from litellm.utils.supports_* + the model_cost row.
+
+    Each ``supports_*`` helper takes (model, provider) and returns False if the
+    model isn't recognized — perfect default for unknown providers. We also
+    cross-check the ``info`` dict so unit tests that supply model_cost without
+    populating ``model_prices`` still get sensible values.
+    """
+    try:
+        from litellm.utils import (
+            supports_audio_input,
+            supports_audio_output,
+            supports_function_calling,
+            supports_pdf_input,
+            supports_prompt_caching,
+            supports_response_schema,
+            supports_vision,
+            supports_web_search,
+        )
+    except Exception:
+        return ModelCapabilityFlags()
+
+    provider = info.get("litellm_provider")
+
+    def _safe(fn, *args) -> bool:
+        try:
+            return bool(fn(*args))
+        except Exception:
+            return False
+
+    return ModelCapabilityFlags(
+        vision=_safe(supports_vision, model_name, provider)
+        or bool(info.get("supports_vision")),
+        function_calling=_safe(supports_function_calling, model_name, provider)
+        or bool(info.get("supports_function_calling")),
+        structured_output=_safe(supports_response_schema, model_name, provider)
+        or bool(info.get("supports_response_schema")),
+        prompt_caching=_safe(supports_prompt_caching, model_name, provider)
+        or bool(info.get("supports_prompt_caching")),
+        pdf_input=_safe(supports_pdf_input, model_name, provider)
+        or bool(info.get("supports_pdf_input")),
+        web_search=_safe(supports_web_search, model_name, provider)
+        or bool(info.get("supports_web_search")),
+        audio_input=_safe(supports_audio_input, model_name, provider)
+        or bool(info.get("supports_audio_input")),
+        audio_output=_safe(supports_audio_output, model_name, provider)
+        or bool(info.get("supports_audio_output")),
+    )
+
+
 def _build_model_summary(model_name: str, info: Dict[str, Any]) -> ModelSummary:
     return ModelSummary(
         id=model_name,
@@ -105,8 +157,7 @@ def _build_model_summary(model_name: str, info: Dict[str, Any]) -> ModelSummary:
         max_output_tokens=info.get("max_output_tokens"),
         input_cost_per_token=info.get("input_cost_per_token"),
         output_cost_per_token=info.get("output_cost_per_token"),
-        # capability flags filled in S1-06
-        capabilities=ModelCapabilityFlags(),
+        capabilities=_compute_model_capability_flags(model_name, info),
     )
 
 

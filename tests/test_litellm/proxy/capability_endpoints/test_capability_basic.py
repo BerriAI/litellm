@@ -452,9 +452,7 @@ class TestPublicCapabilities:
             litellm, "public_model_groups", ["model-public"], raising=False
         )
         monkeypatch.setattr(litellm, "public_agent_groups", ["agent-public"])
-        monkeypatch.setattr(
-            litellm, "public_mcp_groups", ["mcp-public"], raising=False
-        )
+        monkeypatch.setattr(litellm, "public_mcp_groups", ["mcp-public"], raising=False)
 
         agent_pub = MagicMock(
             agent_id="agent-public",
@@ -534,3 +532,66 @@ class TestPublicCapabilities:
             client.get("/.well-known/xct-capabilities")
             client.get("/.well-known/xct-capabilities")
             assert self.fake_registry.get_agent_list.call_count == 1
+
+
+# ============================================================================
+# S1-06: capability flags on ModelSummary + /v1/models response
+# ============================================================================
+
+
+def test_model_capability_flags_populate_from_supports_helpers(monkeypatch):
+    """ModelSummary.capabilities should reflect supports_* helper output."""
+    from litellm.proxy.capability_endpoints.capability_endpoints import (
+        _build_model_summary,
+    )
+
+    info = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        # Direct hints in the row so we test both fall-through paths.
+        "supports_vision": True,
+        "supports_function_calling": True,
+        "supports_pdf_input": True,
+        "supports_prompt_caching": True,
+        "supports_response_schema": True,
+    }
+    summary = _build_model_summary("gpt-4.1", info)
+    flags = summary.capabilities
+    assert flags.vision is True
+    assert flags.function_calling is True
+    assert flags.pdf_input is True
+    assert flags.prompt_caching is True
+    assert flags.structured_output is True
+    assert summary.context_window == 128000
+
+
+def test_create_model_info_response_includes_capabilities(monkeypatch):
+    """/v1/models response gains a 'capabilities' sub-dict from S1-06."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "gpt-4.1": {
+                "litellm_provider": "openai",
+                "max_input_tokens": 128000,
+                "max_output_tokens": 4096,
+                "supports_vision": True,
+                "supports_function_calling": True,
+            }
+        },
+    )
+
+    from litellm.proxy.utils import create_model_info_response
+
+    info = create_model_info_response(model_id="gpt-4.1", provider="openai")
+    assert "capabilities" in info
+    caps = info["capabilities"]
+    assert caps["vision"] is True
+    assert caps["function_calling"] is True
+    assert info["context_window"] == 128000
+    assert info["max_output_tokens"] == 4096
+    # original OpenAI-compatible fields preserved
+    assert info["id"] == "gpt-4.1"
+    assert info["object"] == "model"
