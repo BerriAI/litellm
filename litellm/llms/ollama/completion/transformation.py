@@ -21,7 +21,6 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
-    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     ProviderField,
@@ -222,9 +221,7 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_KEY")
         )
 
-    def get_model_info(
-        self, model: str, api_base: Optional[str] = None
-    ) -> ModelInfoBase:
+    def get_model_info(self, model: str, api_base: Optional[str] = None) -> Any:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
