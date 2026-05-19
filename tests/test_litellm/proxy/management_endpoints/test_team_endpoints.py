@@ -7943,3 +7943,103 @@ async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
                 user_api_key_dict=caller_auth,
             )
     assert exc_info.value.status_code == 404
+
+
+def _non_admin_auth():
+    return UserAPIKeyAuth(
+        user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+
+def test_check_passthrough_routes_caller_permission_team():
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.common_utils import (
+        _check_passthrough_routes_caller_permission,
+    )
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    non_admin = _non_admin_auth()
+
+    _check_passthrough_routes_caller_permission(
+        NewTeamRequest(allowed_passthrough_routes=["/foo/*"]), admin, entity="team"
+    )
+
+    _check_passthrough_routes_caller_permission(
+        NewTeamRequest(), non_admin, entity="team"
+    )
+    _check_passthrough_routes_caller_permission(
+        NewTeamRequest(allowed_passthrough_routes=[]), non_admin, entity="team"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        _check_passthrough_routes_caller_permission(
+            NewTeamRequest(allowed_passthrough_routes=["/admin/*"]),
+            non_admin,
+            entity="team",
+        )
+    assert exc.value.status_code == 403
+    assert "allowed_passthrough_routes" in str(exc.value.detail)
+    assert "team" in str(exc.value.detail)
+
+    with pytest.raises(HTTPException) as exc:
+        _check_passthrough_routes_caller_permission(
+            NewTeamRequest(metadata={"allowed_passthrough_routes": ["/admin/*"]}),
+            non_admin,
+            entity="team",
+        )
+    assert exc.value.status_code == 403
+    assert "metadata.allowed_passthrough_routes" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_new_team_blocks_non_admin_passthrough_routes(mock_db_client):
+    """A non-proxy-admin cannot self-grant pass-through routes via /team/new."""
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._check_user_team_limits",
+        AsyncMock(return_value=None),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await new_team(
+                data=NewTeamRequest(
+                    team_alias="t", allowed_passthrough_routes=["/admin/*"]
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+    assert str(exc.value.code) == "403"
+    assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
+    """Even a team manager (non-proxy-admin) cannot set pass-through routes via
+    /team/update — the gate runs after _verify_team_access."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing = MagicMock()
+    existing.model_dump.return_value = {"team_id": "t1"}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._verify_team_access",
+        AsyncMock(return_value=None),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id="t1", allowed_passthrough_routes=["/admin/*"]
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+    assert str(exc.value.code) == "403"
+    assert "allowed_passthrough_routes" in str(exc.value.message)
