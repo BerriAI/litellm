@@ -45,14 +45,44 @@ interface XCTAgentMarketplaceProps {
   onAgentAdded?: () => void;
 }
 
+// Fallback used only if the server-side config endpoint is unreachable.
+// Admins flip the live value via PUT /v1/xct-marketplace/config (S3-07).
 const DEFAULT_GATEWAY_URL = "https://xct-agents-production.up.railway.app";
 
 const XCTAgentMarketplace: React.FC<XCTAgentMarketplaceProps> = ({
   accessToken,
   isAdmin,
-  gatewayUrl = DEFAULT_GATEWAY_URL,
+  gatewayUrl: gatewayUrlProp,
   onAgentAdded,
 }) => {
+  const [resolvedGatewayUrl, setResolvedGatewayUrl] = useState<string>(
+    gatewayUrlProp || DEFAULT_GATEWAY_URL,
+  );
+  const gatewayUrl = resolvedGatewayUrl;
+
+  // Resolve the marketplace gateway URL from the proxy (S3-07).
+  useEffect(() => {
+    if (gatewayUrlProp || !accessToken) {
+      return;
+    }
+    let cancelled = false;
+    fetch(`/v1/xct-marketplace/config`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        if (!cancelled && cfg && cfg.gateway_url) {
+          setResolvedGatewayUrl(cfg.gateway_url);
+        }
+      })
+      .catch(() => {
+        /* fall back to DEFAULT_GATEWAY_URL */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, gatewayUrlProp]);
+
   const [agents, setAgents] = useState<XCTAgent[]>([]);
   const [filteredAgents, setFilteredAgents] = useState<XCTAgent[]>([]);
   const [loading, setLoading] = useState(false);

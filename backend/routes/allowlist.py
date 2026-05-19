@@ -56,6 +56,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/agents",
     # xct-native skills CRUD (admin/UI surface)
     "/v1/xct-skills",
+    # XCT agent marketplace config (admin/UI surface)
+    "/v1/xct-marketplace/",
     # Guardrails admin
     "/v2/guardrails/",
     # MCP server admin + BYOK OAuth flow (UI-initiated) + dynamic per-server endpoints
