@@ -657,8 +657,12 @@ def test_stream_chunk_builder_openai_audio_output_usage():
             stream_options={"include_usage": True},
         )
     except Exception as e:
-        if "openai-internal" in str(e):
+        err = str(e)
+        if "openai-internal" in err:
             pytest.skip("Skipping test due to openai-internal error")
+        if "model_not_found" in err or "does not exist" in err:
+            pytest.skip(f"Skipping test - upstream model unavailable: {err}")
+        raise
 
     chunks = []
     for chunk in completion:
