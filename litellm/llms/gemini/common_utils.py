@@ -14,7 +14,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
-
 GEMINI_IMAGE_ASPECT_RATIOS: Dict[str, float] = {
     "1:1": 1 / 1,
     "1:4": 1 / 4,
