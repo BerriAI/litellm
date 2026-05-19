@@ -5639,15 +5639,30 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
     from litellm.caching.dual_cache import DualCache
 
     counter_cache = DualCache()
+    redis_store: dict = {}
+    recorded_seeds: list = []
     recorded_increments: list = []
 
+    async def record_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
+        recorded_seeds.append({"key": key, "value": value})
+        return True
+
     async def record_increment(key, value, ttl=None, **kwargs):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
         recorded_increments.append({"key": key, "value": value, "ttl": ttl})
-        return value
+        return redis_store[key]
+
+    async def redis_get(key, **_):
+        return redis_store.get(key)
 
     fake_redis = AsyncMock()
     fake_redis.async_increment = AsyncMock(side_effect=record_increment)
-    fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
+    fake_redis.async_set_cache = AsyncMock(side_effect=record_set_cache)
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
     counter_cache.redis_cache = fake_redis
 
     # Prisma returns spend=42.0 (authoritative) while the stale cached
@@ -5684,10 +5699,14 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
             where={"team_id": "team-9"}
         )
-        # Two increments keyed on the counter: seed ($42) then request ($1.50).
-        writes = [(c["key"], c["value"]) for c in recorded_increments]
-        assert ("spend:team:team-9", 42.0) in writes
-        assert ("spend:team:team-9", 1.5) in writes
+        # Seed write goes through SET NX (idempotent across pods); the
+        # request-cost write goes through INCRBYFLOAT.
+        assert ("spend:team:team-9", 42.0) in [
+            (s["key"], s["value"]) for s in recorded_seeds
+        ]
+        assert ("spend:team:team-9", 1.5) in [
+            (c["key"], c["value"]) for c in recorded_increments
+        ]
     finally:
         ps.user_api_key_cache = orig_user
         ps.spend_counter_cache = orig_counter
@@ -5813,12 +5832,23 @@ async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
 
     redis_store: dict = {}
 
+    async def redis_get(key, **_):
+        return redis_store.get(key)
+
+    async def redis_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
     async def redis_increment(key, value, **_):
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
     fake_redis = AsyncMock()
-    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
@@ -6237,15 +6267,23 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
     from litellm.proxy.proxy_server import get_current_spend
 
     counter_cache = DualCache()
+    redis_store: dict = {}
     recorded_warms: list = []
 
-    async def record_increment(key, value, ttl=None, **kwargs):
+    async def redis_get(key, **_):
+        return redis_store.get(key)
+
+    async def record_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
         recorded_warms.append({"key": key, "value": value})
-        return value
+        return True
 
     fake_redis = AsyncMock()
-    fake_redis.async_increment = AsyncMock(side_effect=record_increment)
-    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_set_cache = AsyncMock(side_effect=record_set_cache)
     counter_cache.redis_cache = fake_redis
 
     # DB has authoritative spend=362.0; caller hands us stale fallback=30.0
@@ -6269,7 +6307,7 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
             f"expected DB reseed to return 362.0, got {spend} "
             f"(fallback would have returned 30.0 and caused bypass)"
         )
-        # Counter warmed so subsequent reads are fast
+        # Counter warmed via SET NX so subsequent reads are fast
         assert ("spend:team_member:user-1:team-1", 362.0) in [
             (w["key"], w["value"]) for w in recorded_warms
         ]
@@ -6344,11 +6382,19 @@ async def test_get_current_spend_coalesces_concurrent_reseeds():
     async def redis_get(key, **_):
         return redis_store.get(key)
 
+    async def redis_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
     async def redis_increment(key, value, **_):
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
@@ -6376,6 +6422,135 @@ async def test_get_current_spend_coalesces_concurrent_reseeds():
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_coalesced_reseed_idempotent_under_concurrent_multi_pod_reseed(
+    monkeypatch,
+):
+    """
+    Regression: multiple pods racing to reseed the same Redis spend counter
+    must not multiply db_spend. Before this fix, the reseed used INCRBYFLOAT
+    and produced N * db_spend across N pods because the per-process
+    asyncio.Lock added for singleflight provides no cross-pod coordination.
+    The reseed now uses SET NX so only the first writer seeds db_spend and
+    losers read the winner's value, mirroring coalesced_window().
+
+    Simulates N pods by giving each concurrent caller its own asyncio.Lock
+    (defeating the per-process singleflight, which does not exist across pods
+    in real deployments).
+    """
+    import asyncio as _asyncio
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    # 1) Defeat the per-process singleflight so each caller models a distinct pod.
+    async def _fresh_lock(_counter_key):
+        return _asyncio.Lock()
+
+    monkeypatch.setattr(SpendCounterReseed, "_get_lock", staticmethod(_fresh_lock))
+
+    # 2) Shared "Redis" backed by a dict + internal lock (single Redis instance
+    #    shared across pods).
+    class _SharedFakeRedis:
+        def __init__(self) -> None:
+            self.store: dict = {}
+            self._lock = _asyncio.Lock()
+
+        async def async_get_cache(self, key, **_kwargs):
+            async with self._lock:
+                return self.store.get(key)
+
+        async def async_set_cache(self, key, value, **kwargs):
+            nx = kwargs.get("nx", False)
+            async with self._lock:
+                if nx and key in self.store:
+                    return False
+                self.store[key] = value
+                return True
+
+        async def async_increment(self, key, value, **_kwargs):
+            async with self._lock:
+                self.store[key] = float(self.store.get(key, 0.0)) + float(value)
+                return self.store[key]
+
+    fake_redis = _SharedFakeRedis()
+    spend_cache = DualCache()
+    spend_cache.redis_cache = fake_redis  # type: ignore[assignment]
+
+    # 3) DB always reports the same authoritative spend.
+    db_spend = 100.0
+
+    async def _fake_from_db(_prisma, _counter_key):
+        return db_spend
+
+    monkeypatch.setattr(SpendCounterReseed, "from_db", staticmethod(_fake_from_db))
+
+    counter_key = "spend:user:test-user-multi-pod"
+    n_pods = 5
+    results = await _asyncio.gather(
+        *[
+            SpendCounterReseed.coalesced(
+                prisma_client=None,
+                spend_counter_cache=spend_cache,
+                counter_key=counter_key,
+            )
+            for _ in range(n_pods)
+        ]
+    )
+
+    assert all(
+        r == db_spend for r in results
+    ), f"all callers should see db_spend={db_spend}, got {results}"
+    assert fake_redis.store[counter_key] == db_spend, (
+        f"Redis counter must equal db_spend after concurrent reseed, "
+        f"got {fake_redis.store[counter_key]} (would be "
+        f"{n_pods * db_spend} under non-idempotent INCRBYFLOAT)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_coalesced_reseed_toctou_fallback_uses_increment_when_winner_key_vanishes():
+    """
+    Edge case: SET NX returns False (another pod seeded first), but the
+    follow-up GET returns None (the winner's key already expired between
+    NX and GET). In this narrow window, the loser falls back to
+    INCRBYFLOAT so the cache is still warmed. Matches coalesced_window()'s
+    behaviour for the same TOCTOU window.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_set_cache = AsyncMock(return_value=False)
+    fake_redis.async_increment = AsyncMock(return_value=42.0)
+
+    spend_cache = DualCache()
+    spend_cache.redis_cache = fake_redis  # type: ignore[assignment]
+
+    async def _fake_from_db(_prisma, _counter_key):
+        return 42.0
+
+    monkeypatch_target = SpendCounterReseed
+    original_from_db = monkeypatch_target.from_db
+    monkeypatch_target.from_db = staticmethod(_fake_from_db)  # type: ignore[method-assign]
+    try:
+        result = await SpendCounterReseed.coalesced(
+            prisma_client=None,
+            spend_counter_cache=spend_cache,
+            counter_key="spend:user:test-toctou",
+        )
+    finally:
+        monkeypatch_target.from_db = staticmethod(original_from_db)  # type: ignore[method-assign]
+
+    assert result == 42.0
+    fake_redis.async_set_cache.assert_awaited_once()
+    fake_redis.async_get_cache.assert_awaited()
+    fake_redis.async_increment.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -6452,12 +6627,20 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
     async def redis_get(key, **_):
         return redis_store.get(key)
 
+    async def redis_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
     async def redis_increment(key, value, **_):
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
@@ -6557,12 +6740,20 @@ async def test_reseed_warms_cache_even_on_zero_db_spend():
     async def redis_get(key, **_):
         return redis_store.get(key)
 
+    async def redis_set_cache(key, value, **kwargs):
+        nx = kwargs.get("nx", False)
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = value
+        return True
+
     async def redis_increment(key, value, **_):
         redis_store[key] = (redis_store.get(key) or 0.0) + value
         return redis_store[key]
 
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(side_effect=redis_get)
+    fake_redis.async_set_cache = AsyncMock(side_effect=redis_set_cache)
     fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
     counter_cache.redis_cache = fake_redis
 
