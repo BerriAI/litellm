@@ -1,4 +1,7 @@
+import ipaddress
+import socket
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
+from urllib.parse import urlparse
 
 import aiohttp
 import httpx  # type: ignore
@@ -30,6 +33,39 @@ else:
     LiteLLMLoggingObj = Any
 
 DEFAULT_TIMEOUT = 600
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+
+def _assert_not_private_url(url: str) -> None:
+    """Raise ValueError if url resolves to a private/reserved IP (SSRF protection)."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return
+    try:
+        resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+    except socket.gaierror:
+        return  # DNS failure — request will fail naturally
+    try:
+        addr = ipaddress.ip_address(resolved_ip)
+    except ValueError:
+        return
+    for net in _BLOCKED_NETWORKS:
+        if addr in net:
+            raise ValueError(
+                f"api_base '{url}' resolves to a private/reserved IP address "
+                f"({resolved_ip}) which is not allowed (SSRF protection)"
+            )
 
 
 class BaseLLMAIOHTTPHandler:
@@ -190,6 +226,8 @@ class BaseLLMAIOHTTPHandler:
         async_client_session = self._get_async_client_session(
             dynamic_client_session=async_client_session
         )
+
+        _assert_not_private_url(api_base)
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
