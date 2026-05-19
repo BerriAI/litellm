@@ -97,13 +97,13 @@ class _SSRFGuardResolver(AbstractResolver):
     async def resolve(
         self, host: str, port: int = 0, family: int = socket.AF_INET
     ) -> list:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             infos = await loop.getaddrinfo(
                 host, port, family=family, type=socket.SOCK_STREAM
             )
         except socket.gaierror:
-            return []  # Let aiohttp surface the connection error naturally
+            raise  # Propagate so aiohttp wraps it in a ClientConnectorError
         for info in infos:
             raw_ip = info[4][0]
             try:
