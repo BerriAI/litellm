@@ -1,0 +1,289 @@
+from dataclasses import dataclass, field
+from typing import Dict, FrozenSet, List, Optional, Tuple
+
+
+OMIT = object()
+
+
+@dataclass(frozen=True)
+class CellExpectation:
+    status: int
+    thinking_type: object
+    output_config_effort: object = OMIT
+    thinking_budget_tokens: object = OMIT
+    max_tokens: object = OMIT
+
+
+@dataclass(frozen=True)
+class ModelEntry:
+    alias: str
+    model: str
+    mode: str
+    extra_params: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
+    required_env: FrozenSet[str] = field(default_factory=frozenset)
+    caps: FrozenSet[str] = field(default_factory=frozenset)
+
+    def params(self) -> Dict[str, str]:
+        return dict(self.extra_params)
+
+
+EFFORTS: Tuple[str, ...] = (
+    "__omit__",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "disabled",
+    "invalid",
+    "",
+)
+
+_BUDGET_TOKENS: Dict[str, int] = {
+    "minimal": 1024,
+    "low": 1024,
+    "medium": 2048,
+    "high": 4096,
+    "xhigh": 8192,
+    "max": 16384,
+}
+
+_ADAPTIVE_EFFORT_LABEL: Dict[str, str] = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+_BAD_REQUEST_EFFORTS: FrozenSet[str] = frozenset({"disabled", "invalid", ""})
+
+
+def expected(model: ModelEntry, effort: str) -> CellExpectation:
+    if effort in ("__omit__", "none"):
+        if model.mode == "budget":
+            return CellExpectation(status=200, thinking_type=OMIT, max_tokens=8192)
+        return CellExpectation(status=200, thinking_type=OMIT)
+
+    if effort in _BAD_REQUEST_EFFORTS:
+        return CellExpectation(status=400, thinking_type=OMIT)
+
+    if effort in ("xhigh", "max"):
+        cap = f"supports_{effort}_reasoning_effort"
+        if cap not in model.caps:
+            return CellExpectation(status=400, thinking_type=OMIT)
+
+    if model.mode == "adaptive":
+        return CellExpectation(
+            status=200,
+            thinking_type="adaptive",
+            output_config_effort=_ADAPTIVE_EFFORT_LABEL[effort],
+        )
+
+    return CellExpectation(
+        status=200,
+        thinking_type="enabled",
+        thinking_budget_tokens=_BUDGET_TOKENS[effort],
+        max_tokens=8192,
+    )
+
+
+_ANTHROPIC_REQ = frozenset({"ANTHROPIC_API_KEY"})
+_AZURE_FOUNDRY_REQ = frozenset({"AZURE_FOUNDRY_API_BASE", "AZURE_FOUNDRY_API_KEY"})
+_VERTEX_REQ = frozenset({"VERTEX_PROJECT"})
+_BEDROCK_REQ = frozenset({"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
+
+
+_CAPS_OPUS_4_7: FrozenSet[str] = frozenset(
+    {"supports_xhigh_reasoning_effort", "supports_max_reasoning_effort"}
+)
+_CAPS_4_6: FrozenSet[str] = frozenset({"supports_max_reasoning_effort"})
+_CAPS_NONE: FrozenSet[str] = frozenset()
+
+
+ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="claude-opus-4-7",
+        model="anthropic/claude-opus-4-7",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
+        alias="claude-sonnet-4-6",
+        model="anthropic/claude-sonnet-4-6",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="claude-haiku-4-5",
+        model="anthropic/claude-haiku-4-5",
+        mode="budget",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_NONE,
+    ),
+)
+
+
+AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="azure-claude-opus-4-7",
+        model="azure_ai/claude-opus-4-7",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
+        alias="azure-claude-opus-4-6",
+        model="azure_ai/claude-opus-4-6",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="azure-claude-sonnet-4-6",
+        model="azure_ai/claude-sonnet-4-6",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="azure-claude-haiku-4-5",
+        model="azure_ai/claude-haiku-4-5",
+        mode="budget",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_NONE,
+    ),
+)
+
+
+VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="vertex-claude-opus-4-7",
+        model="vertex_ai/claude-opus-4-7",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
+        alias="vertex-claude-opus-4-6",
+        model="vertex_ai/claude-opus-4-6",
+        mode="adaptive",
+        extra_params=(("vertex_location", "us-east5"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="vertex-claude-sonnet-4-6",
+        model="vertex_ai/claude-sonnet-4-6",
+        mode="adaptive",
+        extra_params=(("vertex_location", "us-east5"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="vertex-claude-haiku-4-5",
+        model="vertex_ai/claude-haiku-4-5",
+        mode="budget",
+        extra_params=(("vertex_location", "us-east5"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_NONE,
+    ),
+)
+
+
+BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="bedrock-claude-opus-4-7",
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_OPUS_4_7,
+    ),
+    ModelEntry(
+        alias="bedrock-claude-opus-4-6",
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="bedrock-claude-sonnet-4-6",
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="bedrock-claude-sonnet-4-5",
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        mode="budget",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_NONE,
+    ),
+)
+
+
+BEDROCK_INVOKE_CHAT_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="bedrock-invoke-claude-opus-4-6",
+        model="bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="bedrock-invoke-claude-sonnet-4-6",
+        model="bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_4_6,
+    ),
+    ModelEntry(
+        alias="bedrock-invoke-claude-opus-4-5",
+        model="bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        mode="budget",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_NONE,
+    ),
+)
+
+
+BEDROCK_INVOKE_MESSAGES_MODELS: Tuple[ModelEntry, ...] = BEDROCK_INVOKE_CHAT_MODELS
+
+
+@dataclass(frozen=True)
+class Route:
+    name: str
+    models: Tuple[ModelEntry, ...]
+
+
+ROUTES: Tuple[Route, ...] = (
+    Route("anthropic_direct", ANTHROPIC_DIRECT_MODELS),
+    Route("azure_ai", AZURE_AI_MODELS),
+    Route("vertex_ai", VERTEX_AI_MODELS),
+    Route("bedrock_converse", BEDROCK_CONVERSE_MODELS),
+    Route("bedrock_invoke_chat", BEDROCK_INVOKE_CHAT_MODELS),
+    Route("bedrock_invoke_messages", BEDROCK_INVOKE_MESSAGES_MODELS),
+)
+
+
+def all_cells() -> List[Tuple[str, ModelEntry, str, CellExpectation]]:
+    cells: List[Tuple[str, ModelEntry, str, CellExpectation]] = []
+    for route in ROUTES:
+        for model in route.models:
+            for effort in EFFORTS:
+                cells.append((route.name, model, effort, expected(model, effort)))
+    return cells

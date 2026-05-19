@@ -3788,10 +3788,10 @@ def test_public_get_available_deployment_skips_blocked_on_primary_path():
 
 
 def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
-    from litellm.types.router import RouterRateLimitErrorBasic
+    import litellm
 
     router = _router_with_two_deployments([True, True])
-    with pytest.raises(RouterRateLimitErrorBasic):
+    with pytest.raises(litellm.ServiceUnavailableError):
         router.get_available_deployment(model="dep-0", request_kwargs={})
 
 
@@ -3823,10 +3823,10 @@ def test_get_available_deployment_for_pass_through_skips_blocked():
 
 
 def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
-    from litellm.types.router import RouterRateLimitErrorBasic
+    import litellm
 
     router = _router_with_two_pass_through_deployments([True, True])
-    with pytest.raises(RouterRateLimitErrorBasic):
+    with pytest.raises(litellm.ServiceUnavailableError):
         router.get_available_deployment_for_pass_through(
             model="pt-0", request_kwargs={}
         )
@@ -3842,3 +3842,28 @@ def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deplo
     router = _router_with_two_deployments([True, False])
     assert router.get_deployment_credentials_with_provider(model_id="dep-0") is None
     assert router.get_deployment_credentials_with_provider(model_id="dep-1") is not None
+
+
+def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
+    """
+    Exercises Router._is_deployment_blocked so router_code_coverage.py (AST call graph)
+    marks the helper as covered by router-named tests.
+    """
+    import types
+
+    import litellm
+
+    router = _router_with_two_deployments([True, False])
+    blocked_dep = router.get_deployment("dep-0")
+    unblocked_dep = router.get_deployment("dep-1")
+    assert blocked_dep is not None and unblocked_dep is not None
+    assert litellm.Router._is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router._is_deployment_blocked(unblocked_dep) is False
+
+    # No model_info on deployment object → treated as not blocked
+    assert litellm.Router._is_deployment_blocked(object()) is False
+    missing_blocked = types.SimpleNamespace()
+    assert litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
+    assert litellm.Router._is_deployment_blocked(
+        types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
+    ) is True

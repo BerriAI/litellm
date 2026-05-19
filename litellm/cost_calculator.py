@@ -365,21 +365,21 @@ def cost_per_token(  # noqa: PLR0915
         if _pt_details is not None:
             _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
             # OpenAI-compatible providers report cache-write tokens under
-            # either `cache_creation_tokens` or `cache_write_tokens` (kimi-k2
-            # uses the latter). Mirror db_spend_update_writer to stay symmetric.
+            # either `cache_write_tokens` (kimi-k2) or `cache_creation_tokens`.
+            # Mirror db_spend_update_writer to stay symmetric.
             _cache_creation_tokens = float(
-                getattr(_pt_details, "cache_creation_tokens", 0)
-                or getattr(_pt_details, "cache_write_tokens", 0)
+                getattr(_pt_details, "cache_write_tokens", 0)
+                or getattr(_pt_details, "cache_creation_tokens", 0)
                 or 0
             )
 
         _anthropic_read = getattr(usage_object, "cache_read_input_tokens", None)
         _anthropic_create = getattr(usage_object, "cache_creation_input_tokens", None)
-        if _anthropic_read or _anthropic_create:
+        if _anthropic_read is not None or _anthropic_create is not None:
             _is_anthropic_style = True
-            if _anthropic_read:
+            if _anthropic_read is not None:
                 _cache_read_tokens = float(_anthropic_read)
-            if _anthropic_create:
+            if _anthropic_create is not None:
                 _cache_creation_tokens = float(_anthropic_create)
 
     if not _cache_read_tokens and cache_read_input_tokens:
@@ -2194,6 +2194,26 @@ def batch_cost_calculator(
             )
         except Exception:
             model_info = None
+    elif not any(
+        model_info.get(k) is not None
+        for k in (
+            "input_cost_per_token_batches",
+            "input_cost_per_token",
+            "output_cost_per_token_batches",
+            "output_cost_per_token",
+        )
+    ):
+        # model_info was provided (e.g. deployment metadata with only id/db_model)
+        # but carries no pricing fields. Fall back to the global pricing table so
+        # that standard model pricing is used instead of silently returning $0.
+        try:
+            global_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            if global_info:
+                model_info = global_info
+        except Exception:
+            pass
 
     if not model_info:
         return 0.0, 0.0

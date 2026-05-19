@@ -30,23 +30,43 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
 
+_warned_invalid_proxy_base_url: Optional[str] = None
+
+
+def _resolve_proxy_base_url_env() -> Optional[str]:
+    global _warned_invalid_proxy_base_url
+    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    if not configured:
+        return None
+    parsed = urlparse(configured)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        return normalized.rstrip("/")
+    if _warned_invalid_proxy_base_url != configured:
+        verbose_logger.warning(
+            "PROXY_BASE_URL=%r is not a valid http(s) URL (missing scheme "
+            "or host) and will be ignored for MCP OAuth origin resolution. "
+            "Set it to a full URL like https://litellm.example.com.",
+            configured,
+        )
+        _warned_invalid_proxy_base_url = configured
+    return None
+
+
 def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
-
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
+    Resolution order: ``PROXY_BASE_URL`` env var, then X-Forwarded-* when
+    the caller is a trusted proxy (``use_x_forwarded_for`` enabled AND
+    caller in ``mcp_trusted_proxy_ranges``), otherwise the request's
+    literal ``base_url``. Untrusted callers cannot poison OAuth-discovery
+    / redirect_uri values by injecting headers.
     """
+    configured = _resolve_proxy_base_url_env()
+    if configured:
+        return configured
+
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
 
@@ -284,4 +304,22 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             if _matches_trusted_origin_entry(redirect_netloc, entry):
                 return
 
+    verbose_logger.warning(
+        "MCP OAuth: rejecting redirect_uri %r as invalid_request. "
+        "Computed proxy base=%r (PROXY_BASE_URL=%r). "
+        "Inbound headers: X-Forwarded-Proto=%r X-Forwarded-Host=%r "
+        "X-Forwarded-Port=%r Host=%r. "
+        "Trusted-redirect-origins env=%r. "
+        "If this should be accepted, either align ingress X-Forwarded-* "
+        "with the browser URL, set PROXY_BASE_URL to your public origin, "
+        "or add the redirect_uri host to MCP_TRUSTED_REDIRECT_ORIGINS.",
+        redirect_uri,
+        proxy_base,
+        os.environ.get("PROXY_BASE_URL"),
+        request.headers.get("X-Forwarded-Proto"),
+        request.headers.get("X-Forwarded-Host"),
+        request.headers.get("X-Forwarded-Port"),
+        request.headers.get("Host"),
+        os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV),
+    )
     raise HTTPException(status_code=400, detail="invalid_request")
