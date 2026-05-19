@@ -22,12 +22,15 @@ everything. Non-admin gets:
   - skills: still stub until S2-04.
 """
 
-from typing import Any, Dict, List
+import hashlib
+import os
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.capabilities import (
@@ -42,6 +45,35 @@ from litellm.types.capabilities import (
 )
 
 router = APIRouter()
+
+# 60s TTL is short enough that permission changes propagate quickly without
+# hammering the registry/DB on every UI render. Override via env in tests.
+CAPABILITIES_CACHE_TTL = int(os.environ.get("LITELLM_CAPABILITIES_CACHE_TTL", "60"))
+# Singleton DualCache; populated lazily so test code can swap it.
+_capabilities_cache: Optional[DualCache] = None
+
+
+def _get_capabilities_cache() -> DualCache:
+    global _capabilities_cache
+    if _capabilities_cache is None:
+        _capabilities_cache = DualCache(
+            default_in_memory_ttl=CAPABILITIES_CACHE_TTL,
+            default_redis_ttl=CAPABILITIES_CACHE_TTL,
+        )
+    return _capabilities_cache
+
+
+def _hash_token(token: Optional[str]) -> str:
+    """Stable, non-reversible identifier for cache keys."""
+    return hashlib.sha256((token or "anon").encode("utf-8")).hexdigest()[:16]
+
+
+def _capabilities_cache_key(uak: UserAPIKeyAuth) -> str:
+    """Cache key = (hashed token, app_id). Different callers never share entries."""
+    return "capabilities:{token}:{app}".format(
+        token=_hash_token(uak.api_key),
+        app=getattr(uak, "app_id", None) or "none",
+    )
 
 
 def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -259,9 +291,30 @@ async def _collect_access_groups() -> List[AccessGroupSummary]:
 async def get_capabilities(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> CapabilitiesResponse:
-    """Return capabilities visible to the caller (admin: full; else: scoped)."""
+    """Return capabilities visible to the caller (admin: full; else: scoped).
+
+    Result is cached for ``CAPABILITIES_CACHE_TTL`` seconds keyed on the
+    caller's hashed token + app_id. Permission/grant changes propagate at
+    most that fast; ``invalidate_capabilities_cache_for_caller`` lets us
+    punch the entry sooner from key/team mutation handlers (wired in S4).
+    """
+    cache = _get_capabilities_cache()
+    cache_key = _capabilities_cache_key(user_api_key_dict)
+
+    hit = await cache.async_get_cache(cache_key)
+    if hit is not None:
+        _record_cache_metric(hit=True)
+        # DualCache stores either a Pydantic model or its dict form depending
+        # on serializer. Normalize back to the response model.
+        if isinstance(hit, CapabilitiesResponse):
+            return hit
+        if isinstance(hit, dict):
+            return CapabilitiesResponse(**hit)
+
+    _record_cache_metric(hit=False)
+
     admin = _is_admin(user_api_key_dict)
-    return CapabilitiesResponse(
+    response = CapabilitiesResponse(
         caller=_build_caller(user_api_key_dict),
         models=_collect_models(user_api_key_dict, admin=admin),
         agents=await _collect_agents(user_api_key_dict, admin=admin),
@@ -269,3 +322,45 @@ async def get_capabilities(
         skills=await _collect_skills(),
         access_groups=await _collect_access_groups(),
     )
+    await cache.async_set_cache(cache_key, response, ttl=CAPABILITIES_CACHE_TTL)
+    return response
+
+
+def _record_cache_metric(*, hit: bool) -> None:
+    """Increment Prometheus counters if Prometheus is enabled. No-op otherwise."""
+    try:
+        from prometheus_client import Counter  # type: ignore
+
+        global _capabilities_cache_hit, _capabilities_cache_miss
+        if "_capabilities_cache_hit" not in globals():
+            _capabilities_cache_hit = Counter(
+                "litellm_capability_cache_hit_total",
+                "Number of /v1/capabilities responses served from cache.",
+            )
+            _capabilities_cache_miss = Counter(
+                "litellm_capability_cache_miss_total",
+                "Number of /v1/capabilities responses computed (cache miss).",
+            )
+        (_capabilities_cache_hit if hit else _capabilities_cache_miss).inc()
+    except Exception:  # pragma: no cover — metrics are best-effort
+        pass
+
+
+async def invalidate_capabilities_cache_for_caller(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Punch a specific caller's cache entry.
+
+    Wired from key/team mutation paths once those handlers grow the
+    capability-aware logic; safe to call from anywhere — silently no-ops
+    if the cache hasn't been initialized yet.
+    """
+    cache = _get_capabilities_cache()
+    try:
+        await cache.async_delete_cache(_capabilities_cache_key(user_api_key_dict))
+    except AttributeError:
+        # Older DualCache without async_delete_cache; fall back to set with
+        # a 1-second TTL, expiring within the next polling window.
+        await cache.async_set_cache(
+            _capabilities_cache_key(user_api_key_dict), None, ttl=1
+        )

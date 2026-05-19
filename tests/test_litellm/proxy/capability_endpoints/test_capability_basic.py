@@ -340,3 +340,76 @@ class TestCapabilitiesScoping:
         }
         # MCPs without explicit grants -> none.
         assert body["mcps"] == []
+
+
+# ============================================================================
+# S1-04: caching
+# ============================================================================
+
+
+class TestCapabilitiesCache:
+    """The result is cached per (token, app_id). Same caller hitting back-to-
+    back should not re-walk the registry; different caller key gets its own."""
+
+    @pytest.fixture(autouse=True)
+    def _wire(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        monkeypatch.setattr(litellm, "public_agent_groups", [])
+
+        self.fake_registry = MagicMock()
+        self.fake_registry.get_agent_list = MagicMock(return_value=[])
+        self.fake_manager = MagicMock()
+        self.fake_manager.get_registered_mcp_servers = MagicMock(return_value=[])
+
+        # Reset the module-level cache so each test starts cold.
+        import litellm.proxy.capability_endpoints.capability_endpoints as mod
+
+        mod._capabilities_cache = None
+
+    def _client(self, token="sk-test"):
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="u-1",
+            team_id="t-1",
+            api_key=token,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        return TestClient(app)
+
+    def test_same_caller_hits_cache_on_second_call(self):
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+        ):
+            client = self._client()
+            r1 = client.get("/v1/capabilities", headers={"Authorization": "Bearer k"})
+            r2 = client.get("/v1/capabilities", headers={"Authorization": "Bearer k"})
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            # Registry walked exactly once between the two requests.
+            assert self.fake_registry.get_agent_list.call_count == 1
+
+    def test_different_caller_keys_have_separate_cache_entries(self):
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                self.fake_registry,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                self.fake_manager,
+            ),
+        ):
+            # Each caller flips a brand-new client (different token).
+            c1 = self._client(token="sk-caller-A")
+            c2 = self._client(token="sk-caller-B")
+            c1.get("/v1/capabilities", headers={"Authorization": "Bearer kA"})
+            c2.get("/v1/capabilities", headers={"Authorization": "Bearer kB"})
+            assert self.fake_registry.get_agent_list.call_count == 2
