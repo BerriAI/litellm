@@ -1741,50 +1741,45 @@ async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation
         assert fallback_kwargs["messages"] == messages
 
 
-@pytest.mark.asyncio
-async def test_aresponses_streaming_iterator_fallback():
-    """_aresponses_streaming_iterator should catch MidStreamFallbackError and
-    re-enter the Router's fallback chain — parity with the chat-completions
-    streaming path. Mirrors test_acompletion_streaming_iterator for aresponses.
+# ---------------------------------------------------------------------------
+# Shared helpers for the _aresponses_streaming_iterator test suite.
+# ---------------------------------------------------------------------------
+def _make_responses_iterator(
+    *,
+    chunks=(),
+    error=None,
+    bridge=False,
+    model="gpt-4",
+    hidden_params=None,
+    chat_chunks=None,
+):
+    """Build a minimal mock Responses-API streaming iterator.
+
+    Bypasses BaseResponsesAPIStreamingIterator.__init__ but mirrors every
+    attribute production code reads. Yields *chunks*, then raises *error*
+    (or StopAsyncIteration). Set bridge=True to inherit from
+    LiteLLMCompletionStreamingIterator so the wrapper's bridge-path
+    isinstance check (used by usage extraction) matches.
     """
-    from litellm.exceptions import MidStreamFallbackError
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
     )
 
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "anthropic/claude-sonnet-4-6",
-                "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-6",
-                    "api_key": "fake-anthropic-key",
-                },
-            },
-            {
-                "model_name": "vertex_ai/claude-sonnet-4-6",
-                "litellm_params": {
-                    "model": "vertex_ai/claude-sonnet-4-6",
-                    "api_key": "fake-vertex-key",
-                },
-            },
-        ],
-        fallbacks=[{"anthropic/claude-sonnet-4-6": ["vertex_ai/claude-sonnet-4-6"]}],
+    base = (
+        LiteLLMCompletionStreamingIterator
+        if bridge
+        else BaseResponsesAPIStreamingIterator
     )
 
-    initial_kwargs = {
-        "model": "anthropic/claude-sonnet-4-6",
-        "stream": True,
-        "input": "Hi",
-    }
-
-    # Source iterator: yields one chunk, then raises MidStreamFallbackError.
-    class _ErrorIterator(BaseResponsesAPIStreamingIterator):
+    class _Iter(base):
         def __init__(self):
-            self._chunks = [MagicMock(type="response.created")]
+            self._chunks = list(chunks)
             self._idx = 0
-            self._hidden_params = {"model_id": "src-deployment-1"}
-            self.model = "anthropic/claude-sonnet-4-6"
+            self._hidden_params = hidden_params or {}
+            self.model = model
             self.custom_llm_provider = "anthropic"
             self.logging_obj = MagicMock()
             self.litellm_metadata = None
@@ -1795,154 +1790,140 @@ async def test_aresponses_streaming_iterator_fallback():
             self.start_time = None
             self.request_data = {}
             self.call_type = None
+            if chat_chunks is not None:
+                self.collected_chat_completion_chunks = chat_chunks
 
         def __aiter__(self):
             return self
 
         async def __anext__(self):
             if self._idx < len(self._chunks):
-                chunk = self._chunks[self._idx]
                 self._idx += 1
-                return chunk
-            raise MidStreamFallbackError(
-                message="anthropic socket timeout",
-                model="anthropic/claude-sonnet-4-6",
-                llm_provider="anthropic",
-                is_pre_first_chunk=False,
-                generated_content="",
-            )
+                return self._chunks[self._idx - 1]
+            if error is not None:
+                raise error
+            raise StopAsyncIteration
 
-    # Fallback iterator: what the Router would return from the fallback chain.
+    return _Iter()
+
+
+class _AsyncList:
+    """Generic async iterator over a list — used as the fallback response."""
+
+    def __init__(self, items=()):
+        self._items = list(items)
+        self._idx = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._idx >= len(self._items):
+            raise StopAsyncIteration
+        item = self._items[self._idx]
+        self._idx += 1
+        return item
+
+
+def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": primary,
+                "litellm_params": {"model": primary, "api_key": "k1"},
+            },
+            {
+                "model_name": secondary,
+                "litellm_params": {"model": secondary, "api_key": "k2"},
+            },
+        ],
+        fallbacks=[{primary: [secondary]}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_fallback():
+    """Catches MidStreamFallbackError, re-enters the fallback chain via
+    async_function_with_fallbacks_common_utils with the per-attempt helper
+    and original_generic_function preserved. Mirrors
+    test_acompletion_streaming_iterator for the aresponses path."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+
+    router = _make_router_with_fallback(
+        "anthropic/claude-sonnet-4-6", "vertex_ai/claude-sonnet-4-6"
+    )
+    src = _make_responses_iterator(
+        chunks=[MagicMock(type="response.created")],
+        error=MidStreamFallbackError(
+            message="anthropic socket timeout",
+            model="anthropic/claude-sonnet-4-6",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="",
+        ),
+        model="anthropic/claude-sonnet-4-6",
+        hidden_params={"model_id": "src-deployment-1"},
+    )
     fallback_chunks = [
         MagicMock(type="response.output_text.delta"),
         MagicMock(type="response.completed"),
     ]
 
-    class _FallbackIterator:
-        def __init__(self, items):
-            self._items = items
-            self._idx = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._idx >= len(self._items):
-                raise StopAsyncIteration
-            item = self._items[self._idx]
-            self._idx += 1
-            return item
-
-    src = _ErrorIterator()
-
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        return_value=_FallbackIterator(fallback_chunks),
+        return_value=_AsyncList(fallback_chunks),
     ) as mock_fallback_utils:
         wrapped = await router._aresponses_streaming_iterator(
             response=src,
             initial_kwargs={
-                **initial_kwargs,
+                "model": "anthropic/claude-sonnet-4-6",
+                "stream": True,
+                "input": "Hi",
                 "original_generic_function": litellm.aresponses,
             },
         )
-
-        # Wrapper preserves isinstance for downstream consumers
         assert isinstance(wrapped, BaseResponsesAPIStreamingIterator)
-        # Hidden params propagated through (needed for response headers)
         assert wrapped._hidden_params.get("model_id") == "src-deployment-1"
+        collected = [c async for c in wrapped]
 
-        collected = []
-        async for chunk in wrapped:
-            collected.append(chunk)
-
-    # 1 chunk before the error + 2 from fallback iterator
-    assert len(collected) == 3
-    assert mock_fallback_utils.called
-
+    assert len(collected) == 3  # 1 primary chunk + 2 fallback chunks
     call_kwargs = mock_fallback_utils.call_args.kwargs
-    fallback_call_kwargs = call_kwargs["kwargs"]
-    # Re-entry must hit the per-attempt helper, with original_generic_function
-    # preserved so the helper calls litellm.aresponses on each fallback attempt.
-    # (Bound methods compare equal when they share the same instance + __func__.)
-    assert (
-        fallback_call_kwargs["original_function"]
-        == router._ageneric_api_call_with_fallbacks_helper
-    )
-    assert fallback_call_kwargs["original_generic_function"] is litellm.aresponses
+    fbk = call_kwargs["kwargs"]
+    # Bound methods compare equal when they share the same instance + __func__.
+    assert fbk["original_function"] == router._ageneric_api_call_with_fallbacks_helper
+    assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
 
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_writes_litellm_metadata_on_fallback():
-    """On fallback re-entry, model_group / model_group_alias must land under
-    "litellm_metadata" (the key litellm.aresponses reads from) — not the
-    default "metadata" key the chat-completions path uses. Regression test
-    for greptile-apps comment on PR #28215."""
+    """Regression: model_group must land under "litellm_metadata" (the key
+    litellm.aresponses reads), not the default "metadata"."""
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(
+        error=MidStreamFallbackError(
+            message="boom",
+            model="gpt-4",
+            llm_provider="anthropic",
+            is_pre_first_chunk=True,
+            generated_content="",
+        )
     )
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "k1"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k2"},
-            },
-        ],
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
-    )
-
-    error = MidStreamFallbackError(
-        message="boom",
-        model="gpt-4",
-        llm_provider="anthropic",
-        is_pre_first_chunk=True,
-        generated_content="",
-    )
-
-    class _ImmediateErrorIterator(BaseResponsesAPIStreamingIterator):
-        def __init__(self):
-            self._hidden_params = {}
-            self.model = "gpt-4"
-            self.custom_llm_provider = "anthropic"
-            self.logging_obj = MagicMock()
-            self.litellm_metadata = None
-            self.responses_api_provider_config = None
-            self.finished = False
-            self.completed_response = None
-            self.response = None
-            self.start_time = None
-            self.request_data = {}
-            self.call_type = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise error
-
-    class _EmptyIter:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
 
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        return_value=_EmptyIter(),
+        return_value=_AsyncList(),
     ) as mock_fallback_utils:
         wrapped = await router._aresponses_streaming_iterator(
-            response=_ImmediateErrorIterator(),
+            response=src,
             initial_kwargs={
                 "model": "gpt-4",
                 "stream": True,
@@ -1953,198 +1934,92 @@ async def test_aresponses_streaming_iterator_writes_litellm_metadata_on_fallback
         async for _ in wrapped:
             pass
 
-    fallback_call_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
-    # Routing metadata must land under litellm_metadata, NOT the default
-    # "metadata" key (which litellm.aresponses doesn't read).
-    assert "litellm_metadata" in fallback_call_kwargs, (
-        "litellm_metadata key missing — _update_kwargs_before_fallbacks "
-        "called with the wrong metadata_variable_name"
-    )
-    assert fallback_call_kwargs["litellm_metadata"]["model_group"] == "gpt-4"
-    assert "metadata" not in fallback_call_kwargs or (
-        "model_group" not in fallback_call_kwargs.get("metadata", {})
+    fbk = mock_fallback_utils.call_args.kwargs["kwargs"]
+    assert "litellm_metadata" in fbk, "wrong metadata_variable_name"
+    assert fbk["litellm_metadata"]["model_group"] == "gpt-4"
+    assert "model_group" not in fbk.get(
+        "metadata", {}
     ), "model_group leaked into 'metadata' instead of 'litellm_metadata'"
 
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation():
-    """Pre-first-chunk MidStreamFallbackError: original input is preserved
-    unchanged, no continuation messages are injected."""
+    """Pre-first-chunk error: original input is preserved unchanged."""
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(
+        error=MidStreamFallbackError(
+            message="socket timeout before first chunk",
+            model="gpt-4",
+            llm_provider="anthropic",
+            is_pre_first_chunk=True,
+            generated_content="",
+        )
     )
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "k1"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k2"},
-            },
-        ],
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
-    )
-
-    pre_first_chunk_error = MidStreamFallbackError(
-        message="socket timeout before first chunk",
-        model="gpt-4",
-        llm_provider="anthropic",
-        is_pre_first_chunk=True,
-        generated_content="",
-    )
-
-    class _ImmediateErrorIterator(BaseResponsesAPIStreamingIterator):
-        def __init__(self):
-            self._hidden_params = {}
-            self.model = "gpt-4"
-            self.custom_llm_provider = "anthropic"
-            self.logging_obj = MagicMock()
-            self.litellm_metadata = None
-            self.responses_api_provider_config = None
-            self.finished = False
-            self.completed_response = None
-            self.response = None
-            self.start_time = None
-            self.request_data = {}
-            self.call_type = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise pre_first_chunk_error
-
-    class _EmptyIter:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-    initial_kwargs = {"model": "gpt-4", "stream": True, "input": "Hello"}
 
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        return_value=_EmptyIter(),
+        return_value=_AsyncList(),
     ) as mock_fallback_utils:
         wrapped = await router._aresponses_streaming_iterator(
-            response=_ImmediateErrorIterator(),
+            response=src,
             initial_kwargs={
-                **initial_kwargs,
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
                 "original_generic_function": litellm.aresponses,
             },
         )
         async for _ in wrapped:
             pass
 
-    assert mock_fallback_utils.called
-    fallback_call_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
-    # Pre-first-chunk: input must be the original string, not a continuation list
-    assert fallback_call_kwargs["input"] == "Hello"
+    fbk = mock_fallback_utils.call_args.kwargs["kwargs"]
+    assert fbk["input"] == "Hello"  # original input, no continuation messages
 
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
-    """Mid-stream MidStreamFallbackError with generated_content: input is
-    rewritten to include a developer instruction + prior-assistant message
-    carrying the partial output."""
+    """Mid-stream error: input is rewritten to include user prompt +
+    developer instruction + prior assistant message with partial output."""
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(
+        chunks=[MagicMock(type="response.output_text.delta")],
+        error=MidStreamFallbackError(
+            message="socket reset mid-stream",
+            model="gpt-4",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="The capital of France is",
+        ),
     )
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "k1"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k2"},
-            },
-        ],
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
-    )
-
-    mid_stream_error = MidStreamFallbackError(
-        message="socket reset mid-stream",
-        model="gpt-4",
-        llm_provider="anthropic",
-        is_pre_first_chunk=False,
-        generated_content="The capital of France is",
-    )
-
-    class _MidStreamErrorIterator(BaseResponsesAPIStreamingIterator):
-        def __init__(self):
-            self._chunks = [MagicMock(type="response.output_text.delta")]
-            self._idx = 0
-            self._hidden_params = {}
-            self.model = "gpt-4"
-            self.custom_llm_provider = "anthropic"
-            self.logging_obj = MagicMock()
-            self.litellm_metadata = None
-            self.responses_api_provider_config = None
-            self.finished = False
-            self.completed_response = None
-            self.response = None
-            self.start_time = None
-            self.request_data = {}
-            self.call_type = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._idx < len(self._chunks):
-                self._idx += 1
-                return self._chunks[self._idx - 1]
-            raise mid_stream_error
-
-    class _EmptyIter:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-    initial_kwargs = {
-        "model": "gpt-4",
-        "stream": True,
-        "input": "What's the capital of France?",
-    }
 
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        return_value=_EmptyIter(),
+        return_value=_AsyncList(),
     ) as mock_fallback_utils:
         wrapped = await router._aresponses_streaming_iterator(
-            response=_MidStreamErrorIterator(),
+            response=src,
             initial_kwargs={
-                **initial_kwargs,
+                "model": "gpt-4",
+                "stream": True,
+                "input": "What's the capital of France?",
                 "original_generic_function": litellm.aresponses,
             },
         )
         async for _ in wrapped:
             pass
 
-    fallback_call_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
-    new_input = fallback_call_kwargs["input"]
-
-    # Original string input is normalized to a user message
+    new_input = mock_fallback_utils.call_args.kwargs["kwargs"]["input"]
     assert isinstance(new_input, list)
     assert new_input[0]["role"] == "user"
     assert new_input[0]["content"][0]["text"] == "What's the capital of France?"
-    # A developer instruction tells the model not to repeat
     assert new_input[1]["role"] == "developer"
     assert "do not repeat" in new_input[1]["content"][0]["text"].lower()
-    # Prior assistant message carries the partial output as output_text
     assert new_input[2]["role"] == "assistant"
     assert new_input[2]["content"][0]["type"] == "output_text"
     assert new_input[2]["content"][0]["text"] == "The capital of France is"
@@ -2152,79 +2027,12 @@ async def test_aresponses_streaming_iterator_partial_content_injects_continuatio
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_combines_partial_usage():
-    """Usage from partial chunks is merged onto the fallback's
-    response.completed event so downstream accounting reflects both attempts."""
+    """Partial usage from the bridge path is normalized to ResponseAPIUsage
+    and summed onto the fallback's response.completed event — no token-name
+    split, clean ResponseAPIUsage on output."""
     from types import SimpleNamespace
 
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
-    )
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "k1"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k2"},
-            },
-        ],
-        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
-    )
-
-    partial_usage = SimpleNamespace(prompt_tokens=10, completion_tokens=4)
-
-    # The bridge subclass is what the wrapper isinstance-narrows on to read
-    # collected_chat_completion_chunks. Inherit from it (and skip super().__init__)
-    # so the test exercises the same code path production hits.
-    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
-        LiteLLMCompletionStreamingIterator,
-    )
-
-    class _BridgeStyleIterator(LiteLLMCompletionStreamingIterator):
-        """Emits a delta chunk then raises mid-stream. Mimics the bridge
-        path's collected_chat_completion_chunks attribute, but here we
-        intercept stream_chunk_builder so we don't have to construct real
-        ModelResponse chunks."""
-
-        def __init__(self):
-            self.collected_chat_completion_chunks = [MagicMock()]
-            self._chunks = [MagicMock(type="response.output_text.delta")]
-            self._idx = 0
-            self._hidden_params = {}
-            self.model = "gpt-4"
-            self.custom_llm_provider = "anthropic"
-            self.logging_obj = MagicMock()
-            self.litellm_metadata = None
-            self.responses_api_provider_config = None
-            self.finished = False
-            self.completed_response = None
-            self.response = None
-            self.start_time = None
-            self.request_data = {}
-            self.call_type = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._idx < len(self._chunks):
-                self._idx += 1
-                return self._chunks[self._idx - 1]
-            raise MidStreamFallbackError(
-                message="boom",
-                model="gpt-4",
-                llm_provider="anthropic",
-                is_pre_first_chunk=False,
-                generated_content="hello",
-            )
-
-    # Use real event/response/usage types so the wrapper's isinstance
-    # narrowing matches AND the combined output is a clean ResponseAPIUsage
-    # (no token-naming split between chat and responses conventions).
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
         ResponseCompletedEvent,
@@ -2232,46 +2040,46 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
         ResponsesAPIStreamEvents,
     )
 
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(
+        bridge=True,
+        chat_chunks=[MagicMock()],
+        chunks=[MagicMock(type="response.output_text.delta")],
+        error=MidStreamFallbackError(
+            message="boom",
+            model="gpt-4",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="hello",
+        ),
+    )
+
     fallback_response_object = ResponsesAPIResponse(
         id="resp_test", created_at=0, model="gpt-4", object="response", output=[]
     )
-    # Fallback usage arrives in responses-API shape (input/output_tokens).
     fallback_response_object.usage = ResponseAPIUsage(
         input_tokens=20, output_tokens=15, total_tokens=35
     )
-    fallback_completed_event = ResponseCompletedEvent(
+    fallback_event = ResponseCompletedEvent(
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
         response=fallback_response_object,
     )
 
-    class _FallbackIter:
-        def __init__(self, items):
-            self._items = items
-            self._idx = 0
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._idx >= len(self._items):
-                raise StopAsyncIteration
-            item = self._items[self._idx]
-            self._idx += 1
-            return item
-
     with (
         patch(
             "litellm.main.stream_chunk_builder",
-            return_value=SimpleNamespace(usage=partial_usage),
+            return_value=SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4)
+            ),
         ),
         patch.object(
             router,
             "async_function_with_fallbacks_common_utils",
-            return_value=_FallbackIter([fallback_completed_event]),
+            return_value=_AsyncList([fallback_event]),
         ),
     ):
         wrapped = await router._aresponses_streaming_iterator(
-            response=_BridgeStyleIterator(),
+            response=src,
             initial_kwargs={
                 "model": "gpt-4",
                 "stream": True,
@@ -2282,19 +2090,11 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
         async for _ in wrapped:
             pass
 
-    # Combined output must be a clean ResponseAPIUsage (no split between
-    # chat-style and responses-style token names). Bridge partial of 10/4
-    # gets translated to input/output_tokens, then summed with the fallback's
-    # 20/15 to produce 30/19/49.
-    merged_usage = fallback_response_object.usage
-    assert isinstance(merged_usage, ResponseAPIUsage)
-    assert merged_usage.input_tokens == 30
-    assert merged_usage.output_tokens == 19
-    assert merged_usage.total_tokens == 49
-    # Chat-style attributes should NOT leak onto the merged object.
-    assert not hasattr(merged_usage, "prompt_tokens") or getattr(
-        merged_usage, "prompt_tokens", None
-    ) in (None, 0)
+    merged = fallback_response_object.usage
+    assert isinstance(merged, ResponseAPIUsage)
+    assert merged.input_tokens == 30  # 10 (translated from prompt_tokens) + 20
+    assert merged.output_tokens == 19  # 4 (translated from completion_tokens) + 15
+    assert merged.total_tokens == 49
 
 
 @pytest.mark.asyncio
