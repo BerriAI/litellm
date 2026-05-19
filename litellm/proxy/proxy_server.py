@@ -6924,10 +6924,7 @@ async def async_data_generator(  # noqa: PLR0915
                 # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
                 chunk = chunk.decode("utf-8", errors="replace")
                 if chunk.startswith(("data:", "event:", ":")):
-                    try:
-                        yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
-                    except Exception as e:
-                        yield f"data: {str(e)}\n\n"
+                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
                     continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
