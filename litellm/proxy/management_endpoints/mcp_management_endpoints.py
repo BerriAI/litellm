@@ -2140,6 +2140,9 @@ if MCP_AVAILABLE:
                 raw_fields = []
         user_fields: List[MCPUserField] = []
         for entry in raw_fields:
+            if isinstance(entry, MCPUserField):
+                user_fields.append(entry)
+                continue
             if not isinstance(entry, dict):
                 continue
             try:

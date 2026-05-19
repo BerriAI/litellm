@@ -1,8 +1,11 @@
+import asyncio
 import base64
 import binascii
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
+
+from prisma.errors import UniqueViolationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -711,35 +714,64 @@ async def store_user_field_values(
     BYOK and OAuth2 credentials share the same ``(user_id, server_id)`` row.
     Refuse to overwrite a non-user-fields credential so saving user-field
     values does not silently destroy a stored BYOK API key or OAuth2 token.
-    """
 
-    # Guard against silently overwriting a BYOK or OAuth2 credential that
-    # shares the same (user_id, server_id) row.
-    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
-    )
-    if (
-        existing is not None
-        and _decode_user_fields_payload(existing.credential_b64) is None
-    ):
-        raise ValueError(
-            f"Existing credential for user {user_id} and server "
-            f"{server_id} is not a user-fields payload (likely BYOK or "
-            f"OAuth2). Refusing to overwrite."
-        )
+    Uses optimistic concurrency to close the read-then-write race against
+    concurrent ``store_user_credential`` / ``store_user_oauth_credential``
+    calls: the write is gated on the previously-observed ``credential_b64``
+    being unchanged, and we retry from the re-read on contention.
+    """
 
     payload = json.dumps({"type": "user_fields", "values": values})
     encoded = encrypt_value_helper(payload)
-    await prisma_client.db.litellm_mcpusercredentials.upsert(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
-        data={
-            "create": {
+
+    # Bound the retry loop; in practice contention is resolved in a single
+    # extra round-trip but we leave headroom for pathological interleavings.
+    for attempt in range(5):
+        existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+        )
+
+        if existing is None:
+            try:
+                await prisma_client.db.litellm_mcpusercredentials.create(
+                    data={
+                        "user_id": user_id,
+                        "server_id": server_id,
+                        "credential_b64": encoded,
+                    }
+                )
+                return
+            except UniqueViolationError:
+                # A concurrent writer inserted the row first; restart so we
+                # can inspect what they wrote before clobbering it.
+                await asyncio.sleep(0)
+                continue
+
+        if _decode_user_fields_payload(existing.credential_b64) is None:
+            raise ValueError(
+                f"Existing credential for user {user_id} and server "
+                f"{server_id} is not a user-fields payload (likely BYOK or "
+                f"OAuth2). Refusing to overwrite."
+            )
+
+        # Compare-and-swap on credential_b64: only succeed if the row still
+        # matches what we just inspected, so a concurrent BYOK/OAuth2 write
+        # between the read and the write is not silently overwritten.
+        updated = await prisma_client.db.litellm_mcpusercredentials.update_many(
+            where={
                 "user_id": user_id,
                 "server_id": server_id,
-                "credential_b64": encoded,
+                "credential_b64": existing.credential_b64,
             },
-            "update": {"credential_b64": encoded},
-        },
+            data={"credential_b64": encoded},
+        )
+        if updated:
+            return
+        await asyncio.sleep(0)
+
+    raise RuntimeError(
+        f"store_user_field_values: gave up after repeated concurrent "
+        f"modifications for user {user_id} and server {server_id}"
     )
 
 

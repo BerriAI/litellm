@@ -26,19 +26,40 @@ else:
     UserFieldServer = MCPServer
 
 
+def _entry_to_dict(entry: Any) -> Optional[Dict[str, Any]]:
+    """Coerce a single user-field entry to a plain dict, or None if malformed.
+
+    Accepts both raw dicts (as Prisma hands JSONB columns back) and Pydantic
+    ``MCPUserField`` model instances (as a fully-typed
+    ``LiteLLM_MCPServerTable`` would carry).
+    """
+    if isinstance(entry, dict):
+        return entry
+    model_dump = getattr(entry, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump()
+        except Exception:  # noqa: BLE001 — drop malformed entries silently
+            return None
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def coerce_user_fields(server: UserFieldServer) -> List[Dict[str, Any]]:
     """Return the server's declared user fields as a list of plain dicts.
 
     The column is stored as JSONB but Prisma sometimes hands it back as a
-    string; this normalises both shapes and silently drops malformed
-    entries (the admin form filters these out, but DB writes from
-    external tooling might not).
+    string; fully-typed ``LiteLLM_MCPServerTable`` instances carry it as a
+    list of ``MCPUserField`` Pydantic models. This normalises all shapes
+    and silently drops malformed entries (the admin form filters these
+    out, but DB writes from external tooling might not).
     """
     raw = getattr(server, "user_fields", None)
     if not raw:
         return []
     if isinstance(raw, list):
-        return [e for e in raw if isinstance(e, dict)]
+        return [d for d in (_entry_to_dict(e) for e in raw) if d is not None]
     if isinstance(raw, str):
         import json
 
@@ -47,7 +68,7 @@ def coerce_user_fields(server: UserFieldServer) -> List[Dict[str, Any]]:
         except (ValueError, TypeError):
             return []
         if isinstance(parsed, list):
-            return [e for e in parsed if isinstance(e, dict)]
+            return [d for d in (_entry_to_dict(e) for e in parsed) if d is not None]
     return []
 
 
