@@ -166,7 +166,9 @@ def create(
         **kwargs: Forwarded to GenericLiteLLMParams (api_key, api_base, etc.).
     """
     local_vars = locals()
-    custom_llm_provider = custom_llm_provider or "gemini"
+    custom_llm_provider = (
+        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    )
     try:
         _is_async = kwargs.pop("acreate_agent", False) is True
         if base_agent is not None:
@@ -175,6 +177,7 @@ def create(
             kwargs["instructions"] = instructions
         if base_environment is not None:
             kwargs["base_environment"] = base_environment
+        kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params = GenericLiteLLMParams(**kwargs)
         logging_obj = _make_logging_obj(
             kwargs, name, custom_llm_provider, "create_agent", {}
@@ -248,9 +251,12 @@ def list(
 ) -> Union[GeminiAgentListResponse, Coroutine[Any, Any, GeminiAgentListResponse]]:
     """Sync: List all agents on the provider side."""
     local_vars = locals()
-    custom_llm_provider = custom_llm_provider or "gemini"
+    custom_llm_provider = (
+        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    )
     try:
         _is_async = kwargs.pop("alist_agents", False) is True
+        kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params = GenericLiteLLMParams(**kwargs)
         logging_obj = _make_logging_obj(
             kwargs, "", custom_llm_provider, "list_agents", {}
@@ -325,9 +331,12 @@ def get(
 ) -> Union[AgentCreateResponse, Coroutine[Any, Any, AgentCreateResponse]]:
     """Sync: Get a specific agent by name."""
     local_vars = locals()
-    custom_llm_provider = custom_llm_provider or "gemini"
+    custom_llm_provider = (
+        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    )
     try:
         _is_async = kwargs.pop("aget_agent", False) is True
+        kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params = GenericLiteLLMParams(**kwargs)
         logging_obj = _make_logging_obj(
             kwargs, name, custom_llm_provider, "get_agent", {"name": name}
@@ -403,9 +412,12 @@ def delete(
 ) -> Union[GeminiAgentDeleteResult, Coroutine[Any, Any, GeminiAgentDeleteResult]]:
     """Sync: Delete a specific agent by name."""
     local_vars = locals()
-    custom_llm_provider = custom_llm_provider or "gemini"
+    custom_llm_provider = (
+        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    )
     try:
         _is_async = kwargs.pop("adelete_agent", False) is True
+        kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params = GenericLiteLLMParams(**kwargs)
         logging_obj = _make_logging_obj(
             kwargs, name, custom_llm_provider, "delete_agent", {"name": name}
@@ -483,9 +495,12 @@ def list_versions(
 ]:
     """Sync: List versions of a specific agent."""
     local_vars = locals()
-    custom_llm_provider = custom_llm_provider or "gemini"
+    custom_llm_provider = (
+        custom_llm_provider or kwargs.get("custom_llm_provider") or "gemini"
+    )
     try:
         _is_async = kwargs.pop("alist_agent_versions", False) is True
+        kwargs.setdefault("custom_llm_provider", custom_llm_provider)
         litellm_params = GenericLiteLLMParams(**kwargs)
         logging_obj = _make_logging_obj(
             kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name}

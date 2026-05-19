@@ -165,12 +165,11 @@ class TestInitInteractionsApiEndpoints:
 
 
 class TestRouterCreateInteractionRouting:
-    """acreate_interaction must use fallback-aware routing."""
+    """acreate_interaction routing: agent-only vs model + fallbacks."""
 
     @pytest.mark.asyncio
-    async def test_acreate_interaction_uses_generic_fallbacks(self):
-        """acreate_interaction must go through _ageneric_api_call_with_fallbacks
-        so that users who configure fallback models get retries."""
+    async def test_acreate_interaction_agent_only_uses_init_interactions(self):
+        """Agent-only create must not use model-group fallback lookup."""
         router = Router(
             model_list=[
                 {
@@ -183,15 +182,15 @@ class TestRouterCreateInteractionRouting:
         with (
             patch.object(
                 router,
-                "_ageneric_api_call_with_fallbacks",
-                new_callable=AsyncMock,
-                return_value={"id": "int-1"},
-            ) as mock_generic,
-            patch.object(
-                router,
                 "_init_interactions_api_endpoints",
                 new_callable=AsyncMock,
+                return_value={"id": "int-1"},
             ) as mock_init,
+            patch.object(
+                router,
+                "_ageneric_api_call_with_fallbacks",
+                new_callable=AsyncMock,
+            ) as mock_generic,
         ):
             result = await router.acreate_interaction(
                 agent="mqy-custom-slides-agent",
@@ -199,8 +198,29 @@ class TestRouterCreateInteractionRouting:
                 custom_llm_provider="gemini",
             )
 
+        mock_init.assert_called_once()
+        mock_generic.assert_not_called()
+        assert result == {"id": "int-1"}
+
+    @pytest.mark.asyncio
+    async def test_init_interactions_model_uses_generic_fallbacks(self):
+        """Model-based create uses _ageneric_api_call_with_fallbacks inside _init_interactions."""
+        router = Router(model_list=[])
+
+        with patch.object(
+            router,
+            "_ageneric_api_call_with_fallbacks",
+            new_callable=AsyncMock,
+            return_value={"id": "int-1"},
+        ) as mock_generic:
+            result = await router._init_interactions_api_endpoints(
+                original_function=AsyncMock(),
+                model="gemini-2.5-flash",
+                input="hello",
+                custom_llm_provider="gemini",
+            )
+
         mock_generic.assert_called_once()
-        mock_init.assert_not_called()
         assert result == {"id": "int-1"}
 
 

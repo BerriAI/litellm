@@ -73,11 +73,10 @@ class _BaseHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         client: Optional[AsyncHTTPHandler],
     ) -> AsyncHTTPHandler:
-        provider = litellm_params.get(
-            "custom_llm_provider", litellm.LlmProviders.GEMINI
-        )
+        # GenericLiteLLMParams.get uses getattr; an unset field is None, not the default.
+        custom_llm_provider = litellm_params.get("custom_llm_provider") or "gemini"
         return client or get_async_httpx_client(
-            llm_provider=provider,
+            llm_provider=litellm.LlmProviders(custom_llm_provider),
             params={"ssl_verify": litellm_params.get("ssl_verify", None)},
         )
 

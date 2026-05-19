@@ -5576,12 +5576,9 @@ class Router:
                     client=client,
                     **kwargs,
                 )
-            elif call_type in ("acreate_interaction", "create_interaction"):
-                return await self._ageneric_api_call_with_fallbacks(
-                    original_function=original_function,
-                    **kwargs,
-                )
             elif call_type in (
+                "acreate_interaction",
+                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",
@@ -5712,6 +5709,13 @@ class Router:
         # If the proxy accidentally passed agent name as model, clear it
         if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
             kwargs["model"] = None
+        # Model-based interactions use deployment routing + fallbacks; agent-only calls
+        # must not enter model-group lookup (agent name is not a LiteLLM deployment).
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
         return await original_function(**kwargs)
 
     async def _init_managed_agents_api_endpoints(
