@@ -619,9 +619,12 @@ class TestTriageOrchestration:
         self, triage_module, monkeypatch
     ):
         # "See #1234" is a passing mention, not a closing keyword. The LLM
-        # must get a chance to apply the stricter rubric.
+        # must get a chance to apply the stricter rubric. With no prior
+        # grace warning, the first failing verdict triggers the warning
+        # path (`would-warn-grace` in dry-run).
         pr = self._make_pr(body="See #1234 for context. No QA proof here.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_no_warning(triage_module, monkeypatch)
         called = {"judge": False}
 
         def judge(prompt):
@@ -639,7 +642,7 @@ class TestTriageOrchestration:
             judge=judge,
         )
         assert called["judge"] is True
-        assert result["action"] == "would-close"
+        assert result["action"] == "would-warn-grace"
 
     def test_should_return_pass_llm_when_judge_passes(self, triage_module, monkeypatch):
         pr = self._make_pr(body="Long body, no linked issue.")
@@ -656,9 +659,16 @@ class TestTriageOrchestration:
         assert result["action"] == "pass-llm"
         assert "Long body" in captured["prompt"]
 
-    def test_should_return_would_close_in_dry_run(self, triage_module, monkeypatch):
+    def test_should_return_would_close_in_dry_run_after_grace_aged_out(
+        self, triage_module, monkeypatch
+    ):
+        # When the grace warning has already aged out (>= GRACE_PERIOD_SECONDS)
+        # AND the rubric still fails, the dry-run preview returns
+        # `would-close` so a step-summary writer can render the close
+        # comment without touching GitHub state.
         pr = self._make_pr(body="just a sentence.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_aged_out(triage_module, monkeypatch)
 
         def fake_post(*a, **kw):
             pytest.fail("should not post comments in dry-run")
@@ -685,11 +695,15 @@ class TestTriageOrchestration:
         assert result["action"] == "would-close"
         assert result["verdict"]["missing"] == ["problem description", "QA proof"]
 
-    def test_should_post_comment_and_close_when_close_enabled(
+    def test_should_post_comment_and_close_after_grace_window(
         self, triage_module, monkeypatch
     ):
+        # The "real close" path: --close passed AND the grace warning has
+        # aged out AND the rubric still fails. The bot posts the close
+        # comment and closes the PR.
         pr = self._make_pr(body="just a sentence.")
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_aged_out(triage_module, monkeypatch)
         posted = {}
         closed = {}
         monkeypatch.setattr(
@@ -781,6 +795,30 @@ class TestTriageOrchestration:
         monkeypatch.setattr(
             triage_module,
             "seconds_since_last_reconsider_verdict",
+            lambda *a, **kw: None,
+        )
+
+    @staticmethod
+    def _stub_grace_aged_out(triage_module, monkeypatch):
+        """Pretend the grace warning has aged out.
+
+        For tests that exercise the post-grace close path. Set the age
+        to twice the grace window so a future tweak to
+        `GRACE_PERIOD_SECONDS` doesn't accidentally make the stub fall
+        back inside the window.
+        """
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_grace_warning",
+            lambda *a, **kw: triage_module.GRACE_PERIOD_SECONDS * 2,
+        )
+
+    @staticmethod
+    def _stub_grace_no_warning(triage_module, monkeypatch):
+        """Pretend no grace warning has been posted yet (first detection)."""
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_grace_warning",
             lambda *a, **kw: None,
         )
 
@@ -1214,6 +1252,9 @@ class TestTriageOrchestration:
             "user": {"login": "outside"},
         }
         monkeypatch.setattr(triage_module, "fetch_issue", lambda repo, n: issue)
+        # Grace already aged out -> close path. (Issues use the same
+        # GRACE_COMMENT_MARKER detection as PRs.)
+        self._stub_grace_aged_out(triage_module, monkeypatch)
         closed = {}
         posted = {}
         monkeypatch.setattr(
@@ -1243,3 +1284,432 @@ class TestTriageOrchestration:
         assert result["action"] == "closed"
         assert closed["n"] == 7
         assert "reproduction" in posted["body"]
+
+    # ---- Grace-period flow ------------------------------------------------
+
+    def test_should_post_grace_warning_on_first_failing_run_in_close_mode(
+        self, triage_module, monkeypatch
+    ):
+        # First low-quality detection -> bot posts a warning comment with
+        # the GRACE_COMMENT_MARKER. The PR must NOT be closed yet.
+        pr = self._make_pr(body="just a sentence.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_no_warning(triage_module, monkeypatch)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close on first detection"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Body too thin.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "warned-grace"
+        assert posted["n"] == 42
+        # Pin the user-facing language pieces the user explicitly asked for.
+        assert "1 day" in posted["body"]
+        assert "@agent-shin reconsider" in posted["body"]
+        assert "@greptileai" in posted["body"]
+        assert "even after the PR is closed" in posted["body"]
+        assert triage_module.GRACE_COMMENT_MARKER in posted["body"]
+
+    def test_should_skip_close_inside_grace_window(self, triage_module, monkeypatch):
+        # A warning was posted recently; do nothing on this run regardless
+        # of close=True. The next run after `GRACE_PERIOD_SECONDS` elapses
+        # is the one that flips to actual close.
+        pr = self._make_pr(body="just a sentence.")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_grace_warning",
+            lambda *a, **kw: 60.0,
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not comment during grace window"),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close during grace window"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Body too thin.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=42,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "skip-in-grace-period"
+        assert result["grace_age_seconds"] == 60.0
+        assert result["grace_period_seconds"] == triage_module.GRACE_PERIOD_SECONDS
+
+    def test_should_dry_run_grace_warning_when_close_false(
+        self, triage_module, monkeypatch
+    ):
+        # In dry-run mode the FIRST failing detection returns
+        # `would-warn-grace` (with the previewed comment body) and never
+        # touches GitHub state. Lets a local operator preview the
+        # warning before flipping --close on.
+        pr = self._make_pr(body="thin")
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_no_warning(triage_module, monkeypatch)
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda *a, **kw: pytest.fail("must not post in dry-run grace warn"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "thin",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "would-warn-grace"
+        assert "1 day" in result["comment"]
+
+    # ---- IMMEDIATE_CLOSE_LOGINS bypass (e.g. SwiftWinds) -----------------
+
+    def test_should_skip_grace_for_swiftwinds_login(self, triage_module, monkeypatch):
+        # SwiftWinds is in `IMMEDIATE_CLOSE_LOGINS` for dogfooding.
+        # Even though no grace warning has been posted, the bypass must
+        # take the close path immediately.
+        pr = self._make_pr(body="just a sentence.", user={"login": "SwiftWinds"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        # The grace check must NOT be consulted at all for an immediate
+        # login — pin that here.
+        monkeypatch.setattr(
+            triage_module,
+            "seconds_since_last_grace_warning",
+            lambda *a, **kw: pytest.fail(
+                "grace check must not run for immediate-close login"
+            ),
+        )
+        posted = {}
+        closed = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda repo, n: closed.update({"n": n}),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "Body too thin.",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=99,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "closed"
+        assert result["immediate_close"] is True
+        assert closed["n"] == 99
+        # The close comment is the standard one (no warning was needed).
+        assert "Agent Shin" in posted["body"]
+
+    def test_should_close_swiftwinds_even_when_close_flag_false(
+        self, triage_module, monkeypatch
+    ):
+        # The `IMMEDIATE_CLOSE_LOGINS` bypass intentionally overrides the
+        # workflow-level dry-run gating. The user explicitly asked to
+        # "turn on full (non dry run) mode with SwiftWinds" because their
+        # personal account has no push permissions to litellm and is the
+        # perfect testing target. With `close=False` (workflow stripped
+        # --close on pull_request_target), the script must STILL post +
+        # close for SwiftWinds.
+        pr = self._make_pr(body="just a sentence.", user={"login": "SwiftWinds"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        posted = {}
+        closed = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"n": n, "body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda repo, n: closed.update({"n": n}),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "thin",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=99,
+            close=False,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "closed"
+        assert closed["n"] == 99
+
+    def test_should_match_immediate_close_login_case_insensitively(
+        self, triage_module, monkeypatch
+    ):
+        # GitHub returns the original casing of a login. The bypass must
+        # work regardless of the exact case the API returns.
+        for login in ("SwiftWinds", "swiftwinds", "SWIFTWINDS"):
+            pr = self._make_pr(body="thin", user={"login": login})
+            monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+            monkeypatch.setattr(
+                triage_module,
+                "post_comment",
+                lambda *a, **kw: None,
+            )
+            monkeypatch.setattr(
+                triage_module,
+                "close_pr",
+                lambda *a, **kw: None,
+            )
+            verdict = {
+                "verdict": "fail",
+                "missing": ["QA proof"],
+                "explanation": "thin",
+            }
+            result = triage_module.triage(
+                repo="o/r",
+                kind="pr",
+                number=1,
+                close=False,
+                model="m",
+                judge=lambda p: json.dumps(verdict),
+            )
+            assert result["action"] == "closed", login
+            assert result.get("immediate_close") is True, login
+
+    def test_should_not_treat_random_external_login_as_immediate_close(
+        self, triage_module, monkeypatch
+    ):
+        # Sanity check — the bypass must NOT fire for any login other
+        # than the explicitly-listed test accounts.
+        pr = self._make_pr(body="thin", user={"login": "random-oss-dev"})
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        self._stub_grace_no_warning(triage_module, monkeypatch)
+        posted = {}
+        monkeypatch.setattr(
+            triage_module,
+            "post_comment",
+            lambda repo, n, body: posted.update({"body": body}),
+        )
+        monkeypatch.setattr(
+            triage_module,
+            "close_pr",
+            lambda *a, **kw: pytest.fail("must not close non-immediate login"),
+        )
+
+        verdict = {
+            "verdict": "fail",
+            "missing": ["QA proof"],
+            "explanation": "thin",
+        }
+        result = triage_module.triage(
+            repo="o/r",
+            kind="pr",
+            number=1,
+            close=True,
+            model="m",
+            judge=lambda p: json.dumps(verdict),
+        )
+        assert result["action"] == "warned-grace"
+
+
+class TestImmediateCloseLoginsConstant:
+    """SwiftWinds is the dogfood account the user explicitly named — pin
+    its presence so a future cleanup that removes the constant or
+    forgets to keep the entry doesn't silently break the test path."""
+
+    def test_should_include_swiftwinds(self, triage_module):
+        assert "swiftwinds" in triage_module.IMMEDIATE_CLOSE_LOGINS
+
+    def test_should_be_lowercase_for_case_insensitive_match(self, triage_module):
+        for login in triage_module.IMMEDIATE_CLOSE_LOGINS:
+            assert login == login.lower(), login
+
+
+class TestGraceWarningCommentText:
+    """Pin the user-facing promises in the grace warning so a future
+    refactor can't silently drop them."""
+
+    def test_pr_grace_warning_should_state_one_day_grace(self, triage_module):
+        body = triage_module.format_grace_warning_pr_comment(
+            {"verdict": "fail", "missing": ["QA proof"], "explanation": "thin"}
+        )
+        # The user explicitly asked: "specify in the comment" that there
+        # is a 1-day grace.
+        assert "1 day" in body
+
+    def test_pr_grace_warning_should_mention_reconsider_during_grace(
+        self, triage_module
+    ):
+        body = triage_module.format_grace_warning_pr_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "@agent-shin reconsider" in body
+
+    def test_pr_grace_warning_should_promise_greptileai_works_post_close(
+        self, triage_module
+    ):
+        body = triage_module.format_grace_warning_pr_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        # Per user: comment should state @greptileai works even after close.
+        assert "@greptileai" in body
+        assert "even after the PR is closed" in body
+
+    def test_pr_grace_warning_should_carry_grace_marker(self, triage_module):
+        # The marker is what `seconds_since_last_grace_warning` greps for
+        # on subsequent runs to detect that a warning has been posted.
+        # Dropping it would silently break the close-after-grace path.
+        body = triage_module.format_grace_warning_pr_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert triage_module.GRACE_COMMENT_MARKER in body
+
+    def test_issue_grace_warning_should_carry_grace_marker(self, triage_module):
+        body = triage_module.format_grace_warning_issue_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert triage_module.GRACE_COMMENT_MARKER in body
+        assert "1 day" in body
+        assert "@agent-shin reconsider" in body
+
+    def test_pr_close_comment_should_promise_greptileai_works_post_close(
+        self, triage_module
+    ):
+        # The standard close comment must ALSO point at @greptileai so
+        # contributors see the same options whether they read the warning
+        # or only catch the close comment.
+        body = triage_module.format_pr_close_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "@greptileai" in body
+        assert "even after the PR is closed" in body
+
+
+class TestSecondsSinceLastGraceWarning:
+    """Mirror of TestSecondsSinceLastReconsiderVerdict for the new helper.
+    Both helpers share `_seconds_since_latest_marker_comment` underneath
+    so the parsing logic is exercised either way; these tests pin the
+    grace-marker-specific behavior."""
+
+    def _make_comment(
+        self,
+        *,
+        login: str,
+        body: str,
+        created_at: str | None = "2026-05-18T05:00:00Z",
+    ) -> dict:
+        comment: dict = {"user": {"login": login}, "body": body}
+        if created_at is not None:
+            comment["created_at"] = created_at
+        return comment
+
+    def test_should_return_none_when_no_grace_marker(self, triage_module, monkeypatch):
+        comments = [
+            self._make_comment(
+                login="github-actions[bot]",
+                body="Some other bot message",
+            ),
+            self._make_comment(login="random-user", body="ping?"),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_grace_warning("o/r", 1) is None
+
+    def test_should_ignore_non_bot_comments_with_marker(
+        self, triage_module, monkeypatch
+    ):
+        # A user who quotes the marker in a question must NOT be treated
+        # as the bot warning; otherwise the close-after-grace path would
+        # never fire because the timer keeps resetting.
+        comments = [
+            self._make_comment(
+                login="random-user",
+                body=f"What is {triage_module.GRACE_COMMENT_MARKER}?",
+            )
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+        assert triage_module.seconds_since_last_grace_warning("o/r", 1) is None
+
+    def test_should_pick_latest_grace_marker(self, triage_module, monkeypatch):
+        comments = [
+            self._make_comment(
+                login="github-actions[bot]",
+                body="old warning " + triage_module.GRACE_COMMENT_MARKER,
+                created_at="2026-05-18T03:00:00Z",
+            ),
+            self._make_comment(
+                login="github-actions[bot]",
+                body="newer warning " + triage_module.GRACE_COMMENT_MARKER,
+                created_at="2026-05-18T04:55:00Z",
+            ),
+        ]
+        monkeypatch.setattr(
+            triage_module, "_iter_paginated_json", lambda *a, **kw: iter(comments)
+        )
+
+        import datetime as real_dt
+
+        class FrozenDateTime(real_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return real_dt.datetime(2026, 5, 18, 5, 0, 0, tzinfo=tz)
+
+        frozen_module = type(triage_module.dt)("datetime")
+        frozen_module.datetime = FrozenDateTime
+        frozen_module.timezone = real_dt.timezone
+        monkeypatch.setattr(triage_module, "dt", frozen_module)
+
+        age = triage_module.seconds_since_last_grace_warning("o/r", 1)
+        # Newer warning is 5 minutes (300s) before "now".
+        assert age == 300.0

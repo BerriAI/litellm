@@ -62,6 +62,27 @@ RECONSIDER_COMMENT_MARKER = "<!-- agent-shin:reconsider-verdict -->"
 # the body" iteration loop isn't punished.
 RECONSIDER_RATE_LIMIT_SECONDS = 600
 
+# HTML marker appended to the grace-period warning comment posted on the
+# first low-quality detection. We grep for this on subsequent triage runs
+# to (a) detect that a warning was already posted (so we don't spam the
+# contributor with duplicate warnings) and (b) measure how long ago it
+# was posted so we know when the grace period has elapsed.
+GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
+
+# Length of the grace period between the warning comment and the actual
+# auto-close. Set to 24 hours so the contributor has at least one full
+# working day across any time zone to push fixes or comment
+# `@agent-shin reconsider`.
+GRACE_PERIOD_SECONDS = 86400
+
+# Logins (case-insensitive) that bypass BOTH the 1-day grace period AND
+# the dry-run / `AGENT_SHIN_ENABLED` workflow gating — every Agent Shin
+# verdict against a PR/issue from one of these accounts is treated as a
+# real run with immediate close on fail. Useful for dogfooding the bot
+# from an external account that has no push permissions to the repo.
+# Listed lower-case so callers compare via `login.lower() in ...`.
+IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
+
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
 # pass `reasoning_effort="none"` so a `temperature=0` deterministic judgment
@@ -238,17 +259,20 @@ def was_closed_by_agent_shin(
     return actor.lower() == expected
 
 
-def seconds_since_last_reconsider_verdict(
-    repo: str, number: int, *, bot_login: str | None = None
+def _seconds_since_latest_marker_comment(
+    repo: str,
+    number: int,
+    *,
+    marker: str,
+    bot_login: str | None = None,
 ) -> float | None:
-    """Return seconds since the bot's most recent reconsider verdict comment.
+    """Shared helper: return seconds since the bot's most recent comment
+    that contains the given HTML marker, or None if no such comment exists.
 
-    Detects comments by matching the HTML marker `RECONSIDER_COMMENT_MARKER`
-    appended by `format_reopen_comment` and
-    `format_reconsider_still_failing_comment`. Returns None when the bot
-    has never posted a reconsider verdict on this PR/issue (or when the
-    only matching comments are missing a `created_at` timestamp, which
-    shouldn't happen on a real GitHub response).
+    Used by both the reconsider-verdict cooldown and the grace-period
+    warning detection — keeping the iteration logic centralized stops the
+    two paths from drifting (e.g. one fixing a tz parsing bug and the
+    other forgetting to mirror it).
     """
     expected_login = (
         bot_login
@@ -261,7 +285,7 @@ def seconds_since_last_reconsider_verdict(
         if author != expected_login:
             continue
         body = comment.get("body") or ""
-        if RECONSIDER_COMMENT_MARKER not in body:
+        if marker not in body:
             continue
         created = comment.get("created_at")
         if not created:
@@ -275,6 +299,39 @@ def seconds_since_last_reconsider_verdict(
     if latest is None:
         return None
     return (dt.datetime.now(dt.timezone.utc) - latest).total_seconds()
+
+
+def seconds_since_last_reconsider_verdict(
+    repo: str, number: int, *, bot_login: str | None = None
+) -> float | None:
+    """Return seconds since the bot's most recent reconsider verdict comment.
+
+    Detects comments by matching the HTML marker `RECONSIDER_COMMENT_MARKER`
+    appended by `format_reopen_comment` and
+    `format_reconsider_still_failing_comment`. Returns None when the bot
+    has never posted a reconsider verdict on this PR/issue (or when the
+    only matching comments are missing a `created_at` timestamp, which
+    shouldn't happen on a real GitHub response).
+    """
+    return _seconds_since_latest_marker_comment(
+        repo, number, marker=RECONSIDER_COMMENT_MARKER, bot_login=bot_login
+    )
+
+
+def seconds_since_last_grace_warning(
+    repo: str, number: int, *, bot_login: str | None = None
+) -> float | None:
+    """Return seconds since the bot's most recent grace-period warning.
+
+    Detects warning comments by matching the HTML marker
+    `GRACE_COMMENT_MARKER` appended by `format_grace_warning_pr_comment`
+    and `format_grace_warning_issue_comment`. Returns None when no
+    grace warning has ever been posted on this PR/issue — that's the
+    "first low-quality detection" signal that drives the warning path.
+    """
+    return _seconds_since_latest_marker_comment(
+        repo, number, marker=GRACE_COMMENT_MARKER, bot_login=bot_login
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +567,9 @@ def format_pr_close_comment(verdict: dict) -> str:
         "to get back into the review queue.\n"
         "   - **Or** comment `@agent-shin reconsider` on this closed PR after updating the description. "
         "I'll re-run the triage; if it now passes, I'll reopen this PR automatically.\n"
+        "   - You can also comment `@greptileai` on this PR to request a fresh Greptile review — that "
+        "still works **even after the PR is closed**, and a higher score is one of the signals that "
+        "lifts the PR back into the queue.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
@@ -547,6 +607,90 @@ def format_issue_close_comment(verdict: dict) -> str:
         "\n"
         "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
         "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_"
+    )
+
+
+def format_grace_warning_pr_comment(verdict: dict) -> str:
+    """Comment posted on the FIRST low-quality detection — gives the
+    contributor a 1-day grace window to fix the PR before the next
+    triage run actually closes it.
+
+    This is the "before-close" warning. On the second triage run, if the
+    grace marker is older than `GRACE_PERIOD_SECONDS` AND the PR still
+    fails the rubric, the close path runs (which posts
+    `format_pr_close_comment` and closes the PR).
+    """
+    missing_lines = _format_missing(verdict.get("missing") or [])
+    explanation = verdict.get("explanation") or ""
+    return (
+        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this repository.\n"
+        "\n"
+        "Heads up — this PR does not yet meet the bar described in our "
+        "[pull-request template](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
+        "Specifically, I couldn't find:\n"
+        "\n"
+        f"{missing_lines}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "⏳ **You have 1 day to address this before this PR is auto-closed.** "
+        "During the grace period:\n"
+        "\n"
+        "1. Update the PR description to either:\n"
+        "   - Link a related GitHub issue (e.g. `Fixes #1234`), OR\n"
+        "   - Add a clear **problem description**, **expected vs. actual behavior**, and **visual QA proof** "
+        "(before/after screenshots, a short screen recording, or terminal/log output).\n"
+        "2. Comment `@agent-shin reconsider` on this PR after updating it. If your update meets the "
+        "bar, I'll skip the auto-close and a maintainer will take another look.\n"
+        "\n"
+        "If this PR is auto-closed in 24 hours, you'll still have options:\n"
+        "\n"
+        "- Comment `@agent-shin reconsider` to have me re-evaluate (and reopen the PR if it now meets the bar).\n"
+        "- Comment `@greptileai` to request a fresh Greptile review — that works **even after the PR is closed**.\n"
+        "\n"
+        "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
+        "\n"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
+        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_\n"
+        "\n"
+        f"{GRACE_COMMENT_MARKER}"
+    )
+
+
+def format_grace_warning_issue_comment(verdict: dict) -> str:
+    """Issue analogue of `format_grace_warning_pr_comment`."""
+    missing_lines = _format_missing(verdict.get("missing") or [])
+    explanation = verdict.get("explanation") or ""
+    return (
+        "👋 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this repository.\n"
+        "\n"
+        "Heads up — this issue doesn't yet have enough detail for a maintainer to act on. "
+        "Specifically, I couldn't find:\n"
+        "\n"
+        f"{missing_lines}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "⏳ **You have 1 day to address this before this issue is auto-closed.** "
+        "During the grace period:\n"
+        "\n"
+        "1. Edit the issue to add the missing pieces:\n"
+        "   - For **bug reports**: a runnable reproduction (code / curl / config), expected vs. actual behavior, "
+        "and a screenshot / traceback / log showing the bug.\n"
+        "   - For **feature requests**: a concrete description of what should change, plus a use case and example "
+        "(config / API call / UI flow).\n"
+        "2. Comment `@agent-shin reconsider` on this issue after updating it. If your update meets the bar, "
+        "I'll skip the auto-close and a maintainer will take another look.\n"
+        "\n"
+        "If this issue is auto-closed in 24 hours, you can still comment `@agent-shin reconsider` to have "
+        "me re-evaluate (and reopen the issue if it now meets the bar).\n"
+        "\n"
+        "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
+        "\n"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
+        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_\n"
+        "\n"
+        f"{GRACE_COMMENT_MARKER}"
     )
 
 
@@ -809,7 +953,58 @@ def triage(
     if decision != "fail":
         return {**base_result, "action": "pass-llm", "verdict": verdict}
 
-    if not close:
+    # Grace-period flow: on the first low-quality detection, post a warning
+    # comment instead of closing immediately. On a subsequent triage run
+    # (manual re-trigger, or the daily `close_low_quality_prs.py` cron
+    # finding the same PR in its own pass), if `GRACE_PERIOD_SECONDS` has
+    # elapsed since the warning AND the PR still fails the rubric, close.
+    #
+    # `IMMEDIATE_CLOSE_LOGINS` (e.g. test/dogfood accounts like SwiftWinds)
+    # bypass the grace period entirely — every fail is treated as a real
+    # close run. This is intentional: those accounts exist specifically to
+    # exercise the bot end-to-end, and waiting a day per iteration kills
+    # the feedback loop.
+    is_immediate = login.lower() in IMMEDIATE_CLOSE_LOGINS
+
+    if not is_immediate:
+        grace_age = seconds_since_last_grace_warning(repo, number)
+        if grace_age is None:
+            warning_body = (
+                format_grace_warning_pr_comment(verdict)
+                if kind == "pr"
+                else format_grace_warning_issue_comment(verdict)
+            )
+            if not close:
+                return {
+                    **base_result,
+                    "action": "would-warn-grace",
+                    "verdict": verdict,
+                    "comment": warning_body,
+                }
+            post_comment(repo, number, warning_body)
+            return {
+                **base_result,
+                "action": "warned-grace",
+                "verdict": verdict,
+                "comment": warning_body,
+            }
+        if grace_age < GRACE_PERIOD_SECONDS:
+            return {
+                **base_result,
+                "action": "skip-in-grace-period",
+                "verdict": verdict,
+                "grace_age_seconds": grace_age,
+                "grace_period_seconds": GRACE_PERIOD_SECONDS,
+            }
+
+    # Either the grace window has elapsed or this author bypasses grace —
+    # proceed to the actual close path. `--close` still gates the
+    # destructive write for the regular-author path so a local operator
+    # can preview a "would close after grace" verdict; immediate-close
+    # accounts (`is_immediate`) ignore `--close` so a workflow that
+    # forces dry-run for the global population can still take real
+    # action on those test accounts.
+    if not close and not is_immediate:
         return {**base_result, "action": "would-close", "verdict": verdict}
 
     comment_body = (
@@ -828,6 +1023,7 @@ def triage(
         "action": "closed",
         "verdict": verdict,
         "comment": comment_body,
+        "immediate_close": is_immediate,
     }
 
 

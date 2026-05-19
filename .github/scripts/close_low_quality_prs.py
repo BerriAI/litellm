@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -65,6 +66,33 @@ INTERNAL_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # defaults instead of appending to them — the argparse `action="append"` +
 # `default=[...]` combination silently mutates the shared default list.
 DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
+
+# HTML marker appended to grace-period warning comments. Shared with the
+# Agent Shin LLM-judge script (`triage_with_llm.py`) so a warning posted
+# by either path is recognized by both: the LLM judge can see "Greptile
+# already warned this contributor 12 hours ago" and skip re-warning, and
+# the Greptile closer can see "Agent Shin already warned" and close on
+# the next run if Greptile still has a low score.
+GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
+
+# Length of the grace period between the warning comment and the actual
+# auto-close. Set to 24 hours so the contributor has at least one full
+# working day across any time zone to push fixes or comment
+# `@agent-shin reconsider`. Mirrors the constant of the same name in
+# `triage_with_llm.py` — keep them in sync if either changes.
+GRACE_PERIOD_SECONDS = 86400
+
+# Default login of the GitHub identity that performs Agent Shin's writes;
+# used for matching the author of a grace-warning comment so we don't
+# count somebody quoting the marker. The env override
+# `AGENT_SHIN_BOT_LOGIN` mirrors `triage_with_llm.py`.
+AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
+
+# Logins (case-insensitive) that bypass BOTH the 1-day grace period AND
+# the dry-run gating. Mirrors `IMMEDIATE_CLOSE_LOGINS` in
+# `triage_with_llm.py`. Used for dogfooding the bot from external test
+# accounts that have no push permissions to the repo.
+IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
 
 
 def gh(*args: str) -> str:
@@ -196,6 +224,124 @@ def has_optout_label(pr: dict, optout_labels: set[str]) -> bool:
     return bool(labels & {lbl.lower() for lbl in optout_labels})
 
 
+def seconds_since_last_grace_warning(
+    comments: Iterable[dict],
+    *,
+    bot_login: str | None = None,
+    now: dt.datetime | None = None,
+) -> float | None:
+    """Return seconds since the bot's most recent grace-period warning, or
+    None if no such warning has ever been posted on this PR.
+
+    Detects warnings by matching `GRACE_COMMENT_MARKER` in comments
+    authored by the bot identity. Operates on an already-fetched
+    comments list (avoids a second `gh api` call when the caller has
+    already pulled the page for Greptile-score extraction).
+
+    `now` is injectable so callers (and tests) can pin the reference
+    time. The closer runs everything against a single `now` snapshot
+    captured at the top of `main()` so age calculations stay consistent
+    across many PRs in a single run.
+    """
+    expected_login = (
+        bot_login
+        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
+        or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
+    latest: dt.datetime | None = None
+    for comment in comments:
+        author = ((comment.get("user") or {}).get("login") or "").lower()
+        if author != expected_login:
+            continue
+        body = comment.get("body") or ""
+        if GRACE_COMMENT_MARKER not in body:
+            continue
+        created = comment.get("created_at")
+        if not created:
+            continue
+        try:
+            ts = parse_iso8601(created)
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    if latest is None:
+        return None
+    reference = now if now is not None else dt.datetime.now(dt.timezone.utc)
+    return (reference - latest).total_seconds()
+
+
+def format_grace_warning_comment(score: int, threshold: int) -> str:
+    """Comment posted on the FIRST low-Greptile-score detection — gives
+    the contributor a 1-day grace window before the auto-close fires on
+    the next daily cron run.
+
+    Mirrors `format_grace_warning_pr_comment` in
+    `triage_with_llm.py` in spirit (1-day grace + escape hatches), but
+    framed around Greptile's confidence score instead of the LLM judge's
+    rubric since the close trigger here is the Greptile signal.
+    """
+    return (
+        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this repository.\n"
+        "\n"
+        "Heads up — Greptile's most recent review scored this PR "
+        f"**{score}/5**, below our merge bar of **{threshold}/5**.\n"
+        "\n"
+        "⏳ **You have 1 day to address Greptile's feedback before this PR is auto-closed.** "
+        "We close low-confidence PRs aggressively to keep the review queue manageable for "
+        "maintainers and contributors alike. **This isn't a rejection of the idea.**\n"
+        "\n"
+        "During the grace period:\n"
+        "\n"
+        "1. Push fixes that address Greptile's feedback (continue using your existing branch is fine).\n"
+        "2. Either:\n"
+        "   - Comment `@greptileai` to request a fresh Greptile review. If the new score is "
+        f"**{threshold}/5 or higher**, the PR stays open.\n"
+        "   - Or comment `@agent-shin reconsider` to have Agent Shin re-evaluate the PR description.\n"
+        "\n"
+        "If this PR is auto-closed in 24 hours, you'll still have options:\n"
+        "\n"
+        "- Comment `@agent-shin reconsider` after pushing fixes — Agent Shin will re-run triage "
+        "and reopen the PR if it now meets the bar.\n"
+        "- Comment `@greptileai` to request a re-review — that works **even after the PR is closed**.\n"
+        "\n"
+        "Thanks for contributing to LiteLLM. We know auto-closures can sting; the goal is to keep "
+        "the project healthy, not to dismiss your work.\n"
+        "\n"
+        f"{GRACE_COMMENT_MARKER}"
+    )
+
+
+def post_grace_warning(
+    pr: dict,
+    score: int,
+    threshold: int,
+    repo: str | None,
+    dry_run: bool,
+) -> None:
+    """Post the 1-day grace-period warning comment on `pr`.
+
+    The warning carries `GRACE_COMMENT_MARKER` so subsequent runs can
+    detect that the contributor has already been told about the
+    pending close. Does NOT close the PR — the close happens on the
+    next eligible run after `GRACE_PERIOD_SECONDS` elapses (handled
+    by `close_pr`).
+    """
+    pr_number = pr["number"]
+    repo_args = ["--repo", repo] if repo else []
+
+    if dry_run:
+        print(
+            f"  [DRY RUN] Would post grace warning to PR #{pr_number} "
+            f"(greptile={score}/5): {pr['title']}"
+        )
+        return
+
+    comment_body = format_grace_warning_comment(score, threshold)
+    gh("pr", "comment", str(pr_number), "--body", comment_body, *repo_args)
+    print(f"  Posted grace warning on PR #{pr_number} (greptile={score}/5)")
+
+
 def close_pr(
     pr: dict,
     score: int,
@@ -219,7 +365,8 @@ def close_pr(
     comment_body = (
         f"Closing as part of automated PR triage.\n\n"
         f"Greptile's most recent review scored this PR **{score}/5**, below "
-        f"our merge bar of **{threshold}/5**.\n\n"
+        f"our merge bar of **{threshold}/5**, and the 1-day grace period since "
+        "the warning has elapsed.\n\n"
         "We close low-confidence PRs aggressively to keep the review queue "
         "manageable for maintainers and contributors alike. **This is not a "
         "rejection of the idea** — to bring this back:\n\n"
@@ -233,7 +380,9 @@ def close_pr(
         "maintainer, so a fresh PR is the most reliable path forward. If you "
         "would prefer this exact PR re-evaluated, comment "
         "`@agent-shin reconsider` once you've pushed the fixes — Agent Shin "
-        "will re-run triage and reopen this PR if it now meets the bar.\n\n"
+        "will re-run triage and reopen this PR if it now meets the bar. "
+        "You can also comment `@greptileai` to request a fresh Greptile "
+        "review — that works **even after the PR is closed**.\n\n"
         "Thanks for contributing to LiteLLM. We know auto-closures can sting; "
         "the goal is to keep the project healthy, not to dismiss your work."
     )
@@ -258,16 +407,28 @@ def evaluate_pr(
     repo: str | None,
     optout_labels: set[str],
 ) -> tuple[str, int | None, int | None]:
-    """Decide whether to close `pr`.
+    """Decide what to do with `pr` on this triage run.
 
     Returns (action, score_or_none, age_days_or_none) where action is one of:
         "skip-too-young", "skip-optout-label", "skip-internal",
-        "skip-no-greptile-score", "skip-score-ok", or "close".
+        "skip-no-greptile-score", "skip-score-ok",
+        "warn-grace", "skip-in-grace-period", or "close".
 
     Drafts are NOT skipped — the goal is "open PR count == PRs internal
     collaborators need to action on", and a draft that Greptile scored <4/5
     is still in that queue. Authors can opt out via the `wip` label (see
     `DEFAULT_OPTOUT_LABELS`) if they need to keep a long-lived draft open.
+
+    Grace-period semantics: the first time a PR fails the rubric, the
+    action is `warn-grace` — the caller should post a warning comment but
+    NOT close the PR. On a subsequent run, if the warning is still less
+    than `GRACE_PERIOD_SECONDS` old AND the PR still fails, the action is
+    `skip-in-grace-period`. Once the warning ages out and the rubric is
+    still failing, the action is `close`.
+
+    Grace is bypassed for `IMMEDIATE_CLOSE_LOGINS` (test/dogfood
+    accounts), which always go straight to `close` on the first failing
+    run so the bot is dogfoodable end-to-end without a 24h delay.
     """
     if has_optout_label(pr, optout_labels):
         return ("skip-optout-label", None, None)
@@ -293,6 +454,16 @@ def evaluate_pr(
     score, _ = extraction
     if score >= min_score:
         return ("skip-score-ok", score, age_days)
+
+    login = ((pr.get("author") or {}).get("login") or "").lower()
+    if login in IMMEDIATE_CLOSE_LOGINS:
+        return ("close", score, age_days)
+
+    grace_age = seconds_since_last_grace_warning(comments, now=now)
+    if grace_age is None:
+        return ("warn-grace", score, age_days)
+    if grace_age < GRACE_PERIOD_SECONDS:
+        return ("skip-in-grace-period", score, age_days)
 
     return ("close", score, age_days)
 
@@ -370,6 +541,8 @@ def main() -> int:
     closed = 0
     summary = {
         "close": 0,
+        "warn-grace": 0,
+        "skip-in-grace-period": 0,
         "skip-too-young": 0,
         "skip-optout-label": 0,
         "skip-internal": 0,
@@ -388,6 +561,30 @@ def main() -> int:
         )
         summary[action] = summary.get(action, 0) + 1
 
+        # Per-PR dry-run override: `IMMEDIATE_CLOSE_LOGINS` accounts (e.g.
+        # SwiftWinds) always run in real-close mode regardless of the
+        # global `--close` flag. Lets a maintainer dogfood the bot from
+        # an external account while the rest of the open-PR queue stays
+        # on the safe dry-run default.
+        author_login = ((pr.get("author") or {}).get("login") or "").lower()
+        is_immediate = author_login in IMMEDIATE_CLOSE_LOGINS
+        pr_dry_run = dry_run and not is_immediate
+
+        if action == "warn-grace":
+            assert score is not None
+            print(
+                f"#{pr['number']}: \"{pr['title']}\" "
+                f"(age={age_days}d, greptile={score}/5) -> warn-grace"
+            )
+            post_grace_warning(
+                pr,
+                score=score,
+                threshold=args.min_score,
+                repo=args.repo,
+                dry_run=pr_dry_run,
+            )
+            continue
+
         if action != "close":
             continue
 
@@ -395,6 +592,7 @@ def main() -> int:
         print(
             f"#{pr['number']}: \"{pr['title']}\" "
             f"(age={age_days}d, greptile={score}/5) -> close"
+            + (" [immediate-close login]" if is_immediate else "")
         )
         close_pr(
             pr,
@@ -402,11 +600,11 @@ def main() -> int:
             threshold=args.min_score,
             age_days=age_days,
             repo=args.repo,
-            dry_run=dry_run,
+            dry_run=pr_dry_run,
             label=args.close_label,
         )
 
-        if not dry_run:
+        if not pr_dry_run:
             closed += 1
             if args.limit is not None and closed >= args.limit:
                 print(f"\nReached --limit={args.limit}; stopping.")
@@ -416,6 +614,10 @@ def main() -> int:
     for key, value in summary.items():
         print(f"  {key:28s} {value}")
     print(f"\nTotal {'would close' if dry_run else 'closed'}: {summary['close']}")
+    print(
+        f"Total {'would warn (grace)' if dry_run else 'warned (grace)'}: "
+        f"{summary['warn-grace']}"
+    )
     return 0
 
 
