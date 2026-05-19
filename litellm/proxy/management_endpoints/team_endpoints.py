@@ -1881,11 +1881,16 @@ async def update_team(  # noqa: PLR0915
 
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
+    if "budget_duration" not in data.model_fields_set:
+        return
     if data.budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
         updated_kv["budget_reset_at"] = reset_at
+    else:
+        # budget_duration explicitly set to null: clear the field and reset time
+        updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
