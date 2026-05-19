@@ -8346,6 +8346,20 @@ async def chat_completion(  # noqa: PLR0915
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
 
+    # S2-05: resolve `skills: [...]` in the request body, inject prompt +
+    # tools, strip the meta fields. No-ops when `skills` is absent.
+    if data.get("skills"):
+        from litellm.proxy.skill_endpoints.injection import (
+            inject_skills_into_chat_request,
+        )
+
+        data["metadata"]["skill_ids"] = [
+            (s.split("@", 1)[0] if isinstance(s, str) else s)
+            for s in data.get("skills", [])
+            if isinstance(s, str)
+        ]
+        await inject_skills_into_chat_request(data)
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
