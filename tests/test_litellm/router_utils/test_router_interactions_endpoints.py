@@ -165,12 +165,12 @@ class TestInitInteractionsApiEndpoints:
 
 
 class TestRouterCreateInteractionRouting:
-    """acreate_interaction must bypass model-group fallbacks (openai/* wildcards)."""
+    """acreate_interaction must use fallback-aware routing."""
 
     @pytest.mark.asyncio
-    async def test_acreate_interaction_uses_init_interactions_not_generic_fallbacks(
-        self,
-    ):
+    async def test_acreate_interaction_uses_generic_fallbacks(self):
+        """acreate_interaction must go through _ageneric_api_call_with_fallbacks
+        so that users who configure fallback models get retries."""
         router = Router(
             model_list=[
                 {
@@ -180,22 +180,98 @@ class TestRouterCreateInteractionRouting:
             ]
         )
 
-        with patch.object(
-            router,
-            "_init_interactions_api_endpoints",
-            new_callable=AsyncMock,
-            return_value={"id": "int-1"},
-        ) as mock_init, patch.object(
-            router,
-            "_ageneric_api_call_with_fallbacks",
-            new_callable=AsyncMock,
-        ) as mock_generic:
+        with (
+            patch.object(
+                router,
+                "_ageneric_api_call_with_fallbacks",
+                new_callable=AsyncMock,
+                return_value={"id": "int-1"},
+            ) as mock_generic,
+            patch.object(
+                router,
+                "_init_interactions_api_endpoints",
+                new_callable=AsyncMock,
+            ) as mock_init,
+        ):
             result = await router.acreate_interaction(
                 agent="mqy-custom-slides-agent",
                 input="hello",
                 custom_llm_provider="gemini",
             )
 
-        mock_init.assert_called_once()
-        mock_generic.assert_not_called()
+        mock_generic.assert_called_once()
+        mock_init.assert_not_called()
         assert result == {"id": "int-1"}
+
+
+class TestInitializeManagedAgentsEndpoints:
+    """Tests for _initialize_managed_agents_endpoints."""
+
+    def test_initialize_managed_agents_endpoints_creates_methods(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "gpt-4"},
+                }
+            ]
+        )
+
+        for method_name in (
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
+        ):
+            assert hasattr(router, method_name), f"missing {method_name}"
+            assert callable(getattr(router, method_name)), f"{method_name} not callable"
+
+    def test_initialize_managed_agents_endpoints_can_be_called_directly(self):
+        router = Router(model_list=[])
+        router._initialize_managed_agents_endpoints()
+        assert callable(router.acreate_agent)
+        assert callable(router.alist_agents)
+
+
+class TestInitManagedAgentsApiEndpoints:
+    """Tests for _init_managed_agents_api_endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_init_managed_agents_api_endpoints_defaults_to_gemini(self):
+        router = Router(model_list=[])
+        mock_fn = AsyncMock(return_value={"agents": []})
+
+        await router._init_managed_agents_api_endpoints(
+            original_function=mock_fn,
+        )
+
+        call_kwargs = mock_fn.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "gemini"
+
+    @pytest.mark.asyncio
+    async def test_init_managed_agents_api_endpoints_passes_custom_provider(self):
+        router = Router(model_list=[])
+        mock_fn = AsyncMock(return_value={"agents": []})
+
+        await router._init_managed_agents_api_endpoints(
+            original_function=mock_fn,
+            custom_llm_provider="vertex_ai",
+        )
+
+        call_kwargs = mock_fn.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "vertex_ai"
+
+    @pytest.mark.asyncio
+    async def test_init_managed_agents_api_endpoints_does_not_override_existing_provider(
+        self,
+    ):
+        router = Router(model_list=[])
+        mock_fn = AsyncMock(return_value={"agents": []})
+
+        await router._init_managed_agents_api_endpoints(
+            original_function=mock_fn,
+            custom_llm_provider="vertex_ai",
+        )
+
+        mock_fn.assert_called_once_with(custom_llm_provider="vertex_ai")

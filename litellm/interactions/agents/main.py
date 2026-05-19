@@ -54,6 +54,7 @@ from litellm.utils import client
 # Shared helpers                                                       #
 # ------------------------------------------------------------------ #
 
+
 def _get_agents_api_config(custom_llm_provider: str):
     config = get_provider_agents_api_config(custom_llm_provider)
     if config is None:
@@ -129,8 +130,11 @@ async def acreate(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider or "gemini",
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -172,17 +176,27 @@ def create(
         if base_environment is not None:
             kwargs["base_environment"] = base_environment
         litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(kwargs, name, custom_llm_provider, "create_agent", {})
+        logging_obj = _make_logging_obj(
+            kwargs, name, custom_llm_provider, "create_agent", {}
+        )
         config = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.create_agent(
-            agents_api_config=config, name=name, litellm_params=litellm_params,
-            logging_obj=logging_obj, extra_headers=extra_headers,
-            extra_body=extra_body, timeout=timeout, _is_async=_is_async,
+            agents_api_config=config,
+            name=name,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout,
+            _is_async=_is_async,
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider,
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -217,8 +231,11 @@ async def alist(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model="", custom_llm_provider=custom_llm_provider or "gemini",
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model="",
+            custom_llm_provider=custom_llm_provider or "gemini",
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -235,17 +252,25 @@ def list(
     try:
         _is_async = kwargs.pop("alist_agents", False) is True
         litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(kwargs, "", custom_llm_provider, "list_agents", {})
+        logging_obj = _make_logging_obj(
+            kwargs, "", custom_llm_provider, "list_agents", {}
+        )
         config = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.list_agents(
-            agents_api_config=config, litellm_params=litellm_params,
-            logging_obj=logging_obj, extra_headers=extra_headers,
-            timeout=timeout, _is_async=_is_async,
+            agents_api_config=config,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            _is_async=_is_async,
         )
     except Exception as e:
         raise litellm.exception_type(
-            model="", custom_llm_provider=custom_llm_provider,
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -282,8 +307,11 @@ async def aget(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider or "gemini",
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -301,17 +329,26 @@ def get(
     try:
         _is_async = kwargs.pop("aget_agent", False) is True
         litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(kwargs, name, custom_llm_provider, "get_agent", {"name": name})
+        logging_obj = _make_logging_obj(
+            kwargs, name, custom_llm_provider, "get_agent", {"name": name}
+        )
         config = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.get_agent(
-            agents_api_config=config, name=name, litellm_params=litellm_params,
-            logging_obj=logging_obj, extra_headers=extra_headers,
-            timeout=timeout, _is_async=_is_async,
+            agents_api_config=config,
+            name=name,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            _is_async=_is_async,
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider,
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -348,8 +385,11 @@ async def adelete(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider or "gemini",
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -367,17 +407,26 @@ def delete(
     try:
         _is_async = kwargs.pop("adelete_agent", False) is True
         litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(kwargs, name, custom_llm_provider, "delete_agent", {"name": name})
+        logging_obj = _make_logging_obj(
+            kwargs, name, custom_llm_provider, "delete_agent", {"name": name}
+        )
         config = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.delete_agent(
-            agents_api_config=config, name=name, litellm_params=litellm_params,
-            logging_obj=logging_obj, extra_headers=extra_headers,
-            timeout=timeout, _is_async=_is_async,
+            agents_api_config=config,
+            name=name,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            _is_async=_is_async,
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider,
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -414,8 +463,11 @@ async def alist_versions(
         return init_response
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider or "gemini",
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )
 
 
@@ -426,22 +478,33 @@ def list_versions(
     extra_headers: Optional[Dict[str, Any]] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     **kwargs,
-) -> Union[GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]]:
+) -> Union[
+    GeminiAgentVersionsResponse, Coroutine[Any, Any, GeminiAgentVersionsResponse]
+]:
     """Sync: List versions of a specific agent."""
     local_vars = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
     try:
         _is_async = kwargs.pop("alist_agent_versions", False) is True
         litellm_params = GenericLiteLLMParams(**kwargs)
-        logging_obj = _make_logging_obj(kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name})
+        logging_obj = _make_logging_obj(
+            kwargs, name, custom_llm_provider, "list_agent_versions", {"name": name}
+        )
         config = _get_agents_api_config(custom_llm_provider)
         return agents_http_handler.list_agent_versions(
-            agents_api_config=config, name=name, litellm_params=litellm_params,
-            logging_obj=logging_obj, extra_headers=extra_headers,
-            timeout=timeout, _is_async=_is_async,
+            agents_api_config=config,
+            name=name,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            _is_async=_is_async,
         )
     except Exception as e:
         raise litellm.exception_type(
-            model=name, custom_llm_provider=custom_llm_provider,
-            original_exception=e, completion_kwargs=local_vars, extra_kwargs=kwargs,
+            model=name,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
         )

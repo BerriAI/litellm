@@ -3,7 +3,9 @@ Unit tests for litellm/proxy/google_endpoints/agents_endpoints.py
 
 Focus: verify that list_gemini_agents, get_gemini_agent, delete_gemini_agent,
 and list_gemini_agent_versions correctly forward per-request credentials
-(api_key, api_base, …) supplied via query parameters.
+(api_key, api_base, …) supplied via the JSON-encoded litellm_params_template
+query parameter.  Flat credential query params (e.g. ?api_key=…) are no
+longer accepted — they would appear in server logs.
 """
 
 import json
@@ -47,20 +49,21 @@ class TestMergeQueryParamsIntoData:
         result = _merge_query_params_into_data(data, request)
         assert result == {"custom_llm_provider": "gemini"}
 
-    def test_flat_api_key_is_merged(self):
+    def test_flat_api_key_is_ignored(self):
+        """Flat credential params must NOT be merged (they leak into server logs)."""
         data = {"custom_llm_provider": "gemini"}
         request = _make_request("api_key=AIzaSyTest123")
         _merge_query_params_into_data(data, request)
-        assert data["api_key"] == "AIzaSyTest123"
+        assert "api_key" not in data
         assert data["custom_llm_provider"] == "gemini"
 
-    def test_flat_params_do_not_overwrite_existing_keys(self):
-        """Path params like 'name' must never be clobbered by query params."""
+    def test_flat_params_are_silently_dropped(self):
+        """Flat params (including name injection attempts) are ignored entirely."""
         data = {"name": "my-agent", "custom_llm_provider": "gemini"}
         request = _make_request("name=INJECTED&api_key=AIzaSyTest")
         _merge_query_params_into_data(data, request)
         assert data["name"] == "my-agent"
-        assert data["api_key"] == "AIzaSyTest"
+        assert "api_key" not in data
 
     def test_litellm_params_template_json_is_expanded(self):
         template = json.dumps(
@@ -96,8 +99,8 @@ class TestMergeQueryParamsIntoData:
         # Bad JSON is silently skipped; other data stays intact
         assert data == {"custom_llm_provider": "gemini"}
 
-    def test_flat_and_template_combined(self):
-        """Template and a flat param can coexist."""
+    def test_template_only_no_flat_params_merged(self):
+        """Only litellm_params_template is expanded; unknown flat params are dropped."""
         template = json.dumps({"api_key": "FromTemplate"})
         from urllib.parse import quote
 
@@ -106,7 +109,8 @@ class TestMergeQueryParamsIntoData:
         data = {"custom_llm_provider": "gemini"}
         _merge_query_params_into_data(data, request)
         assert data["api_key"] == "FromTemplate"
-        assert data["vertex_project"] == "my-project"
+        # flat vertex_project is ignored since it wasn't in litellm_params_template
+        assert "vertex_project" not in data
         assert "litellm_params_template" not in data
 
 
@@ -162,21 +166,19 @@ def _make_endpoint_request(query_string: str = "") -> MagicMock:
 async def test_list_gemini_agents_passes_api_key_to_processor(
     mock_srv, user_api_key_dict
 ):
+    from urllib.parse import quote
+
     from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
 
-    captured: dict = {}
-
-    async def fake_process(**kwargs):
-        captured.update({"data": kwargs.get("data") or {}})
-        return MagicMock()
+    template = json.dumps({"api_key": "AIzaListTest"})
 
     with patch(
         "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
     ) as MockProcessor:
         instance = MockProcessor.return_value
-        instance.base_process_llm_request = AsyncMock(side_effect=fake_process)
+        instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
 
-        request = _make_endpoint_request("api_key=AIzaListTest")
+        request = _make_endpoint_request(f"litellm_params_template={quote(template)}")
         await list_gemini_agents(
             request=request,
             fastapi_response=MagicMock(),
@@ -192,7 +194,11 @@ async def test_list_gemini_agents_passes_api_key_to_processor(
 async def test_get_gemini_agent_passes_api_key_to_processor(
     mock_srv, user_api_key_dict
 ):
+    from urllib.parse import quote
+
     from litellm.proxy.google_endpoints.agents_endpoints import get_gemini_agent
+
+    template = json.dumps({"api_key": "AIzaGetTest"})
 
     with patch(
         "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
@@ -200,7 +206,7 @@ async def test_get_gemini_agent_passes_api_key_to_processor(
         instance = MockProcessor.return_value
         instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
 
-        request = _make_endpoint_request("api_key=AIzaGetTest")
+        request = _make_endpoint_request(f"litellm_params_template={quote(template)}")
         await get_gemini_agent(
             request=request,
             name="my-agent",
@@ -218,7 +224,11 @@ async def test_get_gemini_agent_passes_api_key_to_processor(
 async def test_delete_gemini_agent_passes_api_key_to_processor(
     mock_srv, user_api_key_dict
 ):
+    from urllib.parse import quote
+
     from litellm.proxy.google_endpoints.agents_endpoints import delete_gemini_agent
+
+    template = json.dumps({"api_key": "AIzaDeleteTest"})
 
     with patch(
         "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
@@ -226,7 +236,7 @@ async def test_delete_gemini_agent_passes_api_key_to_processor(
         instance = MockProcessor.return_value
         instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
 
-        request = _make_endpoint_request("api_key=AIzaDeleteTest")
+        request = _make_endpoint_request(f"litellm_params_template={quote(template)}")
         await delete_gemini_agent(
             request=request,
             name="my-agent",
@@ -244,9 +254,13 @@ async def test_delete_gemini_agent_passes_api_key_to_processor(
 async def test_list_gemini_agent_versions_passes_api_key_to_processor(
     mock_srv, user_api_key_dict
 ):
+    from urllib.parse import quote
+
     from litellm.proxy.google_endpoints.agents_endpoints import (
         list_gemini_agent_versions,
     )
+
+    template = json.dumps({"api_key": "AIzaVersionsTest"})
 
     with patch(
         "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
@@ -254,7 +268,7 @@ async def test_list_gemini_agent_versions_passes_api_key_to_processor(
         instance = MockProcessor.return_value
         instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
 
-        request = _make_endpoint_request("api_key=AIzaVersionsTest")
+        request = _make_endpoint_request(f"litellm_params_template={quote(template)}")
         await list_gemini_agent_versions(
             request=request,
             name="my-agent",
@@ -281,7 +295,9 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(
         instance = MockProcessor.return_value
         instance.base_process_llm_request = AsyncMock(return_value=MagicMock())
 
-        request = _make_endpoint_request("name=INJECTED&api_key=AIzaKey")
+        # Even if a caller tries to inject "name" via flat query param, it is
+        # ignored (flat params are not merged).  The path-param name wins.
+        request = _make_endpoint_request("name=INJECTED")
         await get_gemini_agent(
             request=request,
             name="real-agent",
@@ -291,7 +307,6 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(
 
         init_data = MockProcessor.call_args[1]["data"]
         assert init_data["name"] == "real-agent"
-        assert init_data["api_key"] == "AIzaKey"
 
 
 @pytest.mark.asyncio
