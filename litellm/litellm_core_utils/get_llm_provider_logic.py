@@ -334,7 +334,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
-                    elif endpoint == "api-inference.modelscope.cn/v1":
+                    elif endpoint == "https://api-inference.modelscope.cn/v1":
                         custom_llm_provider = "modelscope"
                         dynamic_api_key = get_secret_str("MODELSCOPE_API_KEY")
                     elif endpoint == "api.moonshot.ai/v1":

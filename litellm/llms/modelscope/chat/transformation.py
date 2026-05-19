@@ -14,6 +14,8 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class ModelScopeChatConfig(OpenAIGPTConfig):
+    DEFAULT_BASE_URL: str = "https://api-inference.modelscope.cn/v1"
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -49,7 +51,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         api_base = (
             api_base
             or get_secret_str("MODELSCOPE_API_BASE")
-            or "https://api-inference.modelscope.cn/v1"
+            or self.DEFAULT_BASE_URL
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
@@ -67,7 +69,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         If api_base is not provided, use the default ModelScope /chat/completions endpoint.
         """
         if not api_base:
-            api_base = "https://api-inference.modelscope.cn/v1"
+            api_base = self.DEFAULT_BASE_URL
 
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"

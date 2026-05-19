@@ -9298,6 +9298,12 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_image_generation_config(model)
+        elif LlmProviders.MODELSCOPE == provider:
+            from litellm.llms.modelscope.image_generation import (
+                get_modelscope_image_generation_config,
+            )
+
+            return get_modelscope_image_generation_config(model)
         return None
 
     @staticmethod
