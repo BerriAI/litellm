@@ -572,6 +572,22 @@ def test_handle_cohere_response_tool_call():
     assert tool_calls[0]["function"]["name"] == "get_time"
 
 
+def test_handle_cohere_response_missing_usage():
+    resp = {
+        **_COHERE_RESPONSE_JSON,
+        "chatResponse": {
+            k: v
+            for k, v in _COHERE_RESPONSE_JSON["chatResponse"].items()
+            if k != "usage"
+        },
+    }
+    model_response = ModelResponse()
+    result = handle_cohere_response(resp, _COHERE_MODEL, model_response)
+    assert result.usage.prompt_tokens == 0
+    assert result.usage.completion_tokens == 0
+    assert result.usage.total_tokens == 0
+
+
 # ===========================================================================
 # cohere.py — handle_cohere_stream_chunk
 # ===========================================================================
