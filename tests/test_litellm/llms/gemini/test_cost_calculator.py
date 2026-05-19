@@ -115,6 +115,62 @@ def test_gemini_image_edit_cost_prefers_token_usage_metadata():
     assert cost != flat_image_cost
 
 
+def test_gemini_image_edit_cost_uses_output_token_details():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model = "gemini/gemini-3-pro-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    input_text_tokens = 20
+    output_text_tokens = 213
+    output_image_tokens = 1120
+    output_tokens = output_text_tokens + output_image_tokens
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1")],
+        usage=ImageUsage(
+            input_tokens=input_text_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=0,
+            ),
+            output_tokens=output_tokens,
+            total_tokens=input_text_tokens + output_tokens,
+            prompt_tokens=input_text_tokens,
+            completion_tokens=output_tokens,
+            prompt_tokens_details={
+                "text_tokens": input_text_tokens,
+                "image_tokens": 0,
+            },
+            completion_tokens_details={
+                "text_tokens": output_text_tokens,
+                "image_tokens": output_image_tokens,
+            },
+            output_tokens_details={
+                "text_tokens": output_text_tokens,
+                "image_tokens": output_image_tokens,
+            },
+        ),
+    )
+
+    cost = gemini_image_edit_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = (
+        input_text_tokens * model_info["input_cost_per_token"]
+        + output_text_tokens * model_info["output_cost_per_token"]
+        + output_image_tokens * model_info["output_cost_per_image_token"]
+    )
+    all_output_as_image_cost = (
+        input_text_tokens * model_info["input_cost_per_token"]
+        + (output_text_tokens + output_image_tokens)
+        * model_info["output_cost_per_image_token"]
+    )
+    assert round(cost, 10) == round(expected_cost, 10)
+    assert cost != all_output_as_image_cost
+
+
 def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

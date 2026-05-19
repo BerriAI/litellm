@@ -93,6 +93,8 @@ GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Dict[tuple[int, int], str] = {
     (896, 1280): "3:4",
 }
 
+IMAGEN_SUPPORTED_IMAGE_SIZES = {"1K", "2K"}
+
 
 def map_openai_size_to_gemini_image_config(
     size: str, model: str
@@ -105,8 +107,12 @@ def map_openai_size_to_gemini_image_config(
     image_config = {
         "aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height)
     }
-    if supports_gemini_image_size(model):
-        image_config["imageSize"] = _map_dimensions_to_gemini_image_size(width, height)
+    image_size = _map_dimensions_to_gemini_image_size(width, height)
+    if is_gemini_image_model(model):
+        if supports_gemini_image_size(model):
+            image_config["imageSize"] = image_size
+    elif image_size in IMAGEN_SUPPORTED_IMAGE_SIZES:
+        image_config["imageSize"] = image_size
     return image_config
 
 

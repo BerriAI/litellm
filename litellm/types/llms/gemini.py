@@ -1,7 +1,7 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
 
 from .vertex_ai import (
     GenerationConfig,
@@ -172,7 +172,7 @@ class GeminiImageGenerationParameters(BaseModel):
     """Aspect ratio for generated images (e.g., '1:1', '16:9', '9:16', '4:3', '3:4')"""
 
     imageSize: Optional[str] = None
-    """Image size for generated images (e.g., '512', '1K', '2K', '4K')"""
+    """Image size for generated images (e.g., '1K', '2K')"""
 
     personGeneration: Optional[str] = None
     """Controls person generation in images"""
