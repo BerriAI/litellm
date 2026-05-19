@@ -316,7 +316,7 @@ def _is_positive_finite_number(value: Any) -> bool:
     )
 
 
-def _get_metadata_model_infos(
+def _get_metadata_model_infos_for_cost_fallback(
     litellm_logging_obj: Optional[LitellmLoggingObject],
 ) -> List[Mapping[str, Any]]:
     litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
@@ -339,15 +339,6 @@ def _get_max_input_tokens_for_cost_fallback(
     custom_llm_provider: Optional[str],
     litellm_logging_obj: Optional[LitellmLoggingObject],
 ) -> Optional[Union[int, float]]:
-    metadata_model_infos = _get_metadata_model_infos(
-        litellm_logging_obj=litellm_logging_obj
-    )
-    for model_info in metadata_model_infos:
-        for token_limit_key in ("max_input_tokens", "max_tokens"):
-            token_limit = model_info.get(token_limit_key)
-            if _is_positive_finite_number(token_limit):
-                return cast(Union[int, float], token_limit)
-
     if model is None:
         return None
 
@@ -365,6 +356,18 @@ def _get_max_input_tokens_for_cost_fallback(
             )
         except Exception:
             continue
+        for token_limit_key in ("max_input_tokens", "max_tokens"):
+            token_limit = model_info.get(token_limit_key)
+            if _is_positive_finite_number(token_limit):
+                return cast(Union[int, float], token_limit)
+
+    # Request metadata can be caller-controlled on proxy paths. Prefer the
+    # registered model info above; use metadata only as a final compatibility
+    # fallback for router/deployment paths that have not registered the model.
+    metadata_model_infos = _get_metadata_model_infos_for_cost_fallback(
+        litellm_logging_obj=litellm_logging_obj
+    )
+    for model_info in metadata_model_infos:
         for token_limit_key in ("max_input_tokens", "max_tokens"):
             token_limit = model_info.get(token_limit_key)
             if _is_positive_finite_number(token_limit):

@@ -1031,6 +1031,68 @@ def test_completion_cost_uses_conservative_video_fallback_without_usage():
     assert cost == pytest.approx(max_input_tokens * input_cost_per_token)
 
 
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_completion_cost_ignores_client_metadata_for_video_fallback_limit(
+    metadata_key,
+):
+    model = "openai/test-video-untrusted-metadata-fallback"
+    input_cost_per_token = 0.25
+    max_input_tokens = 32
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": 0.0,
+                "max_tokens": max_input_tokens,
+                "max_input_tokens": max_input_tokens,
+                "max_output_tokens": 4,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4",
+                        "video_metadata": {
+                            "duration_seconds": 0,
+                            "fps": 0,
+                            "has_audio": False,
+                        },
+                    },
+                }
+            ],
+        }
+    ]
+    logging_obj = MagicMock()
+    logging_obj.litellm_params = {
+        metadata_key: {
+            "model_info": {
+                "max_input_tokens": 1,
+                "max_tokens": 1,
+            }
+        }
+    }
+
+    try:
+        cost = completion_cost(
+            completion_response={"model": model, "usage": {}},
+            model=model,
+            messages=messages,
+            custom_llm_provider="openai",
+            litellm_logging_obj=logging_obj,
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    assert cost == pytest.approx(max_input_tokens * input_cost_per_token)
+
+
 def test_completion_cost_uses_provider_video_usage_when_present():
     model = "openai/test-video-provider-usage"
     input_cost_per_token = 0.25
