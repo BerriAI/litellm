@@ -52,6 +52,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
       form.setFieldsValue({
         input_cost_per_token: undefined,
         output_cost_per_token: undefined,
+        cache_read_input_token_cost: undefined,
+        cache_creation_input_token_cost: undefined,
         input_cost_per_second: undefined,
       });
     }
@@ -210,6 +212,24 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       className="mb-4"
                     >
                       <TextInput />
+                    </Form.Item>
+                    <Form.Item
+                      label="Cache Read Cost (per 1M tokens)"
+                      name="cache_read_input_token_cost"
+                      rules={[{ validator: validateNumber }]}
+                      tooltip="If left blank, defaults to Input Cost."
+                      className="mb-4"
+                    >
+                      <TextInput placeholder="Defaults to Input Cost if blank" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Cache Write Cost (per 1M tokens)"
+                      name="cache_creation_input_token_cost"
+                      rules={[{ validator: validateNumber }]}
+                      tooltip="If left blank, defaults to Input Cost (the backend falls back to input_cost_per_token when no cache-write rate is set)."
+                      className="mb-4"
+                    >
+                      <TextInput placeholder="Defaults to Input Cost if blank" />
                     </Form.Item>
                   </>
                 ) : (

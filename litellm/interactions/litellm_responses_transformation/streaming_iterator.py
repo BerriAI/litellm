@@ -2,7 +2,7 @@
 Streaming iterator for transforming Responses API stream to Interactions API stream.
 """
 
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, cast
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -15,6 +15,7 @@ from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.types.llms.openai import (
+    ContentPartAddedEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
@@ -51,6 +52,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         self.collected_text = ""
         self.sent_interaction_start = False
         self.sent_content_start = False
+        self._pending_events: List[InteractionsAPIStreamingResponse] = []
 
     def _transform_responses_chunk_to_interactions_chunk(
         self,
@@ -80,7 +82,49 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             )
             self.collected_text += delta_text
 
-            # Send interaction.start if not sent
+            # Fallback: emit interaction.start, and queue content.start carrying this
+            # delta so the first token is preserved in the stream.
+            if not self.sent_interaction_start:
+                self.sent_interaction_start = True
+                self.sent_content_start = True
+                self._pending_events.append(
+                    InteractionsAPIStreamingResponse(
+                        event_type="content.start",
+                        id=getattr(responses_chunk, "item_id", None),
+                        object="content",
+                        delta={"type": "text", "text": delta_text},
+                    )
+                )
+                return InteractionsAPIStreamingResponse(
+                    event_type="interaction.start",
+                    id=getattr(responses_chunk, "item_id", None)
+                    or f"interaction_{id(self)}",
+                    object="interaction",
+                    status="in_progress",
+                    model=self.model,
+                )
+
+            # Fallback: emit content.start if ContentPartAddedEvent never arrived
+            if not self.sent_content_start:
+                self.sent_content_start = True
+                return InteractionsAPIStreamingResponse(
+                    event_type="content.start",
+                    id=getattr(responses_chunk, "item_id", None),
+                    object="content",
+                    delta={"type": "text", "text": delta_text},
+                )
+
+            # Normal path: emit content.delta with type field
+            return InteractionsAPIStreamingResponse(
+                event_type="content.delta",
+                id=getattr(responses_chunk, "item_id", None),
+                object="content",
+                delta={"type": "text", "text": delta_text},
+            )
+
+        # Handle ContentPartAddedEvent -> content.start (arrives before text deltas)
+        if isinstance(responses_chunk, ContentPartAddedEvent):
+            # Fallback: emit interaction.start if ResponseCreatedEvent never arrived
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
                 return InteractionsAPIStreamingResponse(
@@ -91,8 +135,6 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     status="in_progress",
                     model=self.model,
                 )
-
-            # Send content.start if not sent
             if not self.sent_content_start:
                 self.sent_content_start = True
                 return InteractionsAPIStreamingResponse(
@@ -101,14 +143,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     object="content",
                     delta={"type": "text", "text": ""},
                 )
-
-            # Send content.delta
-            return InteractionsAPIStreamingResponse(
-                event_type="content.delta",
-                id=getattr(responses_chunk, "item_id", None),
-                object="content",
-                delta={"text": delta_text},
-            )
+            return None
 
         # Handle ResponseCreatedEvent or ResponseInProgressEvent -> interaction.start
         if isinstance(responses_chunk, (ResponseCreatedEvent, ResponseInProgressEvent)):
@@ -172,6 +207,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
+        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
+        # the interaction.start fallback for the first OutputTextDeltaEvent).
+        if self._pending_events:
+            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         sync_iterator = cast(
             SyncResponsesAPIStreamingIterator, self.responses_stream_iterator
@@ -237,6 +276,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
 
+        # Drain events queued from a prior chunk (e.g. content.start emitted alongside
+        # the interaction.start fallback for the first OutputTextDeltaEvent).
+        if self._pending_events:
+            return self._pending_events.pop(0)
         # Use a loop instead of recursion to avoid stack overflow
         async_iterator = cast(
             ResponsesAPIStreamingIterator, self.responses_stream_iterator

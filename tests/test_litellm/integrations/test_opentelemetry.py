@@ -88,6 +88,149 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         otel.tracer.start_span.assert_not_called()
 
 
+class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
+    """team_id / team_alias must land on every child span of a
+    litellm_request trace, not only the root litellm_request span."""
+
+    def _slo_metadata(self):
+        return {
+            "user_api_key_team_id": "team-123",
+            "user_api_key_team_alias": "my-team",
+        }
+
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_guardrail_span_has_team_attributes(self, mock_datetime):
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        guardrail_info = {
+            "guardrail_name": "test_guardrail",
+            "guardrail_mode": "input",
+            "guardrail_response": "filtered_content",
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {
+                "guardrail_information": [guardrail_info],
+                "metadata": self._slo_metadata(),
+            }
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_id", "team-123"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_alias", "my-team"
+        )
+
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
+    @patch("litellm.turn_off_message_logging", False)
+    def test_raw_request_span_has_team_attributes(self):
+        otel = OpenTelemetry()
+        otel.message_logging = True
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": self._slo_metadata()},
+        }
+        otel._maybe_log_raw_request(
+            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+        )
+
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_id", "team-123"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_alias", "my-team"
+        )
+
+    def test_helper_skips_when_team_values_missing(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel._set_team_attributes_on_span(span=mock_span, team_id=None, team_alias=None)
+
+        mock_span.set_attribute.assert_not_called()
+
+    def test_helper_skips_when_team_values_are_empty_strings(self):
+        """A master-key / team-less request carries user_api_key_team_id=''
+        in metadata. Propagating '' to every span is noise that makes
+        traces look mis-instrumented; treat empty as absent."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel._set_team_attributes_on_span(span=mock_span, team_id="", team_alias="")
+
+        mock_span.set_attribute.assert_not_called()
+
+    def test_helper_reads_metadata_from_kwargs(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel._set_team_attributes_from_kwargs(
+            mock_span,
+            {"standard_logging_object": {"metadata": self._slo_metadata()}},
+        )
+
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_id", "team-123"
+        )
+        mock_span.set_attribute.assert_any_call(
+            "metadata.user_api_key_team_alias", "my-team"
+        )
+
+    def test_helper_handles_missing_standard_logging_object(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        otel._set_team_attributes_from_kwargs(mock_span, {})
+
+        mock_span.set_attribute.assert_not_called()
+
+    def test_failure_hook_exception_span_has_team_attributes(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        otel.tracer = tracer
+        server_span = tracer.start_span("Received Proxy Server Request")
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.parent_otel_span = server_span
+        user_api_key_dict.team_id = "team-123"
+        user_api_key_dict.team_alias = "my-team"
+
+        asyncio.run(
+            otel.async_post_call_failure_hook(
+                request_data={},
+                original_exception=ValueError("boom"),
+                user_api_key_dict=user_api_key_dict,
+                traceback_str="trace",
+            )
+        )
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        exception_span = finished["Failed Proxy Server Request"]
+        assert exception_span.attributes["metadata.user_api_key_team_id"] == "team-123"
+        assert (
+            exception_span.attributes["metadata.user_api_key_team_alias"] == "my-team"
+        )
+
+
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
     def test_cost_breakdown_emitted_to_otel_span(self):
         """

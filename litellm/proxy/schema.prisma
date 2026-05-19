@@ -48,9 +48,10 @@ model LiteLLM_CredentialsTable {
 // Models on proxy
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())
-  model_name String 
+  model_name String
   litellm_params Json
-  model_info Json? 
+  model_info Json?
+  blocked Boolean @default(false)
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

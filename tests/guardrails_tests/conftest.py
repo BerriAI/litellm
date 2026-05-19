@@ -16,14 +16,17 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-from tests._vcr_conftest_common import (  # noqa: E402
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
     install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
+    reset_vcr_diag_dir,
     vcr_config_dict,
 )
 
@@ -55,6 +58,7 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
 
 
 def pytest_runtest_logreport(report):
@@ -160,3 +164,4 @@ def pytest_collection_modifyitems(config, items):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     emit_cassette_cache_session_banner(terminalreporter)
     emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)

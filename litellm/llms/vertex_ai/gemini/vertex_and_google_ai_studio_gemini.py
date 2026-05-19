@@ -280,6 +280,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         - gemini-3-pro-preview
         - gemini-3-flash
         - gemini-3-flash-preview (Gemini 3 Flash)
+        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
+        - gemini-3.5-flash
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
@@ -300,6 +302,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         supported_params = [
             "temperature",
             "top_p",
+            "top_k",
             "max_tokens",
             "max_completion_tokens",
             "stream",
@@ -362,6 +365,66 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Google doesn't support user_location or search_context_size params
         """
         return Tools(googleSearch={})
+
+    @staticmethod
+    def _search_tool_keys() -> set:
+        return {
+            VertexToolName.GOOGLE_SEARCH.value,
+            VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
+            VertexToolName.ENTERPRISE_WEB_SEARCH.value,
+            VertexToolName.URL_CONTEXT.value,
+            "google_search",
+            "google_search_retrieval",
+            "enterprise_web_search",
+            "urlContext",
+        }
+
+    @classmethod
+    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
+        """
+        Drop search tools from optional_params when mixed with function declarations
+        and include_server_side_tool_invocations is not enabled.
+
+        Runs after map_openai_params merges tools and web_search_options so both
+        code paths (single _map_function call vs split tools + web_search_options)
+        get the same conflict resolution.
+        """
+        if optional_params.get("include_server_side_tool_invocations"):
+            return
+
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return
+
+        search_tool_keys = cls._search_tool_keys()
+        has_function_declarations = any(
+            isinstance(tool, dict) and tool.get("function_declarations")
+            for tool in tools
+        )
+        if not has_function_declarations:
+            return
+
+        has_search_tools = any(
+            isinstance(tool, dict) and any(key in tool for key in search_tool_keys)
+            for tool in tools
+        )
+        if not has_search_tools:
+            return
+
+        verbose_logger.warning(
+            "Vertex AI does not support mixing function declarations with "
+            "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+            "googleSearchRetrieval) in the same request. Dropping search "
+            "tools and keeping function declarations. To use search tools, "
+            "send a request without function calling tools."
+        )
+        optional_params["tools"] = [
+            tool
+            for tool in tools
+            if not (
+                isinstance(tool, dict) and any(key in tool for key in search_tool_keys)
+            )
+        ]
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """
@@ -884,9 +947,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
+        # gemini-3.5-flash, and any future 3.x-flash variants.
         is_gemini3flash = model and (
-            "gemini-3-flash" in model.lower() or "gemini-3.1-flash" in model.lower()
+            "flash" in model.lower() and "gemini-3" in model.lower()
         )
         is_gemini31pro = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
@@ -982,8 +1046,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
+                            "gemini-3" in model.lower() and "flash" in model.lower()
                         )
                         params["thinkingLevel"] = (
                             "minimal" if is_gemini3flash else "low"
@@ -1077,6 +1140,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1086,9 +1150,41 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "can cause infinite loops, degraded reasoning performance, and failure on complex tasks. "
                             "Strongly recommended to use temperature = 1.0 (default)."
                         )
+                    if not gemini_sampling_params_warned:
+                        verbose_logger.warning(
+                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                            f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                            "future release. Move sampling guidance into the `system` "
+                            "instructions instead."
+                        )
+                        gemini_sampling_params_warned = True
                 optional_params["temperature"] = value
             elif param == "top_p":
+                if (
+                    VertexGeminiConfig._is_gemini_3_or_newer(model)
+                    and not gemini_sampling_params_warned
+                ):
+                    verbose_logger.warning(
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                        "future release. Move sampling guidance into the `system` "
+                        "instructions instead."
+                    )
+                    gemini_sampling_params_warned = True
                 optional_params["top_p"] = value
+            elif param == "top_k":
+                if (
+                    VertexGeminiConfig._is_gemini_3_or_newer(model)
+                    and not gemini_sampling_params_warned
+                ):
+                    verbose_logger.warning(
+                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to "
+                        f"function for Gemini 3+ ({model}) but are planned for removal in a "
+                        "future release. Move sampling guidance into the `system` "
+                        "instructions instead."
+                    )
+                    gemini_sampling_params_warned = True
+                optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
@@ -1139,11 +1235,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
-                if value is False and not (
-                    drop_params or litellm.drop_params
-                ):  # if drop params is True, then we should just ignore this
-                    self.validate_parallel_tool_calls(value, non_default_params)
-                else:
+                tools_list = non_default_params.get(
+                    "tools", non_default_params.get("functions")
+                )
+                num_tools = len(tools_list) if isinstance(tools_list, list) else 0
+                # Gemini does not support parallel_tool_calls=False with multiple
+                # tools. Drop the param instead of failing — Responses API clients
+                # often send parallel_tool_calls=false by default.
+                if not (value is False and num_tools > 1):
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value
@@ -1215,6 +1314,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
+
+        self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
 
@@ -1588,6 +1689,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 }
                 # Extract thought signature if present
                 thought_signature = part.get("thoughtSignature")
+                # Gemini 3.5+ returns a stable `id` per function call to enable
+                # strict response matching. Preserve it as the OpenAI
+                # tool_call_id so it can be echoed back unchanged.
+                gemini_call_id = part["functionCall"].get("id")
 
                 if is_function_call is True:
                     function_dict: Dict[str, Any] = dict(_function_chunk)
@@ -1605,6 +1710,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "function": _function_chunk,
                         "index": cumulative_tool_call_idx,
                     }
+                    # Gemini 3.5+ returns a stable native `id`; prefer it over
+                    # the synthetic call_<uuid> so the same value can be echoed
+                    # back on the matching `functionResponse`.
+                    if gemini_call_id:
+                        _tool_response_chunk["id"] = gemini_call_id
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
@@ -2533,9 +2643,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages, model=model)
+        return _gemini_convert_messages_with_history(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
@@ -3139,6 +3254,31 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
 
+    @staticmethod
+    def _check_streaming_error(chunk: dict) -> None:
+        """Detect embedded errors (e.g. 429 RESOURCE_EXHAUSTED) in streaming chunks and raise VertexAIError."""
+        if "error" not in chunk:
+            return
+        error_data = chunk["error"]
+        if not isinstance(error_data, dict):
+            raise VertexAIError(
+                status_code=500,
+                message=f"Unexpected error format in mid-stream chunk: {error_data}",
+            )
+        raw_code = error_data.get("code", 500)
+        if raw_code is None:
+            raw_code = 500
+        try:
+            error_code = int(raw_code)
+        except (TypeError, ValueError):
+            error_code = 500
+        error_message = error_data.get("message", "Unknown error")
+        error_status = error_data.get("status", "UNKNOWN")
+        raise VertexAIError(
+            status_code=error_code,
+            message=f"{error_status} - {error_message}",
+        )
+
     def _apply_stream_candidates(
         self,
         _candidates: List[Candidates],
@@ -3256,6 +3396,11 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
+
+            # Detect mid-stream error chunks (e.g. 429 RESOURCE_EXHAUSTED).
+            # Vertex AI can return errors as HTTP 200 but with an "error" field in the SSE body.
+            self._check_streaming_error(chunk)
+
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore

@@ -416,6 +416,7 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
@@ -1287,6 +1288,18 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
+from .interactions.agents.main import (
+    acreate as acreate_agent,
+    create as create_agent,
+    alist as alist_agents,
+    list as list_agents,
+    aget as aget_agent,
+    get as get_agent,
+    adelete as adelete_agent,
+    delete as delete_agent,
+    alist_versions as alist_agent_versions,
+    list_versions as list_agent_versions,
+)
 from .skills.main import (
     create_skill,
     acreate_skill,
@@ -1879,6 +1892,12 @@ if TYPE_CHECKING:
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,
+    )
+    from .llms.dashscope.embed.transformation import (
+        DashScopeEmbeddingConfig as DashScopeEmbeddingConfig,
+    )
+    from .llms.dashscope.rerank.transformation import (
+        DashScopeRerankConfig as DashScopeRerankConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

@@ -172,12 +172,7 @@ describe("LogDetailContent", () => {
   });
 
   it("should display loading state when isLoadingDetails is true", () => {
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry()}
-        isLoadingDetails={true}
-      />,
-    );
+    render(<LogDetailContent logEntry={createLogEntry()} isLoadingDetails={true} />);
 
     expect(screen.getByText("Loading request & response data...")).toBeInTheDocument();
   });
@@ -296,6 +291,37 @@ describe("LogDetailContent", () => {
 
     expect(screen.getByText("LiteLLM Overhead")).toBeInTheDocument();
     expect(screen.getByText("42.50 ms")).toBeInTheDocument();
+  });
+
+  it("should not display LiteLLM Overhead when litellm_overhead_time_ms is absent from metadata", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(screen.queryByText("LiteLLM Overhead")).not.toBeInTheDocument();
+  });
+
+  const retriesItem = () => screen.getByText("Retries").closest(".ant-descriptions-item") as HTMLElement;
+
+  it("should display attempted_retries / max_retries for Retries when attempted_retries > 0", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 2, max_retries: 3 } })}
+      />,
+    );
+
+    expect(within(retriesItem()).getByText("2 / 3")).toBeInTheDocument();
+  });
+
+  it("should display a green 'None' tag for Retries when attempted_retries is 0", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 0 } })} />);
+
+    const noneTag = within(retriesItem()).getByText("None");
+    expect(noneTag.closest(".ant-tag")).toHaveClass("ant-tag-green");
+  });
+
+  it("should display '-' for Retries when attempted_retries is absent from metadata", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(within(retriesItem()).getByText("-")).toBeInTheDocument();
   });
 
   it("should display start and end time in ISO format", () => {

@@ -1141,6 +1141,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         event_type = parsed_chunk.get("type")
         if isinstance(event_type, ResponsesAPIStreamEvents):
             event_type = event_type.value
+
+        if parsed_chunk.get("object") == "chat.completion.chunk" or (
+            event_type is None
+            and isinstance(parsed_chunk.get("choices"), list)
+            and parsed_chunk.get("choices")
+        ):
+            return ModelResponseStream(**parsed_chunk)
+
         verbose_logger.debug(f"Chat provider: Processing event type: {event_type}")
 
         if event_type == "response.created":
