@@ -7943,3 +7943,83 @@ async def test_team_member_me_returns_404_for_unknown_team(mock_db_client):
                 user_api_key_dict=caller_auth,
             )
     assert exc_info.value.status_code == 404
+
+
+class TestEmitTeamMembersMetricDelta:
+    """Tests for the ``_emit_team_members_metric_delta`` helper.
+
+    The helper is the seam between the team management endpoints and the
+    Prometheus team-members gauge — it should call the right
+    ``PrometheusLogger`` method (inc or dec) based on sign, and silently
+    no-op when Prometheus is not configured.
+    """
+
+    def test_no_op_when_prometheus_logger_not_registered(self):
+        """Without a PrometheusLogger in callbacks the helper must not raise."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=None,
+        ):
+            # Should not raise, and there's nothing to assert on the call — the
+            # absence of an exception is the contract being tested.
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=3
+            )
+
+    def test_zero_delta_short_circuits_before_lookup(self):
+        """delta=0 must not even touch get_instance — no work to do."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance"
+        ) as mock_get:
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=0
+            )
+            mock_get.assert_not_called()
+
+    def test_positive_delta_calls_increment(self):
+        """A +N delta routes to ``increment_team_members_metric(amount=N)``."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        mock_logger = MagicMock()
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=mock_logger,
+        ):
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=3
+            )
+
+        mock_logger.increment_team_members_metric.assert_called_once_with(
+            team_id="t-1", team_alias="alias-1", amount=3.0
+        )
+        mock_logger.decrement_team_members_metric.assert_not_called()
+
+    def test_negative_delta_calls_decrement_with_absolute_amount(self):
+        """A -N delta routes to ``decrement_team_members_metric(amount=N)``."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        mock_logger = MagicMock()
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=mock_logger,
+        ):
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=-1
+            )
+
+        mock_logger.decrement_team_members_metric.assert_called_once_with(
+            team_id="t-1", team_alias="alias-1", amount=1.0
+        )
+        mock_logger.increment_team_members_metric.assert_not_called()
