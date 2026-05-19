@@ -130,6 +130,7 @@ services = Union[
         "generic_api",
         "arize",
         "galileo",
+        "newrelic",
         "sqs",
     ],
     str,
@@ -207,7 +208,11 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+<<<<<<< HEAD
             "galileo",
+=======
+            "newrelic",
+>>>>>>> f7926f705c (Wiring in the test message from the LiteLLM callback UX.)
             "sqs",
         ]:
             raise HTTPException(
@@ -324,6 +329,19 @@ async def health_services_endpoint(  # noqa: PLR0915
             return {
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
+            }
+        elif service == "newrelic":
+            from litellm.integrations.newrelic.newrelic import NewRelicLogger
+
+            newrelic_logger = NewRelicLogger()
+            response = await newrelic_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "New Relic is healthy — test event sent"
+                ),
             }
 
         if service == "webhook":

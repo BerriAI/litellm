@@ -1113,7 +1113,7 @@ class TestAsyncHealthCheck:
         assert result["error_message"] is not None
 
     @pytest.mark.asyncio
-    async def test_healthy_when_app_enabled(self):
+    async def test_healthy_when_app_enabled_records_test_event(self):
         logger = make_logger()
         mock_app = MagicMock()
         mock_app.enabled = True
@@ -1121,6 +1121,14 @@ class TestAsyncHealthCheck:
             result = await logger.async_health_check()
         assert result["status"] == "healthy"
         assert result["error_message"] is None
+
+        mock_app.record_custom_event.assert_called_once()
+        event_type, event_data = mock_app.record_custom_event.call_args[0]
+        assert event_type == "LiteLLMConnectionTest"
+        assert event_data["is_test_event"] is True
+        assert event_data["app_name"] == logger.app_name
+        assert event_data["source"] == "litellm-proxy"
+        assert isinstance(event_data["timestamp"], float)
 
     @pytest.mark.asyncio
     async def test_unhealthy_when_app_disabled(self):
@@ -1131,6 +1139,7 @@ class TestAsyncHealthCheck:
             result = await logger.async_health_check()
         assert result["status"] == "unhealthy"
         assert result["error_message"] is not None
+        mock_app.record_custom_event.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_exception_returns_unhealthy(self):
@@ -1141,6 +1150,17 @@ class TestAsyncHealthCheck:
             result = await logger.async_health_check()
         assert result["status"] == "unhealthy"
         assert "agent down" in result["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_record_custom_event_failure_returns_unhealthy(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        mock_app.record_custom_event.side_effect = RuntimeError("intake unreachable")
+        with patch("newrelic.agent.application", return_value=mock_app):
+            result = await logger.async_health_check()
+        assert result["status"] == "unhealthy"
+        assert "intake unreachable" in result["error_message"]
 
 
 # ---------------------------------------------------------------------------

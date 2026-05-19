@@ -811,7 +811,14 @@ class NewRelicLogger(CustomLogger):
         Check if the New Relic integration is healthy.
 
         Verifies that the integration is enabled and the New Relic agent
-        has an active, connected application.
+        has an active, connected application, then records a small
+        `LiteLLMConnectionTest` custom event so the user can confirm the
+        end-to-end pipeline in the New Relic UI via NRQL:
+        `SELECT * FROM LiteLLMConnectionTest SINCE 1 hour ago`.
+
+        The `LiteLLMConnectionTest` event type is intentionally outside the
+        `Llm*` family that AI Monitoring queries, so test events do not
+        appear in AI Monitoring dashboards.
         """
         if not self.enabled:
             return IntegrationHealthCheckStatus(
@@ -823,16 +830,24 @@ class NewRelicLogger(CustomLogger):
 
         try:
             app = _newrelic_agent.application()
-            if app and app.enabled:
+            if not (app and app.enabled):
                 return IntegrationHealthCheckStatus(
-                    status="healthy", error_message=None
+                    status="unhealthy",
+                    error_message=(
+                        "New Relic Python agent not installed. Review the New Relic integration documentation at https://docs.litellm.ai/docs/observability/newrelic."
+                    ),
                 )
-            return IntegrationHealthCheckStatus(
-                status="unhealthy",
-                error_message=(
-                    "New Relic Python agent not installed. Review the New Relic integration documentation at https://docs.litellm.ai/docs/observability/newrelic."
-                ),
+
+            app.record_custom_event(
+                "LiteLLMConnectionTest",
+                {
+                    "is_test_event": True,
+                    "app_name": self.app_name,
+                    "source": "litellm-proxy",
+                    "timestamp": time.time(),
+                },
             )
+            return IntegrationHealthCheckStatus(status="healthy", error_message=None)
         except Exception as e:
             return IntegrationHealthCheckStatus(
                 status="unhealthy",
