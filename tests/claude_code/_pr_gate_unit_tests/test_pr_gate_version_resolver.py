@@ -127,6 +127,31 @@ def test_uses_custom_min_age():
     assert out == "0.9.0"
 
 
+def test_excludes_prerelease_versions():
+    """Pre-release tags (1.0.0-alpha.1, 2.0.0-rc.1, etc.) must never win,
+    even if their publish timestamp is the newest eligible one."""
+    metadata = _metadata_with_times(
+        {
+            "2.1.119": _t("2026-04-21T10:00:00.000Z"),  # stable, 4d old
+            "2.2.0-alpha.1": _t("2026-04-22T10:00:00.000Z"),  # newer publish
+            "2.2.0-rc.1": _t("2026-04-22T11:00:00.000Z"),  # newest publish
+            "3.0.0-beta": _t("2026-04-22T12:00:00.000Z"),  # newest publish
+        }
+    )
+    assert resolve_pr_gate_version(metadata=metadata, as_of=NOW) == "2.1.119"
+
+
+def test_raises_when_only_prereleases_are_eligible():
+    metadata = _metadata_with_times(
+        {
+            "2.2.0-alpha.1": _t("2026-04-22T10:00:00.000Z"),
+            "2.2.0-rc.1": _t("2026-04-22T11:00:00.000Z"),
+        }
+    )
+    with pytest.raises(NoEligibleVersionError):
+        resolve_pr_gate_version(metadata=metadata, as_of=NOW)
+
+
 def test_resolver_uses_fetcher_when_metadata_not_provided():
     captured = {}
 
