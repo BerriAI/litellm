@@ -63,10 +63,12 @@ async def test_proxy_admin_actor_can_create_keys_for_others(
         user_row = await prisma.db.litellm_usertable.find_unique(
             where={"user_id": seeder.user_id}
         )
+        # View columns: the auth resolver reads from this view, then does a
+        # separate user-table lookup keyed off the view's user_id to populate
+        # user_role. So we want both surfaces independently.
         view_rows = await prisma.db.query_raw(
-            'SELECT user_id, user_role FROM "LiteLLM_VerificationTokenView" '
-            'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = '
-            '"LiteLLM_VerificationTokenView".user_id WHERE token = $1',
+            "SELECT user_id, team_id, organization_id "
+            'FROM "LiteLLM_VerificationTokenView" WHERE token = $1',
             seeder.hashed,
         )
         pytest.fail(
