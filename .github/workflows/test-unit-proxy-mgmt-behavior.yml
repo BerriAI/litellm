@@ -1,0 +1,29 @@
+name: "Unit Tests: Proxy Management-Endpoint Behavior Pinning"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy-mgmt-behavior:
+    uses: ./.github/workflows/_test-unit-services-base.yml
+    with:
+      test-path: tests/proxy_behavior
+      workers: 2
+      reruns: 0
+      enable-postgres: true
+      artifact-name: proxy-mgmt-behavior
+      timeout-minutes: 15
