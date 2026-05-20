@@ -12,7 +12,7 @@ async def test_liveliness(proxy_client):
     assert resp.status_code == 200
 
 
-async def test_key_generate_lands_in_db(proxy_client):
+async def test_key_generate_lands_in_db(proxy_client, prisma, scratch):
     """De-risk gate: prove the harness exercises the full stack end-to-end.
 
     A successful ``/key/generate`` requires:
@@ -22,21 +22,16 @@ async def test_key_generate_lands_in_db(proxy_client):
       * the real ``generate_key_helper_fn`` wrote a hashed row to
         ``LiteLLM_VerificationToken``.
 
-    All four collapse to a single 200 + ``sk-`` token check here, with a
-    follow-up prisma read to prove the row landed (and that the token is the
-    hashed form, not the cleartext returned over the wire).
+    The scratch fixture tags the row with its prefix so the per-test teardown
+    cleans it up — keeps the proxy DB free of accumulated cruft on repeated
+    local runs.
     """
-    from litellm.proxy import proxy_server
     from litellm.proxy.utils import hash_token
-
-    assert (
-        proxy_server.prisma_client is not None
-    ), "FastAPI lifespan did not connect prisma — harness is wrong."
 
     resp = await proxy_client.post(
         "/key/generate",
         headers={"Authorization": f"Bearer {MASTER_KEY}"},
-        json={},
+        json={"key_alias": scratch.prefix},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -44,9 +39,7 @@ async def test_key_generate_lands_in_db(proxy_client):
     assert cleartext_key.startswith("sk-")
 
     hashed = hash_token(cleartext_key)
-    row = await proxy_server.prisma_client.db.litellm_verificationtoken.find_unique(
-        where={"token": hashed}
-    )
+    row = await prisma.db.litellm_verificationtoken.find_unique(where={"token": hashed})
     assert row is not None, "Generated key did not land in LiteLLM_VerificationToken"
     assert row.token == hashed
     assert (
