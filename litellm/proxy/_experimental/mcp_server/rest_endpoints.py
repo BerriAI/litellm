@@ -307,9 +307,26 @@ if MCP_AVAILABLE:
         if canonical_server_id not in allowed_server_ids_set:
             _server = global_mcp_server_manager.get_mcp_server_by_id(
                 server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(
-                server_id, client_ip=_rest_client_ip
-            )
+            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            if (
+                _server is not None
+                and _rest_client_ip is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    _server, _rest_client_ip
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "ip_filtering",
+                        "message": (
+                            f"MCP server '{server_id}' is not accessible from your IP address "
+                            f"({_rest_client_ip}). This server is restricted to internal "
+                            "networks only. To make it externally accessible, set "
+                            "'available_on_public_internet: true' in the server configuration."
+                        ),
+                    },
+                )
             if _server is None:
                 raise HTTPException(
                     status_code=404,
