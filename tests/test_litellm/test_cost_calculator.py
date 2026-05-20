@@ -2390,3 +2390,79 @@ def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     expected = 1000 * 0.0000025 + 100 * 0.000015
 
     assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_respects_cache_read_and_creation_token_rates():
+    """Regression test for https://github.com/BerriAI/litellm/issues/11364.
+
+    Reported in v1.71.1: ``claude-3-7-sonnet-20250219`` cost was computed
+    as if every prompt token were charged at the regular input rate,
+    ignoring ``cache_read_input_tokens`` (cheaper) and
+    ``cache_creation_input_tokens`` (more expensive). The reporter saw
+    ~$0.096 for a request where the expected cost is ~$0.0125. The bug
+    appears to have been fixed in subsequent refactors, but no test
+    pinned the correct behavior, so a future regression could go
+    unnoticed.
+
+    This test uses the exact token counts from the issue and asserts the
+    cost falls in a tight band around the expected value. If the
+    cache-aware accounting in
+    ``litellm/llms/anthropic/cost_calculation.py`` ever silently reverts
+    to charging the full input rate, this test fails immediately.
+    """
+    from litellm.cost_calculator import cost_per_token
+
+    # Numbers from the issue report (v1.71.1):
+    #   prompt_tokens=30946 (cache_read=30940, cache_creation=460,
+    #                        regular input=6)
+    #   completion_tokens=102
+    #
+    # Expected with claude-3-7-sonnet-20250219 catalog rates:
+    #   input_cost_per_token         = $3.0e-6
+    #   cache_read_input_token_cost  = $3.0e-7
+    #   cache_creation_input_token_cost = $3.75e-6
+    #   output_cost_per_token        = $1.5e-5
+    #
+    # regular_input  =     6 * 3.0e-6  = $0.000018
+    # cache_read     = 30940 * 3.0e-7  = $0.009282
+    # cache_creation =   460 * 3.75e-6 = $0.001725
+    # output         =   102 * 1.5e-5  = $0.00153
+    # ---------------------------------------------
+    # total                            ~ $0.0126
+    #
+    # The buggy v1.71.1 cost (full input rate on everything):
+    # 30946 * 3.0e-6 + 102 * 1.5e-5 = $0.094368 — well outside the
+    # tolerance below.
+    usage = Usage(
+        prompt_tokens=6,
+        completion_tokens=102,
+        total_tokens=31048,
+        cache_creation_input_tokens=460,
+        cache_read_input_tokens=30940,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="claude-3-7-sonnet-20250219",
+        usage_object=usage,
+    )
+    total = prompt_cost + completion_cost
+
+    # Tight tolerance: 10% accommodates minor catalog price updates
+    # but rejects the ~7.5x error the original bug produced.
+    assert total == pytest.approx(0.012537, rel=0.10), (
+        f"Anthropic cache-aware cost regressed. Got total=${total:.6f} "
+        f"(prompt=${prompt_cost:.6f}, completion=${completion_cost:.6f}). "
+        f"Expected ~$0.0126. If this fails because catalog rates changed, "
+        f"recompute the expected value above; if it fails because cache "
+        f"tokens are being billed at the regular input rate, see "
+        f"litellm/llms/anthropic/cost_calculation.py and "
+        f"litellm/cost_calculator.py around line 353."
+    )
+
+    # Also confirm the regular-input rate is NOT being charged on cache
+    # tokens: if it were, total would be at least 30000 * 3.0e-6 = $0.09.
+    assert total < 0.05, (
+        f"Total cost ${total:.6f} is too high to be cache-discounted. "
+        f"Cache tokens appear to be billed at the regular input rate "
+        f"(issue #11364 regression)."
+    )
