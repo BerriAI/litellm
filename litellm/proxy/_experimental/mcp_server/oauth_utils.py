@@ -240,7 +240,7 @@ def _normalize_native_redirect_uri(
 
 def _parse_trusted_native_redirect_uris() -> List[str]:
     """Built-in native MCP callbacks plus ``MCP_TRUSTED_NATIVE_REDIRECT_URIS``."""
-    entries: List[str] = list(_DEFAULT_NATIVE_REDIRECT_URIS)
+    entries: List[str] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
     raw = os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV, "").strip()
     if not raw:
         return entries
