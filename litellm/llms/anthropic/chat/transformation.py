@@ -732,6 +732,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _display_number = tool.get("display_number")
 
             if _display_width_px is None or _display_height_px is None:
+                if isinstance(_function, dict):
+                    raise ValueError(
+                        "Missing required parameter: display_width_px or display_height_px"
+                    )
                 # Responses clients may declare computer tools without display
                 # sizing; skip rather than failing the entire request.
                 return None, None

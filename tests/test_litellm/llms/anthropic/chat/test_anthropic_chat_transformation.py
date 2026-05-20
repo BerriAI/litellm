@@ -3804,6 +3804,76 @@ def test_map_tools_codex_responses_tool_mix():
     assert anthropic_tools[1]["type"] == "computer_use_preview"
 
 
+def test_map_tools_claude_code_function_tools_unchanged():
+    """Claude Code sends Chat Completions function tools (Bash, Task, etc.)."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "Bash",
+                "description": "Run a shell command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Task",
+                "description": "Launch a subagent",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string"}},
+                    "required": ["prompt"],
+                },
+            },
+        },
+    ]
+
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    assert mcp_servers == []
+    assert len(anthropic_tools) == 2
+    assert anthropic_tools[0]["name"] == "Bash"
+    assert anthropic_tools[1]["name"] == "Task"
+    assert anthropic_tools[0]["input_schema"]["type"] == "object"
+
+
+def test_map_tools_claude_code_anthropic_native_tools_passthrough():
+    """Anthropic-native tools with input_schema bypass OpenAI tool mapping."""
+    config = AnthropicConfig()
+    bash_tool = {
+        "name": "Bash",
+        "description": "Run a shell command",
+        "input_schema": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    }
+
+    anthropic_tools, mcp_servers = config._map_tools([bash_tool])
+    assert mcp_servers == []
+    assert anthropic_tools == [bash_tool]
+
+
+def test_map_tool_helper_computer_function_format_still_raises_without_display():
+    config = AnthropicConfig()
+    tool = {
+        "type": "computer_20250124",
+        "function": {
+            "name": "computer",
+            "parameters": {"environment": "mac"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="display_width_px or display_height_px"):
+        config._map_tool_helper(tool)  # type: ignore[arg-type]
+
+
 def test_extract_response_content_thinking_block_null_thinking():
     """
     Test that thinking blocks are not dropped when the 'thinking' field is null
