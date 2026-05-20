@@ -30,6 +30,9 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
 # Comma-separated private-use URI allowlist for native MCP clients.
+# A trailing ``*`` is a prefix match; end the prefix with ``/`` (e.g.
+# ``myapp://host/oauth/*``) so ``.../oauth/callback*`` does not also
+# match ``.../oauth/callback-2``.
 _TRUSTED_NATIVE_REDIRECT_URIS_ENV = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
 
 # Default allowlist for trusted native redirect URIs.
@@ -222,12 +225,12 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
 def _normalize_native_redirect_uri(
     parsed,
 ) -> str:
-    """Lowercase scheme/netloc; preserve path for allowlist comparison."""
+    """Lowercase scheme, netloc, and path for allowlist comparison."""
     return urlunparse(
         (
             (parsed.scheme or "").lower(),
             (parsed.netloc or "").lower(),
-            parsed.path or "",
+            (parsed.path or "").lower(),
             "",
             "",
             "",
@@ -248,6 +251,23 @@ def _parse_trusted_native_redirect_uris() -> List[str]:
     return entries
 
 
+def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
+    """Prefix match for ``entry*`` allowlist rows.
+
+    When the prefix does not end with ``/``, only exact matches or
+    deeper path segments (``prefix/...``) are accepted — not siblings
+    like ``prefix-2``.
+    """
+    if not normalized.startswith(prefix):
+        return False
+    suffix = normalized[len(prefix) :]
+    if not suffix:
+        return True
+    if prefix.endswith("/"):
+        return True
+    return suffix[0] == "/"
+
+
 def _matches_trusted_native_redirect_uri(parsed) -> bool:
     """Allowlisted private-use / custom-scheme OAuth callbacks for native MCP clients."""
     if parsed.fragment:
@@ -262,8 +282,7 @@ def _matches_trusted_native_redirect_uri(parsed) -> bool:
     normalized = _normalize_native_redirect_uri(parsed)
     for entry in _parse_trusted_native_redirect_uris():
         if entry.endswith("*"):
-            prefix = entry[:-1]
-            if normalized.startswith(prefix):
+            if _native_wildcard_prefix_matches(normalized, entry[:-1]):
                 return True
         elif normalized == entry:
             return True

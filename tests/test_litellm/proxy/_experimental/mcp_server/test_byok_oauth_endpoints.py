@@ -1291,6 +1291,48 @@ def test_validate_trusted_redirect_uri_rejects_native_callback_with_fragment():
     assert exc.value.status_code == 400
 
 
+def test_validate_trusted_redirect_uri_native_path_case_insensitive(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.oauth_utils._DEFAULT_NATIVE_REDIRECT_URIS",
+        [],
+    )
+    monkeypatch.setenv(
+        "MCP_TRUSTED_NATIVE_REDIRECT_URIS",
+        "myapp://host/MyPath",
+    )
+    req = _make_trusted_request("http://localhost:4000/")
+    validate_trusted_redirect_uri(req, "myapp://host/MyPath")
+
+
+def test_validate_trusted_redirect_uri_native_wildcard_respects_path_boundary(
+    monkeypatch,
+):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.oauth_utils._DEFAULT_NATIVE_REDIRECT_URIS",
+        [],
+    )
+    monkeypatch.setenv(
+        "MCP_TRUSTED_NATIVE_REDIRECT_URIS",
+        "cursor://anysphere.cursor-mcp/oauth/callback*",
+    )
+    req = _make_trusted_request("http://localhost:4000/")
+    validate_trusted_redirect_uri(
+        req, "cursor://anysphere.cursor-mcp/oauth/callback/extra"
+    )
+    with pytest.raises(HTTPException):
+        validate_trusted_redirect_uri(
+            req, "cursor://anysphere.cursor-mcp/oauth/callback-2"
+        )
+
+
 def test_validate_trusted_redirect_uri_rejects_scheme_mismatch_on_same_host():
     """Regression: an attacker who can serve http on the proxy's own
     host (e.g. by MITMing an unencrypted LAN hop) must not be able to
