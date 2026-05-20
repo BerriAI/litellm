@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
@@ -3164,6 +3165,18 @@ if MCP_AVAILABLE:
                 _client_ip,
             ):
                 await session_manager.handle_request(scope, receive, send)
+        except MCPUpstreamAuthError as e:
+            # Pass-through server returned 401 — surface it to the client so
+            # standards-compliant MCP clients trigger the upstream OAuth flow.
+            raise HTTPException(
+                status_code=e.status_code,
+                detail="Unauthorized",
+                headers=(
+                    {"www-authenticate": e.www_authenticate}
+                    if e.www_authenticate
+                    else None
+                ),
+            )
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -3237,6 +3250,18 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
+        except MCPUpstreamAuthError as e:
+            # Pass-through server returned 401 — surface it to the client so
+            # standards-compliant MCP clients trigger the upstream OAuth flow.
+            raise HTTPException(
+                status_code=e.status_code,
+                detail="Unauthorized",
+                headers=(
+                    {"www-authenticate": e.www_authenticate}
+                    if e.www_authenticate
+                    else None
+                ),
+            )
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             # (e.g. 401 + WWW-Authenticate challenges from OAuth pass-through).
