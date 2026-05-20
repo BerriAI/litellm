@@ -15,7 +15,7 @@ import TabItem from '@theme/TabItem';
 
 # Google AI Studio - Managed Agents
 
-LiteLLM now supports the [Google AI Studio Managed Agents API](https://ai.google.dev/gemini-api/docs/gemini-agents/gemini-agents#manage-agents). Create, manage, and run custom agents through LiteLLM.
+LiteLLM now supports the [Google AI Studio Managed Agents API](https://ai.google.dev/gemini-api/docs/agents). Create, manage, and run custom agents through LiteLLM.
 
 ## Overview
 
