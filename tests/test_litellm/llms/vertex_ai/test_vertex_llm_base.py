@@ -1793,6 +1793,79 @@ class TestVertexBase:
             )
 
     @pytest.mark.asyncio
+    async def test_async_refresh_lock_pruned_after_release(self):
+        """get_access_token_async must drop the per-key Lock from the registry
+        once no coroutine is using it, so the dict stays bounded in
+        high-cardinality deployments. Without this, every distinct credential
+        leaks a Lock object for the lifetime of the process."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        for i in range(10):
+            mock_creds = MagicMock()
+            mock_creds.token = f"refreshed-{i}"
+            mock_creds.token_state = TokenState.FRESH
+            mock_creds.project_id = f"project-{i}"
+            mock_creds.quota_project_id = f"project-{i}"
+
+            credentials = {"type": "service_account", "project_id": f"project-{i}"}
+
+            with (
+                patch.object(
+                    vertex_base,
+                    "load_auth",
+                    return_value=(mock_creds, f"project-{i}"),
+                ),
+                patch.object(vertex_base, "refresh_auth"),
+            ):
+                await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=f"project-{i}",
+                    custom_llm_provider="vertex_ai",
+                )
+
+        assert len(vertex_base._async_refresh_locks) == 0, (
+            "expected per-key locks to be pruned once no coroutine holds or "
+            f"waits on them; found {len(vertex_base._async_refresh_locks)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_refresh_lock_kept_while_waiter_pending(self):
+        """The prune must not run while another coroutine is still waiting on
+        the lock — otherwise the waiter ends up on a lock that's been replaced
+        in the registry and single-flight breaks."""
+        vertex_base = VertexBase()
+        key = ("creds", "project-1")
+        lock = vertex_base._get_async_refresh_lock(key)
+
+        async def hold_then_release(release: asyncio.Event):
+            async with lock:
+                await release.wait()
+
+        release_holder = asyncio.Event()
+        holder = asyncio.create_task(hold_then_release(release_holder))
+        await asyncio.sleep(0)  # let holder grab the lock
+
+        async def queue_for_lock():
+            async with lock:
+                pass
+
+        waiter = asyncio.create_task(queue_for_lock())
+        await asyncio.sleep(0)  # let waiter enter lock._waiters
+
+        # Prune would normally only run after `async with` exit; call it
+        # directly while the holder is still active and the waiter is queued.
+        vertex_base._maybe_prune_async_refresh_lock(key, lock)
+        assert (
+            vertex_base._async_refresh_locks.get(key) is lock
+        ), "lock with active holder/waiter must not be pruned"
+
+        release_holder.set()
+        await holder
+        await waiter
+
+    @pytest.mark.asyncio
     async def test_fast_path_no_lock(self):
         """Cached fresh credentials should return without acquiring the lock."""
         import datetime
