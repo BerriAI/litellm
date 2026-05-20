@@ -1,0 +1,184 @@
+"""Slice 11 — actor × target authz matrix for ``POST /key/regenerate``.
+
+Mirrors Slice 10's shape: each test master-seeds a fresh scratch key with the
+target's scope, then the actor attempts to regenerate it. On success the test
+asserts both routes-of-the-rotation contract:
+
+  * the OLD cleartext can no longer authenticate (``/key/info`` with it 401s),
+  * the NEW cleartext (returned in the regenerate response) IS accepted.
+
+A separate single-actor smoke covers the ``/key/{key:path}/regenerate`` route
+form to prove both registrations exercise the same handler.
+"""
+
+from typing import Any, Dict, Optional
+
+import pytest
+
+from .actors import TEAM_ALPHA, TEAM_BETA, Actor
+from .conftest import MASTER_KEY
+
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
+# (id, actor, target_shape, expected_status)
+_SCENARIOS = [
+    # ─── target = self-owned key ──────────────────────────────────────────
+    ("self/proxy_admin", Actor.PROXY_ADMIN, "self", 200),
+    ("self/org_admin", Actor.ORG_ADMIN, "self", 401),
+    ("self/team_admin", Actor.TEAM_ADMIN, "self", 200),
+    ("self/internal_user", Actor.INTERNAL_USER, "self", 200),
+    ("self/owner", Actor.OWNER, "self", 200),
+    ("self/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "self", 200),
+    ("self/cross_org_user", Actor.CROSS_ORG_USER, "self", 200),
+    ("self/service_account", Actor.SERVICE_ACCOUNT, "self", 200),
+    # ─── target = OWNER-scoped key in org_a / team_alpha ──────────────────
+    # NB: /key/regenerate routes most denials through the team-member-perm
+    # path (401), not the same 403 paths /key/update uses. This is observable
+    # divergence between the two endpoints — the matrix surfaces it.
+    ("owner_target/proxy_admin", Actor.PROXY_ADMIN, "owner", 200),
+    ("owner_target/org_admin", Actor.ORG_ADMIN, "owner", 401),
+    ("owner_target/team_admin", Actor.TEAM_ADMIN, "owner", 200),
+    ("owner_target/internal_user", Actor.INTERNAL_USER, "owner", 401),
+    ("owner_target/unrelated_same_org", Actor.UNRELATED_SAME_ORG, "owner", 401),
+    ("owner_target/cross_org_user", Actor.CROSS_ORG_USER, "owner", 401),
+    ("owner_target/service_account", Actor.SERVICE_ACCOUNT, "owner", 401),
+    # ─── target = CROSS_ORG_USER-scoped key in org_b / team_beta ──────────
+    ("cross_org_target/proxy_admin", Actor.PROXY_ADMIN, "cross_org", 200),
+    ("cross_org_target/org_admin", Actor.ORG_ADMIN, "cross_org", 401),
+    ("cross_org_target/team_admin", Actor.TEAM_ADMIN, "cross_org", 401),
+    ("cross_org_target/owner", Actor.OWNER, "cross_org", 401),
+    # cross_org_user is in team_beta as a non-admin → 401 team_member_permission.
+    ("cross_org_target/cross_org_user", Actor.CROSS_ORG_USER, "cross_org", 401),
+    ("cross_org_target/service_account", Actor.SERVICE_ACCOUNT, "cross_org", 401),
+]
+
+
+async def _create_scratch_key(
+    proxy_client,
+    scratch_prefix: str,
+    *,
+    user_id: str,
+    team_id: Optional[str] = None,
+) -> str:
+    body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
+    if team_id is not None:
+        body["team_id"] = team_id
+    resp = await proxy_client.post(
+        "/key/generate",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        json=body,
+    )
+    assert resp.status_code == 200, f"setup: master /key/generate failed: {resp.text}"
+    return resp.json()["key"]
+
+
+@pytest.mark.parametrize(
+    "actor,target_shape,expected_status",
+    [(a, t, s) for (_id, a, t, s) in _SCENARIOS],
+    ids=[s[0] for s in _SCENARIOS],
+)
+async def test_key_regenerate_authz_matrix(
+    actor: Actor,
+    target_shape: str,
+    expected_status: int,
+    proxy_client,
+    scratch,
+    world,
+):
+    caller = world.keys[actor]
+
+    if target_shape == "self":
+        target_cleartext = await _create_scratch_key(
+            proxy_client, scratch.prefix, user_id=caller.user_id
+        )
+    elif target_shape == "owner":
+        target_cleartext = await _create_scratch_key(
+            proxy_client,
+            scratch.prefix,
+            user_id=world.keys[Actor.OWNER].user_id,
+            team_id=TEAM_ALPHA,
+        )
+    elif target_shape == "cross_org":
+        target_cleartext = await _create_scratch_key(
+            proxy_client,
+            scratch.prefix,
+            user_id=world.keys[Actor.CROSS_ORG_USER].user_id,
+            team_id=TEAM_BETA,
+        )
+    else:
+        pytest.fail(f"unknown target_shape={target_shape}")
+
+    resp = await proxy_client.post(
+        "/key/regenerate",
+        headers={"Authorization": f"Bearer {caller.cleartext}"},
+        json={"key": target_cleartext},
+    )
+    assert resp.status_code == expected_status, (
+        f"{actor.value} POST /key/regenerate {target_shape} → "
+        f"{resp.status_code} (expected {expected_status}). body={resp.text}"
+    )
+
+    if expected_status == 200:
+        new_cleartext = resp.json()["key"]
+        assert (
+            new_cleartext.startswith("sk-") and new_cleartext != target_cleartext
+        ), "regenerate returned the same cleartext — rotation contract broken"
+        # Old cleartext no longer authenticates.
+        old_check = await proxy_client.get(
+            "/key/info",
+            headers={"Authorization": f"Bearer {target_cleartext}"},
+        )
+        assert old_check.status_code == 401, (
+            f"old cleartext still works post-regenerate: {old_check.status_code} "
+            f"{old_check.text}"
+        )
+        # New cleartext does authenticate.
+        new_check = await proxy_client.get(
+            "/key/info",
+            headers={"Authorization": f"Bearer {new_cleartext}"},
+        )
+        assert new_check.status_code == 200, (
+            f"new cleartext rejected post-regenerate: {new_check.status_code} "
+            f"{new_check.text}"
+        )
+    else:
+        # Denied: old cleartext should still work.
+        check = await proxy_client.get(
+            "/key/info",
+            headers={"Authorization": f"Bearer {target_cleartext}"},
+        )
+        assert check.status_code == 200, (
+            f"{actor.value}: handler returned {expected_status} but old cleartext "
+            f"is no longer valid — rotation may have leaked: {check.text}"
+        )
+
+
+async def test_key_path_regenerate_smoke(proxy_client, scratch, world):
+    """Confirms the ``POST /key/{key:path}/regenerate`` registration shares the
+    same handler — proxy_admin regenerates a self-owned scratch key via the
+    path form, and the same rotation contract holds."""
+    caller = world.keys[Actor.PROXY_ADMIN]
+    target_cleartext = await _create_scratch_key(
+        proxy_client, scratch.prefix, user_id=caller.user_id
+    )
+
+    resp = await proxy_client.post(
+        f"/key/{target_cleartext}/regenerate",
+        headers={"Authorization": f"Bearer {caller.cleartext}"},
+        json={},
+    )
+    assert resp.status_code == 200, resp.text
+    new_cleartext = resp.json()["key"]
+    assert new_cleartext.startswith("sk-") and new_cleartext != target_cleartext
+
+    # Old denied, new accepted.
+    old_check = await proxy_client.get(
+        "/key/info", headers={"Authorization": f"Bearer {target_cleartext}"}
+    )
+    assert old_check.status_code == 401
+
+    new_check = await proxy_client.get(
+        "/key/info", headers={"Authorization": f"Bearer {new_cleartext}"}
+    )
+    assert new_check.status_code == 200
