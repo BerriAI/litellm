@@ -20,7 +20,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM now supports `gemini-3.5-flash` with full day 0 support!
 
 :::note
-If you only want cost tracking, you need no change in your current LiteLLM version. But if you want support for new features introduced with this release — thinking levels, strict function-call IDs, and thought signatures — upgrade to the latest LiteLLM release.
+If you only want cost tracking, you need no change in your current LiteLLM version. But if you want support for new features introduced with this release — thinking levels, strict function-call IDs, and thought signatures — use `v1.87.0-dev.1` or above.
 :::
 
 {/* truncate */}
@@ -34,7 +34,7 @@ If you only want cost tracking, you need no change in your current LiteLLM versi
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-stable
+ghcr.io/berriai/litellm:v1.87.0-dev.1
 ```
 
 </TabItem>
@@ -42,7 +42,7 @@ ghcr.io/berriai/litellm:main-stable
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm --upgrade
+pip install litellm==1.87.0.dev1
 ```
 
 </TabItem>
