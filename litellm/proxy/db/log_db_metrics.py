@@ -107,7 +107,7 @@ def _is_exception_related_to_db(e: Exception) -> bool:
     """
 
     import httpx
-    from prisma.errors import PrismaError
+    from litellm.proxy.db.sqlmodel.errors import PrismaError
 
     return isinstance(e, (PrismaError, httpx.ConnectError, httpx.TimeoutException))
 

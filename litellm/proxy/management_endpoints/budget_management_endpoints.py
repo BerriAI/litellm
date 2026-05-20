@@ -48,7 +48,7 @@ async def new_budget(
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
-    from prisma.errors import UniqueViolationError
+    from litellm.proxy.db.sqlmodel.errors import UniqueViolationError
 
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 

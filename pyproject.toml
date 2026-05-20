@@ -66,7 +66,9 @@ proxy = [
     "pydantic-settings>=2.14.1",
 ]
 extra_proxy = [
-    "prisma==0.11.0",
+    # prisma==0.11.0 was removed in the SQLAlchemy migration. The
+    # ``litellm.proxy.db.sqlmodel`` package provides a Prisma-compatible
+    # shim backed by SQLAlchemy + asyncpg.
     "azure-identity==1.25.2",
     "azure-keyvault-secrets==4.10.0",
     # Not in PyPI proxy extra.
@@ -76,6 +78,9 @@ extra_proxy = [
     "resend==2.23.0",
     "redisvl==0.4.1; python_version < '3.14'",
     "a2a-sdk==0.3.24",
+    "sqlmodel>=0.0.22,<1.0",
+    "asyncpg>=0.29,<1.0",
+    "alembic>=1.13,<2.0",
 ]
 utils = [
     # Not in Docker or PyPI proxy extra.
@@ -122,6 +127,9 @@ proxy-runtime = [
     "llm-sandbox==0.3.39",
     "detect-secrets==1.5.0",
 ]
+proxy-dev = [
+    "aiosqlite>=0.19,<1.0",
+]
 
 [project.scripts]
 litellm = "litellm:run_server"
@@ -166,7 +174,8 @@ dev = [
     "pytest-recording==0.13.4",
 ]
 proxy-dev = [
-    "prisma==0.11.0",
+    # prisma==0.11.0 was removed in the SQLAlchemy migration. See
+    # ``litellm.proxy.db.sqlmodel`` for the SQLAlchemy-backed replacement.
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
     "opentelemetry-api==1.28.0",

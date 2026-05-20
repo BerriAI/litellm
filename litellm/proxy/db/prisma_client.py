@@ -328,7 +328,19 @@ class PrismaWrapper:
         new URL is passed explicitly via `datasource={"url": ...}` (Prisma
         does not auto-read alternate env vars like DATABASE_URL_READ_REPLICA).
         """
-        from prisma import Prisma  # type: ignore
+        # NOTE: ``PrismaWrapper`` is dead code after the SQLAlchemy big-bang
+        # migration -- ``PrismaClient.__init__`` no longer instantiates one.
+        # We keep the class for backwards-compat with tests that import it
+        # directly, and guard the prisma-client-py import so module load
+        # succeeds when the ``prisma`` PyPI package is no longer installed.
+        try:
+            from prisma import Prisma  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - migration transitional
+            raise RuntimeError(
+                "PrismaWrapper.recreate_prisma_client is no longer supported "
+                "after the SQLAlchemy migration. Use LiteLLMDB / "
+                "PrismaCompatClient from litellm.proxy.db.sqlmodel."
+            ) from exc
 
         old_engine_pid = self._get_engine_pid()
         if old_engine_pid > 0:

@@ -3994,7 +3994,17 @@ async def _rotate_master_key(  # noqa: PLR0915
     3. Encrypt the values with the new master key
     4. Update the values in the DB
     """
-    import prisma
+
+    # ``prisma.Json(...)`` was a prisma-client-py marker that wrapped Python
+    # dicts before insertion into Prisma ``Json`` columns. SQLAlchemy's
+    # ``JSONB`` type accepts ``dict`` / ``list`` directly, so we provide a
+    # local identity shim and skip importing the obsolete prisma package.
+    class _PrismaJsonShim:
+        @staticmethod
+        def Json(value):  # noqa: N802 -- preserves prisma-client-py call shape
+            return value
+
+    prisma = _PrismaJsonShim()
 
     from litellm.proxy.proxy_server import proxy_config
 
