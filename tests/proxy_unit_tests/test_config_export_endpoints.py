@@ -125,10 +125,14 @@ def test_strip_removes_fields():
     assert result["team_alias"] == "my-team"
 
 
-def test_strip_removes_none_values():
+def test_strip_preserves_none_values():
+    # None values must be preserved so that replace-mode import can write
+    # explicit NULLs to the target DB instead of silently leaving existing
+    # non-null values in place.
     record = {"team_id": "t1", "spend": None, "team_alias": "my-team"}
     result = _strip(record, [])
-    assert "spend" not in result
+    assert "spend" in result
+    assert result["spend"] is None
 
 
 def test_strip_handles_model_with_dict_method():
@@ -185,6 +189,7 @@ async def test_export_requires_admin_role():
                 include=None,
                 format="json",
                 redact_secrets=True,
+                limit=1000,
             )
         assert exc_info.value.status_code == 403
 
@@ -200,6 +205,7 @@ async def test_export_returns_versioned_envelope():
             include=None,
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -219,6 +225,7 @@ async def test_export_teams_strips_spend():
             include="teams",
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -243,6 +250,7 @@ async def test_export_credentials_redacted_by_default():
             include="credentials",
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -265,6 +273,7 @@ async def test_export_credentials_not_redacted_when_flag_false():
             include="credentials",
             format="json",
             redact_secrets=False,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -288,6 +297,7 @@ async def test_export_keys_strips_token_and_spend():
             include="keys",
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -308,6 +318,7 @@ async def test_export_yaml_format():
             include="teams",
             format="yaml",
             redact_secrets=True,
+            limit=1000,
         )
 
     assert response.media_type == "application/yaml"
@@ -329,6 +340,7 @@ async def test_export_rejects_unknown_section():
                 include="teams,nonexistent_table",
                 format="json",
                 redact_secrets=True,
+                limit=1000,
             )
         assert exc_info.value.status_code == 400
 
@@ -347,6 +359,7 @@ async def test_export_partial_include_only_fetches_requested_sections():
             include="teams",
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)
@@ -376,6 +389,7 @@ async def test_export_general_settings_only_safe_keys():
             include="general_settings",
             format="json",
             redact_secrets=True,
+            limit=1000,
         )
 
     body = json.loads(response.body)

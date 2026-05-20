@@ -88,6 +88,9 @@ class LiteLLMExportEnvelope(BaseModel):
     exported_at: str
     source_instance: str
     include_filters: List[str]
+    # row_limit is the per-section take value used when producing this snapshot.
+    # A section whose length equals row_limit was likely truncated.
+    row_limit: int = 1000
 
     budgets: Optional[List[Dict[str, Any]]] = None
     organizations: Optional[List[Dict[str, Any]]] = None
@@ -101,6 +104,8 @@ class LiteLLMExportEnvelope(BaseModel):
     guardrails: Optional[List[Dict[str, Any]]] = None
     tags: Optional[List[Dict[str, Any]]] = None
     general_settings: Optional[Dict[str, Any]] = None
+    # Sections where len(rows) == row_limit — the export was likely truncated.
+    truncated_sections: List[str] = []
 
 
 class ImportSectionResult(BaseModel):
@@ -142,7 +147,14 @@ class ImportRequest(BaseModel):
 
 
 def _strip(record: Any, fields: List[str]) -> Dict[str, Any]:
-    """Return a copy of the record (Prisma model or dict) with fields removed."""
+    """Return a copy of the record (Prisma model or dict) with fields removed.
+
+    None values are preserved intentionally.  Dropping them would break
+    replace-mode import: a field that is NULL in the source would be absent
+    from the export payload and therefore absent from the UPDATE statement,
+    silently leaving the target's existing non-null value in place instead of
+    overwriting it with NULL.
+    """
     if hasattr(record, "model_dump"):
         d = record.model_dump()
     elif hasattr(record, "dict"):
@@ -153,8 +165,7 @@ def _strip(record: Any, fields: List[str]) -> Dict[str, Any]:
         d = dict(record)
     for f in fields:
         d.pop(f, None)
-    # Remove None values to keep the export compact
-    return {k: v for k, v in d.items() if v is not None}
+    return d
 
 
 def _redact_credential_values(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -320,15 +331,33 @@ def _validate_dependencies(data: LiteLLMExportEnvelope) -> None:
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Recursively merge `override` into `base`.  For dict values, descend;
+    Iteratively merge `override` into `base`.  For dict values, descend;
     for everything else, override wins.  Neither input is mutated.
+
+    Implemented with an explicit stack to avoid recursion (the repo's circular-
+    import / CPU-spike checker flags recursive functions as unacceptable).
     """
-    result = dict(base)
-    for key, val in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
-            result[key] = _deep_merge(result[key], val)
-        else:
-            result[key] = val
+    # Each stack frame is (target_dict, base_dict, override_dict).
+    # We build the result top-down and patch nested dicts in-place as we go.
+    result: Dict[str, Any] = dict(base)
+    stack: List[Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = [
+        (result, base, override)
+    ]
+    while stack:
+        target, b, o = stack.pop()
+        for key, val in o.items():
+            if (
+                key in target
+                and isinstance(target[key], dict)
+                and isinstance(val, dict)
+            ):
+                # Create a fresh copy of the nested base dict and schedule it
+                # for merging rather than calling _deep_merge again.
+                nested: Dict[str, Any] = dict(b.get(key, {}))
+                target[key] = nested
+                stack.append((nested, b.get(key, {}), val))
+            else:
+                target[key] = val
     return result
 
 
@@ -371,7 +400,6 @@ async def _load_existing(
 @router.get(
     "/config/export",
     tags=["config.yaml"],
-    dependencies=[Depends(user_api_key_auth)],
     summary="Export all UI/API-managed proxy state as a versioned artifact",
 )
 async def export_config(
@@ -390,6 +418,14 @@ async def export_config(
         default=True,
         description="When true, replaces credential_values and MCP server "
         "credentials with {__redacted__: true}.",
+    ),
+    limit: int = Query(
+        default=1000,
+        ge=1,
+        le=5000,
+        description="Maximum number of rows to fetch per entity section. "
+        "Defaults to 1000; maximum 5000. Use the include parameter to export "
+        "individual sections on deployments with very large tables.",
     ),
 ) -> Response:
     """
@@ -435,63 +471,126 @@ async def export_config(
         "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "source_instance": str(request.base_url).rstrip("/"),
         "include_filters": sorted(sections),
+        "row_limit": limit,
+        "truncated_sections": [],
     }
+
+    def _maybe_truncated(section: str, rows: list) -> list:
+        """Record the section as truncated if we hit the row cap."""
+        if len(rows) == limit:
+            envelope["truncated_sections"].append(section)
+        return rows
 
     try:
         if "budgets" in sections:
-            rows = await prisma_client.db.litellm_budgettable.find_many()
+            rows = _maybe_truncated(
+                "budgets",
+                await prisma_client.db.litellm_budgettable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["budgets"] = [_strip(r, _STRIP_FIELDS["budgets"]) for r in rows]
 
         if "organizations" in sections:
-            rows = await prisma_client.db.litellm_organizationtable.find_many(
-                include={"litellm_budget_table": True}
+            rows = _maybe_truncated(
+                "organizations",
+                await prisma_client.db.litellm_organizationtable.find_many(
+                    take=limit,
+                    order={"created_at": "asc"},
+                    include={"litellm_budget_table": True},
+                ),
             )
             envelope["organizations"] = [
                 _strip(r, _STRIP_FIELDS["organizations"]) for r in rows
             ]
 
         if "teams" in sections:
-            rows = await prisma_client.db.litellm_teamtable.find_many()
+            rows = _maybe_truncated(
+                "teams",
+                await prisma_client.db.litellm_teamtable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["teams"] = [_strip(r, _STRIP_FIELDS["teams"]) for r in rows]
 
         if "users" in sections:
-            rows = await prisma_client.db.litellm_usertable.find_many()
+            rows = _maybe_truncated(
+                "users",
+                await prisma_client.db.litellm_usertable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["users"] = [_strip(r, _STRIP_FIELDS["users"]) for r in rows]
 
         if "keys" in sections:
-            rows = await prisma_client.db.litellm_verificationtoken.find_many()
+            rows = _maybe_truncated(
+                "keys",
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["keys"] = [_strip(r, _STRIP_FIELDS["keys"]) for r in rows]
 
         if "credentials" in sections:
-            rows = await prisma_client.db.litellm_credentialstable.find_many()
+            rows = _maybe_truncated(
+                "credentials",
+                await prisma_client.db.litellm_credentialstable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             records = [_strip(r, _STRIP_FIELDS["credentials"]) for r in rows]
             if redact_secrets:
                 records = [_redact_credential_values(rec) for rec in records]
             envelope["credentials"] = records
 
         if "models" in sections:
-            rows = await prisma_client.db.litellm_proxymodeltable.find_many()
+            rows = _maybe_truncated(
+                "models",
+                await prisma_client.db.litellm_proxymodeltable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["models"] = [_strip(r, _STRIP_FIELDS["models"]) for r in rows]
 
         if "mcp_servers" in sections:
-            rows = await prisma_client.db.litellm_mcpservertable.find_many()
+            rows = _maybe_truncated(
+                "mcp_servers",
+                await prisma_client.db.litellm_mcpservertable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             records = [_strip(r, _STRIP_FIELDS["mcp_servers"]) for r in rows]
             if redact_secrets:
                 records = [_redact_mcp_credentials(rec) for rec in records]
             envelope["mcp_servers"] = records
 
         if "agents" in sections:
-            rows = await prisma_client.db.litellm_agentstable.find_many()
+            rows = _maybe_truncated(
+                "agents",
+                await prisma_client.db.litellm_agentstable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["agents"] = [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
 
         if "guardrails" in sections:
-            rows = await prisma_client.db.litellm_guardrailstable.find_many()
+            rows = _maybe_truncated(
+                "guardrails",
+                await prisma_client.db.litellm_guardrailstable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["guardrails"] = [
                 _strip(r, _STRIP_FIELDS["guardrails"]) for r in rows
             ]
 
         if "tags" in sections:
-            rows = await prisma_client.db.litellm_tagtable.find_many()
+            rows = _maybe_truncated(
+                "tags",
+                await prisma_client.db.litellm_tagtable.find_many(
+                    take=limit, order={"created_at": "asc"}
+                ),
+            )
             envelope["tags"] = [_strip(r, _STRIP_FIELDS["tags"]) for r in rows]
 
         if "general_settings" in sections:
@@ -510,8 +609,6 @@ async def export_config(
         content = yaml.dump(envelope, allow_unicode=True, sort_keys=False)
         return Response(content=content, media_type="application/yaml")
 
-    import json
-
     content = json.dumps(envelope, indent=2, default=str)
     return Response(content=content, media_type="application/json")
 
@@ -524,7 +621,6 @@ async def export_config(
 @router.post(
     "/config/import",
     tags=["config.yaml"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=ImportResult,
     summary="Idempotently re-apply a config snapshot produced by GET /config/export",
 )
@@ -607,6 +703,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_budgettable,
+                table_name="litellm_budgettable",
                 records=data.budgets,
                 id_field="budget_id",
                 conflict=conflict,
@@ -628,6 +725,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_organizationtable,
+                table_name="litellm_organizationtable",
                 records=data.organizations,
                 id_field="organization_id",
                 conflict=conflict,
@@ -645,6 +743,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_teamtable,
+                table_name="litellm_teamtable",
                 records=data.teams,
                 id_field="team_id",
                 conflict=conflict,
@@ -662,6 +761,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_usertable,
+                table_name="litellm_usertable",
                 records=data.users,
                 id_field="user_id",
                 conflict=conflict,
@@ -689,6 +789,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_verificationtoken,
+                table_name="litellm_verificationtoken",
                 records=importable_keys,
                 id_field="key_alias",
                 conflict=conflict,
@@ -721,6 +822,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_credentialstable,
+                table_name="litellm_credentialstable",
                 records=importable_creds,
                 id_field="credential_name",
                 conflict=conflict,
@@ -738,6 +840,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_proxymodeltable,
+                table_name="litellm_proxymodeltable",
                 records=data.models,
                 id_field="model_id",
                 conflict=conflict,
@@ -764,6 +867,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_mcpservertable,
+                table_name="litellm_mcpservertable",
                 records=cleaned_servers,
                 id_field="server_id",
                 conflict=conflict,
@@ -781,6 +885,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_agentstable,
+                table_name="litellm_agentstable",
                 records=data.agents,
                 id_field="agent_name",
                 conflict=conflict,
@@ -802,6 +907,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_guardrailstable,
+                table_name="litellm_guardrailstable",
                 records=data.guardrails,
                 id_field="guardrail_name",
                 conflict=conflict,
@@ -819,6 +925,7 @@ async def import_config(
             )
             await _import_section(
                 table=prisma_client.db.litellm_tagtable,
+                table_name="litellm_tagtable",
                 records=data.tags,
                 id_field="tag_name",
                 conflict=conflict,
@@ -883,6 +990,7 @@ async def import_config(
 
 async def _import_section(
     table: Any,
+    table_name: str,
     records: List[Dict[str, Any]],
     id_field: str,
     conflict: str,
@@ -893,6 +1001,11 @@ async def _import_section(
 ) -> None:
     """
     Process all records for one section inside a single DB transaction.
+
+    table_name must be the exact attribute name used to access this table on
+    the Prisma client (e.g. "litellm_teamtable").  It is used to look up the
+    corresponding accessor on the transaction object — prisma-client-py exposes
+    the same snake_case names on both the client and the transaction.
 
     If any record raises an unhandled exception the entire section is rolled
     back and the error is surfaced in section_result.  Per-record errors
@@ -915,9 +1028,46 @@ async def _import_section(
             )
         return
 
+    # Check for transaction support BEFORE entering async with.
+    # Catching AttributeError *inside* the block would also swallow
+    # AttributeErrors raised by _upsert (e.g. a missing field on the data
+    # dict), misclassifying real bugs as "tx not available".
+    has_tx = hasattr(table, "_client") and hasattr(table._client, "tx")
+
+    if not has_tx:
+        verbose_proxy_logger.warning(
+            "Prisma transaction not available for %s; "
+            "falling back to non-transactional writes.",
+            table_name,
+        )
+        try:
+            for rec in records:
+                await _upsert(
+                    table=table,
+                    rec=rec,
+                    id_field=id_field,
+                    conflict=conflict,
+                    dry_run=False,
+                    section_result=section_result,
+                    existing_map=existing_map,
+                    id_query_field=id_query_field,
+                )
+        except Exception as e:
+            section_result.errors += len(records)
+            section_result.warnings.append(f"Section failed: {e}")
+            verbose_proxy_logger.error(
+                "Section %s failed: %s", table_name, e, exc_info=True
+            )
+        return
+
     try:
         async with table._client.tx() as tx:
-            tx_table = getattr(tx, table.__class__.__name__.lower(), table)
+            # Use the explicit snake_case table_name to look up the accessor on
+            # the transaction object.  table.__class__.__name__.lower() would
+            # produce a name without underscores (e.g. "litellmteamtableactions")
+            # that never matches, causing getattr to silently return the original
+            # non-transactional table handle.
+            tx_table = getattr(tx, table_name)
             for rec in records:
                 await _upsert(
                     table=tx_table,
@@ -929,29 +1079,12 @@ async def _import_section(
                     existing_map=existing_map,
                     id_query_field=id_query_field,
                 )
-    except AttributeError:
-        # Prisma client doesn't expose .tx() on individual table objects —
-        # fall back to non-transactional writes (maintains backward compat
-        # with older prisma-client-py versions).
-        verbose_proxy_logger.warning(
-            "Prisma transaction not available for this table; "
-            "falling back to non-transactional writes."
-        )
-        for rec in records:
-            await _upsert(
-                table=table,
-                rec=rec,
-                id_field=id_field,
-                conflict=conflict,
-                dry_run=False,
-                section_result=section_result,
-                existing_map=existing_map,
-                id_query_field=id_query_field,
-            )
     except Exception as e:
         section_result.errors += len(records)
         section_result.warnings.append(f"Section transaction rolled back: {e}")
-        verbose_proxy_logger.error("Section transaction failed: %s", e, exc_info=True)
+        verbose_proxy_logger.error(
+            "Section %s transaction failed: %s", table_name, e, exc_info=True
+        )
 
 
 async def _import_general_settings(
@@ -963,8 +1096,10 @@ async def _import_general_settings(
 ) -> None:
     """
     Import general_settings key/value rows.
-    Handles its own transaction because the table structure differs
-    from entity tables (param_name PK, no numeric id field).
+
+    Each key is written individually so that a failure on one setting does not
+    prevent the remaining keys from being persisted.  Errors are counted and
+    surfaced in section_result.warnings without aborting the section.
     """
     # Batch-read all relevant existing rows in one query
     safe_keys = [k for k in settings if k in SAFE_GENERAL_SETTINGS_KEYS]
