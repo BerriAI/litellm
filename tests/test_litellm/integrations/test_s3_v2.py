@@ -1198,7 +1198,7 @@ def test_s3_callback_params_override_empty_dict_is_opt_in():
 
 @pytest.mark.asyncio
 @patch("asyncio.create_task")
-@patch.object(S3Logger, "_periodic_flush")
+@patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
 async def test_s3_v2_put_url_encodes_special_chars(
     mock_periodic_flush, mock_create_task
 ):

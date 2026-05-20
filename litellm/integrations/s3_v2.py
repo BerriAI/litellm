@@ -10,7 +10,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, cast
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -350,7 +350,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
 
             # Prepare the URL with percent-encoded object key
-            encoded_key = quote(batch_logging_element.s3_object_key, safe="/")
+            encoded_key = quote(unquote(batch_logging_element.s3_object_key), safe="/")
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
@@ -536,7 +536,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
 
             # Prepare the URL with percent-encoded object key
-            encoded_key = quote(batch_logging_element.s3_object_key, safe="/")
+            encoded_key = quote(unquote(batch_logging_element.s3_object_key), safe="/")
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
@@ -661,7 +661,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
 
             # Prepare the URL with percent-encoded object key
-            encoded_key = quote(s3_object_key, safe="/")
+            encoded_key = quote(unquote(s3_object_key), safe="/")
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
