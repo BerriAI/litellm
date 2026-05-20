@@ -24,6 +24,10 @@ from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.otel_span import (
+    attach_otel_span,
+    litellm_otel_tracer,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -88,7 +92,9 @@ except ImportError as e:
     verbose_proxy_logger.debug(f"Error in enterprise custom auth: {e}")
     enterprise_custom_auth = None
 
-user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+user_api_key_service_logger_obj = (
+    ServiceLogging()
+)  # used for service callback latency tracking
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -665,7 +671,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_apim_header: Optional[str],
     request_data: dict,
     custom_litellm_key_header: Optional[str] = None,
-) -> UserAPIKeyAuth:
+    parent_otel_span: Optional[Span] = None,
+) -> UserAPIKeyAuth:  # pyright: ignore[reportReturnType]
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -674,14 +681,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         llm_router,
         master_key,
         model_max_budget_limiter,
-        open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
         user_custom_auth,
     )
 
-    parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
     # Stash the proxy-receive instant for the pre-request latency calc —
     # the OTel Span API exposes no start-time getter, so propagate it.
@@ -723,28 +728,26 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
             )
 
-        if open_telemetry_logger is not None:
-            parent_otel_span = (
-                open_telemetry_logger.create_litellm_proxy_request_started_span(
-                    start_time=start_time,
-                    headers=_safe_get_request_headers(request),
-                )
-            )
-            # `route` is the literal path; template from the matched route.
-            open_telemetry_logger.set_proxy_request_route_attributes(
-                parent_otel_span,
-                url_path=route,
-                http_route=get_request_route_template(request),
-            )
-
         ### USER-DEFINED AUTH FUNCTION ###
+        response: Any = None
         if enterprise_custom_auth is not None:
-            with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
-                response = await enterprise_custom_auth(
-                    request=request, api_key=api_key, user_custom_auth=user_custom_auth
-                )
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.custom_auth",
+                service=ServiceTypes.AUTH,
+                attributes={"route": route, "enterprise_custom_auth": True},
+                detailed=True,
+            ):
+                with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
+                    response = await enterprise_custom_auth(
+                        request=request,
+                        api_key=api_key,
+                        user_custom_auth=user_custom_auth,
+                    )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
+                validated.parent_otel_span = (
+                    validated.parent_otel_span or parent_otel_span
+                )
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -758,8 +761,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.custom_auth",
+                service=ServiceTypes.AUTH,
+                attributes={"route": route, "enterprise_custom_auth": False},
+                detailed=True,
+            ):
+                response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
+            validated.parent_otel_span = validated.parent_otel_span or parent_otel_span
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
@@ -1695,7 +1705,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(
+    label: str,
+    awaitable,
+    parent_otel_span: Optional[Span] = None,
+    event_metadata: Optional[dict] = None,
+):
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError — which ``get_end_user_object`` raises for
@@ -1705,24 +1720,33 @@ async def _safe_fetch(label: str, awaitable):
     ``common_checks`` can still run against whatever limits are recorded
     directly on the token.
     """
-    try:
-        return await awaitable
-    except (HTTPException, ProxyException, litellm.BudgetExceededError) as e:
-        verbose_proxy_logger.debug(
-            "centralized auth: %s fetch failed (%s: %s)",
-            label,
-            type(e).__name__,
-            e,
-        )
-        raise
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "centralized auth: %s fetch swallowed (%s: %s)",
-            label,
-            type(e).__name__,
-            e,
-        )
-        return None
+    async with litellm_otel_tracer.trace(
+        "proxy.auth.fetch",
+        service=ServiceTypes.AUTH,
+        attributes={
+            "fetch_label": label,
+            **(event_metadata or {}),
+        },
+        detailed=True,
+    ):
+        try:
+            return await awaitable
+        except (HTTPException, ProxyException, litellm.BudgetExceededError) as e:
+            verbose_proxy_logger.debug(
+                "centralized auth: %s fetch failed (%s: %s)",
+                label,
+                type(e).__name__,
+                e,
+            )
+            raise
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "centralized auth: %s fetch swallowed (%s: %s)",
+                label,
+                type(e).__name__,
+                e,
+            )
+            return None
 
 
 def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCachedObj:
@@ -1745,7 +1769,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(
+async def _run_centralized_common_checks(  # noqa: PLR0915
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,
@@ -1839,10 +1863,19 @@ async def _run_centralized_common_checks(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route},
             )
         )
     else:
-        fetch_coros.append(_safe_fetch("team", _noop_none()))
+        fetch_coros.append(
+            _safe_fetch(
+                "team",
+                _noop_none(),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route, "skipped": True},
+            )
+        )
 
     if user_api_key_auth_obj.user_id is not None:
         fetch_coros.append(
@@ -1856,10 +1889,19 @@ async def _run_centralized_common_checks(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route},
             )
         )
     else:
-        fetch_coros.append(_safe_fetch("user", _noop_none()))
+        fetch_coros.append(
+            _safe_fetch(
+                "user",
+                _noop_none(),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route, "skipped": True},
+            )
+        )
 
     if user_api_key_auth_obj.project_id is not None:
         fetch_coros.append(
@@ -1871,10 +1913,19 @@ async def _run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route},
             )
         )
     else:
-        fetch_coros.append(_safe_fetch("project", _noop_none()))
+        fetch_coros.append(
+            _safe_fetch(
+                "project",
+                _noop_none(),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route, "skipped": True},
+            )
+        )
 
     if end_user_id:
         fetch_coros.append(
@@ -1888,10 +1939,19 @@ async def _run_centralized_common_checks(
                     proxy_logging_obj=proxy_logging_obj,
                     route=route,
                 ),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route},
             )
         )
     else:
-        fetch_coros.append(_safe_fetch("end_user", _noop_none()))
+        fetch_coros.append(
+            _safe_fetch(
+                "end_user",
+                _noop_none(),
+                parent_otel_span=parent_otel_span,
+                event_metadata={"route": route, "skipped": True},
+            )
+        )
 
     fetch_coros.append(
         _safe_fetch(
@@ -1903,6 +1963,8 @@ async def _run_centralized_common_checks(
                 token=user_api_key_auth_obj.token or "",
                 proxy_logging_obj=proxy_logging_obj,
             ),
+            parent_otel_span=parent_otel_span,
+            event_metadata={"route": route},
         )
     )
 
@@ -1914,13 +1976,24 @@ async def _run_centralized_common_checks(
     # would silently skip the user, end-user, project, and global-spend
     # checks. Use ``return_exceptions=True`` and apply per-fetch fallback
     # so a missing team only zeros out the team object.
-    (
-        team_result,
-        user_result,
-        project_result,
-        end_user_result,
-        global_spend_result,
-    ) = await asyncio.gather(*fetch_coros, return_exceptions=True)
+    team_result: Any = None
+    user_result: Any = None
+    project_result: Any = None
+    end_user_result: Any = None
+    global_spend_result: Any = None
+    async with litellm_otel_tracer.trace(
+        "proxy.auth.fetch_auth_context",
+        service=ServiceTypes.AUTH,
+        attributes={"route": route},
+        detailed=True,
+    ):
+        (
+            team_result,
+            user_result,
+            project_result,
+            end_user_result,
+            global_spend_result,
+        ) = await asyncio.gather(*fetch_coros, return_exceptions=True)
 
     # ProxyException / BudgetExceededError are authorization failures —
     # propagate so the wrapper renders them. HTTPException is fallback
@@ -2001,36 +2074,48 @@ async def _run_centralized_common_checks(
         user_api_key_dict=user_api_key_auth_obj,
     )
 
-    _ = await common_checks(
-        request=request,
-        request_body=request_data,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_object=end_user_object,
-        general_settings=general_settings,
-        global_proxy_spend=global_proxy_spend,
-        route=route,
-        llm_router=llm_router,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=user_api_key_auth_obj,
-        skip_budget_checks=skip_budget_checks,
-        project_object=project_object,
-    )
+    async with litellm_otel_tracer.trace(
+        "proxy.auth.common_checks",
+        service=ServiceTypes.AUTH,
+        attributes={"route": route, "skip_budget_checks": skip_budget_checks},
+        detailed=True,
+    ):
+        _ = await common_checks(
+            request=request,
+            request_body=request_data,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_object=end_user_object,
+            general_settings=general_settings,
+            global_proxy_spend=global_proxy_spend,
+            route=route,
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=user_api_key_auth_obj,
+            skip_budget_checks=skip_budget_checks,
+            project_object=project_object,
+        )
 
-    await _reserve_budget_after_common_checks(
-        user_api_key_auth_obj=user_api_key_auth_obj,
-        request_data=request_data,
-        route=route,
-        llm_router=llm_router,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_id=end_user_id,
-        end_user_object=end_user_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        skip_budget_checks=skip_budget_checks,
-    )
+    async with litellm_otel_tracer.trace(
+        "proxy.auth.reserve_budget_for_request",
+        service=ServiceTypes.AUTH,
+        attributes={"route": route, "skip_budget_checks": skip_budget_checks},
+        detailed=True,
+    ):
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data=request_data,
+            route=route,
+            llm_router=llm_router,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_id=end_user_id,
+            end_user_object=end_user_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            skip_budget_checks=skip_budget_checks,
+        )
 
 
 async def _noop_none() -> None:
@@ -2107,63 +2192,140 @@ async def user_api_key_auth(
     custom_litellm_key_header: Optional[str] = fastapi.Security(
         custom_litellm_key_header
     ),
-) -> UserAPIKeyAuth:
+) -> UserAPIKeyAuth:  # pyright: ignore[reportReturnType]
     """
     Parent function to authenticate user api key / jwt token.
     """
+    from litellm.proxy.proxy_server import general_settings, open_telemetry_logger
 
-    request_data = await _read_request_body(request=request)
-    request_data = populate_request_with_path_params(
-        request_data=request_data, request=request
-    )
+    auth_start_time = datetime.now()
     route: str = get_request_route(request=request)
-    ## CHECK IF ROUTE IS ALLOWED
-
-    user_api_key_auth_obj = await _user_api_key_auth_builder(
-        request=request,
-        api_key=api_key,
-        azure_api_key_header=azure_api_key_header,
-        anthropic_api_key_header=anthropic_api_key_header,
-        google_ai_studio_api_key_header=google_ai_studio_api_key_header,
-        azure_apim_header=azure_apim_header,
-        request_data=request_data,
-        custom_litellm_key_header=custom_litellm_key_header,
+    parent_otel_span: Optional[Span] = None
+    route_is_auth_exempt_public = not _route_requires_auth_despite_public(
+        route=route, general_settings=general_settings
+    ) and (
+        route in LiteLLMRoutes.public_routes.value  # type: ignore[attr-defined]
+        or route_in_additonal_public_routes(current_route=route)
     )
-    user_api_key_auth_obj.budget_reservation = None
-
-    ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
-    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
-
-    # Single authorization point. Builder paths MUST NOT call common_checks.
-    # Route through the same exception handler the builder uses so
-    # authorization failures (ProxyException, or plain Exception from
-    # admin-only-route / model-access / budget checks) surface as
-    # ProxyException consistently with pre-refactor behavior.
-    try:
-        await _run_centralized_common_checks(
-            user_api_key_auth_obj=user_api_key_auth_obj,
-            request=request,
-            request_data=request_data,
-            route=route,
+    if open_telemetry_logger is not None and not route_is_auth_exempt_public:
+        parent_otel_span = (
+            open_telemetry_logger.create_litellm_proxy_request_started_span(
+                start_time=auth_start_time,
+                headers=_safe_get_request_headers(request),
+            )
         )
-    except Exception as e:
-        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
-            e=e,
-            request=request,
-            request_data=request_data,
-            route=route,
-            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
-            api_key=api_key,
+        # `route` is the literal path; template from the matched route.
+        open_telemetry_logger.set_proxy_request_route_attributes(
+            parent_otel_span,
+            url_path=route,
+            http_route=get_request_route_template(request),
         )
 
-    end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
-    if end_user_id is not None:
-        user_api_key_auth_obj.end_user_id = end_user_id
+    request_data: dict = {}
+    user_api_key_auth_obj: Optional[UserAPIKeyAuth] = None
+    with attach_otel_span(parent_otel_span):
+        async with litellm_otel_tracer.trace(
+            "proxy.auth",
+            service=ServiceTypes.AUTH,
+            parent_span=parent_otel_span,
+            attributes={"route": route},
+        ):
+            try:
+                async with litellm_otel_tracer.trace(
+                    "proxy.auth.read_request_body",
+                    service=ServiceTypes.AUTH,
+                    attributes={"route": route},
+                    detailed=True,
+                ):
+                    request_data = await _read_request_body(request=request)
 
-    user_api_key_auth_obj.request_route = normalize_request_route(route)
-    return user_api_key_auth_obj
+                with litellm_otel_tracer.trace(
+                    "proxy.auth.populate_request_path_params",
+                    service=ServiceTypes.AUTH,
+                    attributes={"route": route},
+                    detailed=True,
+                ):
+                    request_data = populate_request_with_path_params(
+                        request_data=request_data, request=request
+                    )
+            except Exception as e:
+                return (
+                    await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                        e=e,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                        parent_otel_span=parent_otel_span,
+                        api_key=api_key,
+                    )
+                )
+
+            ## CHECK IF ROUTE IS ALLOWED
+
+            async with litellm_otel_tracer.trace(
+                "proxy.auth.user_api_key_auth_builder",
+                service=ServiceTypes.AUTH,
+                attributes={"route": route},
+                detailed=True,
+            ):
+                user_api_key_auth_obj = await _user_api_key_auth_builder(
+                    request=request,
+                    api_key=api_key,
+                    azure_api_key_header=azure_api_key_header,
+                    anthropic_api_key_header=anthropic_api_key_header,
+                    google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+                    azure_apim_header=azure_apim_header,
+                    request_data=request_data,
+                    custom_litellm_key_header=custom_litellm_key_header,
+                    parent_otel_span=parent_otel_span,
+                )
+            user_api_key_auth_obj = cast(UserAPIKeyAuth, user_api_key_auth_obj)
+            user_api_key_auth_obj.budget_reservation = None
+
+            ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
+            with litellm_otel_tracer.trace(
+                "proxy.auth.route_checks",
+                service=ServiceTypes.AUTH,
+                attributes={"route": route},
+                detailed=True,
+            ):
+                RouteChecks.should_call_route(
+                    route=route, valid_token=user_api_key_auth_obj
+                )
+
+            try:
+                async with litellm_otel_tracer.trace(
+                    "proxy.auth.centralized_common_checks",
+                    service=ServiceTypes.AUTH,
+                    attributes={"route": route},
+                    detailed=True,
+                ):
+                    await _run_centralized_common_checks(
+                        user_api_key_auth_obj=user_api_key_auth_obj,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                    )
+            except Exception as e:
+                return (
+                    await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                        e=e,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                        parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                        api_key=api_key,
+                    )
+                )
+
+            end_user_id = get_end_user_id_from_request_body(
+                request_data, _safe_get_request_headers(request)
+            )
+            if end_user_id is not None:
+                user_api_key_auth_obj.end_user_id = end_user_id
+
+            user_api_key_auth_obj.request_route = normalize_request_route(route)
+            return user_api_key_auth_obj
 
 
 async def _return_user_api_key_auth_obj(
@@ -2176,7 +2338,6 @@ async def _return_user_api_key_auth_obj(
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
-
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
             service=ServiceTypes.AUTH,
@@ -2185,6 +2346,10 @@ async def _return_user_api_key_auth_obj(
             end_time=end_time,
             duration=end_time.timestamp() - start_time.timestamp(),
             parent_otel_span=parent_otel_span,
+            event_metadata={
+                "span_name": "proxy.auth.user_api_key_auth",
+                "route": route,
+            },
         )
     )
 
@@ -2210,9 +2375,7 @@ async def _return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        return UserAPIKeyAuth(**user_api_key_kwargs)
-    else:
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+    return UserAPIKeyAuth(**user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(

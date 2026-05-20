@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
+from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -289,8 +290,6 @@ def track_llm_api_timing():
             start_time = datetime.now()
             start_time_float = time.time()
             logging_obj = kwargs.get("logging_obj", None)
-
-            # Extract parent OTEL span from logging object
             parent_otel_span = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
@@ -308,16 +307,10 @@ def track_llm_api_timing():
                     end_time=end_time,
                 )
 
-                # Log timing using ServiceLogging (like Redis cache)
+                # Fan out timing to all configured service callbacks.
                 try:
-                    from litellm.types.services import ServiceTypes
-
                     service_logger = _get_service_logger()
-
-                    # Get function name for call_type
                     call_type = f"{func.__name__} <- track_llm_api_timing"
-
-                    # Create async task for service logging (similar to Redis cache pattern)
                     asyncio.create_task(
                         service_logger.async_service_success_hook(
                             service=ServiceTypes.LITELLM,
@@ -336,8 +329,6 @@ def track_llm_api_timing():
             start_time = datetime.now()
             start_time_float = time.time()
             logging_obj = kwargs.get("logging_obj", None)
-
-            # Extract parent OTEL span from logging object
             parent_otel_span = _get_parent_otel_span_from_logging_obj(logging_obj)
 
             try:
@@ -355,16 +346,10 @@ def track_llm_api_timing():
                     end_time=end_time,
                 )
 
-                # Log timing using ServiceLogging (like Redis cache)
+                # Fan out timing to all configured service callbacks.
                 try:
-                    from litellm.types.services import ServiceTypes
-
                     service_logger = _get_service_logger()
-
-                    # Get function name for call_type
                     call_type = f"{func.__name__} <- track_llm_api_timing"
-
-                    # Use sync service logging for sync functions
                     service_logger.service_success_hook(
                         service=ServiceTypes.LITELLM,
                         duration=duration,

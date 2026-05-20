@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.otel_span import litellm_otel_tracer
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -2527,37 +2528,73 @@ class Router:
 
                 response = await _response
 
-            ## CHECK CONTENT FILTER ERROR ##
-            if isinstance(response, ModelResponse):
-                _should_raise = self._should_raise_content_policy_error(
-                    model=model, response=response, kwargs=kwargs
-                )
-                if _should_raise:
-                    raise litellm.ContentPolicyViolationError(
-                        message="Response output was blocked.",
-                        model=model,
-                        llm_provider="",
+            response_type = type(response).__name__
+            finish_reason = None
+            content_policy_checked = False
+            raised_content_policy_error = False
+            with litellm_otel_tracer.trace(
+                "router.post_llm_response_processing",
+                service=ServiceTypes.ROUTER,
+                parent_span=parent_otel_span,
+                attributes={
+                    "model_group": model,
+                    "deployment": model_name,
+                    "model_id": (
+                        deployment.get("model_info", {}).get("id")
+                        if deployment is not None
+                        else None
+                    ),
+                    "response_type": response_type,
+                },
+                detailed=True,
+            ) as post_response_span:
+                try:
+                    ## CHECK CONTENT FILTER ERROR ##
+                    if isinstance(response, ModelResponse):
+                        content_policy_checked = True
+                        if response.choices and len(response.choices) > 0:
+                            finish_reason = getattr(
+                                response.choices[0], "finish_reason", None
+                            )
+                        _should_raise = self._should_raise_content_policy_error(
+                            model=model, response=response, kwargs=kwargs
+                        )
+                        if _should_raise:
+                            raised_content_policy_error = True
+                            raise litellm.ContentPolicyViolationError(
+                                message="Response output was blocked.",
+                                model=model,
+                                llm_provider="",
+                            )
+
+                    self.success_calls[model_name] += 1
+                    verbose_router_logger.info(
+                        f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
+                    )
+                    # debug how often this deployment picked
+                    self._track_deployment_metrics(
+                        deployment=deployment,
+                        response=response,
+                        parent_otel_span=parent_otel_span,
                     )
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info(
-                f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
-            )
-            # debug how often this deployment picked
-            self._track_deployment_metrics(
-                deployment=deployment,
-                response=response,
-                parent_otel_span=parent_otel_span,
-            )
+                    if isinstance(response, CustomStreamWrapper):
+                        return await self._acompletion_streaming_iterator(
+                            model_response=response,
+                            messages=messages,
+                            initial_kwargs=input_kwargs_for_streaming_fallback,
+                        )
 
-            if isinstance(response, CustomStreamWrapper):
-                return await self._acompletion_streaming_iterator(
-                    model_response=response,
-                    messages=messages,
-                    initial_kwargs=input_kwargs_for_streaming_fallback,
-                )
-
-            return response
+                    return response
+                finally:
+                    post_response_span.set_attributes(
+                        {
+                            "is_streaming": isinstance(response, CustomStreamWrapper),
+                            "finish_reason": finish_reason,
+                            "content_policy_checked": content_policy_checked,
+                            "content_policy_fallback_available": raised_content_policy_error,
+                        }
+                    )
         except litellm.Timeout as e:
             deployment_request_timeout_param = _timeout_debug_deployment_dict.get(
                 "litellm_params", {}
@@ -6442,9 +6479,26 @@ class Router:
         ):
             response = await response
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(
-            response=response, model_group=model_group, request_kwargs=kwargs
-        )
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+        async with litellm_otel_tracer.trace(
+            "router.set_response_headers",
+            service=ServiceTypes.ROUTER,
+            parent_span=parent_otel_span,
+            attributes={
+                "model_group": model_group,
+            },
+            detailed=True,
+        ) as set_response_headers_span:
+            response = await self.set_response_headers(
+                response=response,
+                model_group=model_group,
+                request_kwargs=kwargs,
+                parent_otel_span=parent_otel_span,
+            )
+            set_response_headers_span.set_attribute(
+                key="response_type",
+                value=type(response).__name__,
+            )
 
         return response
 
@@ -8953,6 +9007,7 @@ class Router:
         response: Any,
         model_group: Optional[str] = None,
         request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,
     ) -> Any:
         """
         Add the most accurate rate limit headers for a given model response.
@@ -9017,9 +9072,26 @@ class Router:
                 and "x-ratelimit-remaining-requests" not in additional_headers
                 and model_group is not None
             ):
-                remaining_usage = await self.get_remaining_model_group_usage(
-                    model_group
-                )
+                remaining_usage = {}
+                async with litellm_otel_tracer.trace(
+                    "router.get_remaining_model_group_usage",
+                    service=ServiceTypes.ROUTER,
+                    parent_span=parent_otel_span,
+                    attributes={
+                        "model_group": model_group,
+                        "model_group_deployment_count": len(
+                            self.get_model_list(model_name=model_group) or []
+                        ),
+                    },
+                    detailed=True,
+                ) as remaining_usage_span:
+                    remaining_usage = await self.get_remaining_model_group_usage(
+                        model_group
+                    )
+                    remaining_usage_span.set_attribute(
+                        key="returned_header_count",
+                        value=len(remaining_usage),
+                    )
 
                 # get_remaining_model_group_usage reads the router's TPM/RPM
                 # counter, which is incremented post-response by

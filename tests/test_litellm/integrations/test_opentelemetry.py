@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import unittest
+import asyncio
 from datetime import datetime, timedelta, timezone
 from parameterized import parameterized
 from unittest.mock import MagicMock, patch
@@ -25,6 +26,7 @@ from litellm.integrations.opentelemetry import (
     OTELSemconvCategory,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -232,6 +234,34 @@ class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
+    def test_service_failure_hook_allows_missing_timestamps(self):
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+        payload = ServiceLoggerPayload(
+            is_error=True,
+            error="connection failed",
+            service=ServiceTypes.DB,
+            duration=0.0,
+            call_type="db_read",
+            event_metadata=None,
+        )
+
+        with patch.dict(os.environ, {"LITELLM_ENABLE_DETAILED_OTEL_SPANS": "true"}):
+            asyncio.run(
+                otel.async_service_failure_hook(
+                    payload=payload,
+                    error="connection failed",
+                    parent_otel_span=MagicMock(),
+                    start_time=None,
+                    end_time=None,
+                )
+            )
+
+        otel.tracer.start_span.assert_called_once()
+        mock_span.end.assert_called_once()
+
     def test_cost_breakdown_emitted_to_otel_span(self):
         """
         Test that cost breakdown from StandardLoggingPayload is emitted to OpenTelemetry span attributes.

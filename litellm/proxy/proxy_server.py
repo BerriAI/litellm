@@ -241,10 +241,12 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.otel_span import litellm_otel_tracer
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
+from litellm.types.services import ServiceTypes
 from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
@@ -8320,7 +8322,14 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data = await _read_request_body(request=request)
+    data: dict = {}
+    async with litellm_otel_tracer.trace(
+        "proxy.chat.read_request_body",
+        service=ServiceTypes.PROXY_PRE_CALL,
+        parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+        detailed=True,
+    ):
+        data = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /
@@ -8375,10 +8384,25 @@ async def chat_completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
-        if isinstance(result, BaseModel):
-            return model_dump_with_preserved_fields(result, exclude_unset=True)
-        else:
-            return result
+        is_base_model_response = isinstance(result, BaseModel)
+        with litellm_otel_tracer.trace(
+            "proxy.chat.serialize_response",
+            service=ServiceTypes.PROXY_PRE_CALL,
+            parent_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            attributes={
+                "route": "/v1/chat/completions",
+                "response_type": type(result).__name__,
+                "is_base_model": is_base_model_response,
+                "model": getattr(result, "model", None),
+                "choice_count": len(getattr(result, "choices", []) or []),
+                "has_usage": getattr(result, "usage", None) is not None,
+            },
+            detailed=True,
+        ):
+            if is_base_model_response:
+                return model_dump_with_preserved_fields(result, exclude_unset=True)
+            else:
+                return result
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data

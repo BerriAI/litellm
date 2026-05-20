@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.otel_span import get_current_otel_span
 
 from .integrations.custom_logger import CustomLogger
 from .integrations.datadog.datadog import DataDogLogger
@@ -119,6 +120,7 @@ class ServiceLogging(CustomLogger):
         """
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
+        parent_otel_span = parent_otel_span or get_current_otel_span()
 
         payload = ServiceLoggerPayload(
             is_error=False,
@@ -222,6 +224,7 @@ class ServiceLogging(CustomLogger):
         """
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
+        parent_otel_span = parent_otel_span or get_current_otel_span()
 
         error_message = ""
         if isinstance(error, Exception):

@@ -59,13 +59,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
-from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.otel_span import litellm_otel_tracer
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -89,6 +93,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
+from litellm.types.services import ServiceTypes
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -167,6 +172,27 @@ from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
+
+
+def _emit_litellm_logging_span(
+    *,
+    model_call_details: dict,
+    span_name: str,
+    start_time: float,
+    end_time: Optional[float] = None,
+    event_metadata: Optional[dict] = None,
+) -> None:
+    span_end_time = end_time if end_time is not None else time.time()
+    parent_otel_span = _get_parent_otel_span_from_kwargs(model_call_details)
+    litellm_otel_tracer.record_completed_span(
+        span_name=span_name,
+        service=ServiceTypes.LITELLM,
+        start_time=start_time,
+        end_time=span_end_time,
+        parent_span=parent_otel_span,
+        attributes=event_metadata,
+    )
+
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
@@ -2499,6 +2525,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
 
+        async_success_prepare_start_time = time.time()
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(
             result, LiteLLMBatch
@@ -2658,39 +2685,71 @@ class Logging(LiteLLMLoggingBaseClass):
             ),
             result=result,
         )
+        _emit_litellm_logging_span(
+            model_call_details=self.model_call_details,
+            span_name="litellm.logging.async_success_prepare",
+            start_time=async_success_prepare_start_time,
+            end_time=time.time(),
+            event_metadata={
+                "call_type": self.call_type,
+                "stream": self.stream,
+                "cache_hit": cache_hit,
+                "callback_count": len(callbacks),
+                "has_standard_logging_payload": self.model_call_details.get(
+                    "standard_logging_object"
+                )
+                is not None,
+            },
+        )
 
         ## LOGGING HOOK ##
 
-        for callback in callbacks:
-            if isinstance(callback, CustomGuardrail):
-                from litellm.types.guardrails import GuardrailEventHooks
+        async_callback_dispatch_start_time = time.time()
+        try:
+            for callback in callbacks:
+                if isinstance(callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
 
-                if (
-                    callback.should_run_guardrail(
-                        data=self.model_call_details,
-                        event_type=GuardrailEventHooks.logging_only,
+                    if (
+                        callback.should_run_guardrail(
+                            data=self.model_call_details,
+                            event_type=GuardrailEventHooks.logging_only,
+                        )
+                        is not True
+                    ):
+                        continue
+
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
                     )
-                    is not True
-                ):
-                    continue
-
-                self.model_call_details, result = await callback.async_logging_hook(
-                    kwargs=self.model_call_details,
-                    result=result,
-                    call_type=self.call_type,
-                )
-            elif isinstance(callback, CustomLogger):
-                result = redact_message_input_output_from_custom_logger(
-                    result=result, litellm_logging_obj=self, custom_logger=callback
-                )
-                self.model_call_details, result = await callback.async_logging_hook(
-                    kwargs=self.model_call_details,
-                    result=result,
-                    call_type=self.call_type,
-                )
+                elif isinstance(callback, CustomLogger):
+                    result = redact_message_input_output_from_custom_logger(
+                        result=result, litellm_logging_obj=self, custom_logger=callback
+                    )
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+        finally:
+            _emit_litellm_logging_span(
+                model_call_details=self.model_call_details,
+                span_name="litellm.logging.async_logging_hook_dispatch",
+                start_time=async_callback_dispatch_start_time,
+                end_time=time.time(),
+                event_metadata={
+                    "call_type": self.call_type,
+                    "stream": self.stream,
+                    "cache_hit": cache_hit,
+                    "callback_count": len(callbacks),
+                },
+            )
 
         self.has_run_logging(event_type="async_success")
 
+        async_success_callback_dispatch_start_time = time.time()
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
@@ -2830,6 +2889,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
                 pass
+        _emit_litellm_logging_span(
+            model_call_details=self.model_call_details,
+            span_name="litellm.logging.async_callback_dispatch",
+            start_time=async_success_callback_dispatch_start_time,
+            end_time=time.time(),
+            event_metadata={
+                "call_type": self.call_type,
+                "stream": self.stream,
+                "cache_hit": cache_hit,
+                "callback_count": len(callbacks),
+            },
+        )
 
     def _handle_callback_failure(self, callback: Any):
         """
@@ -5051,6 +5122,7 @@ class StandardLoggingPayloadSetup:
             response_cost=None,
             additional_headers=None,
             litellm_overhead_time_ms=None,
+            llm_api_duration_ms=None,
             batch_models=None,
             litellm_model_name=None,
             usage_object=None,

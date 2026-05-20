@@ -16,6 +16,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.litellm_core_utils.otel_span import set_litellm_otel_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
@@ -239,21 +240,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Initializes OpenTelemetry for litellm proxy server
 
         - Adds Otel as a service callback
+        - Registers this logger for LiteLLM internal OTEL spans
         - Sets `proxy_server.open_telemetry_logger` to self
         """
-        try:
-            from litellm.proxy import proxy_server
-        except ImportError:
-            verbose_logger.warning(
-                "Proxy Server is not installed. Skipping OpenTelemetry initialization."
-            )
-            return
-
         # Add self as a service callback
         if "otel" not in litellm.service_callback and all(
             not isinstance(cb, OpenTelemetry) for cb in litellm.service_callback
         ):
             litellm.service_callback.append(self)
+        set_litellm_otel_logger(self)
+
+        from litellm.proxy import proxy_server
+
         # avoid proxy logger ownership being overwritten by later
         # handlers. Multiple integrations (default OTEL, Langfuse OTEL,
         # Arize OTEL, etc.) may initialize in sequence; without this guard,
@@ -404,7 +402,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
 
     def _init_tracing(self, tracer_provider):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
@@ -440,7 +438,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self._response_duration_histogram = None
             return
 
-        from opentelemetry import metrics
+        import opentelemetry.metrics as metrics
         from opentelemetry.sdk.metrics import MeterProvider
 
         def create_meter_provider():
@@ -544,7 +542,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -562,6 +560,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if parent_otel_span is not None:
             _span_name = payload.service
+            if event_metadata and isinstance(event_metadata.get("span_name"), str):
+                _span_name = event_metadata["span_name"]
             service_logging_span = self.tracer.start_span(
                 name=_span_name,
                 context=trace.set_span_in_context(parent_otel_span),
@@ -604,7 +604,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -622,6 +622,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if parent_otel_span is not None:
             _span_name = payload.service
+            if event_metadata and isinstance(event_metadata.get("span_name"), str):
+                _span_name = event_metadata["span_name"]
             service_logging_span = self.tracer.start_span(
                 name=_span_name,
                 context=trace.set_span_in_context(parent_otel_span),
@@ -666,7 +668,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         parent_otel_span = user_api_key_dict.parent_otel_span
@@ -991,8 +993,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             span = None
             # Only set attributes if the span is still recording (not closed)
-            # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if parent_span is not None and hasattr(parent_span, "set_status"):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -1064,7 +1065,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _maybe_log_raw_request(
         self, kwargs, response_obj, start_time, end_time, parent_span
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         # raw_gen_ai_request is non-standard in semconv mode.
@@ -1426,7 +1427,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Resolve through the handler's own LoggerProvider (which may be a
         # private one when skip_set_global=True) rather than the module-level
         # get_logger() which always goes through the global provider.
-        otel_logger = self._logger_provider.get_logger(LITELLM_LOGGER_NAME)
+        logger_provider = self._logger_provider
+        if logger_provider is None:
+            return
+        otel_logger = logger_provider.get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
@@ -1517,7 +1521,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
           2. The parent proxy-request span
           3. The original fallback context (may be None — last resort)
         """
-        from opentelemetry import trace as _trace
+        import opentelemetry.trace as _trace
 
         if span is not None:
             return _trace.set_span_in_context(span)
@@ -1680,8 +1684,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # When parent span exists and USE_OTEL_LITELLM_REQUEST_SPAN=false,
             # record error on parent span (keeps hierarchy shallow)
             # Only set attributes if the span is still recording (not closed)
-            # Note: parent_otel_span is guaranteed to be not None here
-            if parent_otel_span.is_recording():
+            if parent_otel_span is not None and parent_otel_span.is_recording():
                 parent_otel_span.set_status(Status(StatusCode.ERROR))
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
@@ -2471,7 +2474,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 str(e),
             )
 
-    def _to_ns(self, dt):
+    def _to_ns(self, dt: Optional[Union[datetime, int, float]]):
+        if dt is None:
+            dt = datetime.now()
+        if isinstance(dt, (int, float)):
+            return int(dt * 1e9)
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
@@ -2506,7 +2513,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return _parent_context
 
     def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
-        from opentelemetry import context, trace
+        import opentelemetry.context as context
+        import opentelemetry.trace as trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
@@ -2914,7 +2922,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -2967,7 +2975,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0

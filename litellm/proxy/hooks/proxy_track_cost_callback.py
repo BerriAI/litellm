@@ -176,7 +176,7 @@ class _ProxyDBLogger(CustomLogger):
         )
 
     @log_db_metrics
-    async def _PROXY_track_cost_callback(
+    async def _PROXY_track_cost_callback(  # noqa: PLR0915
         self,
         kwargs,  # kwargs to completion
         completion_response: Optional[
@@ -220,7 +220,6 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object=sl_object,
                 metadata=metadata,
             )
-
             if response_cost is not None:
                 user_api_key = metadata.get("user_api_key", None)
                 if kwargs.get("cache_hit", False) is True:

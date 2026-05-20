@@ -158,6 +158,68 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
 
 
 @pytest.mark.asyncio
+async def test_should_handle_read_body_errors_with_parent_otel_span(monkeypatch):
+    parent_otel_span = MagicMock()
+    captured_error_context = {}
+
+    class _FakeOpenTelemetryLogger:
+        def create_litellm_proxy_request_started_span(self, start_time, headers):
+            return parent_otel_span
+
+    async def _raise_read_body_error(request):
+        raise ValueError("Unable to read body")
+
+    async def _fake_handle_authentication_error(
+        e,
+        request,
+        request_data,
+        route,
+        parent_otel_span,
+        api_key,
+    ):
+        captured_error_context.update(
+            e=e,
+            request_data=request_data,
+            route=route,
+            parent_otel_span=parent_otel_span,
+            api_key=api_key,
+        )
+        return UserAPIKeyAuth(api_key=api_key, parent_otel_span=parent_otel_span)
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.base_url.path = "/"
+    mock_request.headers = {"authorization": "Bearer sk-test"}
+    mock_request.query_params = {}
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "open_telemetry_logger",
+        _FakeOpenTelemetryLogger(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth._read_request_body",
+        _raise_read_body_error,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.UserAPIKeyAuthExceptionHandler._handle_authentication_error",
+        staticmethod(_fake_handle_authentication_error),
+    )
+
+    result = await user_api_key_auth(
+        request=mock_request,
+        api_key="Bearer sk-test",
+    )
+
+    assert result.parent_otel_span is parent_otel_span
+    assert isinstance(captured_error_context["e"], ValueError)
+    assert captured_error_context["request_data"] == {}
+    assert captured_error_context["route"] == "/v1/chat/completions"
+    assert captured_error_context["parent_otel_span"] is parent_otel_span
+    assert captured_error_context["api_key"] == "Bearer sk-test"
+
+
+@pytest.mark.asyncio
 async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
     request_data = {"model": "gpt-4o"}
@@ -335,6 +397,57 @@ def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
         "jwt_handler": None,
         "litellm_proxy_admin_name": "admin",
     }
+
+
+@pytest.mark.asyncio
+async def test_builder_direct_call_does_not_create_parent_otel_span():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    class _FakeOpenTelemetryLogger:
+        def __init__(self):
+            self.create_litellm_proxy_request_started_span = MagicMock(
+                return_value=MagicMock()
+            )
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-custom-auth-trusted",
+        user_id="custom-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_user_custom_auth = AsyncMock(return_value=trusted_token)
+    fake_otel_logger = _FakeOpenTelemetryLogger()
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=mock_user_custom_auth)
+    attrs["open_telemetry_logger"] = fake_otel_logger
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key="Bearer sk-custom-auth-trusted",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        fake_otel_logger.create_litellm_proxy_request_started_span.assert_not_called()
+        assert result.parent_otel_span is None
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
 
 
 @pytest.mark.asyncio
