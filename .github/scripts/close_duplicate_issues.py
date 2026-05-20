@@ -50,17 +50,27 @@ def fetch_open_issues(repo: str | None) -> list[dict]:
     cmd = ["api", "--paginate", endpoint]
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
+    # `gh api --paginate` concatenates the JSON value from every page back-to-back
+    # (e.g. `[...][...][...]`) without a reliable separator. Issue bodies can also
+    # contain literal newlines, so splitting on newlines and parsing each line is
+    # not safe. Walk the stream with a JSONDecoder instead and accumulate every
+    # top-level value we find.
+    decoder = json.JSONDecoder()
+    issues: list[dict] = []
+    idx = 0
+    raw_len = len(raw)
+    while idx < raw_len:
+        # Skip any inter-value whitespace produced by gh between pages.
+        while idx < raw_len and raw[idx].isspace():
+            idx += 1
+        if idx >= raw_len:
+            break
+        parsed, end = decoder.raw_decode(raw, idx)
         if isinstance(parsed, list):
             issues.extend(parsed)
         else:
             issues.append(parsed)
+        idx = end
 
     # Filter out pull requests (they also appear in the issues endpoint)
     return [i for i in issues if "pull_request" not in i]
