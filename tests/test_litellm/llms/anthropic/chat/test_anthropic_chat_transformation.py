@@ -3731,6 +3731,79 @@ def test_map_tool_helper_responses_namespace_tool_is_skipped():
     assert mcp_server is None
 
 
+def test_map_tool_helper_responses_computer_use_preview_flat_format():
+    """
+    OpenAI Responses computer_use_preview tools use top-level display_width/
+    display_height without a Chat Completions `function` wrapper.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "computer_use_preview",
+        "display_width": 1024,
+        "display_height": 768,
+        "environment": "linux",
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)  # type: ignore[arg-type]
+    assert mcp_server is None
+    assert result is not None
+    assert result["type"] == "computer_use_preview"
+    assert result["name"] == "computer"
+    assert result["display_width_px"] == 1024
+    assert result["display_height_px"] == 768
+
+
+def test_map_tool_helper_responses_computer_tool_without_display_is_skipped():
+    config = AnthropicConfig()
+    tool = {"type": "computer_use_preview", "environment": "linux"}
+
+    result, mcp_server = config._map_tool_helper(tool)  # type: ignore[arg-type]
+    assert result is None
+    assert mcp_server is None
+
+
+def test_map_tool_helper_responses_shell_tool_is_skipped():
+    """
+    Codex and other Responses clients send shell tools for local execution.
+    Anthropic has no shell tool equivalent, so LiteLLM should skip them.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "shell",
+        "environment": {"type": "local"},
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)  # type: ignore[arg-type]
+    assert result is None
+    assert mcp_server is None
+
+
+def test_map_tools_codex_responses_tool_mix():
+    """Regression: Codex tool bundle should not crash Anthropic tool mapping."""
+    config = AnthropicConfig()
+    tools = [
+        {"type": "namespace", "name": "tools"},
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a free-form patch",
+        },
+        {"type": "shell", "environment": {"type": "local"}},
+        {
+            "type": "computer_use_preview",
+            "display_width": 1920,
+            "display_height": 1080,
+            "environment": "mac",
+        },
+    ]
+
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    assert mcp_servers == []
+    assert len(anthropic_tools) == 2
+    assert anthropic_tools[0]["name"] == "apply_patch"
+    assert anthropic_tools[1]["type"] == "computer_use_preview"
+
+
 def test_extract_response_content_thinking_block_null_thinking():
     """
     Test that thinking blocks are not dropped when the 'thinking' field is null

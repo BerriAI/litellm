@@ -711,29 +711,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             returned_tool = _tool
 
         elif tool["type"].startswith("computer_"):
-            ## check if all required 'display_' params are given
-            if "parameters" not in tool["function"]:
-                raise ValueError("Missing required parameter: parameters")
-
-            _display_width_px: Optional[int] = tool["function"]["parameters"].get(
-                "display_width_px"
-            )
-            _display_height_px: Optional[int] = tool["function"]["parameters"].get(
-                "display_height_px"
-            )
-            if _display_width_px is None or _display_height_px is None:
-                raise ValueError(
-                    "Missing required parameter: display_width_px or display_height_px"
+            _function = tool.get("function")
+            if isinstance(_function, dict):
+                if "parameters" not in _function:
+                    raise ValueError("Missing required parameter: parameters")
+                _params = _function["parameters"]
+                _display_width_px = _params.get("display_width_px")
+                _display_height_px = _params.get("display_height_px")
+                _tool_name = _function.get("name", "computer")
+                _display_number = _params.get("display_number")
+            else:
+                # OpenAI Responses API flat format (e.g. computer_use_preview)
+                _display_width_px = tool.get("display_width_px") or tool.get(
+                    "display_width"
                 )
+                _display_height_px = tool.get("display_height_px") or tool.get(
+                    "display_height"
+                )
+                _tool_name = tool.get("name", "computer")
+                _display_number = tool.get("display_number")
+
+            if _display_width_px is None or _display_height_px is None:
+                # Responses clients may declare computer tools without display
+                # sizing; skip rather than failing the entire request.
+                return None, None
 
             _computer_tool = AnthropicComputerTool(
                 type=tool["type"],
-                name=tool["function"].get("name", "computer"),
-                display_width_px=_display_width_px,
-                display_height_px=_display_height_px,
+                name=_tool_name if isinstance(_tool_name, str) else "computer",
+                display_width_px=int(_display_width_px),
+                display_height_px=int(_display_height_px),
             )
 
-            _display_number = tool["function"]["parameters"].get("display_number")
             if _display_number is not None:
                 _computer_tool["display_number"] = _display_number
 
@@ -799,6 +808,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if _tool_dict.get("caching") is not None:
                 _advisor_tool["caching"] = _tool_dict["caching"]
             returned_tool = _advisor_tool  # type: ignore[assignment]
+        elif tool["type"] == "shell":
+            # OpenAI Responses shell tools execute in the client runtime; Anthropic
+            # has no equivalent executable tool definition, so skip them.
+            return None, None
         elif tool["type"] == "namespace":
             # OpenAI Responses clients may send namespace declarations to group
             # tools. They are not executable Anthropic tools, so skip them.
@@ -1936,6 +1949,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+
         strict_sanitize = self._is_glm_5_1_family_model(model)
         if strict_sanitize:
             messages = self._sanitize_request_messages(messages)
