@@ -51,8 +51,12 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
+        streaming_end_of_stream_only: bool = False,
+        streaming_sampling_rate: int = 5,
         **kwargs: Any,
     ) -> None:
+        self.streaming_end_of_stream_only = streaming_end_of_stream_only
+        self.streaming_sampling_rate = streaming_sampling_rate
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )

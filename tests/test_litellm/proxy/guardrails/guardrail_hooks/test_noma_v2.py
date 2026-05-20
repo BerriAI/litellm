@@ -655,3 +655,68 @@ class TestNomaV2ApplicationIdResolution:
 
         payload = call_mock.call_args.kwargs["payload"]
         assert "application_id" not in payload
+
+
+class TestNomaV2StreamingKnobs:
+    def test_streaming_knobs_default_values(self):
+        guardrail = NomaV2Guardrail(
+            api_key="test-api-key",
+            guardrail_name="test",
+            event_hook="pre_call",
+            default_on=True,
+        )
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+    def test_streaming_knobs_custom_values(self):
+        guardrail = NomaV2Guardrail(
+            api_key="test-api-key",
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=10,
+            guardrail_name="test",
+            event_hook="pre_call",
+            default_on=True,
+        )
+        assert guardrail.streaming_end_of_stream_only is True
+        assert guardrail.streaming_sampling_rate == 10
+
+    def test_config_model_has_streaming_fields(self):
+        model = NomaV2GuardrailConfigModel(
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=3,
+        )
+        assert model.streaming_end_of_stream_only is True
+        assert model.streaming_sampling_rate == 3
+
+    def test_config_model_streaming_fields_default_to_none(self):
+        model = NomaV2GuardrailConfigModel()
+        assert model.streaming_end_of_stream_only is None
+        assert model.streaming_sampling_rate is None
+
+    def test_initialize_guardrail_v2_passes_streaming_knobs(self):
+        from unittest.mock import patch as _patch
+
+        from litellm.proxy.guardrails.guardrail_hooks.noma import (
+            initialize_guardrail_v2,
+        )
+
+        class FakeLitellmParams:
+            api_key = "test-key"
+            api_base = "https://self-managed.local"
+            application_id = "app-1"
+            monitor_mode = False
+            block_failures = False
+            streaming_end_of_stream_only = True
+            streaming_sampling_rate = 8
+            mode = "pre_call"
+            default_on = True
+
+        guardrail = {"guardrail_name": "test-guardrail"}
+
+        with _patch("litellm.logging_callback_manager.add_litellm_callback"):
+            result = initialize_guardrail_v2(
+                litellm_params=FakeLitellmParams(), guardrail=guardrail
+            )
+
+        assert result.streaming_end_of_stream_only is True
+        assert result.streaming_sampling_rate == 8

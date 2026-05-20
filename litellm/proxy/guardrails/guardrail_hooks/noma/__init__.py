@@ -46,6 +46,12 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
         application_id=litellm_params.application_id,
         monitor_mode=litellm_params.monitor_mode,
         block_failures=litellm_params.block_failures,
+        streaming_end_of_stream_only=getattr(
+            litellm_params, "streaming_end_of_stream_only", None
+        )
+        or False,
+        streaming_sampling_rate=getattr(litellm_params, "streaming_sampling_rate", None)
+        or 5,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
