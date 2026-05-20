@@ -8,7 +8,7 @@ This tutorial shows how to call Claude models through LiteLLM proxy from Claude 
 
 :::info 
 
-This tutorial is based on [Anthropic's official LiteLLM configuration documentation](https://docs.anthropic.com/en/docs/claude-code/llm-gateway#litellm-configuration). This integration allows you to use any LiteLLM supported model through Claude Code with centralized authentication, usage tracking, and cost controls.
+This tutorial is based on [Anthropic's official LiteLLM configuration documentation](https://code.claude.com/docs/en/llm-gateway#litellm-configuration). This integration allows you to use any LiteLLM supported model through Claude Code with centralized authentication, usage tracking, and cost controls.
 
 :::
 
@@ -93,28 +93,79 @@ curl -X POST http://0.0.0.0:4000/v1/messages \
 
 ### 4. Configure Claude Code
 
-#### Method 1: Unified Endpoint (Recommended)
+#### Authentication methods
 
-Configure Claude Code to use LiteLLM's unified endpoint:
+Claude Code authenticates to LiteLLM using your proxy **master key** or a [**virtual key**](https://docs.litellm.ai/docs/proxy/virtual_keys). You can provide that credential as a **static** value or fetch it **dynamically** with a helper script. See also [Anthropic's LLM gateway — authentication methods](https://code.claude.com/docs/en/llm-gateway#authentication-methods).
 
-Either a virtual key / master key can be used here
+##### Static API key
+
+Set a fixed LiteLLM master key or virtual key in the environment:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
 
+Or in Claude Code settings (`~/.claude/settings.json`):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-litellm-static-key"
+  }
+}
+```
+
+Claude Code sends this value as the `Authorization` header.
+
 :::tip
-LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual key would be limited to the models set in UI
+`LITELLM_MASTER_KEY` gives Claude Code access to all proxy models. A [virtual key](https://docs.litellm.ai/docs/proxy/virtual_keys) limits access to specific models and enables per-user spend tracking.
 :::
 
-#### Method 2: Provider-specific Pass-through Endpoint
+##### Dynamic API key with helper
 
-Alternatively, use the Anthropic pass-through endpoint:
+For rotating keys or per-user authentication, use Claude Code's `apiKeyHelper` to run a script that prints a LiteLLM key to stdout (for example, fetch from a vault or mint a short-lived token):
+
+1. Create a helper script:
+
+```bash
+#!/bin/bash
+# ~/bin/get-litellm-key.sh
+# Example: return a per-user LiteLLM virtual key
+echo "$LITELLM_VIRTUAL_KEY"
+```
+
+2. Configure Claude Code settings:
+
+```json
+{
+  "apiKeyHelper": "~/bin/get-litellm-key.sh"
+}
+```
+
+3. Optional refresh interval (milliseconds):
+
+```bash
+export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3600000
+```
+
+The helper output is sent as `Authorization` and `X-Api-Key`. It has **lower precedence** than `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` when those are also set.
+
+#### Endpoint URL
+
+Set `ANTHROPIC_BASE_URL` to point Claude Code at your LiteLLM proxy (in addition to the authentication settings above).
+
+##### Method 1: Unified Endpoint (Recommended)
+
+```bash
+export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
+```
+
+Benefits: load balancing, fallbacks, and consistent cost tracking. See [Anthropic unified `/v1/messages`](https://docs.litellm.ai/docs/anthropic_unified).
+
+##### Method 2: Provider-specific Pass-through Endpoint
 
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000/anthropic"
-export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
 
 ### 5. Use Claude Code
@@ -184,7 +235,8 @@ Common issues and solutions:
 **Authentication errors:**
 - Verify your environment variables are set: `echo $LITELLM_MASTER_KEY`
 - Check that your API keys are valid and have sufficient credits
-- Ensure the `ANTHROPIC_AUTH_TOKEN` matches your LiteLLM master key
+- Ensure the `ANTHROPIC_AUTH_TOKEN` matches your LiteLLM master key or virtual key
+- If using `apiKeyHelper`, confirm the script is executable and prints only the key (no extra output). Remember `ANTHROPIC_AUTH_TOKEN` overrides the helper when both are set
 
 **Model not found:**
 - Ensure the model name in Claude Code matches exactly with your `config.yaml`
