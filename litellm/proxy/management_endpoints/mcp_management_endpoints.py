@@ -47,7 +47,10 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
+    build_env_var_setup_url,
+    collect_env_var_references,
     get_server_prefix,
+    parse_admin_env_vars,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
@@ -111,14 +114,18 @@ if MCP_AVAILABLE:
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
+        delete_user_env_vars,
         get_all_mcp_servers_for_user,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
+        get_user_env_vars,
+        get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
         reject_mcp_server,
         store_user_credential,
+        store_user_env_vars,
         store_user_oauth_credential,
         update_mcp_server,
     )
@@ -146,6 +153,9 @@ if MCP_AVAILABLE:
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
+        MCPUserEnvVarSpec,
+        MCPUserEnvVarsRequest,
+        MCPUserEnvVarsStatus,
         NewMCPServerRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
@@ -2101,6 +2111,190 @@ if MCP_AVAILABLE:
                 )
             )
         return items
+
+    # ── Per-user MCP env var endpoints ────────────────────────────────────────
+
+    def _compute_user_env_var_status(
+        *,
+        server: LiteLLM_MCPServerTable,
+        stored_values: Dict[str, str],
+    ) -> MCPUserEnvVarsStatus:
+        """Build a status object for one server given the user's stored values."""
+        _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
+
+        # Limit "required" to vars that are actually referenced by static_headers.
+        # If an admin defined a per-user var but never used it, it's not blocking.
+        static_headers = getattr(server, "static_headers", None) or {}
+        if isinstance(static_headers, str):
+            try:
+                import json as _json
+
+                static_headers = _json.loads(static_headers) or {}
+            except (ValueError, TypeError):
+                static_headers = {}
+        referenced = collect_env_var_references(strings=static_headers.values())
+        user_var_names = {spec["name"] for spec in user_specs}
+        blocking = referenced & user_var_names
+
+        required: List[MCPUserEnvVarSpec] = []
+        missing_count = 0
+        for spec in user_specs:
+            name = spec["name"]
+            if name not in blocking:
+                continue
+            value = stored_values.get(name)
+            is_set = bool(value)
+            if not is_set:
+                missing_count += 1
+            required.append(
+                MCPUserEnvVarSpec(
+                    name=name,
+                    description=spec.get("description"),
+                    value=value,
+                    is_set=is_set,
+                )
+            )
+
+        return MCPUserEnvVarsStatus(
+            server_id=server.server_id,
+            server_name=getattr(server, "server_name", None),
+            alias=getattr(server, "alias", None),
+            required=required,
+            missing_count=missing_count,
+            setup_url=build_env_var_setup_url(server.server_id) if required else None,
+        )
+
+    @router.get(
+        "/server/{server_id}/user-env-vars",
+        description="Return the calling user's per-user MCP env var status for this server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_user_env_vars(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        stored = await get_user_env_vars(prisma_client, user_id, server_id)
+        return _compute_user_env_var_status(server=server, stored_values=stored)
+
+    @router.post(
+        "/server/{server_id}/user-env-vars",
+        description="Store the calling user's per-user MCP env var values for this server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def store_mcp_user_env_vars(
+        server_id: str,
+        payload: MCPUserEnvVarsRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        # Filter to only known per-user var names declared by the admin —
+        # never persist arbitrary keys the user invents.
+        _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
+        allowed_names = {spec["name"] for spec in user_specs}
+        filtered = {
+            k: v for k, v in payload.values.items() if k in allowed_names and v != ""
+        }
+        await store_user_env_vars(prisma_client, user_id, server_id, filtered)
+        return _compute_user_env_var_status(server=server, stored_values=filtered)
+
+    @router.delete(
+        "/server/{server_id}/user-env-vars",
+        description="Clear the calling user's per-user MCP env var values for this server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def clear_mcp_user_env_vars(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await get_mcp_server(prisma_client, server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        try:
+            await delete_user_env_vars(prisma_client, user_id, server_id)
+        except Exception:
+            pass  # Already deleted / didn't exist
+        return _compute_user_env_var_status(server=server, stored_values={})
+
+    @router.get(
+        "/user-env-vars/status",
+        description="Per-user MCP env var status across every server the user can access. "
+        "Used by the dashboard to highlight servers with missing per-user vars.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=List[MCPUserEnvVarsStatus],
+    )
+    @management_endpoint_wrapper
+    async def list_mcp_user_env_var_status(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> List[MCPUserEnvVarsStatus]:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            return []
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        if not accessible:
+            return []
+        server_ids = [s.server_id for s in accessible]
+        stored_bulk = await get_user_env_vars_bulk(prisma_client, user_id, server_ids)
+        statuses: List[MCPUserEnvVarsStatus] = []
+        for server in accessible:
+            stored = stored_bulk.get(server.server_id, {})
+            status_obj = _compute_user_env_var_status(
+                server=server, stored_values=stored
+            )
+            if status_obj.required:
+                statuses.append(status_obj)
+        return statuses
 
     @router.put(
         "/server",

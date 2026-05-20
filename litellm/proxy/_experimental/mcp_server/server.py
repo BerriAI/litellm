@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
     get_server_prefix,
     iter_known_server_prefixes,
@@ -467,6 +468,16 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 host_progress_callback=host_progress_callback,
                 **data,  # for logging
+            )
+        except MCPMissingUserEnvVarsError as e:
+            verbose_logger.info(
+                "MCP mcp_server_tool_call missing per-user env vars: server_id=%s missing=%s",
+                e.server_id,
+                e.missing,
+            )
+            return CallToolResult(
+                content=[TextContent(text=str(e), type="text")],
+                isError=True,
             )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
@@ -1368,6 +1379,7 @@ if MCP_AVAILABLE:
                         extra_headers=extra_headers,
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
+                        user_api_key_auth=user_api_key_auth,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -2074,6 +2086,7 @@ if MCP_AVAILABLE:
         """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
+        requested_server_id: Optional[str] = kwargs.get("requested_server_id")
 
         # If the client called with a display-name override (e.g. "Get Pet"),
         # translate it back to the original prefixed name before any routing.
@@ -2082,13 +2095,54 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
+        requested_server: Optional[MCPServer] = None
+        if requested_server_id:
+            requested_server = next(
+                (s for s in allowed_mcp_servers if s.server_id == requested_server_id),
+                None,
+            )
+
         # Resolve the actual MCP server up-front so the permission check uses
         # the canonical server.name even when the tool name is prefixed with a
         # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
         # server's display name directly.
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server is None and requested_server is not None:
+            # REST callers may pass the raw tool name (no prefix) plus a
+            # ``requested_server_id``. The mapping might only contain the
+            # prefixed form, so retry the lookup with every known prefix of
+            # the requested server before treating the tool as unresolved —
+            # otherwise the tool_server_mismatch guard below is silently
+            # bypassed.
+            for known_prefix in iter_known_server_prefixes(requested_server):
+                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    add_server_prefix_to_name(name, known_prefix)
+                )
+                if candidate is not None:
+                    mcp_server = candidate
+                    break
         if mcp_server is not None:
             server_name = mcp_server.name
+
+        # REST /mcp-rest/tools/call passes server_id — tool must belong to that server
+        if requested_server is not None:
+            if (
+                mcp_server is not None
+                and mcp_server.server_id != requested_server.server_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "tool_server_mismatch",
+                        "message": (
+                            f"Tool '{name}' belongs to MCP server '{mcp_server.name}' "
+                            f"but request specified server_id for '{requested_server.name}'."
+                        ),
+                    },
+                )
+            if mcp_server is None:
+                mcp_server = requested_server
+                server_name = requested_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:

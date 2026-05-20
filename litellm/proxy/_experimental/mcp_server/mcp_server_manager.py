@@ -50,14 +50,19 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_env_var_setup_url,
+    collect_env_var_references,
     compute_short_server_prefix,
     get_server_prefix,
+    interpolate_headers,
     is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
+    parse_admin_env_vars,
     split_server_prefix_from_name,
     validate_mcp_server_name,
 )
@@ -188,6 +193,25 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     else:
         # Already a dictionary
         return data
+
+
+def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
+
+    Returns ``None`` for empty / null / unparseable input. Accepts strings
+    (raw JSON) or already-materialized lists.
+    """
+    if data is None or data == "" or data == []:
+        return None
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return parsed if isinstance(parsed, list) else None
+    if isinstance(data, list):
+        return data
+    return None
 
 
 class MCPServerManager:
@@ -396,6 +420,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
@@ -668,6 +693,7 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )
@@ -767,6 +793,7 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
@@ -1226,6 +1253,7 @@ class MCPServerManager:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 return tools
             except Exception as e:
@@ -1298,6 +1326,93 @@ class MCPServerManager:
                 resolved_env[env_key] = env_value
 
         return resolved_env
+
+    async def _resolve_static_headers_with_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Return server.static_headers with ``${NAME}`` interpolated.
+
+        Globals come from ``server.env_vars`` entries with ``scope=="global"``.
+        Per-user values come from the ``LiteLLM_MCPUserEnvVars`` row for the
+        calling user.
+
+        Raises ``MCPMissingUserEnvVarsError`` when ``static_headers`` reference
+        a per-user variable that the calling user has not yet supplied. This
+        is converted into a user-facing 412 by the REST layer.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers and not env_vars:
+            return static_headers
+
+        global_values, user_specs = parse_admin_env_vars(env_vars)
+        user_var_names = {spec["name"] for spec in user_specs}
+
+        # If no env vars are configured, return static_headers as-is.
+        if not global_values and not user_specs:
+            return static_headers
+
+        # Figure out which user-scoped vars are actually referenced.
+        referenced = collect_env_var_references(strings=(static_headers or {}).values())
+        referenced_user_vars = referenced & user_var_names
+
+        user_values: Dict[str, str] = {}
+        if referenced_user_vars:
+            user_values = await self._load_user_env_vars(server, user_api_key_auth)
+
+            missing = sorted(
+                name for name in referenced_user_vars if not user_values.get(name)
+            )
+            if missing:
+                raise MCPMissingUserEnvVarsError(
+                    server_id=server.server_id,
+                    server_name=server.server_name or server.name,
+                    missing=missing,
+                    setup_url=build_env_var_setup_url(server.server_id),
+                )
+
+        merged_vars: Dict[str, str] = {**global_values, **user_values}
+        if not static_headers:
+            return static_headers
+        return interpolate_headers(static_headers, merged_vars)
+
+    async def _load_user_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Dict[str, str]:
+        """Best-effort lookup of the calling user's env var values for ``server``.
+
+        Returns an empty dict when no user is available or the DB lookup
+        fails — callers detect missing values via name lookup, not by an
+        exception here.
+        """
+        if user_api_key_auth is None:
+            return {}
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return {}
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            return {}
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            get_user_env_vars,
+        )
+
+        try:
+            return await get_user_env_vars(prisma_client, user_id, server.server_id)
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPServerManager: failed to load user env vars for "
+                "user=%s server=%s: %s",
+                user_id,
+                server.server_id,
+                exc,
+            )
+            return {}
 
     async def _create_mcp_client(
         self,
@@ -1406,6 +1521,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1427,10 +1543,53 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server, user_api_key_auth
+            )
+            if resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(resolved_static_headers)
+
+            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
+            # Skip entirely when the signer is not configured (avoid an unnecessary
+            # dict copy on every list call), when the server has its own static
+            # Authorization header, when a per-user mcp_auth_header has already
+            # been resolved, or when the caller already supplied an Authorization
+            # entry in extra_headers (e.g. a per-user OAuth token resolved
+            # upstream) — admin-configured static auth and per-user OAuth must
+            # take precedence so the signer doesn't silently overwrite e.g. an
+            # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
+            # applies extra_headers after writing Authorization from auth_value, so
+            # an injected JWT would otherwise clobber the per-user token).
+            if user_api_key_auth is not None and not server.spec_path:
+                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                    get_mcp_jwt_signer,
+                    inject_mcp_jwt_headers_for_upstream,
+                )
+
+                static_headers = server.static_headers or {}
+                has_static_authorization = any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in static_headers.keys()
+                )
+                has_extra_authorization = bool(extra_headers) and any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in (extra_headers or {}).keys()
+                )
+
+                if (
+                    get_mcp_jwt_signer() is not None
+                    and not has_static_authorization
+                    and not mcp_auth_header
+                    and not has_extra_authorization
+                ):
+                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                        user_api_key_dict=user_api_key_auth,
+                        extra_headers=extra_headers,
+                        raw_headers=raw_headers,
+                        for_list_tools=True,
+                    )
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -2633,6 +2792,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2712,10 +2872,17 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        # Interpolate env vars into static_headers. Raises
+        # MCPMissingUserEnvVarsError when the calling user has not filled in
+        # a required per-user variable — the REST layer converts that into
+        # a friendly 412 with a setup URL.
+        resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+            mcp_server, user_api_key_auth
+        )
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -2791,6 +2958,112 @@ class MCPServerManager:
 
         return cast(CallToolResult, result)
 
+    def _resolve_mcp_server_for_tool_call(
+        self,
+        server_name: str,
+        name: str,
+    ) -> MCPServer:
+        """Resolve MCP server for call_tool (prefixed name, registry, fallback)."""
+        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
+        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        resolved_by_server_name_only = False
+        normalized_server_name = normalize_server_name(server_name)
+
+        def _candidate_matches_server_name(candidate: MCPServer) -> bool:
+            for identifier in (
+                candidate.alias,
+                candidate.server_name,
+                candidate.name,
+            ):
+                if identifier and normalize_server_name(identifier) == (
+                    normalized_server_name
+                ):
+                    return True
+            return False
+
+        if mcp_server is None:
+            for candidate in self.get_registry().values():
+                if _candidate_matches_server_name(candidate):
+                    mcp_server = candidate
+                    resolved_by_server_name_only = True
+                    break
+        if mcp_server is None:
+            fallback = self._get_mcp_server_from_tool_name(name)
+            if fallback is not None and (
+                not server_name or _candidate_matches_server_name(fallback)
+            ):
+                mcp_server = fallback
+        if mcp_server is None:
+            raise ValueError(f"Tool {name} not found")
+
+        if resolved_by_server_name_only:
+            tool_known = (
+                name in self.tool_name_to_mcp_server_name_mapping
+                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
+            )
+            if not tool_known:
+                raise ValueError(f"Tool {name} not found")
+
+        return mcp_server
+
+    async def _resolve_oauth2_headers_for_tool_call(
+        self,
+        mcp_server: MCPServer,
+        oauth2_headers: Optional[Dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Look up per-user OAuth headers when the client did not supply a token."""
+        if (
+            not mcp_server.needs_user_oauth_token
+            or oauth2_headers
+            or user_api_key_auth is None
+        ):
+            return oauth2_headers
+
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return oauth2_headers
+
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                _get_user_oauth_extra_headers_from_db,
+            )
+
+            stored_headers = await _get_user_oauth_extra_headers_from_db(
+                server=mcp_server,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if stored_headers:
+                return stored_headers
+        except Exception as _lookup_exc:
+            verbose_logger.debug(
+                "call_tool: per-user token lookup failed for " "user=%s server=%s: %s",
+                user_id,
+                mcp_server.server_id,
+                _lookup_exc,
+            )
+        return oauth2_headers
+
+    async def _gather_openapi_tool_tasks(
+        self,
+        tasks: List[Any],
+        proxy_logging_obj: Optional[ProxyLogging],
+    ) -> CallToolResult:
+        """Await OpenAPI tool tasks and return the tool call result."""
+        try:
+            mcp_responses = await asyncio.gather(*tasks)
+            result_index = 1 if proxy_logging_obj else 0
+            return cast(CallToolResult, mcp_responses[result_index])
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            verbose_logger.error(
+                f"Guardrail blocked MCP tool call during result check: {str(e)}"
+            )
+            raise e
+
     async def call_tool(
         self,
         server_name: str,
@@ -2821,12 +3094,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time = datetime.datetime.now()
-
-        # Get the MCP server
-        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
-        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
-        if mcp_server is None:
-            raise ValueError(f"Tool {name} not found")
+        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -2860,36 +3128,9 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
-        # For per-user OAuth servers: if the client didn't supply a token in
-        # oauth2_headers, look up the stored token from Redis / DB.  This is the
-        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
-        # list_tools.
-        if (
-            mcp_server.needs_user_oauth_token
-            and not oauth2_headers
-            and user_api_key_auth is not None
-        ):
-            user_id = getattr(user_api_key_auth, "user_id", None)
-            if user_id:
-                try:
-                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
-                        _get_user_oauth_extra_headers_from_db,
-                    )
-
-                    stored_headers = await _get_user_oauth_extra_headers_from_db(
-                        server=mcp_server,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-                    if stored_headers:
-                        oauth2_headers = stored_headers
-                except Exception as _lookup_exc:
-                    verbose_logger.debug(
-                        "call_tool: per-user token lookup failed for "
-                        "user=%s server=%s: %s",
-                        user_id,
-                        mcp_server.server_id,
-                        _lookup_exc,
-                    )
+        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
+            mcp_server, oauth2_headers, user_api_key_auth
+        )
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
@@ -2923,28 +3164,10 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
-        # For OpenAPI tools, await outside the client context
-        try:
-            mcp_responses = await asyncio.gather(*tasks)
-
-            # If proxy_logging_obj is None, the tool call result is at index 0
-            # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
-            result_index = 1 if proxy_logging_obj else 0
-            result = mcp_responses[result_index]
-
-            return cast(CallToolResult, result)
-        except (
-            BlockedPiiEntityError,
-            GuardrailRaisedException,
-            HTTPException,
-        ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
-            verbose_logger.error(
-                f"Guardrail blocked MCP tool call during result check: {str(e)}"
-            )
-            raise e
+        return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
 
     #########################################################
     # End of Methods that call the upstream MCP servers

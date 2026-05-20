@@ -46,6 +46,31 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   }, {});
 };
 
+type EnvVarEntry = { name: string; value: string; scope: "global" | "user"; description?: string };
+
+/** Normalize the env_vars form list into the payload shape the backend expects.
+ * Drops empty rows and any with invalid identifiers. */
+const normalizeEnvVars = (list: unknown): EnvVarEntry[] => {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  const out: EnvVarEntry[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = String((entry as Record<string, unknown>).name ?? "").trim();
+    if (!name || seen.has(name)) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    const scope = (entry as Record<string, unknown>).scope === "user" ? "user" : "global";
+    out.push({
+      name,
+      value: String((entry as Record<string, unknown>).value ?? ""),
+      scope,
+      description: ((entry as Record<string, unknown>).description as string | undefined) || undefined,
+    });
+    seen.add(name);
+  }
+  return out;
+};
+
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
   accessToken,
@@ -280,6 +305,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        env_vars: envVarsList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -293,6 +319,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
+      const envVars = normalizeEnvVars(envVarsList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -391,10 +418,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         static_headers: staticHeaders,
+        env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
       payload.static_headers = staticHeaders;
+      payload.env_vars = envVars;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 

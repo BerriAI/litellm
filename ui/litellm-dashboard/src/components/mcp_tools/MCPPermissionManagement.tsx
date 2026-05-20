@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer, AUTH_TYPE } from "./types";
+import EnvVarsSection from "./EnvVarsSection";
 const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
@@ -41,6 +42,17 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           value: value != null ? String(value) : "",
         }));
         form.setFieldValue("static_headers", staticHeaders);
+      }
+      if (Array.isArray(mcpServer.env_vars) && mcpServer.env_vars.length > 0) {
+        form.setFieldValue(
+          "env_vars",
+          mcpServer.env_vars.map((entry) => ({
+            name: entry.name,
+            value: entry.value ?? "",
+            scope: entry.scope ?? "global",
+            description: entry.description ?? "",
+          })),
+        );
       }
       if (typeof mcpServer.allow_all_keys === "boolean") {
         form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
@@ -271,6 +283,8 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               )}
             </Form.List>
           </Form.Item>
+
+          <EnvVarsSection />
         </div>
       </Panel>
     </Collapse>

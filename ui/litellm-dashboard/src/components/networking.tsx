@@ -10014,6 +10014,86 @@ export const listMCPUserCredentials = async (
 };
 
 // ============================================================
+// MCP per-user env vars (/v1/mcp/server/{id}/user-env-vars)
+// ============================================================
+
+import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+
+export const getMCPUserEnvVars = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPUserEnvVarsStatus | null> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
+    : `/v1/mcp/server/${serverId}/user-env-vars`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return null;
+  return response.json();
+};
+
+export const storeMCPUserEnvVars = async (
+  accessToken: string,
+  serverId: string,
+  values: Record<string, string>,
+): Promise<MCPUserEnvVarsStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
+    : `/v1/mcp/server/${serverId}/user-env-vars`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ values }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const detail = (err as { detail?: unknown })?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : (detail as { error?: string })?.error || "Failed to save env vars";
+    throw new Error(message);
+  }
+  return response.json();
+};
+
+export const clearMCPUserEnvVars = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPUserEnvVarsStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
+    : `/v1/mcp/server/${serverId}/user-env-vars`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error("Failed to clear env vars");
+  }
+  return response.json();
+};
+
+export const listMCPUserEnvVarStatus = async (
+  accessToken: string,
+): Promise<MCPUserEnvVarsStatus[]> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/user-env-vars/status`
+    : `/v1/mcp/user-env-vars/status`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
+  return response.json();
+};
+
+// ============================================================
 // Memory management (/v1/memory)
 // ============================================================
 
