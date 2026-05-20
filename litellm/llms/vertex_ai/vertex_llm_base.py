@@ -1047,9 +1047,7 @@ class VertexBase:
                     # Credentials.refresh() is not safe to call concurrently
                     # on the same credentials object, and the background task
                     # runs outside this lock.
-                    await self._await_in_flight_background_refresh(
-                        credential_cache_key
-                    )
+                    await self._await_in_flight_background_refresh(credential_cache_key)
                     cached = self._try_get_cached_token(
                         credential_cache_key, project_id
                     )
