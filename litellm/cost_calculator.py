@@ -375,24 +375,26 @@ def _get_max_input_tokens_for_cost_fallback(
     return None
 
 
-def _usage_has_token_counts(usage_object: Optional[Usage]) -> bool:
+def _usage_has_prompt_token_counts(usage_object: Optional[Usage]) -> bool:
     if usage_object is None:
         return False
 
-    for attr in ("prompt_tokens", "completion_tokens", "total_tokens"):
-        if _is_positive_finite_number(getattr(usage_object, attr, 0)):
-            return True
+    if _is_positive_finite_number(getattr(usage_object, "prompt_tokens", 0)):
+        return True
 
     prompt_details = getattr(usage_object, "prompt_tokens_details", None)
     if prompt_details is not None:
-        for attr in ("audio_tokens", "cached_tokens", "text_tokens"):
+        for attr in (
+            "audio_tokens",
+            "cached_tokens",
+            "cache_creation_tokens",
+            "character_count",
+            "image_count",
+            "image_tokens",
+            "text_tokens",
+            "video_length_seconds",
+        ):
             if _is_positive_finite_number(getattr(prompt_details, attr, 0)):
-                return True
-
-    completion_details = getattr(usage_object, "completion_tokens_details", None)
-    if completion_details is not None:
-        for attr in ("audio_tokens", "reasoning_tokens", "text_tokens"):
-            if _is_positive_finite_number(getattr(completion_details, attr, 0)):
                 return True
 
     return False
@@ -1684,7 +1686,7 @@ def completion_cost(  # noqa: PLR0915
 
                 if (
                     call_type in _CHAT_COMPLETION_CALL_TYPES
-                    and not _usage_has_token_counts(cost_per_token_usage_object)
+                    and not _usage_has_prompt_token_counts(cost_per_token_usage_object)
                 ):
                     # Video metadata is client-provided. When provider usage is
                     # missing, keep spend reconciliation conservative.
