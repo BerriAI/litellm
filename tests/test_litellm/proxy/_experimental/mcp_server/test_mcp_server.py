@@ -109,11 +109,7 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     assert body["arguments"] == tool_arguments
 
 
-def test_prepare_mcp_server_headers_passthrough_omits_authorization():
-    """Pass-through servers must not forward the inbound Authorization header
-    (LiteLLM API key) to the upstream server. The upstream must provide its own
-    bearer token via a server-specific header.
-    """
+def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -122,82 +118,9 @@ def test_prepare_mcp_server_headers_passthrough_omits_authorization():
         pytest.skip("MCP server not available")
 
     server = MCPServer(
-        server_id="server-passthrough",
+        server_id="server-case",
         name="server",
         transport=MCPTransport.http,
-        auth_type=MCPAuth.none,  # Explicitly none for pass-through
-        extra_headers=["Authorization"],
-    )
-
-    server_auth_header, extra_headers = _prepare_mcp_server_headers(
-        server=server,
-        mcp_server_auth_headers=None,
-        mcp_auth_header=None,
-        oauth2_headers=None,
-        raw_headers={"authorization": "Bearer sk-litellm-key"},
-    )
-
-    assert server_auth_header is None
-    # Authorization should NOT be forwarded for pass-through servers
-    assert extra_headers is None
-
-
-def test_prepare_mcp_server_headers_passthrough_forwards_other_headers():
-    """Pass-through servers should forward other headers (not Authorization)
-    from the raw request."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _prepare_mcp_server_headers,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    server = MCPServer(
-        server_id="server-passthrough-headers",
-        name="server",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.none,  # Pass-through mode
-        extra_headers=["Authorization", "x-request-id", "x-trace-id"],
-    )
-
-    server_auth_header, extra_headers = _prepare_mcp_server_headers(
-        server=server,
-        mcp_server_auth_headers=None,
-        mcp_auth_header=None,
-        oauth2_headers=None,
-        raw_headers={
-            "authorization": "Bearer sk-litellm-key",
-            "x-request-id": "req-123",
-            "x-trace-id": "trace-456",
-        },
-    )
-
-    assert server_auth_header is None
-    # Authorization should be omitted, but other headers forwarded
-    assert extra_headers == {"x-request-id": "req-123", "x-trace-id": "trace-456"}
-
-
-def test_prepare_mcp_server_headers_passthrough_forwards_authorization_with_explicit_admission():
-    """Transparent OAuth pass-through: when LiteLLM admission used the explicit
-    `x-litellm-api-key` header, the inbound `Authorization` header is
-    unambiguously the upstream OAuth bearer and MUST be forwarded.
-
-    Regression for EAI-506 V5/V6 — a standards-compliant MCP client (e.g.
-    OpenCode) completes PKCE against the upstream IdP and sends the resulting
-    token as plain `Authorization: Bearer <token>` per the MCP spec.
-    """
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _prepare_mcp_server_headers,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    server = MCPServer(
-        server_id="server-passthrough-explicit-admission",
-        name="server",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
     )
 
@@ -208,20 +131,15 @@ def test_prepare_mcp_server_headers_passthrough_forwards_authorization_with_expl
         oauth2_headers=None,
         raw_headers={
             "x-litellm-api-key": "Bearer sk-litellm-key",
-            "authorization": "Bearer upstream-okta-token",
+            "authorization": "Bearer token",
         },
     )
 
     assert server_auth_header is None
-    assert extra_headers == {"Authorization": "Bearer upstream-okta-token"}
+    assert extra_headers == {"Authorization": "Bearer token"}
 
 
 def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_admission_header():
-    """Counterpart to the explicit-admission test: without `x-litellm-api-key`,
-    the inbound `Authorization` may itself be the LiteLLM admission key, so we
-    strip it to avoid leaking the gateway credential upstream. This preserves
-    the security guarantee introduced in commit 3753970cc9.
-    """
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -1344,6 +1262,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
+        subject_token=None,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -1352,6 +1271,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
                 "mcp_auth_header": mcp_auth_header,
                 "extra_headers": extra_headers,
                 "stdio_env": stdio_env,
+                "subject_token": subject_token,
             }
         )
         # Return a mock client that doesn't actually connect
@@ -2398,6 +2318,144 @@ class TestMCPServerManagerReload:
         mock_build.assert_awaited_once_with(db_row)
         assert manager.registry["server-1"] is rebuilt_server
 
+    @pytest.mark.asyncio
+    async def test_skips_server_when_build_from_database_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_row = _make_db_mcp_server("bad-server", timestamp)
+        another_healthy_row = _make_db_mcp_server("another-healthy-server", timestamp)
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        another_healthy_server = MCPServer(
+            server_id="another-healthy-server",
+            name="another-healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "bad-server":
+                raise RuntimeError("transient build failure")
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return another_healthy_server
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_row, another_healthy_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server", "another-healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert manager.registry["another-healthy-server"] is another_healthy_server
+        assert "Skipping MCP server bad-server" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_skips_server_when_openapi_registration_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_openapi_row = _make_db_mcp_server("bad-openapi-server", timestamp)
+        existing_server = MCPServer(
+            server_id="existing-server",
+            name="existing",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        manager.registry = {existing_server.server_id: existing_server}
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        bad_openapi_server = MCPServer(
+            server_id="bad-openapi-server",
+            name="bad-openapi",
+            transport=MCPTransport.http,
+            spec_path="https://example.invalid/openapi.json",
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return bad_openapi_server
+
+        observed_registries = []
+
+        async def register_openapi_tools(server, **kwargs):
+            observed_registries.append(set(manager.registry))
+            assert kwargs == {"initialize_mapping": False}
+            if server.server_id == "bad-openapi-server":
+                raise RuntimeError("blocked address")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_openapi_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(
+                manager,
+                "_maybe_register_openapi_tools",
+                AsyncMock(side_effect=register_openapi_tools),
+            ),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert observed_registries == [
+            {"existing-server"},
+            {"existing-server"},
+        ]
+        assert "Skipping MCP server bad-openapi-server" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
@@ -3232,3 +3290,137 @@ async def test_call_tool_empty_extra_headers_returns_none():
     ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
         captured_extra_headers
     )
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight upstream auth check tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_returns_upstream_status():
+    """_probe_upstream_auth forwards the status code from the upstream server."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+    mock_client.post.assert_awaited_once()
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer some-token"
+    assert kwargs["json"]["method"] == "initialize"
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_surfaces_httpx_status_error():
+    """Probe extracts status + WWW-Authenticate from httpx.HTTPStatusError.
+
+    AsyncHTTPHandler.post() calls raise_for_status() internally, so when the
+    upstream returns 401/403 the call raises httpx.HTTPStatusError rather than
+    returning the response. The probe must catch that specifically (before the
+    fail-open `except Exception`) so the auth check is not silently defeated.
+    """
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+    request = httpx.Request("POST", "http://upstream/mcp")
+    error = httpx.HTTPStatusError(
+        message="401 Unauthorized", request=request, response=mock_response
+    )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=error)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_fails_open_on_network_error():
+    """_probe_upstream_auth returns (200, None) when the network call fails."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 200
+    assert www_auth is None
+
+
+def test_get_forwarded_auth_from_scope_extracts_header():
+    """Returns Authorization value when x-litellm-api-key is also present."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+            (b"authorization", b"Bearer my-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) == "Bearer my-token"
+
+
+def test_get_forwarded_auth_from_scope_returns_none_when_missing():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    assert _get_forwarded_auth_from_scope({"headers": []}) is None
+
+
+def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
+    """Skip when ``x-litellm-api-key`` is absent.
+
+    Without ``x-litellm-api-key``, the ``Authorization`` header may itself be
+    the LiteLLM proxy API key (backward-compat). Forwarding it upstream would
+    leak the proxy key, so the helper must return None and the probe must
+    not fire.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer ambiguous-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) is None

@@ -21,6 +21,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _get_metadata_variable_name,
     _resolve_credential_from_model_config,
+    _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -3847,3 +3848,451 @@ def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
     assert result == [
         "my-guardrail"
     ], f"Expected guardrails from litellm_metadata fallback, got: {result}"
+
+
+def _build_request_mock_with_headers(headers: dict) -> Request:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = headers
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+    request_mock.state._cached_headers = None
+    return request_mock
+
+
+class TestApplyClientTagPolicyPreAuth:
+    """Tests for ``LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth``.
+
+    Regression coverage for the bug where ``x-litellm-tags`` header was
+    invisible to ``_tag_max_budget_check`` because the merge happened
+    post-auth in ``add_litellm_data_to_request``.
+    """
+
+    def test_merges_header_tags_into_metadata(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme,env:prod"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["metadata"]["tags"] == ["tenant:acme", "env:prod"]
+
+    def test_unions_header_tags_with_existing_metadata_tags(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme,env:prod"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": {"tags": ["env:prod", "team:platform"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Existing tags first, dedupe header tags
+        assert data["metadata"]["tags"] == ["env:prod", "team:platform", "tenant:acme"]
+
+    def test_preserves_body_tags(self):
+        # Pre-auth must NOT touch body-supplied tags. _tag_max_budget_check
+        # (inside common_checks) enforces per-tag budgets on whatever tags
+        # it sees in request_data, including body tags. The helper only
+        # adds header tags to metadata.tags.
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "tags": ["root-tag"],
+            "litellm_metadata": {"tags": ["litellm-meta-tag"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["tags"] == ["root-tag"]
+        # litellm_metadata is the active metadata key (it's present), so
+        # header tags merge into it and union with existing tags there.
+        assert data["litellm_metadata"]["tags"] == [
+            "litellm-meta-tag",
+            "tenant:acme",
+        ]
+
+    def test_uses_litellm_metadata_when_present(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_metadata": {"foo": "bar"},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # get_metadata_variable_name_from_kwargs returns "litellm_metadata"
+        # when present, so header tags should land there to be visible to
+        # _tag_max_budget_check.
+        assert data["litellm_metadata"]["tags"] == ["tenant:acme"]
+        assert "tags" not in data.get("metadata", {})
+
+    def test_no_header_no_mutation(self):
+        request_mock = _build_request_mock_with_headers({})
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data or "tags" not in data["metadata"]
+
+    def test_string_metadata_tags_survive_header_merge(self):
+        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
+        # The pre-auth merge must parse it so an over-budget body tag isn't
+        # silently dropped when a within-budget header tag is also present.
+        request_mock = _build_request_mock_with_headers({"x-litellm-tags": "free"})
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["paid"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert isinstance(data["metadata"], dict)
+        assert data["metadata"]["tags"] == ["paid", "free"]
+
+    @pytest.mark.asyncio
+    async def test_string_metadata_does_not_bypass_tag_max_budget_check(self):
+        """Regression: string metadata containing an over-budget tag must not
+        be silently overwritten when an x-litellm-tags header is present."""
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers({"x-litellm-tags": "free"})
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["paid"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        paid_tag = LiteLLM_TagTable(
+            tag_name="paid",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:paid":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"paid": paid_tag},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    async def test_header_tags_visible_to_tag_max_budget_check(self):
+        """End-to-end: helper + ``_tag_max_budget_check`` enforces budget on
+        header-supplied tags. Without the helper, this would silently pass."""
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:acme",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:tenant:acme":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+
+# ============================================================================
+# Tests for #27516: provider hint resolution from deployment when the
+# user-facing model name has no provider prefix.
+# ============================================================================
+
+
+def test_resolve_provider_from_deployment_uses_litellm_params_model():
+    """When custom_llm_provider is unset, fall back to the prefix of model."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+
+
+def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
+    """Explicit custom_llm_provider on the deployment wins over model prefix."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+
+
+def test_resolve_provider_from_deployment_no_match():
+    """No deployment for the model group -> None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.return_value = None
+    assert _resolve_provider_from_deployment(router, "unknown-model") is None
+
+
+def test_resolve_provider_from_deployment_router_raises():
+    """Router exceptions must not propagate — fall back to None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
+
+
+def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
+    """If post-alias lookup fails, the pre-alias name is also tried."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+
+    def lookup(model_group_name):
+        if model_group_name == "pre-alias-name":
+            return deployment
+        return None
+
+    router.get_deployment_by_model_group_name.side_effect = lookup
+
+    result = _resolve_provider_from_deployment(
+        router, "post-alias-name", pre_alias_model_name="pre-alias-name"
+    )
+    assert result == "bedrock"
+
+
+def test_apply_overrides_multi_provider_default_picks_correct_provider(
+    setup_test_credentials,
+):
+    """
+    Regression for #27516: when defaultconfig has multiple providers and the
+    request model has no '/' prefix, the deployment's custom_llm_provider must
+    drive provider matching instead of falling through to dict insertion order.
+    """
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="bedrock-team-1",
+            credential_info={},
+            credential_values={"api_key": "ABSK-bedrock-key-for-team-1"},
+        )
+    )
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="gemini-team-1",
+            credential_info={},
+            credential_values={"api_key": "gemini-key-for-team-1"},
+        )
+    )
+
+    data = {"model": "claude-sonnet-4.6"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    # gemini comes first in insertion order — the bug picked it.
+                    "gemini": {"litellm_credentials": "gemini-team-1"},
+                    "bedrock": {"litellm_credentials": "bedrock-team-1"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=router,
+    )
+    assert data["api_key"] == "ABSK-bedrock-key-for-team-1"
+
+
+def test_apply_overrides_no_router_keeps_legacy_behaviour(setup_test_credentials):
+    """
+    Without a router, the function still works for the single-provider case
+    (the historical behaviour). Multi-provider configs with no '/' prefix
+    keep the legacy first-entry behaviour because there is no way to
+    disambiguate — this preserves backwards compatibility.
+    """
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=None
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
+    setup_test_credentials,
+):
+    """
+    When the request model already has a 'provider/...' prefix, the router
+    lookup must be skipped — the explicit prefix is authoritative.
+    """
+    data = {"model": "azure/gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"},
+                    "bedrock": {"litellm_credentials": "hotel-rec-azure"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=router
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+    router.get_deployment_by_model_group_name.assert_not_called()

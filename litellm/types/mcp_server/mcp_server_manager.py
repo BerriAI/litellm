@@ -57,6 +57,10 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
+    # Token Exchange (OBO) fields — RFC 8693
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -64,6 +68,12 @@ class MCPServer(BaseModel):
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    # When True AND auth_type == oauth2, MCP requests targeting this server
+    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
+    # completes PKCE directly with the upstream MCP server. Honored only for
+    # auth_type=oauth2; ignored for any other auth_type. See
+    # MCPRequestHandler._target_servers_delegate_auth_to_upstream.
+    delegate_auth_to_upstream: bool = False
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -131,23 +141,22 @@ class MCPServer(BaseModel):
     @property
     def is_oauth_passthrough(self) -> bool:
         """True iff the gateway should transparently forward upstream OAuth
-        (discovery + 401s) rather than participating as an authorization
-        server itself.
+        rather than participating as an authorization server itself.
 
-        A server is pass-through for OAuth purposes when both conditions hold:
-        1. ``auth_type`` is ``None`` or ``MCPAuth.none`` (the gateway does
-           not manage OAuth for this server).
-        2. ``extra_headers`` includes ``Authorization`` — the admin has
-           opted this server into forwarding the client's bearer token
-           straight to the upstream MCP server.
-
-        This is intentionally narrower than ``requires_per_user_auth``,
-        which also covers PATs (``x-api-key``, ``api-key``, ``apikey``).
-        Those are static credentials, not OAuth bearer tokens, so they
-        must not trigger upstream OAuth discovery or 401 propagation.
+        This is intentionally narrower than ``requires_per_user_auth``, which
+        also covers PAT-style passthrough headers such as ``x-api-key``.
         """
         if self.auth_type not in (None, MCPAuth.none):
             return False
         if not self.extra_headers:
             return False
         return any(h.lower() == "authorization" for h in self.extra_headers)
+
+    @property
+    def has_token_exchange_config(self) -> bool:
+        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
+        return (
+            self.auth_type == MCPAuth.oauth2_token_exchange
+            and bool(self.client_id and self.client_secret)
+            and bool(self.token_exchange_endpoint or self.token_url)
+        )
