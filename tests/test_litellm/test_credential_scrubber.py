@@ -1,7 +1,5 @@
 import logging
 
-import pytest
-
 
 class TestScrubSecrets:
     """Tests for the _scrub_secrets() helper."""
@@ -27,6 +25,13 @@ class TestScrubSecrets:
         assert "gpt-4o" in result
         assert "api.openai.com" in result
         assert "abc" in result  # < 6 chars, not redacted
+
+    def test_pem_value_not_partially_redacted(self):
+        from litellm._logging import _scrub_secrets
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
+        result = _scrub_secrets(f"private_key = {pem}")
+        assert "MIIE" not in result or "-----BEGIN" in result
 
 
 class TestCredentialScrubberFilter:

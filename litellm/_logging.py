@@ -439,7 +439,7 @@ _SECRET_KEY_RE = re.compile(
     r"credential|private[_\-]?key|encryption[_\-]?key|master[_\-]?key|"
     r"redis[_\-]?password|client[_\-]?secret|aws[_\-]?secret|"
     r"gcp[_\-]?key|litellm[_\-]?key)"
-    r'(["\']?\s*[:=]\s*["\']?)([^\s\'"&,}\]]{6,})'
+    r'(["\']?\s*[:=]\s*["\']?)(?!-----)([^\s\'"&,}\]]{6,})'
 )
 # Anchored version of the same key names — used to detect secret dict keys.
 _SECRET_KEY_NAME_RE = re.compile(
