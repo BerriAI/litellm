@@ -1519,6 +1519,8 @@ class AmazonConverseConfig(BaseConfig):
             )
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
+        else:
+            inference_params.pop("tool_choice", None)
 
         data: CommonRequestObject = {
             "additionalModelRequestFields": additional_request_params,
