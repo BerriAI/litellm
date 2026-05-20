@@ -11,7 +11,6 @@ enable_preview_features=True to be enabled.
 
 import pytest
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _encode_tool_call_id_with_signature,

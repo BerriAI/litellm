@@ -1384,8 +1384,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
-
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
     # Test with GCS URL
