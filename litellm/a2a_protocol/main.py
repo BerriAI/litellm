@@ -132,6 +132,7 @@ async def _send_message_via_completion_bridge(
     custom_llm_provider: str,
     api_base: Optional[str],
     litellm_params: Dict[str, Any],
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
@@ -151,6 +152,13 @@ async def _send_message_via_completion_bridge(
         if hasattr(request.params, "model_dump")
         else dict(request.params)
     )
+
+    if agent_extra_headers:
+        merged = dict(litellm_params)
+        existing = dict(merged.get("extra_headers") or {})
+        existing.update(agent_extra_headers)
+        merged["extra_headers"] = existing
+        litellm_params = merged
 
     response_dict = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id=str(request.id),
@@ -281,6 +289,7 @@ async def asend_message(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             litellm_params=litellm_params,
+            agent_extra_headers=agent_extra_headers,
         )
 
     # Standard A2A client flow
@@ -508,6 +517,13 @@ async def asend_message_streaming(  # noqa: PLR0915
             if hasattr(request.params, "model_dump")
             else dict(request.params)
         )
+
+        if agent_extra_headers:
+            merged = dict(litellm_params)
+            existing = dict(merged.get("extra_headers") or {})
+            existing.update(agent_extra_headers)
+            merged["extra_headers"] = existing
+            litellm_params = merged
 
         async for chunk in A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
