@@ -109,7 +109,8 @@ class _SyncIteratorToQueue:
                 fut.result(timeout=0.5)
                 return
             except TimeoutError:
-                fut.cancel()
+                if not fut.cancel():
+                    return
                 continue
             except Exception:
                 return
