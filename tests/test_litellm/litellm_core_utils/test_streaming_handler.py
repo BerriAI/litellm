@@ -2036,23 +2036,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
@@ -2124,3 +2120,76 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+# ============================================================================
+# _SyncIteratorToQueue tests
+# ============================================================================
+
+from litellm.litellm_core_utils.streaming_handler import _SyncIteratorToQueue
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_delivers_chunks_in_order():
+    """All chunks from the sync iterator arrive in order via the queue."""
+    items = list(range(10))
+    loop = asyncio.get_event_loop()
+    wrapper = _SyncIteratorToQueue(iter(items), loop)
+
+    results = []
+    for _ in range(10):
+        results.append(await wrapper.get())
+
+    assert results == items
+    wrapper.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_propagates_exception():
+    """Exceptions from the sync iterator propagate to the async consumer."""
+
+    def failing_iter():
+        yield "chunk1"
+        yield "chunk2"
+        raise ValueError("intentional error")
+
+    loop = asyncio.get_event_loop()
+    wrapper = _SyncIteratorToQueue(failing_iter(), loop)
+
+    assert await wrapper.get() == "chunk1"
+    assert await wrapper.get() == "chunk2"
+    with pytest.raises(ValueError, match="intentional error"):
+        await wrapper.get()
+    wrapper.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_close_stops_producer():
+    """Calling close() stops the producer thread from calling next()."""
+    call_count = 0
+
+    def counting_iter():
+        nonlocal call_count
+        while True:
+            call_count += 1
+            yield call_count
+
+    loop = asyncio.get_event_loop()
+    wrapper = _SyncIteratorToQueue(counting_iter(), loop)
+
+    await wrapper.get()
+    wrapper.close()
+    await asyncio.sleep(0.05)
+    count_after_close = call_count
+    await asyncio.sleep(0.05)
+    assert call_count == count_after_close or call_count <= count_after_close + 1
+
+
+def test_queue_wrapper_no_aiter():
+    """Queue wrapper must NOT expose __aiter__ to avoid is_async_iterable() rerouting."""
+    loop = asyncio.new_event_loop()
+    wrapper = _SyncIteratorToQueue(iter([]), loop)
+    assert not hasattr(wrapper, "__aiter__")
+    assert not hasattr(wrapper, "__anext__")
+    wrapper.close()
+    loop.close()

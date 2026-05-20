@@ -74,6 +74,52 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
+_QUEUE_EXHAUSTED = object()
+_QUEUE_ERROR = object()
+
+
+class _SyncIteratorToQueue:
+    """
+    Bridges a sync iterator to an async consumer via a single background thread
+    and an asyncio.Queue — avoiding per-chunk asyncio.to_thread overhead.
+
+    Does NOT implement __aiter__/__anext__ to avoid is_async_iterable() rerouting.
+    """
+
+    def __init__(self, sync_iterator: Any, loop: asyncio.AbstractEventLoop) -> None:
+        self._iterator = sync_iterator
+        self._loop = loop
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._producer, daemon=True)
+        self._thread.start()
+
+    def _producer(self) -> None:
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    item = next(self._iterator)
+                    self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+                except StopIteration:
+                    self._loop.call_soon_threadsafe(
+                        self._queue.put_nowait, _QUEUE_EXHAUSTED
+                    )
+                    return
+        except Exception as exc:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, (_QUEUE_ERROR, exc))
+
+    async def get(self) -> Any:
+        item = await self._queue.get()
+        if item is _QUEUE_EXHAUSTED:
+            raise StopAsyncIteration
+        if isinstance(item, tuple) and len(item) == 2 and item[0] is _QUEUE_ERROR:
+            raise item[1]
+        return item
+
+    def close(self) -> None:
+        self._stop_event.set()
+
+
 def is_async_iterable(obj: Any) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -2126,9 +2172,17 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
-                        if chunk is _SYNC_ITER_EXHAUSTED:
-                            raise StopAsyncIteration
+                        if (
+                            not hasattr(self, "_queue_wrapper")
+                            or self._queue_wrapper is None
+                        ):
+                            self._queue_wrapper = _SyncIteratorToQueue(
+                                self.completion_stream, asyncio.get_event_loop()
+                            )
+                        try:
+                            chunk = await self._queue_wrapper.get()
+                        except StopAsyncIteration:
+                            raise
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
@@ -2148,6 +2202,9 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
+            if hasattr(self, "_queue_wrapper") and self._queue_wrapper is not None:
+                self._queue_wrapper.close()
+                self._queue_wrapper = None
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
                 complete_streaming_response = litellm.stream_chunk_builder(
