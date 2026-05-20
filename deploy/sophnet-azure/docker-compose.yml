@@ -8,12 +8,15 @@ services:
       - "4000:4000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      # Bind-mount local source — edit litellm/ then run ./restart-proxy.sh
+      - ../../litellm:/app/litellm:ro
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
       STORE_MODEL_IN_DB: "False"
       LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES: "True"
+      PYTHONPATH: /app
     command:
       - "--config"
       - "/app/config.yaml"
