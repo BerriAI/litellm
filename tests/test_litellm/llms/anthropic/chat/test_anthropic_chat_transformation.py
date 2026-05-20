@@ -3893,6 +3893,7 @@ def test_map_tools_claude_code_anthropic_native_tools_passthrough():
     """Anthropic-native tools with input_schema bypass OpenAI tool mapping."""
     config = AnthropicConfig()
     bash_tool = {
+        "type": "custom",
         "name": "Bash",
         "description": "Run a shell command",
         "input_schema": {
