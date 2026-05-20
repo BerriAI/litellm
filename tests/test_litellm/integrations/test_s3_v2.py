@@ -1284,14 +1284,14 @@ async def test_s3_v2_download_url_encodes_special_chars(
     assert "#" not in actual_url
 
 
+@pytest.mark.asyncio
 @patch("asyncio.create_task")
 @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
-def test_s3_v2_sync_upload_url_encodes_special_chars(
+async def test_s3_v2_sync_upload_url_encodes_special_chars(
     mock_periodic_flush, mock_create_task
 ):
-    """Sync PUT path: URL-encode special characters in s3_object_key."""
+    """Async PUT path: URL-encode special characters in s3_object_key (second key pattern)."""
     from urllib.parse import quote
-    from unittest.mock import MagicMock as MM
 
     from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 
@@ -1315,14 +1315,12 @@ def test_s3_v2_sync_upload_url_encodes_special_chars(
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
     )
+    s3_logger.async_httpx_client = AsyncMock()
+    s3_logger.async_httpx_client.put.return_value = mock_response
 
-    mock_httpx = MagicMock()
-    mock_httpx.put.return_value = mock_response
+    await s3_logger.async_upload_data_to_s3(test_element)
 
-    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_httpx):
-        s3_logger.sync_upload_data_to_s3(test_element)
-
-    call_args = mock_httpx.put.call_args
+    call_args = s3_logger.async_httpx_client.put.call_args
     assert call_args is not None
     actual_url = call_args[0][0]
     encoded_key = quote(s3_object_key, safe="/")
