@@ -17,13 +17,19 @@ class TestYouComSearch:
     Tests for You.com Search functionality with mocked network responses.
     """
 
+    @pytest.fixture(autouse=True)
+    def _set_api_key(self, monkeypatch):
+        """
+        Default fixture: YOUCOM_API_KEY is set, scoped to this test.
+        Tests that need the key absent should call `monkeypatch.delenv` themselves.
+        """
+        monkeypatch.setenv("YOUCOM_API_KEY", "test-api-key")
+
     @pytest.mark.asyncio
     async def test_you_com_search_request_payload(self):
         """
         Validate the You.com search request payload structure without real API calls.
         """
-        os.environ["YOUCOM_API_KEY"] = "test-api-key"
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -97,10 +103,8 @@ class TestYouComSearch:
         """
         Validate that Perplexity-spec optional params map to You.com's parameters:
         - search_domain_filter -> include_domains
-        - country              -> country
+        - country              -> country (lowercased to match Tavily's convention)
         """
-        os.environ["YOUCOM_API_KEY"] = "test-api-key"
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -126,9 +130,10 @@ class TestYouComSearch:
 
             assert json_data["query"] == "machine learning"
             assert json_data["include_domains"] == ["arxiv.org", "nature.com"]
-            assert json_data["country"] == "US"
-            # search_domain_filter and country (perplexity-spec names) should NOT
-            # leak through to the upstream payload.
+            # Country is normalized to lowercase, matching Tavily's behavior.
+            assert json_data["country"] == "us"
+            # search_domain_filter and max_tokens_per_page (perplexity-spec names)
+            # should NOT leak through to the upstream payload.
             assert "search_domain_filter" not in json_data
             assert "max_tokens_per_page" not in json_data
 
@@ -137,8 +142,6 @@ class TestYouComSearch:
         """
         When `snippets` is missing/empty, snippet falls back to `description`.
         """
-        os.environ["YOUCOM_API_KEY"] = "test-api-key"
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -177,8 +180,6 @@ class TestYouComSearch:
         """
         News results are flattened in after web results.
         """
-        os.environ["YOUCOM_API_KEY"] = "test-api-key"
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -221,12 +222,36 @@ class TestYouComSearch:
             # News result has no `snippets` -> falls back to description
             assert response.results[1].snippet == "news desc"
 
-    def test_you_com_search_raises_without_api_key(self):
+    def test_you_com_search_complete_url_handles_trailing_slash(self):
+        """
+        get_complete_url must normalize trailing slashes on api_base, so a custom
+        base like `https://x.example/v1/search/` does not become
+        `https://x.example/v1/search/v1/search`.
+        """
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
+
+        config = YouComSearchConfig()
+        assert (
+            config.get_complete_url(
+                api_base="https://x.example/v1/search/", optional_params={}
+            )
+            == "https://x.example/v1/search"
+        )
+        assert (
+            config.get_complete_url(api_base="https://x.example/", optional_params={})
+            == "https://x.example/v1/search"
+        )
+        assert (
+            config.get_complete_url(api_base=None, optional_params={})
+            == "https://ydc-index.io/v1/search"
+        )
+
+    def test_you_com_search_raises_without_api_key(self, monkeypatch):
         """
         validate_environment must raise when no YOUCOM_API_KEY is set
         and no api_key is explicitly passed.
         """
-        os.environ.pop("YOUCOM_API_KEY", None)
+        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
 
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 

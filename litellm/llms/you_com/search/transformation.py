@@ -72,9 +72,10 @@ class YouComSearchConfig(BaseSearchConfig):
         api_base = (
             api_base or get_secret_str("YOUCOM_API_BASE") or self.YOU_COM_API_BASE
         )
+        api_base = api_base.rstrip("/")
 
         if not api_base.endswith("/v1/search"):
-            api_base = f"{api_base.rstrip('/')}/v1/search"
+            api_base = f"{api_base}/v1/search"
 
         return api_base
 
@@ -108,7 +109,7 @@ class YouComSearchConfig(BaseSearchConfig):
             request_data["include_domains"] = optional_params["search_domain_filter"]
 
         if "country" in optional_params:
-            request_data["country"] = optional_params["country"]
+            request_data["country"] = optional_params["country"].lower()
 
         result_data = dict(request_data)
 
