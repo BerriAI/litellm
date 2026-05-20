@@ -178,15 +178,28 @@ class SpendCounterReseed:
             if db_spend is None:
                 return None
             # Warm even when 0 so subsequent reads hit cache, not DB.
+            #
+            # Seed via SET NX (cross-pod safe): only one pod initializes the
+            # Redis key with db_spend; concurrent seeders read the winner's
+            # value. INCRBYFLOAT-of-db_spend from N pods would multiply the
+            # counter (N x db_spend) and trigger spurious budget alerts.
+            current_value: float = float(db_spend)
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    current_value = (
-                        await spend_counter_cache.redis_cache.async_increment(
-                            key=counter_key,
-                            value=db_spend,
-                            refresh_ttl=True,
-                        )
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=db_spend,
+                        nx=True,
                     )
+                    if seeded:
+                        current_value = float(db_spend)
+                    else:
+                        cached = await spend_counter_cache.redis_cache.async_get_cache(
+                            key=counter_key
+                        )
+                        current_value = (
+                            float(cached) if cached is not None else float(db_spend)
+                        )
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,
@@ -202,7 +215,7 @@ class SpendCounterReseed:
                 )
                 if require_cache_warm:
                     raise
-            return db_spend
+            return current_value
 
     @staticmethod
     async def window_from_spend_logs(
