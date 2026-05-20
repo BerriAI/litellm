@@ -225,6 +225,10 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
+use_legacy_interactions_schema: bool = (
+    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
+)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
+# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None

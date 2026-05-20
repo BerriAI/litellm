@@ -1,10 +1,11 @@
 """
 Tests for Gemini Interactions API transformation.
 
-Covers credential leak prevention changes:
-- validate_environment sets x-goog-api-key header
-- get_complete_url excludes API key from URL
-- get/delete/cancel interaction request URLs exclude API key
+Covers:
+- validate_environment: x-goog-api-key header, Api-Revision schema selection
+- get_complete_url: API key excluded from URL
+- get/delete/cancel interaction request URLs
+- transform_request: response_mime_type coalescing, image_config migration
 """
 
 import os
@@ -15,6 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
     LiteLLMResponsesInteractionsStreamingIterator,
 )
@@ -22,9 +24,7 @@ from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
 )
 from litellm.types.llms.openai import (
-    ContentPartAddedEvent,
     OutputTextDeltaEvent,
-    ResponseCompletedEvent,
     ResponseCreatedEvent,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -84,6 +84,30 @@ class TestValidateEnvironment:
 
         assert headers["X-Custom"] == "value"
         assert headers["x-goog-api-key"] == "test-key"
+
+    def test_api_revision_new_schema_by_default(self, config):
+        # Default: use_legacy_interactions_schema=False → new steps schema
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            headers = config.validate_environment(
+                headers={}, model="gemini-2.5-flash", litellm_params=None
+            )
+            assert headers["Api-Revision"] == "2026-05-20"
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+    def test_api_revision_legacy_schema_when_flag_set(self, config):
+        # Flag on → legacy outputs schema until June 8, 2026
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = True
+            headers = config.validate_environment(
+                headers={}, model="gemini-2.5-flash", litellm_params=None
+            )
+            assert headers["Api-Revision"] == "2026-05-07"
+        finally:
+            litellm.use_legacy_interactions_schema = original
 
 
 class TestGetCompleteUrl:
@@ -172,158 +196,7 @@ class TestTransformRequest:
         )
 
         assert request_body["environment"] == env_id
-class TestStreamingIterator:
-    def _make_iterator(self) -> LiteLLMResponsesInteractionsStreamingIterator:
-        return LiteLLMResponsesInteractionsStreamingIterator(
-            model="gpt-5.4",
-            litellm_custom_stream_wrapper=MagicMock(),
-            request_input="hi",
-            optional_params={},
-        )
 
-    def _make_text_delta(
-        self, text: str, item_id: str = "item_1"
-    ) -> OutputTextDeltaEvent:
-        event = MagicMock(spec=OutputTextDeltaEvent)
-        event.delta = text
-        event.item_id = item_id
-        return event
-
-    def _make_part_added(self, item_id: str = "item_1") -> ContentPartAddedEvent:
-        event = MagicMock(spec=ContentPartAddedEvent)
-        event.item_id = item_id
-        return event
-
-    def _make_response_created(self) -> ResponseCreatedEvent:
-        event = MagicMock(spec=ResponseCreatedEvent)
-        event.response = MagicMock(id="resp_123")
-        return event
-
-    def test_content_delta_includes_type_field(self):
-        """content.delta events must carry delta.type='text' so the UI can display them."""
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-        it.sent_content_start = True
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "content.delta"
-        assert chunk.delta == {"type": "text", "text": "Hello"}
-
-    def test_response_part_added_emits_content_start(self):
-        """ContentPartAddedEvent (arrives before text deltas) should emit content.start
-        so the first OutputTextDeltaEvent immediately emits content.delta without dropping text.
-        """
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added()
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "content.start"
-        assert it.sent_content_start is True
-
-    def test_first_text_delta_not_dropped_when_part_added_seen(self):
-        """After ContentPartAddedEvent, the first text delta must yield content.delta
-        (not content.start), preserving the token text."""
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-        it._transform_responses_chunk_to_interactions_chunk(self._make_part_added())
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "content.delta"
-        assert chunk.delta is not None
-        assert chunk.delta.get("text") == "Hello"
-
-    def test_part_added_emits_interaction_start_fallback_when_not_sent(self):
-        """If ContentPartAddedEvent arrives before any ResponseCreatedEvent,
-        the iterator must emit interaction.start before content.start to honor
-        the documented event ordering contract."""
-        it = self._make_iterator()
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added(item_id="item_42")
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "interaction.start"
-        assert chunk.id == "item_42"
-        assert chunk.status == "in_progress"
-        assert chunk.model == "gpt-5.4"
-        assert it.sent_interaction_start is True
-        assert it.sent_content_start is False
-
-    def test_part_added_returns_none_when_already_started(self):
-        """A second ContentPartAddedEvent (after content.start was already emitted)
-        should be a no-op so we don't re-emit content.start."""
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-        it.sent_content_start = True
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added()
-        )
-
-        assert chunk is None
-
-    def test_part_added_without_item_id_falls_back_to_self_id(self):
-        """When ContentPartAddedEvent has no item_id and we emit the interaction.start
-        fallback, the id must default to an interaction_<id(self)> string."""
-        it = self._make_iterator()
-        event = MagicMock(spec=ContentPartAddedEvent)
-        event.item_id = None
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(event)
-
-        assert chunk is not None
-        assert chunk.event_type == "interaction.start"
-        assert chunk.id == f"interaction_{id(it)}"
-
-    def test_first_text_delta_not_dropped_when_no_prior_start_events(self):
-        """When OutputTextDeltaEvent arrives before any ResponseCreatedEvent or
-        ContentPartAddedEvent, the iterator must emit interaction.start *and*
-        immediately follow with a content.start that carries this delta's text,
-        so the first token is never silently dropped from the stream."""
-        events = [
-            self._make_text_delta("Hello"),
-            self._make_text_delta(" World"),
-        ]
-        wrapper = MagicMock()
-        wrapper.__iter__ = lambda self: iter(events)
-        wrapper.__next__ = lambda self, _it=iter(events): next(_it)
-        it = LiteLLMResponsesInteractionsStreamingIterator(
-            model="gpt-5.4",
-            litellm_custom_stream_wrapper=wrapper,
-            request_input="hi",
-            optional_params={},
-        )
-
-        first = it._transform_responses_chunk_to_interactions_chunk(events[0])
-        assert first is not None
-        assert first.event_type == "interaction.start"
-        assert it.sent_interaction_start is True
-        assert it.sent_content_start is True
-        assert len(it._pending_events) == 1
-        pending = it._pending_events[0]
-        assert pending.event_type == "content.start"
-        assert pending.delta == {"type": "text", "text": "Hello"}
-
-        second = it._transform_responses_chunk_to_interactions_chunk(events[1])
-        assert second is not None
-        assert second.event_type == "content.delta"
-        assert second.delta == {"type": "text", "text": " World"}
-
-
-class TestTransformRequest:
     def test_stream_param_included_in_request_body(self, config):
         """When stream=True is in optional_params, the request body must include it
         so the proxy forwards the SSE streaming flag to Google's backend."""
@@ -350,6 +223,148 @@ class TestTransformRequest:
         )
 
         assert "stream" not in body
+
+
+class TestStreamingIterator:
+    def _make_iterator(
+        self, use_legacy: bool = False
+    ) -> LiteLLMResponsesInteractionsStreamingIterator:
+        original = litellm.use_legacy_interactions_schema
+        litellm.use_legacy_interactions_schema = use_legacy
+        try:
+            return LiteLLMResponsesInteractionsStreamingIterator(
+                model="gpt-5.4",
+                litellm_custom_stream_wrapper=MagicMock(),
+                request_input="hi",
+                optional_params={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+    def _make_text_delta(
+        self, text: str, item_id: str = "item_1"
+    ) -> OutputTextDeltaEvent:
+        event = MagicMock(spec=OutputTextDeltaEvent)
+        event.delta = text
+        event.item_id = item_id
+        return event
+
+    def _make_response_created(self) -> ResponseCreatedEvent:
+        event = MagicMock(spec=ResponseCreatedEvent)
+        event.response = MagicMock(id="resp_123")
+        return event
+
+    def test_step_delta_includes_type_field(self):
+        """step.delta events must carry delta.type='text' so the UI can display them."""
+        it = self._make_iterator(use_legacy=False)
+        it.sent_interaction_start = True
+        it.sent_content_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "step.delta"
+        assert chunk.delta == {"type": "text", "text": "Hello"}
+
+    def test_content_delta_legacy_schema(self):
+        """Legacy schema emits content.delta with type and text fields."""
+        it = self._make_iterator(use_legacy=True)
+        it.sent_interaction_start = True
+        it.sent_content_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "content.delta"
+        assert chunk.delta == {"type": "text", "text": "Hello"}
+
+    def test_response_created_emits_interaction_created(self):
+        it = self._make_iterator(use_legacy=False)
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_response_created()
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "interaction.created"
+        assert chunk.id == "resp_123"
+        assert it.sent_interaction_start is True
+
+    def test_response_created_emits_interaction_start_legacy(self):
+        it = self._make_iterator(use_legacy=True)
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_response_created()
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "interaction.start"
+        assert chunk.id == "resp_123"
+
+    def test_text_delta_sequence_new_schema(self):
+        """First two OutputTextDeltaEvents emit created + step.start; third emits step.delta."""
+        it = self._make_iterator(use_legacy=False)
+
+        first = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+        assert first is not None
+        assert first.event_type == "interaction.created"
+        assert it.sent_interaction_start is True
+        assert it.sent_content_start is False
+
+        second = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta(" World")
+        )
+        assert second is not None
+        assert second.event_type == "step.start"
+        assert it.sent_content_start is True
+
+        third = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("!")
+        )
+        assert third is not None
+        assert third.event_type == "step.delta"
+        assert third.delta == {"type": "text", "text": "!"}
+
+    def test_text_delta_sequence_legacy_schema(self):
+        """Legacy: interaction.start → content.start → content.delta."""
+        it = self._make_iterator(use_legacy=True)
+
+        first = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+        assert first is not None
+        assert first.event_type == "interaction.start"
+
+        second = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta(" World")
+        )
+        assert second is not None
+        assert second.event_type == "content.start"
+        assert second.delta == {"type": "text", "text": ""}
+
+        third = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("!")
+        )
+        assert third is not None
+        assert third.event_type == "content.delta"
+        assert third.delta == {"type": "text", "text": "!"}
+
+    def test_first_text_delta_without_item_id_uses_fallback_id(self):
+        it = self._make_iterator(use_legacy=False)
+        event = self._make_text_delta("Hi")
+        event.item_id = None
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(event)
+
+        assert chunk is not None
+        assert chunk.event_type == "interaction.created"
+        assert chunk.id == f"interaction_{id(it)}"
 
 
 class TestInteractionOperationUrls:
@@ -410,3 +425,152 @@ class TestInteractionOperationUrls:
                     litellm_params=GenericLiteLLMParams(api_key=None),
                     headers={},
                 )
+
+
+class TestTransformRequestSchemaCoalescing:
+    """Test new-schema request coalescing (Api-Revision: 2026-05-20)."""
+
+    def test_response_mime_type_folded_into_response_format(self, config):
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="summarise",
+                optional_params={
+                    "response_mime_type": "application/json",
+                    "response_format": {"type": "object", "properties": {}},
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        # response_mime_type must not appear as a top-level body key
+        assert "response_mime_type" not in body
+        rf = body["response_format"]
+        assert rf["type"] == "text"
+        assert rf["mime_type"] == "application/json"
+        assert "schema" in rf
+
+    def test_image_config_moved_to_response_format(self, config):
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw a sunset",
+                optional_params={
+                    "generation_config": {
+                        "temperature": 0.7,
+                        "image_config": {"aspect_ratio": "1:1", "image_size": "1K"},
+                    }
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        # image_config removed from generation_config
+        assert "image_config" not in body.get("generation_config", {})
+        # moved into response_format with type=image
+        rf = body["response_format"]
+        assert rf["type"] == "image"
+        assert rf["aspect_ratio"] == "1:1"
+
+    def test_response_mime_type_skipped_when_response_format_is_list(self, config):
+        """Lists are already polymorphic; do not wrap them into schema."""
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            rf_list = [
+                {"type": "text", "mime_type": "application/json"},
+                {"type": "image", "aspect_ratio": "1:1"},
+            ]
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="multimodal",
+                optional_params={
+                    "response_format": rf_list,
+                    "response_mime_type": "application/json",
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        assert body["response_format"] == rf_list
+        assert "response_mime_type" not in body
+
+    def test_image_config_appended_to_response_format_list_without_mutating_input(
+        self, config
+    ):
+        """When response_format is already a list, image_config must not mutate optional_params."""
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            text_rf = {"type": "text", "mime_type": "application/json"}
+            optional_params = {
+                "response_format": [text_rf],
+                "generation_config": {
+                    "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
+                },
+            }
+            original_rf = optional_params["response_format"]
+
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw and summarise",
+                optional_params=optional_params,
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+            assert optional_params["response_format"] is original_rf
+            assert len(optional_params["response_format"]) == 1
+            assert body["response_format"] == [
+                text_rf,
+                {"type": "image", "aspect_ratio": "16:9", "image_size": "2K"},
+            ]
+
+            # Retry must not append a second image entry into the caller's list.
+            body_retry = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw and summarise",
+                optional_params=optional_params,
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+            assert len(optional_params["response_format"]) == 1
+            assert body_retry["response_format"] == body["response_format"]
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+    def test_legacy_schema_passes_fields_unchanged(self, config):
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = True
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="hello",
+                optional_params={
+                    "response_mime_type": "application/json",
+                    "generation_config": {"image_config": {"aspect_ratio": "16:9"}},
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        assert body["response_mime_type"] == "application/json"
+        assert body["generation_config"]["image_config"]["aspect_ratio"] == "16:9"
