@@ -64,6 +64,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        api_base: Optional[str] = None,
     ) -> dict:
         # Force tool-based structured outputs for Bedrock Invoke
         # (similar to VertexAI fix in #19201)
@@ -79,6 +81,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             optional_params,
             model,
             drop_params,
+            api_base=api_base,
         )
 
         # Restore original model name

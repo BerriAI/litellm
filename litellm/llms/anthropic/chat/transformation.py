@@ -1572,6 +1572,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
         api_base: Optional[str] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(

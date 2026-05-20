@@ -154,6 +154,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Override parent method to ensure VertexAI always uses tool-based structured outputs.
@@ -172,6 +174,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            api_base=api_base,
         )
 
         # Restore original model name for any other processing

@@ -289,6 +289,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
+        *,
+        api_base: Optional[str] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
         mapped_params = super().map_openai_params(
