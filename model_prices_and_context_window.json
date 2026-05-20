@@ -9926,7 +9926,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
         "supports_output_config": true
     },
@@ -9963,7 +9962,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
         "supports_output_config": true
     },
