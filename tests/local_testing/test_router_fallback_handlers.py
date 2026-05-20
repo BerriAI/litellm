@@ -68,7 +68,7 @@ def create_test_router_2():
                 "litellm_params": {
                     "model": "openai/fake-openai-endpoint-2",
                     "api_key": "working-key-since-this-is-fake-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
             },
         ],
@@ -310,5 +310,5 @@ async def test_multiple_fallbacks(function_name):
 
     assert (
         result._hidden_params["api_base"]
-        == "https://exampleopenaiendpoint-production.up.railway.app/"
+        == "http://127.0.0.1:8090/"
     )

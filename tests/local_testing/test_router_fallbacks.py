@@ -1345,7 +1345,7 @@ def test_router_fallbacks_with_custom_model_costs():
                 "model": "openai/claude-sonnet-4-5-20250929",
                 "input_cost_per_token": 0.000003,  # 3$/M
                 "output_cost_per_token": 0.000015,  # 15$/M
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "api_base": "http://127.0.0.1:8090",
                 "api_key": "my-fake-key",
                 "mock_response": "Hello! How can I help you today?",
             },
@@ -1594,14 +1594,14 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
                 "litellm_params": {
                     "model": "openai/working-fake-endpoint",
                     "api_key": "my-fake-key",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                    "api_base": "http://127.0.0.1:8090",
                 },
             },
             {
                 "model_name": "badly-configured-openai-endpoint",
                 "litellm_params": {
                     "model": "openai/my-fake-model",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.appzzzzz",
+                    "api_base": "http://bad.invalid/",
                 },
             },
         ],

@@ -144,14 +144,14 @@ async def test_router_provider_wildcard_routing_regex():
                 "model_name": "openai/fo::*:static::*",
                 "litellm_params": {
                     "model": "openai/fo::*:static::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
             },
             {
                 "model_name": "openai/foo3::hello::*",
                 "litellm_params": {
                     "model": "openai/foo3::hello::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
             },
         ]
@@ -1639,7 +1639,7 @@ async def test_router_text_completion_client():
                 "litellm_params": {
                     "model": "text-completion-openai/gpt-3.5-turbo-instruct",
                     "api_key": os.getenv("OPENAI_API_KEY", None),
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
             }
         ]

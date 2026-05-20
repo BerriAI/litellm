@@ -111,6 +111,22 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_mock_openai_server:
+    description: "Start the in-repo mock OpenAI server so tests and proxy configs don't depend on an external endpoint. Binds 0.0.0.0:8090 by default — reachable as 127.0.0.1:8090 from the same host and as host.docker.internal:8090 from sibling docker containers."
+    parameters:
+      port:
+        type: string
+        default: "8090"
+    steps:
+      - run:
+          name: Start mock OpenAI server
+          background: true
+          command: |
+            python3 -m tests.mock_endpoints.openai_mock_server \
+              --host 0.0.0.0 --port << parameters.port >>
+      - wait_for_service:
+          url: http://127.0.0.1:<< parameters.port >>/
+          timeout: "30"
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -452,6 +468,7 @@ jobs:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - start_mock_openai_server
       - run:
           name: Run tests
           command: |
@@ -984,6 +1001,7 @@ jobs:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
+      - start_mock_openai_server
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1387,6 +1405,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres:
           db_name: litellm_test
+      - start_mock_openai_server
       - attach_workspace:
           at: ~/project
       - run:
@@ -1478,6 +1497,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_mock_openai_server
       - run:
           name: Load Docker Database Image
           command: |
@@ -1643,6 +1663,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_mock_openai_server
       - attach_workspace:
           at: ~/project
       - run:
@@ -1770,6 +1791,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - start_redis
+      - start_mock_openai_server
       - attach_workspace:
           at: ~/project
       - run:
@@ -1852,6 +1874,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_mock_openai_server
       - attach_workspace:
           at: ~/project
       - run:
@@ -2019,6 +2042,7 @@ jobs:
           command: |
             docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - start_postgres
+      - start_mock_openai_server
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here

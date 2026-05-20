@@ -164,7 +164,7 @@ async def test_litellm_overhead_stream(model):
     # Specific cases for models
     #########################################################
     if model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
+        kwargs["api_base"] = "http://127.0.0.1:8090/"
         # warmup call for auth validation on vertex_ai models
         await litellm.acompletion(**kwargs)
 
