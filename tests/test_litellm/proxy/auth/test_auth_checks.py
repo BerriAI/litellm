@@ -3016,3 +3016,32 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_key_object_returns_pre_warmed_entry_without_db_lookup():
+    """
+    Regression for case 2026-05-13-zurich-invalid-proxy-token: when
+    /key/generate has warmed the cache, get_key_object must serve the
+    key from cache without touching the DB. This is the path that
+    survives DB-side replication lag / pool isolation.
+    """
+    from litellm.proxy.auth.auth_checks import get_key_object
+
+    pre_warmed_key = UserAPIKeyAuth(token="hashed-warmed-token")
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=pre_warmed_key)
+    mock_cache.async_set_cache = AsyncMock()
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.get_data = AsyncMock()
+
+    result = await get_key_object(
+        hashed_token="hashed-warmed-token",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert result.token == "hashed-warmed-token"
+    mock_prisma_client.get_data.assert_not_called()
