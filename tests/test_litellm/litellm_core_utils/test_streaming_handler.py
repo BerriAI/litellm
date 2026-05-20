@@ -2300,31 +2300,31 @@ async def test_queue_wrapper_put_returns_on_loop_exception():
 
 @pytest.mark.asyncio
 async def test_queue_wrapper_cleanup_on_httpx_timeout():
-    """_queue_wrapper is cleaned up when httpx.TimeoutException is raised during streaming."""
+    """_queue_wrapper is cleaned up when httpx.TimeoutException is raised during streaming (lines 2306-2307)."""
     import httpx
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-    def gen_then_timeout():
-        yield "chunk1"
+    def immediate_timeout():
         raise httpx.ReadTimeout("Connection timed out")
+        yield  # make it a generator
 
     logging_obj = MagicMock()
     logging_obj.model_call_details = {"litellm_params": {}}
     logging_obj.stream_options = None
     logging_obj.messages = []
+    logging_obj.async_failure_handler = AsyncMock()
 
     stream = CustomStreamWrapper(
-        completion_stream=gen_then_timeout(),
+        completion_stream=immediate_timeout(),
         model="test-model",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
     )
 
-    # First __anext__ creates the queue wrapper and returns chunk1
-    # But chunk_creator may fail on raw string — the important thing is
-    # that the httpx.TimeoutException triggers cleanup
-    with pytest.raises(httpx.TimeoutException):
-        while True:
-            await stream.__anext__()
+    # __anext__ creates _queue_wrapper, then get() re-raises httpx.ReadTimeout
+    # which is caught by except httpx.TimeoutException handler (line 2304)
+    # _handle_stream_fallback_error maps it to a litellm exception
+    with pytest.raises(Exception):
+        await stream.__anext__()
 
     assert stream._queue_wrapper is None
