@@ -1,0 +1,235 @@
+"""
+Tests for You.com Search API integration.
+"""
+
+import os
+import sys
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+
+sys.path.insert(0, os.path.abspath("../.."))
+
+import litellm
+
+
+class TestYouComSearch:
+    """
+    Tests for You.com Search functionality with mocked network responses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_request_payload(self):
+        """
+        Validate the You.com search request payload structure without real API calls.
+        """
+        os.environ["YOUCOM_API_KEY"] = "test-api-key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {
+                "web": [
+                    {
+                        "title": "Test Result 1",
+                        "url": "https://example.com/1",
+                        "description": "Brief description 1",
+                        "snippets": ["This is a test snippet for result 1"],
+                        "page_age": "2025-01-15T00:00:00Z",
+                    },
+                    {
+                        "title": "Test Result 2",
+                        "url": "https://example.com/2",
+                        "description": "Brief description 2",
+                        "snippets": ["This is a test snippet for result 2"],
+                        "page_age": "2025-01-10T00:00:00Z",
+                    },
+                ],
+                "news": [],
+            },
+            "metadata": {
+                "search_uuid": "abc-123",
+                "query": "latest developments in AI",
+                "latency": 0.42,
+            },
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="latest developments in AI",
+                search_provider="you_com",
+                max_results=5,
+            )
+
+            assert mock_post.call_count == 1
+            call_args = mock_post.call_args
+
+            assert call_args.kwargs["url"] == "https://ydc-index.io/v1/search"
+
+            headers = call_args.kwargs.get("headers", {})
+            assert "X-API-Key" in headers
+            assert headers["X-API-Key"] == "test-api-key"
+            assert headers["Content-Type"] == "application/json"
+
+            json_data = call_args.kwargs.get("json")
+            assert json_data is not None
+            assert json_data["query"] == "latest developments in AI"
+            # max_results is mapped to You.com's `count` parameter
+            assert json_data["count"] == 5
+
+            assert hasattr(response, "results")
+            assert hasattr(response, "object")
+            assert response.object == "search"
+            assert len(response.results) == 2
+
+            first_result = response.results[0]
+            assert first_result.title == "Test Result 1"
+            assert first_result.url == "https://example.com/1"
+            assert first_result.snippet == "This is a test snippet for result 1"
+            assert first_result.date == "2025-01-15T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_domain_filter_and_country(self):
+        """
+        Validate that Perplexity-spec optional params map to You.com's parameters:
+        - search_domain_filter -> include_domains
+        - country              -> country
+        """
+        os.environ["YOUCOM_API_KEY"] = "test-api-key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {"web": [], "news": []},
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            await litellm.asearch(
+                query="machine learning",
+                search_provider="you_com",
+                search_domain_filter=["arxiv.org", "nature.com"],
+                country="US",
+            )
+
+            call_args = mock_post.call_args
+            json_data = call_args.kwargs.get("json")
+
+            assert json_data["query"] == "machine learning"
+            assert json_data["include_domains"] == ["arxiv.org", "nature.com"]
+            assert json_data["country"] == "US"
+            # search_domain_filter and country (perplexity-spec names) should NOT
+            # leak through to the upstream payload.
+            assert "search_domain_filter" not in json_data
+            assert "max_tokens_per_page" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_snippet_fallback_to_description(self):
+        """
+        When `snippets` is missing/empty, snippet falls back to `description`.
+        """
+        os.environ["YOUCOM_API_KEY"] = "test-api-key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {
+                "web": [
+                    {
+                        "title": "No snippets here",
+                        "url": "https://example.com/3",
+                        "description": "Fallback description text",
+                        "snippets": [],
+                        "page_age": None,
+                    }
+                ],
+                "news": [],
+            },
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="anything",
+                search_provider="you_com",
+            )
+
+            assert len(response.results) == 1
+            assert response.results[0].snippet == "Fallback description text"
+            assert response.results[0].date is None
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_news_results_appended(self):
+        """
+        News results are flattened in after web results.
+        """
+        os.environ["YOUCOM_API_KEY"] = "test-api-key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {
+                "web": [
+                    {
+                        "title": "Web Result",
+                        "url": "https://example.com/web",
+                        "snippets": ["web snippet"],
+                        "description": "web desc",
+                        "page_age": "2025-01-01T00:00:00Z",
+                    }
+                ],
+                "news": [
+                    {
+                        "title": "News Result",
+                        "url": "https://news.example.com/article",
+                        "description": "news desc",
+                        "page_age": "2025-02-01T00:00:00Z",
+                    }
+                ],
+            },
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="anything",
+                search_provider="you_com",
+            )
+
+            assert len(response.results) == 2
+            assert response.results[0].title == "Web Result"
+            assert response.results[1].title == "News Result"
+            # News result has no `snippets` -> falls back to description
+            assert response.results[1].snippet == "news desc"
+
+    def test_you_com_search_raises_without_api_key(self):
+        """
+        validate_environment must raise when no YOUCOM_API_KEY is set
+        and no api_key is explicitly passed.
+        """
+        os.environ.pop("YOUCOM_API_KEY", None)
+
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
+
+        config = YouComSearchConfig()
+        with pytest.raises(ValueError, match="YOUCOM_API_KEY"):
+            config.validate_environment(headers={}, api_key=None)

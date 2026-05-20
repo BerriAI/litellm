@@ -3375,6 +3375,7 @@ class SearchProviders(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    YOU_COM = "you_com"
 
 
 # Create a set of all search provider values for quick lookup
