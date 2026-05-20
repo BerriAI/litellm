@@ -14,7 +14,6 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:
@@ -95,6 +94,96 @@ class TestOpenAIGPTConfig:
 
         supported_params = self.config.get_supported_openai_params("gpt-4.1")
         assert "prompt_cache_key" in supported_params
+
+    def test_glm_json_object_injects_json_hint_when_missing(self):
+        messages = [{"role": "user", "content": "Reply with one word."}]
+        result = self.config.transform_request(
+            model="custom_openai/GLM-5.1",
+            messages=messages,
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_messages = result["messages"]
+        assert transformed_messages[0]["role"] == "system"
+        assert "json" in str(transformed_messages[0]["content"]).lower()
+
+    def test_glm_json_object_does_not_inject_when_prompt_has_json(self):
+        messages = [{"role": "user", "content": "Return JSON only."}]
+        result = self.config.transform_request(
+            model="custom_openai/GLM-5.1",
+            messages=messages,
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_messages = result["messages"]
+        assert transformed_messages[0]["role"] == "user"
+
+    def test_non_glm_json_object_does_not_inject_hint(self):
+        messages = [{"role": "user", "content": "Reply with one word."}]
+        result = self.config.transform_request(
+            model="gpt-4o-mini",
+            messages=messages,
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_messages = result["messages"]
+        assert transformed_messages[0]["role"] == "user"
+
+    def test_transform_request_normalizes_flat_function_tools(self):
+        messages = [{"role": "user", "content": "hi"}]
+        flat_tools = [
+            {
+                "type": "function",
+                "name": "shell",
+                "description": "Run shell command",
+                "parameters": {
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            }
+        ]
+        result = self.config.transform_request(
+            model="custom_openai/DeepSeek-V4-Flash",
+            messages=messages,
+            optional_params={"tools": flat_tools},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"][0]["type"] == "function"
+        assert "function" in result["tools"][0]
+        assert result["tools"][0]["function"]["name"] == "shell"
+        assert result["tools"][0]["function"]["parameters"]["type"] == "object"
+        assert "name" not in result["tools"][0]
+        assert "parameters" not in result["tools"][0]
+
+    def test_transform_request_preserves_nested_function_tools(self):
+        messages = [{"role": "user", "content": "hi"}]
+        nested_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run shell command",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        result = self.config.transform_request(
+            model="custom_openai/DeepSeek-V4-Flash",
+            messages=messages,
+            optional_params={"tools": nested_tools},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"][0] == nested_tools[0]
 
 
 class TestGetOptionalParamsIntegration:

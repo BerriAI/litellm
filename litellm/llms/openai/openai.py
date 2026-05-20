@@ -267,7 +267,56 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
+        messages = self._maybe_inject_json_hint_for_glm(
+            model=model, messages=messages, optional_params=optional_params
+        )
         return {"model": model, "messages": messages, **optional_params}
+
+    @staticmethod
+    def _response_format_is_json_object(optional_params: dict) -> bool:
+        response_format = optional_params.get("response_format")
+        return (
+            isinstance(response_format, dict)
+            and response_format.get("type") == "json_object"
+        )
+
+    @staticmethod
+    def _messages_contain_json_keyword(messages: List[AllMessageValues]) -> bool:
+        def _contains_json(value: Any) -> bool:
+            if isinstance(value, str):
+                return "json" in value.lower()
+            if isinstance(value, list):
+                return any(_contains_json(v) for v in value)
+            if isinstance(value, dict):
+                return any(_contains_json(v) for v in value.values())
+            return False
+
+        return any(_contains_json(message) for message in messages)
+
+    def _maybe_inject_json_hint_for_glm(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+    ) -> List[AllMessageValues]:
+        """
+        GLM-5.1 requires prompt text to include the word 'json' when using
+        response_format={"type":"json_object"}.
+        """
+        normalized_model = model.lower()
+        is_glm_5_1 = "glm-5.1" in normalized_model or "glm_5_1" in normalized_model
+        if not is_glm_5_1:
+            return messages
+        if not self._response_format_is_json_object(optional_params):
+            return messages
+        if self._messages_contain_json_keyword(messages):
+            return messages
+
+        json_hint: AllMessageValues = {
+            "role": "system",
+            "content": "Return valid JSON only.",
+        }
+        return [json_hint, *messages]
 
     def transform_response(
         self,
