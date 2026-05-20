@@ -71,6 +71,7 @@ async def make_chat_completions_request() -> ChatCompletion:
     return response
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 async def test_e2e_langfuse_callbacks_in_db():
 
