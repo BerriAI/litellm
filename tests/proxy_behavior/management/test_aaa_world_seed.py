@@ -35,3 +35,24 @@ async def test_each_actor_can_self_info(actor, proxy_client, world):
         f"{actor.value}: /key/info returned the wrong user_id "
         f"(got {info.get('user_id')!r}, expected {seeded.user_id!r})"
     )
+
+
+async def test_proxy_admin_actor_can_create_keys_for_others(proxy_client, world):
+    """Diagnostic: the seeded PROXY_ADMIN actor must be able to /key/generate
+    a key for another user. If this fails, the user_role is not propagating
+    through user_api_key_auth → the actor's auth context disagrees with the
+    DB row, and the cause is elsewhere in the auth stack (not the seed)."""
+    seeder = world.keys[Actor.PROXY_ADMIN]
+    target_user_id = world.keys[Actor.OWNER].user_id
+
+    resp = await proxy_client.post(
+        "/key/generate",
+        headers={"Authorization": f"Bearer {seeder.cleartext}"},
+        json={"key_alias": "diag-proxy-admin-seeder", "user_id": target_user_id},
+    )
+    assert resp.status_code == 200, (
+        f"PROXY_ADMIN-seeded actor can't create keys for others: "
+        f"{resp.status_code} {resp.text}\n"
+        f"  seeder user_id: {seeder.user_id}\n"
+        f"  target user_id: {target_user_id}"
+    )
