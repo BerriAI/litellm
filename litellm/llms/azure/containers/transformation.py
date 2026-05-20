@@ -42,10 +42,9 @@ class AzureContainerConfig(OpenAIContainerConfig):
         parsed = urlparse(api_base)
         path = parsed.path
         for ep in _AZURE_ENDPOINT_PATHS:
-            idx = path.find(ep)
-            if idx >= 0:
+            if path.endswith(ep):
                 return urlunparse(
-                    (parsed.scheme, parsed.netloc, path[:idx], "", "", "")
+                    (parsed.scheme, parsed.netloc, path[: -len(ep)], "", "", "")
                 )
         return api_base
 
