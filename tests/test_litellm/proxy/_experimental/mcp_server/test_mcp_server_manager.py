@@ -1877,11 +1877,29 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
         manager.registry = {"srv-uuid-123": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = "zapier"
 
         resolved = manager._resolve_mcp_server_for_tool_call(
             "zapier-alias", "create_zap"
         )
         assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
+        """Server-name match alone must not let unknown tools through when the
+        mapping has no entries for that server (e.g. listing has not completed
+        or the server is OAuth2 and the user has not yet listed tools).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+
+        with pytest.raises(ValueError, match="Tool create_zap not found"):
+            manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
 
     def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
         """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""

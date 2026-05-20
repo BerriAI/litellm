@@ -2876,7 +2876,7 @@ class MCPServerManager:
                 name in self.tool_name_to_mcp_server_name_mapping
                 or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
             )
-            if not tool_known and self._mapping_has_tools_for_server(mcp_server):
+            if not tool_known:
                 raise ValueError(f"Tool {name} not found")
 
         return mcp_server
@@ -3077,21 +3077,6 @@ class MCPServerManager:
                 original_name, _ = split_server_prefix_from_name(tool.name)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
-
-    def _mapping_has_tools_for_server(self, server: MCPServer) -> bool:
-        """Return True if the tool mapping lists any tool for this server."""
-        server_identifiers = {
-            normalize_server_name(server.name),
-        }
-        if server.server_name:
-            server_identifiers.add(normalize_server_name(server.server_name))
-        if server.alias:
-            server_identifiers.add(normalize_server_name(server.alias))
-
-        for mapped_server_name in self.tool_name_to_mcp_server_name_mapping.values():
-            if normalize_server_name(mapped_server_name) in server_identifiers:
-                return True
-        return False
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
