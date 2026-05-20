@@ -2427,3 +2427,59 @@ def test_translate_anthropic_tool_choice_none():
 
     result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
     assert result == "none"
+
+
+def test_translate_anthropic_tools_type_not_leaked_into_parameters():
+    """
+    Regression: tool-level "type" key (e.g. "custom") must not leak into
+    function_chunk["parameters"] via the catch-all loop. Additionally,
+    input_schema must be shallow-copied so mutations to parameters don't
+    affect the original tool dict.
+    """
+    original_input_schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tools = [
+        {
+            "name": "my_tool",
+            "type": "custom",
+            "description": "A custom tool",
+            "input_schema": original_input_schema,
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert len(result) == 1
+    params = result[0]["function"]["parameters"]
+    # "type" in parameters should be from input_schema ("object"), not tool-level ("custom")
+    assert params["type"] == "object"
+    assert "custom" not in params.values()
+
+    # Deep copy guarantee: modifying nested keys doesn't affect original
+    params["properties"]["injected"] = {"type": "string"}
+    assert "injected" not in original_input_schema["properties"]
+
+
+def test_translate_anthropic_tools_type_not_leaked_without_input_schema():
+    """
+    When a tool has "type" but no "input_schema", "type" must still not
+    appear in the output parameters dict via the catch-all loop.
+    """
+    tools = [
+        {
+            "name": "bare_tool",
+            "type": "custom",
+            "description": "Tool without input_schema",
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert len(result) == 1
+    func = result[0]["function"]
+    assert func["name"] == "bare_tool"
+    # "type" must not leak into parameters
+    params = func.get("parameters", {})
+    assert "type" not in params or params.get("type") == "object"
+    assert "custom" not in params.values()
