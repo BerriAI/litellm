@@ -39,6 +39,28 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+def _iter_json_values(raw: str):
+    """Yield each top-level JSON value from a string that may contain multiple
+    JSON documents concatenated together (with or without whitespace separators).
+
+    `gh api --paginate` returns one JSON array per fetched page and concatenates
+    them in stdout. Depending on the gh version and endpoint, the arrays may be
+    glued together without newlines, so we cannot rely on splitlines() to find
+    document boundaries. `json.JSONDecoder.raw_decode` handles both cases.
+    """
+    decoder = json.JSONDecoder()
+    idx = 0
+    length = len(raw)
+    while idx < length:
+        while idx < length and raw[idx].isspace():
+            idx += 1
+        if idx >= length:
+            break
+        value, end = decoder.raw_decode(raw, idx)
+        yield value
+        idx = end
+
+
 def fetch_open_issues(repo: str | None) -> list[dict]:
     """Fetch all open issues (excluding PRs) via gh api --paginate."""
     if repo:
@@ -50,13 +72,8 @@ def fetch_open_issues(repo: str | None) -> list[dict]:
     cmd = ["api", "--paginate", endpoint]
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
     issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
+    for parsed in _iter_json_values(raw):
         if isinstance(parsed, list):
             issues.extend(parsed)
         else:
