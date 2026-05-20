@@ -29,7 +29,7 @@ def test_deepseek_mock_completion(stream):
     response = completion(
         model="deepseek/deepseek-reasoner",
         messages=[{"role": "user", "content": "Hello, world!"}],
-        api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
+        api_base="http://127.0.0.1:8090/v1/chat/completions",
         stream=stream,
         mock_response="Hello! How can I help you today?",
     )

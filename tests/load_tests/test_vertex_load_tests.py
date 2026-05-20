@@ -118,7 +118,7 @@ async def make_async_calls(message_type="text"):
 
 
 def create_async_task(message_type):
-    base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
+    base_url = "http://127.0.0.1:8090/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
 
     if message_type == "text":
         messages = [{"role": "user", "content": "hi"}]

@@ -72,7 +72,7 @@ async def make_completion_request():
     return await litellm.acompletion(
         model="openai/gpt-4o",
         messages=[{"role": "user", "content": "Test message for memory usage"}],
-        api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        api_base="http://127.0.0.1:8090/",
     )
 
 
@@ -80,7 +80,7 @@ async def make_text_completion_request():
     return await litellm.atext_completion(
         model="openai/gpt-4o",
         prompt="Test message for memory usage",
-        api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        api_base="http://127.0.0.1:8090/",
     )
 
 
@@ -108,14 +108,14 @@ litellm_router = Router(
             "model_name": "text-gpt-4o",
             "litellm_params": {
                 "model": "text-completion-openai/gpt-3.5-turbo-instruct-unlimited",
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                "api_base": "http://127.0.0.1:8090/",
             },
         },
         {
             "model_name": "chat-gpt-4o",
             "litellm_params": {
                 "model": "openai/gpt-4o",
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                "api_base": "http://127.0.0.1:8090/",
             },
         },
     ]
@@ -128,7 +128,7 @@ async def make_router_atext_completion_request():
         temperature=0.5,
         frequency_penalty=0.5,
         prompt="<|fim prefix|> Test message for memory usage<fim suffix> <|fim prefix|> Test message for memory usage<fim suffix>",
-        api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        api_base="http://127.0.0.1:8090/",
         max_tokens=500,
     )
 
@@ -148,7 +148,7 @@ async def make_router_acompletion_request():
     return await litellm_router.acompletion(
         model="chat-gpt-4o",
         messages=[{"role": "user", "content": "Test message for memory usage"}],
-        api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        api_base="http://127.0.0.1:8090/",
     )
 
 

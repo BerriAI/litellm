@@ -12254,7 +12254,7 @@ async def model_info_v1(  # noqa: PLR0915
                     {
                         "model_name": "fake-openai-endpoint",
                         "litellm_params": {
-                            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                            "api_base": "http://host.docker.internal:8090/",
                             "model": "openai/fake"
                         },
                         "model_info": {

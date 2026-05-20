@@ -26,7 +26,7 @@ class MockPrismaClient:
             "environment_variables": {
                 "LANGFUSE_PUBLIC_KEY": "any-public-key",
                 "LANGFUSE_SECRET_KEY": "any-secret-key",
-                "LANGFUSE_HOST": "https://exampleopenaiendpoint-production-c715.up.railway.app",
+                "LANGFUSE_HOST": "http://127.0.0.1:8090/slow",
             },
         }
 

@@ -61,7 +61,7 @@ mock_response_data = {
     "completion_tokens": 12,
     "request_tags": [],
     "end_user": "",
-    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+    "api_base": "http://127.0.0.1:8090",
     "model_group": "fake-openai-endpoint",
     "model_id": "b68d56d76b0c24ac9462ab69541e90886342508212210116e300441155f37865",
     "requester_ip_address": "127.0.0.1",
@@ -100,7 +100,7 @@ mock_response_data = {
     "hidden_params": {
         "model_id": "b68d56d76b0c24ac9462ab69541e90886342508212210116e300441155f37865",
         "cache_key": None,
-        "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+        "api_base": "http://127.0.0.1:8090/",
         "response_cost": 3.7500000000000003e-05,
         "additional_headers": {},
         "litellm_overhead_time_ms": 2.126,

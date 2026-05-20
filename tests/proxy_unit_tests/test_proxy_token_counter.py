@@ -127,7 +127,7 @@ async def test_vLLM_token_counting():
                 "model_name": "special-alias",
                 "litellm_params": {
                     "model": "openai/wolfram/miquliz-120b-v2.0",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
             }
         ]

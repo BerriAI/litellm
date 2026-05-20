@@ -1343,7 +1343,7 @@ def test_lm_studio_completion(monkeypatch):
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            api_base="http://127.0.0.1:8090/",
         )
     except litellm.AuthenticationError as e:
         pytest.fail(f"Error occurred: {e}")

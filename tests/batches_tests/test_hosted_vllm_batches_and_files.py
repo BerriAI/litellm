@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 
 
-SERVER_URL = "https://exampleopenaiendpoint-production-0ee2.up.railway.app/v1"
+SERVER_URL = "http://127.0.0.1:8090/v1"
 
 
 @pytest.mark.asyncio()

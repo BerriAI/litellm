@@ -36,7 +36,7 @@ def _mock_azure_client(
     client = AsyncAzureOpenAI(
         api_key="test-key",
         api_version="2024-10-21",
-        azure_endpoint="https://exampleopenaiendpoint-production.up.railway.app",
+        azure_endpoint="http://127.0.0.1:8090",
     )
     client.fine_tuning.jobs.create = AsyncMock(
         return_value=(
@@ -69,7 +69,7 @@ async def test_azure_acreate_fine_tuning_job_request_and_output_match_expected_j
             model="gpt-35-turbo-1106",
             training_file="file-5e4b20ecbd724182b9964f3cd2ab7212",
             custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
+            api_base="http://127.0.0.1:8090",
             api_key="test-key",
             api_version="2024-10-21",
         )
@@ -100,7 +100,7 @@ async def test_azure_alist_fine_tuning_jobs_request_matches_expected_json():
             after=expected_request["after"],
             limit=expected_request["limit"],
             custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
+            api_base="http://127.0.0.1:8090",
             api_key="test-key",
             api_version="2024-10-21",
         )
@@ -124,7 +124,7 @@ async def test_azure_acancel_fine_tuning_job_request_and_output_match_expected_j
         response = await litellm.acancel_fine_tuning_job(
             fine_tuning_job_id=expected_request["fine_tuning_job_id"],
             custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
+            api_base="http://127.0.0.1:8090",
             api_key="test-key",
             api_version="2024-10-21",
         )

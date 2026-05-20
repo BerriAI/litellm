@@ -290,7 +290,7 @@ async def test_pass_through_request_logging_failure(
         )
         response = await pass_through_request(
             request=request,
-            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            target="http://127.0.0.1:8090/v1/messages",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
@@ -357,7 +357,7 @@ async def test_pass_through_request_logging_failure_with_stream(
         )
         response = await pass_through_request(
             request=request,
-            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            target="http://127.0.0.1:8090/v1/messages",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )

@@ -360,7 +360,7 @@ async def test_triton_embeddings():
         litellm.set_verbose = True
         response = await litellm.aembedding(
             model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
+            api_base="http://127.0.0.1:8090/triton/embeddings",
             input=["good morning from litellm"],
         )
         print(f"response: {response}")

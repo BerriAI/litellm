@@ -158,7 +158,7 @@ async def test_moderations_on_embeddings():
                     "litellm_params": {
                         "model": "text-embedding-ada-002",
                         "api_key": "any",
-                        "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                        "api_base": "http://127.0.0.1:8090/",
                     },
                 },
             ]

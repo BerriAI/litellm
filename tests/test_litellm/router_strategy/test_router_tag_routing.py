@@ -39,7 +39,7 @@ async def test_router_free_paid_tier():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["free"],
                 },
                 "model_info": {"id": "very-cheap-model"},
@@ -48,7 +48,7 @@ async def test_router_free_paid_tier():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -102,7 +102,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["free"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -112,7 +112,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["paid"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -122,7 +122,7 @@ async def test_router_free_paid_tier_embeddings():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["default"],
                     "mock_response": ["1", "2", "3"],
                 },
@@ -178,7 +178,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["default"],
                 },
                 "model_info": {"id": "default-model"},
@@ -187,7 +187,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
                 "model_info": {"id": "default-model-2"},
             },
@@ -195,7 +195,7 @@ async def test_default_tagged_deployments():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -268,7 +268,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
                 "model_info": {"id": "default-model"},
             },
@@ -276,7 +276,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                 },
                 "model_info": {"id": "default-model-2"},
             },
@@ -284,7 +284,7 @@ async def test_error_from_tag_routing():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["teamA"],
                 },
                 "model_info": {"id": "very-expensive-model"},
@@ -386,7 +386,7 @@ async def test_router_free_paid_tier_with_responses_api():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["free"],
                 },
                 "model_info": {"id": "very-cheap-model"},
@@ -395,7 +395,7 @@ async def test_router_free_paid_tier_with_responses_api():
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": "http://127.0.0.1:8090/",
                     "tags": ["paid"],
                 },
                 "model_info": {"id": "very-expensive-model"},

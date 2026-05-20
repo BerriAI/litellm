@@ -17,7 +17,7 @@ def test_langsmith_logging_async():
         os.environ["LANGSMITH_API_KEY"] = "lsv2_anything"
         os.environ["LANGSMITH_PROJECT"] = "pr-b"
         os.environ["LANGSMITH_BASE_URL"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app"
+            "http://127.0.0.1:8090"
         )
 
         percentage_diffs = []

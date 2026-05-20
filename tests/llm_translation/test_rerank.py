@@ -175,7 +175,7 @@ async def test_rerank_custom_api_base(version):
         "documents": ["hello", "world"],
     }
 
-    api_base = "https://exampleopenaiendpoint-production.up.railway.app/"
+    api_base = "http://127.0.0.1:8090/"
     if version == "v1":
         api_base += "v1/rerank"
 
@@ -202,7 +202,7 @@ async def test_rerank_custom_api_base(version):
         print("url = ", _url)
         assert (
             _url
-            == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
+            == f"http://127.0.0.1:8090/{version}/rerank"
         )
 
         request_data = json.loads(args_to_api)
