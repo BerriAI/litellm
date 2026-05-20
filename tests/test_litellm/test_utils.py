@@ -847,6 +847,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "requires_anthropic_request_sanitize": {"type": "boolean"},
+                "requires_json_keyword_for_json_object": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_low_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
