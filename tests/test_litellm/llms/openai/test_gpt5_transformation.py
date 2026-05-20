@@ -176,6 +176,62 @@ def test_glm_json_object_does_not_inject_when_prompt_has_json(config: OpenAIConf
     assert transformed_messages[0]["role"] == "user"
 
 
+def test_custom_openai_transform_request_normalizes_flat_function_tools(
+    config: OpenAIConfig,
+):
+    messages = [{"role": "user", "content": "hi"}]
+    flat_tools = [
+        {
+            "type": "function",
+            "name": "shell",
+            "description": "Run shell command",
+            "parameters": {
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        }
+    ]
+    result = config.transform_request(
+        model="custom_openai/DeepSeek-V4-Flash",
+        messages=messages,  # type: ignore[arg-type]
+        optional_params={"tools": flat_tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0]["type"] == "function"
+    assert "function" in result["tools"][0]
+    assert result["tools"][0]["function"]["name"] == "shell"
+    assert result["tools"][0]["function"]["parameters"]["type"] == "object"
+    assert "name" not in result["tools"][0]
+    assert "parameters" not in result["tools"][0]
+
+
+def test_custom_openai_transform_request_preserves_nested_function_tools(
+    config: OpenAIConfig,
+):
+    messages = [{"role": "user", "content": "hi"}]
+    nested_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "description": "Run shell command",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    result = config.transform_request(
+        model="custom_openai/DeepSeek-V4-Flash",
+        messages=messages,  # type: ignore[arg-type]
+        optional_params={"tools": nested_tools},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0] == nested_tools[0]
+
+
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(
