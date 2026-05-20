@@ -37,6 +37,7 @@ router = APIRouter(
     tags=["mcp"],
 )
 
+
 def _prune_oauth_metadata_cache(now: Optional[float] = None) -> None:
     now = now if now is not None else time.time()
     expired_cache_keys = [
