@@ -40,30 +40,34 @@ def gh(*args: str) -> str:
 
 
 def fetch_open_issues(repo: str | None) -> list[dict]:
-    """Fetch all open issues (excluding PRs) via gh api --paginate."""
+    """Fetch all open issues (excluding PRs) via `gh issue list --json`.
+
+    Uses `gh issue list` instead of `gh api --paginate` because:
+      - `gh api --paginate` concatenates pages onto a single line with no
+        delimiter (and the full issue payload — including bodies — can exceed
+        8 MB), which breaks naive `splitlines()` parsing and has been observed
+        to silently truncate in CI, producing JSONDecodeError.
+      - `gh issue list --json number,title` returns a single well-formed JSON
+        array containing only the fields we use, and natively excludes PRs.
+    """
+    cmd = [
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--json",
+        "number,title",
+        "--limit",
+        "5000",
+    ]
     if repo:
-        endpoint = (
-            f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-        )
-    else:
-        endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
+        cmd.extend(["--repo", repo])
 
     raw = gh(*cmd)
-    # gh --paginate concatenates JSON arrays, so we may get multiple arrays
-    issues = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parsed = json.loads(line)
-        if isinstance(parsed, list):
-            issues.extend(parsed)
-        else:
-            issues.append(parsed)
-
-    # Filter out pull requests (they also appear in the issues endpoint)
-    return [i for i in issues if "pull_request" not in i]
+    parsed = json.loads(raw)
+    if not isinstance(parsed, list):
+        return []
+    return parsed
 
 
 def close_as_duplicate(
