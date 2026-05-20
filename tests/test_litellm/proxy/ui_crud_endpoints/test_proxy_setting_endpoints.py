@@ -362,9 +362,9 @@ class TestProxySettingEndpoints:
 
         # Verify values match our mock config
         assert values["google_client_id"] == "test_google_client_id"
-        assert values["google_client_secret"] == "test_google_client_secret"
+        assert values["google_client_secret"] == "**redacted**"
         assert values["microsoft_client_id"] == "test_microsoft_client_id"
-        assert values["microsoft_client_secret"] == "test_microsoft_client_secret"
+        assert values["microsoft_client_secret"] == "**redacted**"
         assert values["proxy_base_url"] == "https://example.com"
         assert values["user_email"] == "admin@example.com"
 
@@ -393,6 +393,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -429,16 +430,13 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        # Secret fields must be redacted in the response so plaintext does not
+        # leak back to the caller.
+        assert settings["google_client_secret"] == "**redacted**"
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] == "**redacted**"
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -475,6 +473,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
 
         env_var_entry = MagicMock()
@@ -554,6 +553,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         env_var_entry = MagicMock()
         env_var_entry.param_value = json.dumps(
@@ -624,6 +624,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
 
         env_var_entry = MagicMock()
@@ -701,6 +702,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -1321,10 +1323,10 @@ class TestProxySettingEndpoints:
         assert "values" in data
         assert "field_schema" in data
 
-        # Verify decrypted values are returned
+        # Verify decrypted values are returned (secrets are redacted in GET response)
         values = data["values"]
         assert values["google_client_id"] == "decrypted_google_id"
-        assert values["google_client_secret"] == "decrypted_google_secret"
+        assert values["google_client_secret"] == "**redacted**"
         assert values["microsoft_client_id"] == "decrypted_microsoft_id"
         assert values["proxy_base_url"] == "https://decrypted.example.com"
 
@@ -1345,6 +1347,7 @@ class TestProxySettingEndpoints:
         mock_prisma = MagicMock()
         upsert_mock = AsyncMock()
         mock_prisma.db.litellm_ssoconfig.upsert = upsert_mock
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -1424,11 +1427,13 @@ class TestProxySettingEndpoints:
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
         env_var_entry = MagicMock()
         env_var_entry.param_value = json.dumps(
             {
                 "GOOGLE_CLIENT_ID": "old_google_id",
+                "OKTA_CLIENT_ID": "old_okta_id",
                 "GENERIC_TOKEN_ENDPOINT": "old_endpoint",
                 "UNCHANGED_ENV": "keep_me",
             }
@@ -1458,6 +1463,7 @@ class TestProxySettingEndpoints:
         update_call = mock_prisma.db.litellm_config.update.call_args
         updated_env_vars = json.loads(update_call.kwargs["data"]["param_value"])
         assert "GOOGLE_CLIENT_ID" not in updated_env_vars
+        assert "OKTA_CLIENT_ID" not in updated_env_vars
         assert "GENERIC_TOKEN_ENDPOINT" not in updated_env_vars
         assert updated_env_vars["UNCHANGED_ENV"] == "keep_me"
 
@@ -1475,6 +1481,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
         env_var_entry = MagicMock()
         env_var_entry.param_value = {
@@ -1646,6 +1653,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_config.update = AsyncMock()

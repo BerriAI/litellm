@@ -10,7 +10,7 @@ export const ssoProviderLogoMap: Record<string, string> = {
 export const ssoProviderDisplayNames: Record<string, string> = {
   google: "Google SSO",
   microsoft: "Microsoft SSO",
-  okta: "Okta / Auth0 SSO",
+  okta: "Okta SSO",
   generic: "Generic SSO",
 };
 

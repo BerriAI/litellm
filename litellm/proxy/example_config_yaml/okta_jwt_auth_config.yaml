@@ -1,0 +1,85 @@
+# Okta OIDC SSO + JWT Authentication Config
+#
+# This config covers both:
+#   1. Admin UI login with Okta OIDC.
+#   2. API authorization with Okta-issued id_tokens/access_tokens.
+#
+# Okta setup:
+#   1. Create an Okta OIDC application:
+#      Applications -> Applications -> Create App Integration -> OIDC.
+#   2. Use "Web Application" for confidential-client login with a client secret.
+#   3. Add the LiteLLM redirect URI:
+#      https://<your-litellm-host>/sso/callback
+#   4. Copy the Client ID, Client Secret, and Issuer.
+#      For a custom authorization server, issuer usually looks like:
+#      https://your-okta-domain.okta.com/oauth2/default
+#   5. Optional: add a "groups" claim to the authorization server if you want
+#      LiteLLM team/role mapping from Okta groups.
+#
+# API authorization flow:
+#   1. Your app obtains a JWT from Okta (e.g. id_token from the OIDC /token endpoint).
+#   2. The caller passes it as:  Authorization: Bearer <okta_token>
+#   3. LiteLLM validates signature, audience, and issuer against Okta.
+
+environment_variables:
+  # Admin UI SSO. LiteLLM derives /v1/authorize, /v1/token, and /v1/userinfo
+  # from OKTA_ISSUER unless you set explicit OKTA_*_ENDPOINT overrides.
+  OKTA_CLIENT_ID: "your-okta-client-id"
+  OKTA_CLIENT_SECRET: "your-okta-client-secret"
+  OKTA_ISSUER: "https://your-okta-domain.okta.com/oauth2/default"
+  OKTA_SCOPE: "openid email profile groups"
+  OKTA_CLIENT_USE_PKCE: "true"
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  enable_jwt_auth: true
+
+  litellm_jwtauth:
+    # Okta OIDC discovery URL or JWKS URL. LiteLLM auto-resolves jwks_uri from
+    # the discovery document.
+    public_key_url: "https://your-okta-domain.okta.com/oauth2/default/.well-known/openid-configuration"
+
+    # --- Okta claim → LiteLLM field mappings ---
+
+    # "sub" is Okta's stable user identifier (always present)
+    user_id_jwt_field: "sub"
+
+    # "email" is present when the token includes the "email" scope
+    user_email_jwt_field: "email"
+
+    # Map Okta groups to LiteLLM teams.
+    # Requires the "groups" claim to be added to your Okta authorization server:
+    #   Admin Console → Security → API → <your auth server> → Claims → Add Claim
+    #   Name: groups, Include in: ID Token, Value type: Groups, Filter: Starts with <prefix>
+    team_ids_jwt_field: "groups"
+
+    # Validate the token audience. Set to your Okta application's Client ID
+    # or a custom audience string configured on your authorization server.
+    audience: "your-okta-client-id"
+
+    # Validate the token issuer. Must match the "iss" claim in the token exactly.
+    issuer: "https://your-okta-domain.okta.com/oauth2/default"
+
+    # --- Role mapping (optional) ---
+    # Map Okta group membership to LiteLLM RBAC roles.
+    # The "groups" claim must be enabled on your authorization server (see above).
+    roles_jwt_field: "groups"
+    role_mappings:
+      - role: "litellm-admins"       # Okta group name
+        internal_role: "proxy_admin"
+      - role: "litellm-users"
+        internal_role: "internal_user"
+
+    # --- Auto-provisioning (optional) ---
+    # Create LiteLLM user/team records on first login if they don't exist yet.
+    user_id_upsert: true
+    team_id_upsert: true
+
+    # Enforce that every request carries a recognised RBAC role.
+    # Set to false while onboarding so unknown users still get through.
+    enforce_rbac: false

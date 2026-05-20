@@ -5,7 +5,7 @@ import React, { useEffect } from "react";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { processSSOSettingsPayload } from "../utils";
+import { detectSSOProvider, extractRoleMappingFields, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 
@@ -24,49 +24,10 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
   useEffect(() => {
     if (isVisible && ssoSettings.data && ssoSettings.data.values) {
       const ssoData = ssoSettings.data;
-      console.log("Raw SSO data received:", ssoData); // Debug log
-      console.log("SSO values:", ssoData.values); // Debug log
-      console.log("user_email from API:", ssoData.values.user_email); // Debug log
 
       // Determine which SSO provider is configured
-      let selectedProvider = null;
-      if (ssoData.values.google_client_id) {
-        selectedProvider = "google";
-      } else if (ssoData.values.microsoft_client_id) {
-        selectedProvider = "microsoft";
-      } else if (ssoData.values.generic_client_id) {
-        // Check if it looks like Okta based on endpoints
-        if (
-          ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-          ssoData.values.generic_authorization_endpoint?.includes("auth0")
-        ) {
-          selectedProvider = "okta";
-        } else {
-          selectedProvider = "generic";
-        }
-      }
-
-      // Extract role mappings if they exist
-      let roleMappingFields = {};
-      if (ssoData.values.role_mappings) {
-        const roleMappings = ssoData.values.role_mappings;
-
-        // Helper function to join arrays into comma-separated strings
-        const joinTeams = (teams: string[] | undefined): string => {
-          if (!teams || teams.length === 0) return "";
-          return teams.join(", ");
-        };
-
-        roleMappingFields = {
-          use_role_mappings: true,
-          group_claim: roleMappings.group_claim,
-          default_role: roleMappings.default_role || "internal_user",
-          proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
-          admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
-          internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
-          internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
-        };
-      }
+      const selectedProvider = detectSSOProvider(ssoData.values);
+      const roleMappingFields = extractRoleMappingFields(ssoData.values.role_mappings);
 
       // Extract team mappings if they exist
       let teamMappingFields = {};
@@ -86,13 +47,10 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         ...teamMappingFields,
       };
 
-      console.log("Setting form values:", formValues); // Debug log
-
       // Clear form first, then set values with a small delay to ensure proper initialization
       form.resetFields();
       setTimeout(() => {
         form.setFieldsValue(formValues);
-        console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
       }, 100);
     }
   }, [isVisible, ssoSettings.data, form]);
