@@ -158,6 +158,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         completed_response = None
         error_message = None
         streamed_output_items: Dict[int, dict] = {}
+        text_only_output_items: Dict[int, dict] = {}
         for chunk in body_text.splitlines():
             parsed_chunk = self._parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
@@ -173,10 +174,24 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
-                completed_response = self._build_completed_response_from_chunk(
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+                self._record_output_text_chunk(
                     parsed_chunk=parsed_chunk,
                     streamed_output_items=streamed_output_items,
+                    text_only_output_items=text_only_output_items,
+                )
+                continue
+
+            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                # Real OUTPUT_ITEM_DONE events take precedence at any given
+                # output_index, but text-only items at indices without a
+                # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
+                # providers that emit only OUTPUT_TEXT_DONE for some indices).
+                merged_items: Dict[int, dict] = {**text_only_output_items}
+                merged_items.update(streamed_output_items)
+                completed_response = self._build_completed_response_from_chunk(
+                    parsed_chunk=parsed_chunk,
+                    streamed_output_items=merged_items,
                 )
                 break
 
@@ -223,6 +238,72 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except (TypeError, ValueError):
             index = len(streamed_output_items)
         streamed_output_items[index] = item
+
+    def _record_output_text_chunk(
+        self,
+        parsed_chunk: Dict[str, Any],
+        streamed_output_items: Dict[int, dict],
+        text_only_output_items: Dict[int, dict],
+    ) -> None:
+        text = parsed_chunk.get("text")
+        if not isinstance(text, str):
+            return
+
+        try:
+            output_index_raw = parsed_chunk.get("output_index")
+            if output_index_raw is None:
+                raise ValueError("missing output_index")
+            output_index = int(output_index_raw)
+        except (TypeError, ValueError):
+            output_index = len(text_only_output_items)
+
+        # If a real OUTPUT_ITEM_DONE already covered this index, prefer it.
+        if output_index in streamed_output_items:
+            return
+
+        item = text_only_output_items.get(output_index)
+        if item is None:
+            item = {
+                "type": "message",
+                "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
+                "role": "assistant",
+                "status": "completed",
+                "content": [],
+            }
+            text_only_output_items[output_index] = item
+
+        content = item.setdefault("content", [])
+        if not isinstance(content, list):
+            return
+
+        try:
+            content_index_raw = parsed_chunk.get("content_index")
+            if content_index_raw is None:
+                raise ValueError("missing content_index")
+            content_index = int(content_index_raw)
+        except (TypeError, ValueError):
+            content_index = len(content)
+
+        while len(content) <= content_index:
+            content.append(
+                {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                }
+            )
+
+        content_item = content[content_index]
+        if not isinstance(content_item, dict):
+            content_item = {}
+            content[content_index] = content_item
+
+        content_item["type"] = "output_text"
+        content_item["text"] = text
+        if parsed_chunk.get("annotations") is not None:
+            content_item["annotations"] = parsed_chunk["annotations"]
+        else:
+            content_item.setdefault("annotations", [])
 
     def _build_completed_response_from_chunk(
         self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]
