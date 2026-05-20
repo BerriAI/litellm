@@ -24,7 +24,6 @@ from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
 )
 from litellm.types.llms.openai import (
-    ContentPartAddedEvent,
     OutputTextDeltaEvent,
     ResponseCreatedEvent,
 )
@@ -227,13 +226,20 @@ class TestTransformRequest:
 
 
 class TestStreamingIterator:
-    def _make_iterator(self) -> LiteLLMResponsesInteractionsStreamingIterator:
-        return LiteLLMResponsesInteractionsStreamingIterator(
-            model="gpt-5.4",
-            litellm_custom_stream_wrapper=MagicMock(),
-            request_input="hi",
-            optional_params={},
-        )
+    def _make_iterator(
+        self, use_legacy: bool = False
+    ) -> LiteLLMResponsesInteractionsStreamingIterator:
+        original = litellm.use_legacy_interactions_schema
+        litellm.use_legacy_interactions_schema = use_legacy
+        try:
+            return LiteLLMResponsesInteractionsStreamingIterator(
+                model="gpt-5.4",
+                litellm_custom_stream_wrapper=MagicMock(),
+                request_input="hi",
+                optional_params={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
 
     def _make_text_delta(
         self, text: str, item_id: str = "item_1"
@@ -243,19 +249,28 @@ class TestStreamingIterator:
         event.item_id = item_id
         return event
 
-    def _make_part_added(self, item_id: str = "item_1") -> ContentPartAddedEvent:
-        event = MagicMock(spec=ContentPartAddedEvent)
-        event.item_id = item_id
-        return event
-
     def _make_response_created(self) -> ResponseCreatedEvent:
         event = MagicMock(spec=ResponseCreatedEvent)
         event.response = MagicMock(id="resp_123")
         return event
 
-    def test_content_delta_includes_type_field(self):
-        """content.delta events must carry delta.type='text' so the UI can display them."""
-        it = self._make_iterator()
+    def test_step_delta_includes_type_field(self):
+        """step.delta events must carry delta.type='text' so the UI can display them."""
+        it = self._make_iterator(use_legacy=False)
+        it.sent_interaction_start = True
+        it.sent_content_start = True
+
+        chunk = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+
+        assert chunk is not None
+        assert chunk.event_type == "step.delta"
+        assert chunk.delta == {"type": "text", "text": "Hello"}
+
+    def test_content_delta_legacy_schema(self):
+        """Legacy schema emits content.delta with text-only delta payload."""
+        it = self._make_iterator(use_legacy=True)
         it.sent_interaction_start = True
         it.sent_content_start = True
 
@@ -265,116 +280,91 @@ class TestStreamingIterator:
 
         assert chunk is not None
         assert chunk.event_type == "content.delta"
-        assert chunk.delta == {"type": "text", "text": "Hello"}
+        assert chunk.delta == {"text": "Hello"}
 
-    def test_response_part_added_emits_content_start(self):
-        """ContentPartAddedEvent (arrives before text deltas) should emit content.start
-        so the first OutputTextDeltaEvent immediately emits content.delta without dropping text.
-        """
-        it = self._make_iterator()
-        it.sent_interaction_start = True
+    def test_response_created_emits_interaction_created(self):
+        it = self._make_iterator(use_legacy=False)
 
         chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added()
+            self._make_response_created()
         )
 
         assert chunk is not None
-        assert chunk.event_type == "content.start"
-        assert it.sent_content_start is True
+        assert chunk.event_type == "interaction.created"
+        assert chunk.id == "resp_123"
+        assert it.sent_interaction_start is True
 
-    def test_first_text_delta_not_dropped_when_part_added_seen(self):
-        """After ContentPartAddedEvent, the first text delta must yield content.delta
-        (not content.start), preserving the token text."""
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-        it._transform_responses_chunk_to_interactions_chunk(self._make_part_added())
+    def test_response_created_emits_interaction_start_legacy(self):
+        it = self._make_iterator(use_legacy=True)
 
         chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "content.delta"
-        assert chunk.delta is not None
-        assert chunk.delta.get("text") == "Hello"
-
-    def test_part_added_emits_interaction_start_fallback_when_not_sent(self):
-        """If ContentPartAddedEvent arrives before any ResponseCreatedEvent,
-        the iterator must emit interaction.start before content.start to honor
-        the documented event ordering contract."""
-        it = self._make_iterator()
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added(item_id="item_42")
+            self._make_response_created()
         )
 
         assert chunk is not None
         assert chunk.event_type == "interaction.start"
-        assert chunk.id == "item_42"
-        assert chunk.status == "in_progress"
-        assert chunk.model == "gpt-5.4"
+        assert chunk.id == "resp_123"
+
+    def test_text_delta_sequence_new_schema(self):
+        """First two OutputTextDeltaEvents emit created + step.start; third emits step.delta."""
+        it = self._make_iterator(use_legacy=False)
+
+        first = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+        assert first is not None
+        assert first.event_type == "interaction.created"
         assert it.sent_interaction_start is True
         assert it.sent_content_start is False
 
-    def test_part_added_returns_none_when_already_started(self):
-        """A second ContentPartAddedEvent (after content.start was already emitted)
-        should be a no-op so we don't re-emit content.start."""
-        it = self._make_iterator()
-        it.sent_interaction_start = True
-        it.sent_content_start = True
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_part_added()
+        second = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta(" World")
         )
+        assert second is not None
+        assert second.event_type == "step.start"
+        assert it.sent_content_start is True
 
-        assert chunk is None
+        third = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("!")
+        )
+        assert third is not None
+        assert third.event_type == "step.delta"
+        assert third.delta == {"type": "text", "text": "!"}
 
-    def test_part_added_without_item_id_falls_back_to_self_id(self):
-        """When ContentPartAddedEvent has no item_id and we emit the interaction.start
-        fallback, the id must default to an interaction_<id(self)> string."""
-        it = self._make_iterator()
-        event = MagicMock(spec=ContentPartAddedEvent)
+    def test_text_delta_sequence_legacy_schema(self):
+        """Legacy: interaction.start → content.start → content.delta."""
+        it = self._make_iterator(use_legacy=True)
+
+        first = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("Hello")
+        )
+        assert first is not None
+        assert first.event_type == "interaction.start"
+
+        second = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta(" World")
+        )
+        assert second is not None
+        assert second.event_type == "content.start"
+        assert second.delta == {"type": "text", "text": ""}
+
+        third = it._transform_responses_chunk_to_interactions_chunk(
+            self._make_text_delta("!")
+        )
+        assert third is not None
+        assert third.event_type == "content.delta"
+        assert third.delta == {"text": "!"}
+
+    def test_first_text_delta_without_item_id_uses_fallback_id(self):
+        it = self._make_iterator(use_legacy=False)
+        event = self._make_text_delta("Hi")
         event.item_id = None
 
         chunk = it._transform_responses_chunk_to_interactions_chunk(event)
 
         assert chunk is not None
-        assert chunk.event_type == "interaction.start"
+        assert chunk.event_type == "interaction.created"
         assert chunk.id == f"interaction_{id(it)}"
-
-    def test_first_text_delta_not_dropped_when_no_prior_start_events(self):
-        """When OutputTextDeltaEvent arrives before any ResponseCreatedEvent or
-        ContentPartAddedEvent, the iterator must emit interaction.start *and*
-        immediately follow with a content.start that carries this delta's text,
-        so the first token is never silently dropped from the stream."""
-        events = [
-            self._make_text_delta("Hello"),
-            self._make_text_delta(" World"),
-        ]
-        wrapper = MagicMock()
-        wrapper.__iter__ = lambda self: iter(events)
-        wrapper.__next__ = lambda self, _it=iter(events): next(_it)
-        it = LiteLLMResponsesInteractionsStreamingIterator(
-            model="gpt-5.4",
-            litellm_custom_stream_wrapper=wrapper,
-            request_input="hi",
-            optional_params={},
-        )
-
-        first = it._transform_responses_chunk_to_interactions_chunk(events[0])
-        assert first is not None
-        assert first.event_type == "interaction.start"
-        assert it.sent_interaction_start is True
-        assert it.sent_content_start is True
-        assert len(it._pending_events) == 1
-        pending = it._pending_events[0]
-        assert pending.event_type == "content.start"
-        assert pending.delta == {"type": "text", "text": "Hello"}
-
-        second = it._transform_responses_chunk_to_interactions_chunk(events[1])
-        assert second is not None
-        assert second.event_type == "content.delta"
-        assert second.delta == {"type": "text", "text": " World"}
 
 
 class TestInteractionOperationUrls:
