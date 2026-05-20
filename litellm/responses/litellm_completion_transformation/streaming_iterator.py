@@ -842,7 +842,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Default: message
-        self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+        chunk_id = getattr(chunk, "id", None)
+        self._cached_item_id = (
+            self._cached_item_id
+            or (chunk_id if isinstance(chunk_id, str) and chunk_id else None)
+            or f"msg_{uuid.uuid4()}"
+        )
         event = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=0,
@@ -1120,8 +1125,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
         if delta_content:
             if not self.sent_content_part_added_event:
+                chunk_id = getattr(chunk, "id", None)
                 self._cached_item_id = (
-                    self._cached_item_id or chunk.id or f"msg_{uuid.uuid4()}"
+                    self._cached_item_id
+                    or (chunk_id if isinstance(chunk_id, str) and chunk_id else None)
+                    or f"msg_{uuid.uuid4()}"
                 )
                 if not self._message_item_added_after_reasoning:
                     self._pending_response_events.append(
@@ -1132,7 +1140,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._pending_response_events.append(
                     self.create_content_part_added_event()
                 )
-            item_id = self._cached_item_id or chunk.id or f"msg_{uuid.uuid4()}"
+            chunk_id = getattr(chunk, "id", None)
+            item_id = (
+                self._cached_item_id
+                or (chunk_id if isinstance(chunk_id, str) and chunk_id else None)
+                or f"msg_{uuid.uuid4()}"
+            )
             self._sequence_number += 1
             text_delta_event = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
