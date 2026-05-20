@@ -72,7 +72,7 @@ def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
         scope["_original_path"] = route
 
     servers = _parse_mcp_server_names_from_path(scope.get("path", ""))
-    assert _is_mcp_passthrough_cold_start(scope, servers, client_ip=None) is True
+    assert _is_mcp_passthrough_cold_start(servers, client_ip=None) is True
 
     server_name = "sample_docs"
     base_url = "http://localhost:4000"
@@ -117,8 +117,7 @@ def test_is_mcp_passthrough_cold_start_false_for_oauth2_server():
     )
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
-    scope = _make_scope("/mcp/keycloak_whoami")
-    result = _is_mcp_passthrough_cold_start(scope, ["keycloak_whoami"], client_ip=None)
+    result = _is_mcp_passthrough_cold_start(["keycloak_whoami"], client_ip=None)
     assert result is False
 
 
@@ -128,16 +127,19 @@ def test_is_mcp_passthrough_cold_start_false_for_empty_servers():
         _is_mcp_passthrough_cold_start,
     )
 
-    scope = _make_scope("/mcp")
-    assert _is_mcp_passthrough_cold_start(scope, None, client_ip=None) is False
-    assert _is_mcp_passthrough_cold_start(scope, [], client_ip=None) is False
+    assert _is_mcp_passthrough_cold_start(None, client_ip=None) is False
+    assert _is_mcp_passthrough_cold_start([], client_ip=None) is False
 
 
 @pytest.mark.parametrize(
     "path,expected",
     [
         ("/mcp/sample_docs", ["sample_docs"]),
-        ("/mcp/sample_docs/tools/list", ["sample_docs"]),
+        # Server names may contain at most one slash (mirrors
+        # ``_extract_target_server_names_from_path``), so when more than two
+        # segments follow ``/mcp/`` the first two are treated as the name.
+        ("/mcp/sample_docs/tools/list", ["sample_docs/tools"]),
+        ("/mcp/custom_solutions/user_123", ["custom_solutions/user_123"]),
         ("/sample_docs/mcp", ["sample_docs"]),
         ("/sample_docs/mcp/tools/list", ["sample_docs"]),
         ("/mcp", None),

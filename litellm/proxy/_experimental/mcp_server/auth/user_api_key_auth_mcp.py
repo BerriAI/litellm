@@ -23,14 +23,29 @@ def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
 
     Multi-server CSV paths like ``/mcp/server1,server2`` also return ``None`` —
     the cold-start bypass must not activate when any of the co-targeted servers
-    might not be passthrough-eligible. The regex stops at ``/?#`` only; the
-    comma check is handled explicitly below."""
-    m = re.match(r"^/mcp/([^/?#]+)", path)
-    if m:
-        segment = m.group(1)
-        if "," in segment:
+    might not be passthrough-eligible.
+
+    Server names may contain a single slash (e.g. ``custom_solutions/user_123``),
+    so the ``/mcp/...`` form must mirror
+    :meth:`MCPRequestHandler._extract_target_server_names_from_path` rather than
+    stop at the first ``/``. Otherwise the cold-start lookup would miss
+    slashed-name servers and fall through to the generic admission error
+    instead of the spec-compliant 401 challenge."""
+    mcp_path_match = re.match(r"^/mcp/([^?#]+)", path)
+    if mcp_path_match:
+        servers_and_path = mcp_path_match.group(1)
+        if not servers_and_path:
             return None
-        return [segment]
+        if "," in servers_and_path:
+            return None
+        # Server name may contain at most one slash; strip any trailing
+        # path segments so the registry lookup uses the canonical name.
+        single_server_match = re.match(
+            r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+        )
+        if single_server_match:
+            return [single_server_match.group(1)]
+        return [servers_and_path]
     m = re.match(r"^/([^/,?#]+)/mcp", path)
     if m:
         return [m.group(1)]
@@ -38,7 +53,7 @@ def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
 
 
 def _is_mcp_passthrough_cold_start(
-    scope: Scope, mcp_servers: Optional[List[str]], client_ip: Optional[str]
+    mcp_servers: Optional[List[str]], client_ip: Optional[str]
 ) -> bool:
     """True only when EVERY targeted server is a pass-through server with no
     auth headers — the cold-start OAuth discovery case per RFC 9728 / MCP
@@ -272,7 +287,7 @@ class MCPRequestHandler:
                     )
                     and _is_litellm_auth_admission_error(exc)
                     and _is_mcp_passthrough_cold_start(
-                        scope, mcp_servers_from_path, client_ip=client_ip
+                        mcp_servers_from_path, client_ip=client_ip
                     )
                 ):
                     verbose_logger.debug(

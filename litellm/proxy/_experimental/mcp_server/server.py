@@ -3043,17 +3043,32 @@ if MCP_AVAILABLE:
         )
         request = StarletteRequest(scope)
         base_url = get_request_base_url(request)
+        _path = scope.get("_original_path") or scope.get("path", "") or ""
         for srv, (probe_status, _) in zip(passthrough_servers, probe_results):
             if probe_status == 401:
-                # Token is missing or expired — direct the client to re-authorize.
-                authorization_uri = (
-                    f"Bearer authorization_uri="
-                    f"{base_url}/.well-known/oauth-authorization-server/{srv.name}"
-                )
+                # Token is missing or expired — direct the client at the
+                # gateway's oauth-protected-resource well-known URL (which
+                # proxies the upstream IdP's metadata), matching the
+                # pre-emptive 401 path in
+                # _raise_preemptive_401_for_unauthenticated_servers. The
+                # gateway is not the authorization server for pass-through
+                # servers, so emitting ``authorization_uri=`` would point
+                # clients at the wrong AS metadata.
+                if _path.startswith(f"/{srv.name}/mcp"):
+                    resource_metadata_url = (
+                        f"{base_url}/.well-known/oauth-protected-resource/"
+                        f"{srv.name}/mcp"
+                    )
+                else:
+                    resource_metadata_url = (
+                        f"{base_url}/.well-known/oauth-protected-resource/mcp/"
+                        f"{srv.name}"
+                    )
+                www_authenticate = f'Bearer resource_metadata="{resource_metadata_url}"'
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",
-                    headers={"WWW-Authenticate": authorization_uri},
+                    headers={"WWW-Authenticate": www_authenticate},
                 )
             if probe_status == 403:
                 # Token is valid but the caller lacks permission — do not hint
