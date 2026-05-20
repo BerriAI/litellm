@@ -1893,17 +1893,17 @@ def ocr_cost(
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
+    ocr_cost_per_page: Optional[float] = None
+    if model_info is not None:
+        ocr_cost_per_page = model_info.get("ocr_cost_per_page")
+
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
-        if custom_llm_provider == "reducto" or model.startswith("reducto/"):
+        if cost_per_credit is not None or ocr_cost_per_page is None:
             return 0.0, 0.0
         raise ValueError("OCR response pages_processed is None")
 
-    ocr_cost_per_page: float = 0.0
-    if model_info is not None:
-        ocr_cost_per_page = model_info.get("ocr_cost_per_page") or 0.0
-
-    total_ocr_processing_cost: float = ocr_cost_per_page * pages_processed
+    total_ocr_processing_cost: float = (ocr_cost_per_page or 0.0) * pages_processed
     return total_ocr_processing_cost, 0.0
 
 

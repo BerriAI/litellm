@@ -253,9 +253,17 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return messages
 
     def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
-        candidate_keys = [model]
-        if not model.startswith("fireworks_ai/"):
-            candidate_keys.append(f"fireworks_ai/{model}")
+        short_name = model
+        if short_name.startswith("fireworks_ai/"):
+            short_name = short_name[len("fireworks_ai/") :]
+        if short_name.startswith("accounts/fireworks/models/"):
+            short_name = short_name[len("accounts/fireworks/models/") :]
+
+        candidate_keys = [
+            model,
+            f"fireworks_ai/{short_name}",
+            f"fireworks_ai/accounts/fireworks/models/{short_name}",
+        ]
 
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
