@@ -1064,7 +1064,11 @@ class JWTHandler:
                     issuer=decode_kwargs["issuer"],
                     options=decode_kwargs["options"],
                 )
-                return payload
+                return {
+                    k: v
+                    for k, v in payload.items()
+                    if k not in self.LITELLM_INTERNAL_CLAIMS
+                }
 
             except jwt.ExpiredSignatureError:
                 # the token is expired, do something to refresh it
