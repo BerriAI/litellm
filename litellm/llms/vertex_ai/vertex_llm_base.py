@@ -58,7 +58,10 @@ class VertexBase:
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
         self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.
-        self._sync_refresh_lock = threading.Lock()
+        # Use RLock so that the reauthentication retry path (which calls
+        # back into get_access_token while still holding the lock) can
+        # re-acquire it without deadlocking the current thread.
+        self._sync_refresh_lock = threading.RLock()
 
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
         import litellm

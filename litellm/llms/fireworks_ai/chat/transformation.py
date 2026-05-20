@@ -270,6 +270,23 @@ class FireworksAIConfig(OpenAIGPTConfig):
             if model_info is not None and model_info.get(capability) is not None:
                 return cast(Optional[bool], model_info.get(capability))
 
+        # Fallback: preserve historical substring matching for model name
+        # variants (e.g. fine-tuned or regionally-suffixed versions of a
+        # known model). Look for any fireworks_ai entry whose normalized
+        # short name is a substring of our normalized short name.
+        for key, model_info in litellm.model_cost.items():
+            if not key.startswith("fireworks_ai/"):
+                continue
+            if not isinstance(model_info, dict):
+                continue
+            if model_info.get(capability) is None:
+                continue
+            key_short = key[len("fireworks_ai/") :]
+            if key_short.startswith("accounts/fireworks/models/"):
+                key_short = key_short[len("accounts/fireworks/models/") :]
+            if key_short and key_short in short_name:
+                return cast(Optional[bool], model_info.get(capability))
+
         return None
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
