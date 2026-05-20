@@ -515,7 +515,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         returned_tool_calls = message.get("tool_calls") or []
         blocking_explanation = message.get("content", "")
 
-        allowed_ids = {tc["id"] for tc in returned_tool_calls if tc.get("id")}
+        allowed_ids = {
+            tc["id"] for tc in returned_tool_calls if tc.get("id") is not None
+        }
         allowed_count = sum(1 for tc in all_tool_calls if tc.id in allowed_ids)
 
         if allowed_count == len(all_tool_calls):

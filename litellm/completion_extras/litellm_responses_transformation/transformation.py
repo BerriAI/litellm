@@ -675,6 +675,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     output_items=recovered_output_items,
                     text_only_items=recovered_text_only_items,
                 )
+                continue
 
         # Merge text-only items into the recovered output items. Real
         # OUTPUT_ITEM_DONE events take precedence at any given output_index,

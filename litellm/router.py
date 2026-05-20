@@ -7342,7 +7342,7 @@ class Router:
                         _model_name,
                         _deployment_mode,
                     )
-                _shared_model_info["mode"] = _existing_shared_mode
+                    _shared_model_info["mode"] = _existing_shared_mode
             _backend_alias_cost = {_model_name: _shared_model_info}
             if "responses/" in _model_name:
                 _stripped_model_name = _model_name.replace("responses/", "")
