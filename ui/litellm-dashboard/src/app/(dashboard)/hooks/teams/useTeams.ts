@@ -4,12 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 
 export interface TeamsResponse {
   teams: Team[];
@@ -23,7 +18,6 @@ export interface DeletedTeam extends Team {
   deleted_at: string;
   deleted_by: string;
 }
-
 
 export interface TeamListCallOptions {
   organizationID?: string | null;
@@ -47,7 +41,7 @@ export const teamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
@@ -128,11 +122,7 @@ export const useTeam = (teamId?: string) => {
 
 const infiniteTeamKeys = createQueryKeys("infiniteTeams");
 
-export const useInfiniteTeams = (
-  pageSize: number = 50,
-  search?: string,
-  organizationId?: string | null,
-) => {
+export const useInfiniteTeams = (pageSize: number = 50, search?: string, organizationId?: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
 
@@ -146,8 +136,11 @@ export const useInfiniteTeams = (
       },
     }),
     queryFn: async ({ pageParam }) => {
+      // Use the backend `search` param so admins can find a team by either
+      // alias substring OR exact team_id (UUID). Budget overage logs display
+      // team_id, so pasting a UUID into the dropdown must resolve to a team.
       return await teamListCall(accessToken!, pageParam as number, pageSize, {
-        team_alias: search || undefined,
+        search: search || undefined,
         organizationID: organizationId,
         userID: !isAdmin ? userId : undefined,
       });
@@ -174,7 +167,7 @@ const deletedTeamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
@@ -211,10 +204,10 @@ const deletedTeamListCall = async (
 
     const data = await response.json();
     console.log("/team/list?status=deleted API Response:", data);
-    
+
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array
-    if (data && typeof data === 'object' && 'teams' in data) {
+    if (data && typeof data === "object" && "teams" in data) {
       return data.teams as DeletedTeam[];
     }
     return data as DeletedTeam[];
