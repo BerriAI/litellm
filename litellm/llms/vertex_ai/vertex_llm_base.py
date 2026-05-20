@@ -500,6 +500,27 @@ class VertexBase:
                 exc_info=True,
             )
 
+    async def _await_in_flight_background_refresh(
+        self, credential_cache_key: tuple
+    ) -> None:
+        """Wait for an in-flight background refresh to finish, if any.
+
+        google-auth's ``Credentials.refresh()`` is not safe to invoke
+        concurrently on the same credentials object. Coroutines that need a
+        blocking refresh must first drain any background refresh that was
+        scheduled while a previous STALE token was being served.
+        """
+        existing_task = self._background_refresh_tasks.get(credential_cache_key)
+        if existing_task is None or existing_task.done():
+            return
+        try:
+            await existing_task
+        except Exception:
+            # Background refresh failures are already logged inside
+            # _background_refresh_credentials; the caller will fall through
+            # to its own blocking refresh.
+            pass
+
     def _schedule_background_refresh(
         self,
         credentials: Any,
@@ -1021,6 +1042,20 @@ class VertexBase:
                         return current_token, resolved_project
 
                 if token_state == TokenState.INVALID:
+                    # Drain any in-flight background refresh before invoking
+                    # refresh_auth ourselves; google-auth's
+                    # Credentials.refresh() is not safe to call concurrently
+                    # on the same credentials object, and the background task
+                    # runs outside this lock.
+                    await self._await_in_flight_background_refresh(
+                        credential_cache_key
+                    )
+                    cached = self._try_get_cached_token(
+                        credential_cache_key, project_id
+                    )
+                    if cached is not None:
+                        return cached
+
                     # Token is expired or missing — must block until refresh completes.
                     try:
                         verbose_logger.debug("Credentials expired, refreshing")

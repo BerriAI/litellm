@@ -7331,6 +7331,17 @@ class Router:
                 # Multiple aliases can point at the same provider/model backend,
                 # but their deployment-level overrides should not downgrade the
                 # backend from responses -> chat via last-write-wins registration.
+                _deployment_mode = _shared_model_info.get("mode")
+                if _deployment_mode is not None:
+                    verbose_router_logger.warning(
+                        "Router: preserving existing mode=%s for shared backend "
+                        "key %s instead of the deployment-specified mode=%s "
+                        "(prevents alias registration from downgrading the "
+                        "shared backend mode).",
+                        _existing_shared_mode,
+                        _model_name,
+                        _deployment_mode,
+                    )
                 _shared_model_info["mode"] = _existing_shared_mode
             _backend_alias_cost = {_model_name: _shared_model_info}
             if "responses/" in _model_name:
