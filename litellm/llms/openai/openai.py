@@ -267,10 +267,62 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
+        tools = self._normalize_flat_function_tools(optional_params.get("tools"))
+        if tools is not None:
+            optional_params = {**optional_params, "tools": tools}
         messages = self._maybe_inject_json_hint_for_glm(
             model=model, messages=messages, optional_params=optional_params
         )
         return {"model": model, "messages": messages, **optional_params}
+
+    def _normalize_flat_function_tools(self, tools: Optional[list]) -> Optional[list]:
+        """
+        Normalize Responses/Codex flat function tools to OpenAI chat.completions shape.
+        """
+        if tools is None:
+            return None
+
+        normalized_tools = []
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("type") != "function":
+                normalized_tools.append(tool)
+                continue
+
+            existing_function = tool.get("function")
+            if isinstance(existing_function, dict):
+                normalized_tools.append(tool)
+                continue
+
+            name = tool.get("name")
+            if name is None:
+                normalized_tools.append(tool)
+                continue
+
+            parameters = tool.get("parameters")
+            if not isinstance(parameters, dict):
+                parameters = {"type": "object"}
+            elif "type" not in parameters:
+                parameters = {**parameters, "type": "object"}
+
+            function_payload = {
+                "name": name,
+                "description": tool.get("description") or "",
+                "parameters": parameters,
+                "strict": bool(tool.get("strict", False)),
+            }
+            normalized_tools.append(
+                {
+                    **{
+                        key: value
+                        for key, value in tool.items()
+                        if key not in {"name", "description", "parameters", "strict"}
+                    },
+                    "type": "function",
+                    "function": function_payload,
+                }
+            )
+
+        return normalized_tools
 
     @staticmethod
     def _response_format_is_json_object(optional_params: dict) -> bool:

@@ -148,6 +148,37 @@ def test_response_api_handler_drops_client_metadata():
         assert "client_metadata" not in mock_completion.call_args.kwargs
 
 
+def test_responses_to_chat_drops_unsupported_builtin_tools():
+    tools, web_search_options = (
+        LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [
+                {
+                    "type": "function",
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+                {"type": "shell", "environment": {"type": "local"}},
+                {
+                    "type": "computer_use_preview",
+                    "display_width": 1024,
+                    "display_height": 768,
+                    "environment": "mac",
+                },
+            ]
+        )
+    )
+
+    assert web_search_options is None
+    assert len(tools) == 1
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["name"] == "read_file"
+    assert tools[0]["function"]["parameters"]["type"] == "object"
+
+
 @pytest.mark.asyncio
 async def test_async_response_api_handler_merges_trace_id_without_error():
     handler = LiteLLMCompletionTransformationHandler()

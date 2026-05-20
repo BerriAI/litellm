@@ -1413,9 +1413,10 @@ class LiteLLMCompletionResponsesConfig:
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
-                chat_completion_tools.append(
-                    cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
-                )
+                # Responses built-in tools (e.g. shell/computer_use_preview) are not
+                # valid Chat Completions tools. Dropping them prevents OpenAI-compatible
+                # providers from rejecting the whole request while preserving function tools.
+                continue
         return chat_completion_tools, web_search_options
 
     @staticmethod
