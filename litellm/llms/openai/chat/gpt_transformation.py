@@ -516,7 +516,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _messages_contain_json_keyword(messages: List[AllMessageValues]) -> bool:
         return messages_contain_json_keyword(messages)
 
-    def _maybe_inject_json_hint_for_glm(
+    def _maybe_inject_json_keyword_hint(
         self,
         model: str,
         messages: List[AllMessageValues],
