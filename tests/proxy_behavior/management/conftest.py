@@ -34,16 +34,25 @@ def _write_minimal_proxy_config() -> str:
 
 @pytest_asyncio.fixture(scope="session")
 async def proxy_app():
+    """Boot the proxy app once per session with the real FastAPI lifespan.
+
+    httpx 0.28's ASGITransport does not run the lifespan handler, so we enter
+    ``proxy_startup_event`` (the @asynccontextmanager registered as the app's
+    lifespan) directly. That handler is where ``prisma_client`` is connected
+    and the rest of the startup wiring runs.
+    """
     from litellm.proxy.proxy_server import (
         app,
         cleanup_router_config_variables,
         initialize,
+        proxy_startup_event,
     )
 
     cleanup_router_config_variables()
     config_path = _write_minimal_proxy_config()
     await initialize(config=config_path)
-    yield app
+    async with proxy_startup_event(app):
+        yield app
 
 
 @pytest_asyncio.fixture(scope="session")
