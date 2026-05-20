@@ -287,6 +287,11 @@ paths_to_mutate = [
 ]
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
+    # PR1 (key Tier-1) behavior-pinning suite — see
+    # tests/proxy_behavior/management/regression_replay/README.md for the
+    # G4 evidence and tests/proxy_behavior/management/mutmut_triage/pr1.md
+    # for the G5 survivor-classification protocol.
+    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
