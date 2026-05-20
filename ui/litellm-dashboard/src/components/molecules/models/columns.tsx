@@ -435,8 +435,9 @@ export const columns = (
                   e.stopPropagation();
                 }}
                 onChange={(nextChecked) => {
-                  if (isPauseToggleable && onTogglePauseClick) {
-                    void onTogglePauseClick(model.model_info.id, !nextChecked);
+                  const modelId = model.model_info?.id;
+                  if (isPauseToggleable && onTogglePauseClick && modelId) {
+                    void onTogglePauseClick(modelId, !nextChecked);
                   }
                 }}
               />
