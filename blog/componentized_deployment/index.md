@@ -1,10 +1,10 @@
 ---
 slug: componentized-deployment
-title: "One Slow Dashboard Query Shouldn't Take Down Your LLM Traffic"
+title: "Announcing Componentized Deployments"
 date: 2026-05-18T09:00:00
 authors:
   - yassin
-description: "How LiteLLM's componentized deployment isolates the management/UI control plane from the LLM data plane — so a single expensive analytics query can't fail health checks and recycle the pods serving inference."
+description: "How LiteLLM's componentized deployment isolates the management/UI control plane from the LLM data plane, improving reliability at scale."
 tags: [performance, reliability, kubernetes, scaling, ai-gateway]
 hide_table_of_contents: true
 ---
@@ -13,7 +13,7 @@ hide_table_of_contents: true
 
 The LiteLLM proxy container does 2 very different things. It's an **LLM data plane**, `/chat/completions`, `/v1/messages`, embeddings, passthroughs, where latency is measured in single-digit milliseconds of overhead and traffic is high-volume and bursty. It's also a **management control plane** — keys, teams, SSO, audit logs, and the spend/usage analytics that power the dashboard, where a single request can scan millions of rows.
 
-Run both on the same event loop, and the slowest thing the control plane does sets the reliability floor for the fastest thing the data plane does. This post is about why that coupling can cause outages, and the componentized deployment model that can help improve reliability at scale.
+Run both on the same event loop, and the slowest thing the control plane does sets the reliability floor for the fastest thing the data plane does. This post is about how we've improved LiteLLM's reliability at scale by offering a componentized deployment model.
 
 {/* truncate */}
 
