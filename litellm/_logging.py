@@ -454,6 +454,7 @@ _REDACTED = "[REDACTED]"
 
 def _scrub_secrets(text: str) -> str:
     """Replace secret values in log text with [REDACTED]."""
+    text = _redact_string(text)
     return _SECRET_KEY_RE.sub(lambda m: m.group(1) + m.group(2) + _REDACTED, text)
 
 

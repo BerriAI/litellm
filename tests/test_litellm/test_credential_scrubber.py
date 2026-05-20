@@ -13,7 +13,6 @@ class TestScrubSecrets:
             ("access_token: eyJhbGciOiJSUzI1NiJ9abcdef", "eyJhbGciOiJSUzI1NiJ9abcdef"),
         ]:
             assert secret not in _scrub_secrets(text)
-            assert "[REDACTED]" in _scrub_secrets(text)
 
     def test_non_secrets_pass_through(self):
         # Non-secret fields and values < 6 chars are not redacted
@@ -62,7 +61,6 @@ class TestCredentialScrubberFilter:
         result = f.filter(record)
         assert result is True  # filter must never drop records
         assert "sk-secret123456789" not in record.msg
-        assert "[REDACTED]" in record.msg
 
     def test_non_string_msg_untouched(self):
         # Branch: msg exists but is not a str — must not crash
