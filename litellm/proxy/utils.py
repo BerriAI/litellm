@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -5212,6 +5213,18 @@ class ProxyUpdateSpend:
                 "Spend tracking - processing %d spend logs for DB write",
                 len(logs_to_process),
             )
+            # Stamp unique request_id suffixes ONCE, before the retry loop.
+            # Upstream providers may reuse short request IDs (e.g. chatcmpl-424).
+            # Since request_id is the primary key, duplicates are silently dropped
+            # by skip_duplicates=True. Appending a UUID suffix preserves every log.
+            # This MUST happen outside the retry loop so that retries reuse the
+            # same stable IDs and skip_duplicates=True works correctly on retry.
+            for entry in logs_to_process:
+                original_id = entry.get("request_id", "")
+                if original_id:
+                    entry["request_id"] = f"{original_id}-{uuid.uuid4().hex[:8]}"
+                else:
+                    entry["request_id"] = str(uuid.uuid4())
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -5242,6 +5255,7 @@ class ProxyUpdateSpend:
                                 prisma_client.jsonify_object({**entry})
                                 for entry in batch
                             ]
+
                             await prisma_client.db.litellm_spendlogs.create_many(
                                 data=batch_with_dates, skip_duplicates=True
                             )
