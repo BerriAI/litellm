@@ -1,13 +1,4 @@
-"""Immutable read-world seed for behavior-pinning tests.
-
-Seeds 8 actor profiles across 2 orgs / 2 teams so authz matrix tests can drive
-``(actor, target, expected)`` tuples against the real proxy. Each actor has
-exactly one virtual key (cleartext + hashed) so tests pass the cleartext as a
-``Bearer`` token and the real auth stack accepts it.
-
-All seeded rows are namespaced under the ``behavior-pin-`` prefix on their
-primary key, so the seed is identifiable in psql and the wipe step is targeted.
-"""
+"""8-actor read-world seed for the authz matrix tests."""
 
 import enum
 import uuid
@@ -31,7 +22,6 @@ class Actor(str, enum.Enum):
     SERVICE_ACCOUNT = "service_account"
 
 
-# Stable IDs so re-seed is idempotent and the world is identifiable in psql.
 PREFIX = "behavior-pin-"
 ORG_A = PREFIX + "org-a"
 ORG_B = PREFIX + "org-b"
@@ -61,19 +51,6 @@ def _new_clear_key() -> str:
 
 
 def _actor_profile() -> Dict[Actor, Dict[str, Any]]:
-    """Per-actor (role, scoping) profile used for both the user row and its key.
-
-    Scoping rules:
-    - PROXY_ADMIN: global, no team/org scope on its key.
-    - ORG_ADMIN: org_a, no team scope.
-    - TEAM_ADMIN / INTERNAL_USER / OWNER / UNRELATED_SAME_ORG / SERVICE_ACCOUNT:
-      team_alpha within org_a.
-    - CROSS_ORG_USER: team_beta within org_b.
-
-    The auth layer reads ``user_role`` off the user row pointed at by the key's
-    ``user_id``, so setting it once on the user is enough — keys do not need a
-    separate role field.
-    """
     return {
         Actor.PROXY_ADMIN: {
             "user_role": LitellmUserRoles.PROXY_ADMIN.value,
@@ -119,7 +96,6 @@ def _actor_profile() -> Dict[Actor, Dict[str, Any]]:
 
 
 async def _wipe_world(prisma: PrismaClient) -> None:
-    """Delete prior seed rows so re-seed is idempotent across sessions."""
     await prisma.db.litellm_verificationtoken.delete_many(
         where={"user_id": {"startswith": PREFIX}}
     )
@@ -144,7 +120,6 @@ async def _wipe_world(prisma: PrismaClient) -> None:
 async def seed_world(prisma: PrismaClient) -> World:
     await _wipe_world(prisma)
 
-    # Budget — orgs require a non-null budget_id.
     await prisma.db.litellm_budgettable.create(
         data={
             "budget_id": BUDGET_ID,
@@ -153,7 +128,6 @@ async def seed_world(prisma: PrismaClient) -> World:
         }
     )
 
-    # Orgs.
     for org_id, alias in [(ORG_A, "alpha"), (ORG_B, "beta")]:
         await prisma.db.litellm_organizationtable.create(
             data={
@@ -168,7 +142,6 @@ async def seed_world(prisma: PrismaClient) -> World:
     profiles = _actor_profile()
     user_ids: Dict[Actor, str] = {actor: PREFIX + actor.value for actor in Actor}
 
-    # Users.
     for actor, profile in profiles.items():
         teams_list = [profile["team_id"]] if profile["team_id"] else []
         await prisma.db.litellm_usertable.create(
@@ -181,12 +154,9 @@ async def seed_world(prisma: PrismaClient) -> World:
             }
         )
 
-    # Teams.
-    # NOTE: _get_user_in_team in key_management_endpoints.py checks
-    # ``members_with_roles`` (a JSON array of {user_id, role}), NOT the plain
-    # ``members`` String[] column — so the JSON list is what the team-key authz
-    # gate inspects. Populate both to match what the real /team/new handler
-    # would produce.
+    # _get_user_in_team in key_management_endpoints.py walks members_with_roles
+    # (a JSON list of {user_id, role}), not the String[] members column —
+    # populate both to match what /team/new produces.
     await prisma.db.litellm_teamtable.create(
         data={
             "team_id": TEAM_ALPHA,
@@ -226,7 +196,6 @@ async def seed_world(prisma: PrismaClient) -> World:
         }
     )
 
-    # Org memberships (UI lookups + ORG_ADMIN scoping use these).
     for actor, org_id, role in [
         (Actor.ORG_ADMIN, ORG_A, "org_admin"),
         (Actor.TEAM_ADMIN, ORG_A, "internal_user"),
@@ -244,7 +213,6 @@ async def seed_world(prisma: PrismaClient) -> World:
             }
         )
 
-    # Team memberships.
     for actor, team_id in [
         (Actor.TEAM_ADMIN, TEAM_ALPHA),
         (Actor.INTERNAL_USER, TEAM_ALPHA),
@@ -257,8 +225,6 @@ async def seed_world(prisma: PrismaClient) -> World:
             data={"user_id": user_ids[actor], "team_id": team_id}
         )
 
-    # Verification tokens — one cleartext per actor, hashed via the real
-    # credential boundary so user_api_key_auth accepts it.
     keys: Dict[Actor, SeededKey] = {}
     for actor, profile in profiles.items():
         cleartext = _new_clear_key()
@@ -267,8 +233,8 @@ async def seed_world(prisma: PrismaClient) -> World:
             "token": hashed,
             "key_name": PREFIX + actor.value + "-key",
             "user_id": user_ids[actor],
-            # LiteLLM_VerificationTokenView is non-Optional on models — Postgres lets the
-            # column be NULL, but the pydantic view used by user_api_key_auth rejects None.
+            # LiteLLM_VerificationTokenView's models field rejects NULL even
+            # though the column is nullable in Postgres.
             "models": [],
         }
         if profile["team_id"]:
@@ -276,7 +242,6 @@ async def seed_world(prisma: PrismaClient) -> World:
         if profile["organization_id"]:
             token_data["organization_id"] = profile["organization_id"]
         if actor == Actor.SERVICE_ACCOUNT:
-            # LiteLLM convention: service-account keys carry an explicit metadata flag.
             token_data["metadata"] = Json({"service_account_id": user_ids[actor]})
         await prisma.db.litellm_verificationtoken.create(data=token_data)
         keys[actor] = SeededKey(
