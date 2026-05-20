@@ -252,6 +252,55 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         return messages
 
+    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
+    # this index requires a full scan of model_cost (tens of thousands of
+    # entries), so we memoize it and invalidate when the dict identity or size
+    # changes. The cached value is a list of (key_short, model_info) tuples
+    # restricted to fireworks_ai/* entries.
+    _fireworks_index_cache: Optional[Tuple[int, int, List[Tuple[str, dict]]]] = None
+
+    @classmethod
+    def _get_fireworks_index(cls) -> List[Tuple[str, dict]]:
+        model_cost = litellm.model_cost
+        signature = (id(model_cost), len(model_cost))
+        cached = cls._fireworks_index_cache
+        if (
+            cached is not None
+            and cached[0] == signature[0]
+            and cached[1] == signature[1]
+        ):
+            return cached[2]
+
+        index: List[Tuple[str, dict]] = []
+        for key, model_info in model_cost.items():
+            if not key.startswith("fireworks_ai/"):
+                continue
+            if not isinstance(model_info, dict):
+                continue
+            key_short = key[len("fireworks_ai/") :]
+            if key_short.startswith("accounts/fireworks/models/"):
+                key_short = key_short[len("accounts/fireworks/models/") :]
+            if not key_short:
+                continue
+            index.append((key_short, model_info))
+
+        cls._fireworks_index_cache = (signature[0], signature[1], index)
+        return index
+
+    @staticmethod
+    def _matches_on_hyphen_boundary(short_name: str, key_short: str) -> bool:
+        """Return True if `key_short` appears in `short_name` aligned to
+        hyphen-separated word boundaries (or end-of-string). This avoids
+        spurious substring matches like `"some-model"` matching
+        `"awesome-model"`."""
+        if short_name == key_short:
+            return True
+        if short_name.startswith(key_short + "-"):
+            return True
+        if short_name.endswith("-" + key_short):
+            return True
+        return ("-" + key_short + "-") in short_name
+
     def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
         short_name = model
         if short_name.startswith("fireworks_ai/"):
@@ -275,19 +324,14 @@ class FireworksAIConfig(OpenAIGPTConfig):
         # known model). Pick the *longest* matching entry so a more specific
         # known model (e.g. "qwen3-8b-instruct") wins over a less specific
         # one (e.g. "qwen3-8b") when the query model is more specific still.
+        # Use hyphen-aligned matching to avoid false positives where a short
+        # known model name is an unrelated substring of a longer one.
         best_match_short: Optional[str] = None
         best_match_value: Optional[bool] = None
-        for key, model_info in litellm.model_cost.items():
-            if not key.startswith("fireworks_ai/"):
-                continue
-            if not isinstance(model_info, dict):
-                continue
+        for key_short, model_info in self._get_fireworks_index():
             if model_info.get(capability) is None:
                 continue
-            key_short = key[len("fireworks_ai/") :]
-            if key_short.startswith("accounts/fireworks/models/"):
-                key_short = key_short[len("accounts/fireworks/models/") :]
-            if not key_short or key_short not in short_name:
+            if not self._matches_on_hyphen_boundary(short_name, key_short):
                 continue
             if best_match_short is None or len(key_short) > len(best_match_short):
                 best_match_short = key_short
