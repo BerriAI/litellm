@@ -2895,7 +2895,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 if (
                     thinking_blocks is not None and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                    assistant_content.extend(thinking_blocks)
+                    assistant_content.extend(
+                        b
+                        for b in thinking_blocks
+                        if not (
+                            isinstance(b, dict)
+                            and b.get("type") == "redacted_thinking"
+                            and (
+                                not isinstance(b.get("data"), str)
+                                or not str(b.get("data")).strip()
+                            )
+                        )
+                    )
                 if _content_is_list and _content_list is not None:
                     for m in _content_list:
                         if not isinstance(m, dict):
@@ -2911,6 +2922,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                                 AnthropicMessagesTextParam,
                             ] = cast(ChatCompletionThinkingBlock, m)
                             assistant_content.append(anthropic_message)
+                        elif m.get("type", "") == "redacted_thinking":
+                            data = m.get("data")
+                            if isinstance(data, str) and data.strip():
+                                assistant_content.append(m)  # type: ignore
                         # handle text
                         elif (
                             m.get("type", "") == "text" and len(text_block) > 0

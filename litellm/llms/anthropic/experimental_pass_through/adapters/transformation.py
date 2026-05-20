@@ -624,6 +624,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 )
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
+                                data = content.get("data")
+                                if not isinstance(data, str) or not data.strip():
+                                    continue
                                 redacted_thinking_block = (
                                     ChatCompletionRedactedThinkingBlock(
                                         type="redacted_thinking",

@@ -1310,6 +1310,30 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_text_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
 
+    def test_strip_empty_text_blocks_drops_invalid_redacted_thinking(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        valid_data = "abc123valid"
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": valid_data},
+                    {"type": "redacted_thinking", "data": ""},
+                    {"type": "redacted_thinking"},
+                    {"type": "text", "text": "answer"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == [
+            "redacted_thinking",
+            "text",
+        ]
+        assert out[0]["content"][0]["data"] == valid_data
+
     def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_text_blocks_from_anthropic_messages,

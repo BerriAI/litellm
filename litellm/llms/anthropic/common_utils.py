@@ -849,6 +849,9 @@ def strip_empty_text_blocks_from_anthropic_messages(
     handles this in ``anthropic_messages_pt``; this helper provides the
     equivalent guarantee for the native Anthropic Messages path.
 
+    Also drops ``redacted_thinking`` blocks with missing/empty ``data``, which
+    some Anthropic-compatible providers reject (``Invalid data in redacted_thinking``).
+
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
     The caller's list and its content blocks are never mutated; modified
@@ -860,7 +863,12 @@ def strip_empty_text_blocks_from_anthropic_messages(
             out.append(m)
             continue
         content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b)]
+        filtered = [
+            b
+            for b in content
+            if not _is_empty_text_block(b)
+            and not _is_invalid_redacted_thinking_block(b)
+        ]
         if len(filtered) == len(content):
             out.append(m)
         elif filtered:
@@ -873,6 +881,17 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def _is_invalid_redacted_thinking_block(block: Any) -> bool:
+    """
+    Anthropic-compatible providers reject redacted_thinking blocks with missing,
+    empty, or non-string ``data`` (e.g. Sophnet 400 on multi-turn Claude Code).
+    """
+    if not isinstance(block, dict) or block.get("type") != "redacted_thinking":
+        return False
+    data = block.get("data")
+    return not isinstance(data, str) or not data.strip()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
