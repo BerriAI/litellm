@@ -9,6 +9,8 @@ caller automatically applies to all of them.
 
 from typing import Any, Dict
 
+_MAX_CONTENT_INDEX = 1024
+
 
 def record_output_item_chunk(
     parsed_chunk: Dict[str, Any],
@@ -76,6 +78,9 @@ def record_output_text_chunk(
         content_index = int(content_index_raw)
     except (TypeError, ValueError):
         content_index = len(content)
+
+    if content_index < 0 or content_index > _MAX_CONTENT_INDEX:
+        return
 
     while len(content) <= content_index:
         content.append(

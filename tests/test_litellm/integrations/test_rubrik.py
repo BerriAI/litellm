@@ -864,6 +864,33 @@ class TestExtractBlockedTools:
         assert result is not None
         assert "blocked everything" in result
 
+    def test_duplicate_ids_block_when_only_one_returned(self):
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tc1 = ChatCompletionMessageToolCall(
+            id="call_dup",
+            type="function",
+            function=Function(name="fn", arguments="{}"),
+        )
+        tc2 = ChatCompletionMessageToolCall(
+            id="call_dup",
+            type="function",
+            function=Function(name="fn", arguments="{}"),
+        )
+        service_resp = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [{"id": "call_dup"}],
+                        "content": "blocked duplicate",
+                    }
+                }
+            ]
+        }
+        result = RubrikLogger._extract_blocked_tools(service_resp, [tc1, tc2])
+        assert result is not None
+        assert "blocked duplicate" in result
+
 
 # -- Sanitize proxy server request -------------------------------------------
 
