@@ -269,7 +269,7 @@ class TestStreamingIterator:
         assert chunk.delta == {"type": "text", "text": "Hello"}
 
     def test_content_delta_legacy_schema(self):
-        """Legacy schema emits content.delta with text-only delta payload."""
+        """Legacy schema emits content.delta with type and text fields."""
         it = self._make_iterator(use_legacy=True)
         it.sent_interaction_start = True
         it.sent_content_start = True
@@ -280,7 +280,7 @@ class TestStreamingIterator:
 
         assert chunk is not None
         assert chunk.event_type == "content.delta"
-        assert chunk.delta == {"text": "Hello"}
+        assert chunk.delta == {"type": "text", "text": "Hello"}
 
     def test_response_created_emits_interaction_created(self):
         it = self._make_iterator(use_legacy=False)
@@ -353,7 +353,7 @@ class TestStreamingIterator:
         )
         assert third is not None
         assert third.event_type == "content.delta"
-        assert third.delta == {"text": "!"}
+        assert third.delta == {"type": "text", "text": "!"}
 
     def test_first_text_delta_without_item_id_uses_fallback_id(self):
         it = self._make_iterator(use_legacy=False)
@@ -481,6 +481,32 @@ class TestTransformRequestSchemaCoalescing:
         rf = body["response_format"]
         assert rf["type"] == "image"
         assert rf["aspect_ratio"] == "1:1"
+
+    def test_response_mime_type_skipped_when_response_format_is_list(self, config):
+        """Lists are already polymorphic; do not wrap them into schema."""
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            rf_list = [
+                {"type": "text", "mime_type": "application/json"},
+                {"type": "image", "aspect_ratio": "1:1"},
+            ]
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="multimodal",
+                optional_params={
+                    "response_format": rf_list,
+                    "response_mime_type": "application/json",
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        assert body["response_format"] == rf_list
+        assert "response_mime_type" not in body
 
     def test_image_config_appended_to_response_format_list_without_mutating_input(
         self, config

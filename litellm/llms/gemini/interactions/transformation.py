@@ -186,7 +186,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             response_format = optional_params.get("response_format")
             response_mime_type = optional_params.get("response_mime_type")
 
-            if response_mime_type and (
+            if response_mime_type and not isinstance(response_format, list) and (
                 not isinstance(response_format, dict)
                 or "mime_type" not in response_format
             ):

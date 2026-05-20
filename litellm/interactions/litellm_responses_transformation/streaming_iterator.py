@@ -133,7 +133,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     event_type="content.delta",
                     id=item_id,
                     object="content",
-                    delta={"text": delta_text},
+                    delta={"type": "text", "text": delta_text},
                 )
             else:
                 return InteractionsAPIStreamingResponse(
