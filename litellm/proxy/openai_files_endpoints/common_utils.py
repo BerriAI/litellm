@@ -772,13 +772,13 @@ async def ensure_batch_response_managed_file_ids(
         if not raw_file_id or _is_base64_encoded_unified_file_id(raw_file_id):
             continue
         try:
-            unified_file_id = managed_files_obj.get_unified_output_file_id(
+            new_unified_file_id = managed_files_obj.get_unified_output_file_id(
                 output_file_id=raw_file_id,
                 model_id=model_id,
                 model_name=model_name,
             )
             await managed_files_obj.store_unified_file_id(
-                file_id=unified_file_id,
+                file_id=new_unified_file_id,
                 file_object=None,
                 litellm_parent_otel_span=getattr(
                     user_api_key_dict, "parent_otel_span", None
@@ -786,7 +786,7 @@ async def ensure_batch_response_managed_file_ids(
                 model_mappings={model_id: raw_file_id},
                 user_api_key_dict=user_api_key_dict,
             )
-            setattr(response, file_attr, unified_file_id)
+            setattr(response, file_attr, new_unified_file_id)
             verbose_proxy_logger.debug(
                 f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write"
             )

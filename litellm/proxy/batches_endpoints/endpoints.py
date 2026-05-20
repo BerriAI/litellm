@@ -540,10 +540,6 @@ async def retrieve_batch(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict,
         )
 
-        if unified_batch_id:
-            await resolve_input_file_id_to_unified(response, prisma_client)
-            await resolve_output_file_ids_to_unified(response, prisma_client)
-
         ### ALERTING ###
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
