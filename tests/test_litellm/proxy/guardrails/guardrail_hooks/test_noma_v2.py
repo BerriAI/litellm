@@ -693,6 +693,32 @@ class TestNomaV2StreamingKnobs:
         assert model.streaming_end_of_stream_only is None
         assert model.streaming_sampling_rate is None
 
+    def test_streaming_sampling_rate_zero_is_not_coerced(self):
+        """streaming_sampling_rate=0 must not be silently replaced with default 5."""
+        from litellm.proxy.guardrails.guardrail_hooks.noma import (
+            initialize_guardrail_v2,
+        )
+
+        class FakeLitellmParams:
+            api_key = "test-key"
+            api_base = "https://self-managed.local"
+            application_id = "app-1"
+            monitor_mode = False
+            block_failures = False
+            streaming_end_of_stream_only = False
+            streaming_sampling_rate = 0
+            mode = "pre_call"
+            default_on = True
+
+        guardrail = {"guardrail_name": "test-guardrail"}
+
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            result = initialize_guardrail_v2(
+                litellm_params=FakeLitellmParams(), guardrail=guardrail
+            )
+
+        assert result.streaming_sampling_rate == 0
+
     def test_initialize_guardrail_v2_passes_streaming_knobs(self):
         from unittest.mock import patch as _patch
 

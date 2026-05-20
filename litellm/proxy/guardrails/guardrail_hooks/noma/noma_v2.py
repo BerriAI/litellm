@@ -55,6 +55,7 @@ class NomaV2Guardrail(CustomGuardrail):
         streaming_sampling_rate: int = 5,
         **kwargs: Any,
     ) -> None:
+        # Read by UnifiedLLMGuardrails streaming hook
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
         self.streaming_sampling_rate = streaming_sampling_rate
         self.async_handler = get_async_httpx_client(
