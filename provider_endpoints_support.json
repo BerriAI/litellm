@@ -2137,6 +2137,13 @@
         "search": true
       }
     },
+    "you_com": {
+      "display_name": "You.com (`you_com`)",
+      "url": "https://docs.litellm.ai/docs/search/you_com",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
