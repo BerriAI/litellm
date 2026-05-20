@@ -226,9 +226,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
 
         self._fold_reasoning_tokens_into_completion(response)
-        self._normalize_openai_compatible_usage_totals(
-            getattr(response, "usage", None)
-        )
+        self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
         return response
 
     @staticmethod

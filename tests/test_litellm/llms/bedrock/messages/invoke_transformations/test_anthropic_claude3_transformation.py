@@ -694,7 +694,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
 
     mock_supports_factory.assert_called_with(
         model="us.anthropic.claude-opus-4-7",
-        custom_llm_provider="bedrock",
+        custom_llm_provider=None,
         key="supports_output_config",
     )
     assert result["output_config"] == {"effort": "high"}
@@ -1148,7 +1148,7 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
         litellm_params=GenericLiteLLMParams(),

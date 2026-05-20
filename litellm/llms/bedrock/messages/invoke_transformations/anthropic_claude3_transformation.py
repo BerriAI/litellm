@@ -561,8 +561,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 5b. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
         # but older models do not — strip it to avoid request rejection.
         # Ref: https://github.com/BerriAI/litellm/issues/22797
-        if not _supports_factory(
-            model=model, custom_llm_provider="bedrock", key="supports_output_config"
+        if not (
+            _supports_factory(
+                model=model,
+                custom_llm_provider=None,
+                key="supports_output_config",
+            )
+            or AnthropicConfig._model_supports_effort_param(model)
         ):
             anthropic_messages_request.pop("output_config", None)
 

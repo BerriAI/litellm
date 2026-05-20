@@ -966,6 +966,7 @@ class VertexBase:
                                 credential_project_id,
                             )
                         )
+
                         # Clean up the entry automatically when the task finishes so
                         # that long-running proxies with many credential keys do not
                         # accumulate stale references.
