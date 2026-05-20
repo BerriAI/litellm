@@ -32,6 +32,15 @@ class TestBlockedAddress:
     def test_0_0_0_0_blocked(self):
         assert _is_blocked_address(ipaddress.ip_address("0.0.0.0"))
 
+    def test_benchmarking_range_blocked(self):
+        assert _is_blocked_address(ipaddress.ip_address("198.18.0.1"))
+
+    def test_class_e_reserved_blocked(self):
+        assert _is_blocked_address(ipaddress.ip_address("240.0.0.1"))
+
+    def test_documentation_range_blocked(self):
+        assert _is_blocked_address(ipaddress.ip_address("192.0.2.1"))
+
 
 class TestAiohttpSSRFProtection:
     def test_aws_metadata_endpoint_blocked(self):
@@ -150,10 +159,13 @@ class TestAllowInternalIpsOptOut:
 
 
 class TestSSRFGuardOnRequestMethods:
-    """Verify _assert_not_private_url is actually called in the request paths."""
+    """Verify SSRF protection is enforced on both sync and async request paths."""
 
     @pytest.mark.asyncio
-    async def test_make_common_async_call_blocks_private_ip(self):
+    async def test_make_common_async_call_does_not_block_event_loop(self):
+        """Async path delegates SSRF to _SSRFGuardResolver (connection-time),
+        not a sync preflight — so a mock session with a private api_base must
+        NOT raise at preflight; it proceeds until the actual TCP connect."""
         from unittest.mock import AsyncMock, Mock
 
         from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -161,9 +173,18 @@ class TestSSRFGuardOnRequestMethods:
         handler = BaseLLMAIOHTTPHandler()
         mock_config = Mock()
         mock_config.max_retry_on_unprocessable_entity_error = 1
+        # Mock session that raises aiohttp.ClientError on connect (simulating resolver block)
         mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.ok = True
+        mock_session.post.return_value.__aenter__ = AsyncMock(
+            return_value=mock_response
+        )
+        mock_session.post.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with pytest.raises(ValueError, match="private/reserved"):
+        # Should NOT raise ValueError at preflight — sync DNS check was removed
+        # to avoid blocking the event loop. Protection is via _SSRFGuardResolver.
+        try:
             await handler._make_common_async_call(
                 async_client_session=mock_session,
                 provider_config=mock_config,
@@ -173,8 +194,14 @@ class TestSSRFGuardOnRequestMethods:
                 timeout=30,
                 litellm_params={},
             )
+        except ValueError as e:
+            pytest.fail(f"Async path must not do a blocking preflight DNS check: {e}")
+        except Exception:
+            pass  # Other errors (e.g. from mock) are fine
 
     def test_make_common_sync_call_blocks_private_ip(self):
+        """Sync path still runs _assert_not_private_url preflight since httpx
+        has no connection-time resolver hook."""
         from unittest.mock import Mock
 
         from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler

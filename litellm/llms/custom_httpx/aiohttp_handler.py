@@ -36,27 +36,25 @@ else:
 
 DEFAULT_TIMEOUT = 600
 
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS IMDS
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("::/128"),  # IPv6 unspecified / wildcard
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-]
+# CGNAT (100.64.0.0/10) is misclassified as global on Python < 3.11
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Return True if addr falls in any blocked network."""
+    """Return True if addr is not globally routable (private, loopback, reserved, etc.).
+
+    Uses Python's built-in is_global to cover all IANA special-use ranges —
+    including RFC 5737 documentation (192.0.2.0/24), RFC 2544 benchmarking
+    (198.18.0.0/15), and class E (240.0.0.0/4) — without maintaining a manual list.
+    CGNAT (100.64.0.0/10) is explicitly checked for Python < 3.11 compat.
+    """
     # Unwrap IPv4-mapped IPv6 (::ffff:10.0.0.1 → 10.0.0.1)
     if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped
-    return any(addr in net for net in _BLOCKED_NETWORKS)
+    # Python < 3.11 incorrectly marks CGNAT as global
+    if isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT:
+        return True
+    return not addr.is_global or addr.is_multicast
 
 
 def _assert_not_private_url(url: str) -> None:
@@ -292,7 +290,11 @@ class BaseLLMAIOHTTPHandler:
             dynamic_client_session=async_client_session
         )
 
-        _assert_not_private_url(api_base)
+        # SSRF validation on the async path is handled at TCP-connect time by
+        # _SSRFGuardResolver (attached to the TCPConnector).  A synchronous
+        # socket.getaddrinfo() preflight would block the event loop, so it is
+        # intentionally omitted here.  The sync path retains _assert_not_private_url
+        # because httpx has no equivalent connection-time resolver hook.
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
