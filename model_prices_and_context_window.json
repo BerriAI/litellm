@@ -12941,7 +12941,7 @@
         "max_output_tokens": 3.84e+5,
         "max_tokens": 3.84e+5,
         "mode": "chat",
-        "source":"https://api-docs.deepseek.com/quick_start/pricing"
+        "source":"https://api-docs.deepseek.com/quick_start/pricing",
         "output_cost_per_token": 2.8e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -12957,7 +12957,7 @@
         "max_output_tokens": 3.84e+5,
         "max_tokens": 3.84e+5,
         "mode": "chat",
-        "source":"https://api-docs.deepseek.com/quick_start/pricing"
+        "source":"https://api-docs.deepseek.com/quick_start/pricing",
         "output_cost_per_token": 3.48e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
