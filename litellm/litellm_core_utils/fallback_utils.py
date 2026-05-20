@@ -47,8 +47,10 @@ async def async_completion_with_fallbacks(**kwargs):
             completion_kwargs = safe_deep_copy(base_kwargs)
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
-                model = fallback.pop("model", original_model)
-                completion_kwargs.update(fallback)
+                # Deep copy to avoid mutating the caller's fallback dict
+                fallback_copy = safe_deep_copy(fallback)
+                model = fallback_copy.pop("model", original_model)
+                completion_kwargs.update(fallback_copy)
             else:
                 model = fallback
 
