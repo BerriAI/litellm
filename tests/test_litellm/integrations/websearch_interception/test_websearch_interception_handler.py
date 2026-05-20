@@ -426,6 +426,177 @@ async def test_chat_completion_agentic_loop_propagates_search_tool_permission_er
     asearch.assert_not_awaited()
 
 
+def test_search_tool_auth_helpers_cover_fallback_shapes():
+    """Auth helpers should handle proxy object and dict shapes used in tests/hooks."""
+    user_api_key_auth = _search_tool_auth(key_search_tools=["perplexity-search"])
+    auth_dict = {
+        "object_permission": {"search_tools": ["dict-search"]},
+        "team_id": "team-1",
+    }
+
+    assert (
+        WebSearchInterceptionLogger._get_user_api_key_auth_from_kwargs(
+            {"user_api_key_auth": user_api_key_auth}
+        )
+        is user_api_key_auth
+    )
+    assert (
+        WebSearchInterceptionLogger._get_user_api_key_auth_from_kwargs(
+            {"user_api_key_dict": user_api_key_auth}
+        )
+        is user_api_key_auth
+    )
+    assert WebSearchInterceptionLogger._get_auth_attr(auth_dict, "team_id") == "team-1"
+    assert (
+        WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(None)
+        == []
+    )
+    assert WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(
+        {"search_tools": ["dict-search"]}
+    ) == ["dict-search"]
+    assert (
+        WebSearchInterceptionLogger._get_search_tool_names_from_object_permission(
+            {"search_tools": []}
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_search_tool_access_loads_team_permission(monkeypatch):
+    """Team permissions should be loaded when auth context has only a team id."""
+    team_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-permission",
+        search_tools=["perplexity-search"],
+    )
+
+    async def get_team_object(**kwargs):
+        assert kwargs["team_id"] == "team-1"
+        assert kwargs["prisma_client"] == "prisma"
+        assert kwargs["user_api_key_cache"] == "cache"
+        assert kwargs["proxy_logging_obj"] == "proxy-logging"
+        return SimpleNamespace(object_permission=team_permission)
+
+    auth_checks_module = ModuleType("litellm.proxy.auth.auth_checks")
+    auth_checks_module.get_team_object = get_team_object
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.auth_checks", auth_checks_module
+    )
+
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.prisma_client = "prisma"
+    proxy_server_module.proxy_logging_obj = "proxy-logging"
+    proxy_server_module.user_api_key_cache = "cache"
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    user_api_key_auth = _search_tool_auth(key_search_tools=["perplexity-search"])
+    user_api_key_auth.team_id = "team-1"
+    user_api_key_auth.team_object_permission = None
+
+    await WebSearchInterceptionLogger._authorize_search_tool_access(
+        "perplexity-search",
+        {"user_api_key_auth": user_api_key_auth},
+    )
+    await WebSearchInterceptionLogger._authorize_search_tool_access(
+        None,
+        {"user_api_key_auth": user_api_key_auth},
+    )
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_search_returns_text_for_non_auth_search_errors():
+    """Non-auth search failures should keep the existing synthetic error response."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["test_provider"])
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+
+    response = await logger.try_short_circuit_search(
+        model="test-model",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tools=[{"name": "litellm_web_search"}],
+        custom_llm_provider="test_provider",
+    )
+
+    assert response is not None
+    assert response["content"] == [
+        {"type": "text", "text": "Search failed: search down"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_agentic_loop_keeps_non_auth_search_errors_as_tool_text():
+    """Non-auth search failures should still be passed to the follow-up model as text."""
+    logger = WebSearchInterceptionLogger()
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    patch, structured_results = await logger._build_anthropic_request_patch(
+        model="bedrock/claude",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tool_calls=[
+            {
+                "id": "toolu_123",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            },
+            {
+                "id": "toolu_empty",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {},
+            },
+        ],
+        thinking_blocks=[],
+        anthropic_messages_optional_request_params={},
+        logging_obj=logging_obj,
+        kwargs={},
+    )
+
+    assert patch.messages is not None
+    assert "Search failed: search down" in str(patch.messages)
+    assert structured_results == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_loop_keeps_non_auth_search_errors_as_tool_text():
+    """Chat-completion search failures should remain ordinary tool-result text."""
+    logger = WebSearchInterceptionLogger()
+    logger._execute_search = AsyncMock(side_effect=RuntimeError("search down"))  # type: ignore
+
+    patch = await logger._build_chat_completion_request_patch(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "what is litellm"}],
+        tool_calls=[
+            {
+                "id": "call_123",
+                "type": "function",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+                "function": {
+                    "name": "litellm_web_search",
+                    "arguments": {"query": "what is litellm"},
+                },
+            },
+            {
+                "id": "call_empty",
+                "type": "function",
+                "name": "litellm_web_search",
+                "input": {},
+                "function": {
+                    "name": "litellm_web_search",
+                    "arguments": {},
+                },
+            },
+        ],
+        optional_params={},
+        kwargs={},
+    )
+
+    assert patch.messages is not None
+    assert "Search failed: search down" in str(patch.messages)
+
+
 @pytest.mark.asyncio
 async def test_execute_search_falls_back_to_first_search_tool_credentials(monkeypatch):
     """If the requested search tool is missing, use the first configured tool's credentials."""
