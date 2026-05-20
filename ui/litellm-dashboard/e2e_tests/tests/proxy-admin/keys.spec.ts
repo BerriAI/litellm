@@ -126,4 +126,36 @@ test.describe("Proxy Admin - Keys", () => {
 
     await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS)).toBeVisible({ timeout: 10_000 });
   });
+
+  test("Create a key with a specific proxy model (no team)", async ({ page }) => {
+    await navigateToPage(page, Page.ApiKeys);
+    await dismissFeedbackPopup(page);
+
+    await page.getByRole("button", { name: /Create New Key/i }).click();
+
+    await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
+
+    const keyName = `e2e-admin-specific-${Date.now()}`;
+    await page.getByTestId("base-input").fill(keyName);
+
+    // Open the model multi-select and pick a single specific model. Use
+    // getByRole("option", ...) to avoid the strict-mode collision between
+    // the option container and its inner text node.
+    const modelName = "fake-openai-gpt-4";
+    await page.locator(".ant-select-selection-overflow").click();
+    const option = page.locator(".ant-select-dropdown:visible").getByRole("option", { name: modelName, exact: true });
+    await option.waitFor({ state: "attached" });
+    // Dispatch the click via the DOM — antd's dropdown can render the option
+    // off-viewport during the open animation, which trips Playwright's
+    // visibility/stability checks. The click handler fires regardless.
+    await option.evaluate((el: HTMLElement) => el.click());
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Create Key", exact: true }).click();
+
+    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    await page.keyboard.press("Escape");
+
+    await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
+  });
 });
