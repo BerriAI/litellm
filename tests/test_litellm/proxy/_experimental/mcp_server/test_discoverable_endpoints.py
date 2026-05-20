@@ -40,6 +40,20 @@ def mock_mcp_client_ip():
         yield
 
 
+def _mock_callback_request(base_url: str = "http://localhost:3000/"):
+    """Return a MagicMock Request for callback/authorize same-origin tests.
+
+    The callback handler only uses ``request`` to compute the proxy's own
+    base URL via ``get_request_base_url`` (which reads ``request.base_url``
+    and trusted ``X-Forwarded-*`` headers). A simple MagicMock with the
+    right attributes is sufficient.
+    """
+    req = MagicMock()
+    req.base_url = base_url
+    req.headers = {}
+    return req
+
+
 @pytest.fixture
 def trust_xff():
     """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
@@ -1293,170 +1307,186 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
 
 
-def test_validate_trusted_redirect_uri_rejects_spoofed_forwarded_host():
+def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
     try:
         from fastapi import Request
 
         from litellm.proxy._experimental.mcp_server.oauth_utils import (
-            validate_trusted_redirect_uri,
+            get_request_base_url,
         )
     except ImportError:
-        pytest.skip("MCP OAuth utilities not available")
+        pytest.skip("MCP discoverable endpoints not available")
 
     mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://gateway.example.com/"
-    mock_request.headers = {
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "10.0.0.7"
+    headers = {
         "X-Forwarded-Proto": "https",
-        "X-Forwarded-Host": "attacker.example.com",
+        "X-Forwarded-Host": "litellm-internal:4000",
+        "X-Forwarded-Port": "9999",
     }
-    mock_request.client = MagicMock()
-    mock_request.client.host = "203.0.113.10"
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
 
-    with (
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {
-                "use_x_forwarded_for": True,
-                "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
-            },
-            create=True,
-        ),
-        pytest.raises(HTTPException),
-    ):
-        validate_trusted_redirect_uri(
-            mock_request,
-            "https://attacker.example.com/callback",
-        )
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/")
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
 
 
-def test_validate_trusted_redirect_uri_rejects_raw_host_same_origin():
+def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
+    caplog, monkeypatch
+):
     try:
-        from fastapi import Request
+        from fastapi import HTTPException, Request
 
         from litellm.proxy._experimental.mcp_server.oauth_utils import (
             validate_trusted_redirect_uri,
         )
     except ImportError:
-        pytest.skip("MCP OAuth utilities not available")
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
 
     mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://attacker.example.com/"
-    mock_request.headers = {}
+    mock_request.base_url = "http://litellm-internal:4000/"
     mock_request.client = MagicMock()
-    mock_request.client.host = "203.0.113.10"
-
-    with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
-            return_value=None,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
-            return_value=False,
-        ),
-        pytest.raises(HTTPException),
-    ):
-        validate_trusted_redirect_uri(
-            mock_request,
-            "https://attacker.example.com/callback",
-        )
-
-
-def test_validate_trusted_redirect_uri_rejects_trusted_proxy_raw_host_fallback():
-    try:
-        from fastapi import Request
-
-        from litellm.proxy._experimental.mcp_server.oauth_utils import (
-            validate_trusted_redirect_uri,
-        )
-    except ImportError:
-        pytest.skip("MCP OAuth utilities not available")
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://attacker.example.com/"
-    mock_request.headers = {"X-Forwarded-Proto": "https"}
-    mock_request.client = MagicMock()
-    mock_request.client.host = TRUSTED_PROXY_IP
-
-    with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
-            return_value=None,
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
-            return_value=True,
-        ),
-        pytest.raises(HTTPException),
-    ):
-        validate_trusted_redirect_uri(
-            mock_request,
-            "https://attacker.example.com/callback",
-        )
-
-
-def test_validate_trusted_redirect_uri_allows_configured_proxy_base_url_origin():
-    try:
-        from fastapi import Request
-
-        from litellm.proxy._experimental.mcp_server.oauth_utils import (
-            validate_trusted_redirect_uri,
-        )
-    except ImportError:
-        pytest.skip("MCP OAuth utilities not available")
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "http://localhost:4000/"
-    mock_request.headers = {}
-    mock_request.client = MagicMock()
-    mock_request.client.host = "203.0.113.10"
-
-    with (
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.get_proxy_base_url",
-            return_value="https://gateway.example.com",
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.oauth_utils.IPAddressUtils.is_request_from_trusted_proxy",
-            return_value=False,
-        ),
-    ):
-        validate_trusted_redirect_uri(
-            mock_request,
-            "https://gateway.example.com/ui/mcp/oauth/callback",
-        )
-
-
-def test_validate_trusted_redirect_uri_allows_forwarded_origin_from_trusted_proxy():
-    try:
-        from fastapi import Request
-
-        from litellm.proxy._experimental.mcp_server.oauth_utils import (
-            validate_trusted_redirect_uri,
-        )
-    except ImportError:
-        pytest.skip("MCP OAuth utilities not available")
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "http://localhost:4000/"
-    mock_request.headers = {
+    mock_request.client.host = "203.0.113.5"
+    headers = {
         "X-Forwarded-Proto": "https",
-        "X-Forwarded-Host": "proxy.example.com",
+        "X-Forwarded-Host": "litellm.example.com",
+        "X-Forwarded-Port": "443",
+        "Host": "litellm-internal:4000",
     }
-    set_request_from_trusted_proxy(mock_request)
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {
-            "use_x_forwarded_for": True,
-            "mcp_trusted_proxy_ranges": TRUSTED_PROXY_RANGES,
-        },
-        create=True,
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
     ):
-        validate_trusted_redirect_uri(
-            mock_request,
-            "https://proxy.example.com/callback",
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(
+                mock_request,
+                "https://litellm.example.com/ui/mcp/oauth/callback",
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "invalid_request"
+
+    matching = [r for r in caplog.records if "rejecting redirect_uri" in r.getMessage()]
+    assert len(matching) == 1, (
+        "expected exactly one diagnostic warning, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    msg = matching[0].getMessage()
+    assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
+    assert "litellm-internal:4000" in msg
+    assert "X-Forwarded-Host" in msg
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "litellm.example.com",
+        "litellm.example.com/",
+        "://litellm.example.com",
+        "ftp://litellm.example.com",
+        "https://",
+        "not a url at all",
+    ],
+)
+def test_get_request_base_url_rejects_malformed_proxy_base_url(
+    bad_value, monkeypatch, caplog
+):
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
         )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", bad_value)
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        result = get_request_base_url(mock_request)
+
+    assert result == "http://litellm-internal:4000", (
+        f"malformed PROXY_BASE_URL={bad_value!r} should be ignored, " f"got {result!r}"
+    )
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert len(matching) == 1, (
+        "expected one diagnostic for malformed PROXY_BASE_URL, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    assert (
+        repr(bad_value) in matching[0].getMessage()
+        or bad_value in matching[0].getMessage()
+    )
+
+
+def test_get_request_base_url_malformed_proxy_base_url_warning_is_one_shot(
+    monkeypatch, caplog
+):
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", "litellm.example.com")
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        for _ in range(5):
+            get_request_base_url(mock_request)
+
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one warning across 5 calls, got {len(matching)}"
 
 
 # -------------------------------------------------------------------
@@ -2043,7 +2073,7 @@ async def test_oauth_callback_redirects_with_state():
 
         # Call callback endpoint with code and state
         response = await callback(
-            request=mock_request,
+            request=_mock_callback_request(),
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -2091,7 +2121,7 @@ async def test_oauth_callback_preserves_client_redirect_uri_query():
         }
 
         response = await callback(
-            request=mock_request,
+            request=_mock_callback_request(),
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -2126,7 +2156,7 @@ async def test_oauth_callback_handles_invalid_state():
 
         # Call callback endpoint with invalid state
         response = await callback(
-            request=mock_request,
+            request=_mock_callback_request(),
             code="test_code",
             state="invalid_encrypted_state",
         )
@@ -2134,6 +2164,40 @@ async def test_oauth_callback_handles_invalid_state():
         # Should return HTML error page
         assert response.status_code == 200
         assert "Authentication incomplete" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_accepts_same_origin_ui_redirect():
+    """UI OAuth flow: the callback should redirect to the proxy's own UI
+    origin when the encrypted state carries a same-origin client_redirect_uri."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "https://proxy.example.com/ui/mcp/oauth/callback",
+            "original_state": "state-123",
+            "code_challenge": None,
+            "code_challenge_method": None,
+            "client_redirect_uri": "https://proxy.example.com/ui/mcp/oauth/callback",
+        }
+
+        response = await callback(
+            request=_mock_callback_request(base_url="https://proxy.example.com/"),
+            code="auth-code-123",
+            state="encrypted_state",
+        )
+
+    assert response.status_code == 302
+    assert (
+        "https://proxy.example.com/ui/mcp/oauth/callback"
+        in response.headers["location"]
+    )
+    assert "code=auth-code-123" in response.headers["location"]
+    assert "state=state-123" in response.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -2522,7 +2586,7 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
         }
         with pytest.raises(HTTPException) as exc_info:
             await callback(
-                request=mock_request,
+                request=_mock_callback_request(),
                 code="stolen_code",
                 state="encrypted_stale_state",
             )
@@ -2552,7 +2616,7 @@ async def test_callback_revalidates_loopback_on_decoded_client_redirect_uri():
         }
         with pytest.raises(HTTPException) as exc_info:
             await callback(
-                request=mock_request,
+                request=_mock_callback_request(),
                 code="stolen_code",
                 state="encrypted_stale_state",
             )
@@ -2580,7 +2644,7 @@ async def test_callback_rejects_state_missing_redirect_uri():
         }
         with pytest.raises(HTTPException) as exc_info:
             await callback(
-                request=mock_request,
+                request=_mock_callback_request(),
                 code="code",
                 state="encrypted_malformed_state",
             )

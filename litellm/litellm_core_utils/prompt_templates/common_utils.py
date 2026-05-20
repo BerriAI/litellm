@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -436,12 +437,21 @@ def update_messages_with_model_file_ids(
     """
     Updates messages with model file ids.
 
+    For managed files (unified file IDs), uses model_file_id_mapping if it
+    resolves the id, otherwise decodes the base64-encoded unified file ID
+    and extracts the llm_output_file_id directly. Mirrors the Responses-API
+    sibling `update_responses_input_with_model_file_ids`.
+
     model_file_id_mapping: Dict[str, Dict[str, str]] = {
         "litellm_proxy/file_id": {
             "model_id": "provider_file_id"
         }
     }
     """
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+        convert_b64_uid_to_unified_uid,
+    )
 
     for message in messages:
         if message.get("role") == "user":
@@ -450,7 +460,13 @@ def update_messages_with_model_file_ids(
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if not isinstance(c, dict):
+                        # Content list items aren't always dicts. e.g.
+                        # text_completion forwards a token-ids list/list-of-
+                        # lists through this path. Skip non-dict items
+                        # instead of indexing into them.
+                        continue
+                    if c.get("type") == "file":
                         file_object = cast(ChatCompletionFileObject, c)
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):
@@ -468,9 +484,23 @@ def update_messages_with_model_file_ids(
                         if file_id:
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
-                                or file_id
+                                if model_file_id_mapping
+                                else None
                             )
-                            file_object_file_field["file_id"] = provider_file_id
+                            if (
+                                not provider_file_id
+                                and _is_base64_encoded_unified_file_id(file_id)
+                            ):
+                                unified_file_id = convert_b64_uid_to_unified_uid(
+                                    file_id
+                                )
+                                if "llm_output_file_id," in unified_file_id:
+                                    provider_file_id = unified_file_id.split(
+                                        "llm_output_file_id,"
+                                    )[1].split(";")[0]
+                            file_object_file_field["file_id"] = (
+                                provider_file_id or file_id
+                            )
                         if format:
                             file_object_file_field["format"] = format
     return messages
@@ -1141,9 +1171,16 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_id = message["file"].get("file_id")
-    file_data = message["file"].get("file_data")
-    format = message["file"].get("format")
+    file_sub = message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider=None,
+        )
+    file_id = file_sub.get("file_id")
+    file_data = file_sub.get("file_data")
+    format = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(

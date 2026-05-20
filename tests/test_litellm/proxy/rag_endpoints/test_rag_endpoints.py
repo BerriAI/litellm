@@ -181,8 +181,6 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
     assert blocked_field in str(
         body
     ), f"Response should mention '{blocked_field}': {body}"
-
-
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected

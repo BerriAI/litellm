@@ -233,8 +233,8 @@ async def test_list_batches_with_target_model_names():
     """
 
     # Test data
-    target_model_names = "gpt-4,gpt-3.5-turbo"
-    expected_model = "gpt-4"  # Should use the first model from the comma-separated list
+    target_model_names = "gpt-5.5,gpt-5-mini"
+    expected_model = "gpt-5.5"  # Should use the first model from the comma-separated list
 
     # Mock response for list_batches
     mock_batch_response = {

@@ -1259,3 +1259,6 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
 InteractionTool = Tool
 InteractionToolChoiceConfig = ToolChoiceConfig
 InteractionsAPIOptionalRequestParams = Dict[str, Any]
+
+# Agent interaction execution environment
+InteractionEnvironment = Union[str, Dict[str, Any]]
