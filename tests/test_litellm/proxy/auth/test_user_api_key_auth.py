@@ -3335,3 +3335,118 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
     finally:
         for k, v in _orig.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_wrong_master_key_without_db_returns_clear_auth_error():
+    """Regression test for https://github.com/BerriAI/litellm/issues/12273
+    (and the older https://github.com/BerriAI/litellm/issues/4880).
+
+    When a bearer token does NOT match the configured master key AND no
+    database is connected, the proxy previously raised
+    ``"No connected db."`` with HTTP 400 -- which misled operators into
+    believing a database needed to be configured (it does not, for
+    master-key-only deployments). The user-visible error must instead
+    state that the token is invalid, with HTTP 401.
+
+    The ``ProxyErrorTypes.no_db_connection`` *type* is intentionally
+    preserved: ``auth_exception_handler.py`` keys off it to drive the
+    ``allow_requests_on_db_unavailable`` fallback path, and changing the
+    type would silently break that feature (see review feedback on the
+    earlier closed attempt at this fix).
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    # The whole point of this test is the no-DB code path.
+    attrs["prisma_client"] = None
+    _orig = {k: getattr(_proxy_server_mod, k, None) for k in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-not-the-master-key",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert exc_info.value.code in (401, "401"), (
+            f"Expected HTTP 401, got {exc_info.value.code!r}. "
+            "Invalid credentials must return 401, not 400, so clients can "
+            "react to auth failures distinctly from bad-request errors."
+        )
+        assert "No connected db" not in str(
+            exc_info.value.message
+        ), f"Stale 'No connected db' message leaked: {exc_info.value.message!r}"
+        assert "token" in str(exc_info.value.message).lower(), (
+            f"Error message should reference the token, got: "
+            f"{exc_info.value.message!r}"
+        )
+    finally:
+        for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_wrong_master_key_without_db_preserves_no_db_connection_type():
+    """Companion to the message-fix test above: pin the error *type* so a
+    future change cannot silently switch it to ``auth_error`` and break
+    the ``allow_requests_on_db_unavailable`` fallback path.
+
+    ``auth_exception_handler.py`` (via
+    ``PrismaDBExceptionHandler.is_database_connection_error``) checks
+    ``e.type == ProxyErrorTypes.no_db_connection`` to decide whether to
+    issue the restricted INTERNAL_USER fallback token. If the type ever
+    changes, deployments relying on that fallback would start rejecting
+    requests they previously allowed through.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    attrs["prisma_client"] = None
+    _orig = {k: getattr(_proxy_server_mod, k, None) for k in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-not-the-master-key",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.no_db_connection, (
+            "Type must remain no_db_connection so the "
+            "allow_requests_on_db_unavailable fallback path in "
+            "auth_exception_handler.py continues to function."
+        )
+    finally:
+        for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
