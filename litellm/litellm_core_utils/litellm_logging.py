@@ -5143,9 +5143,9 @@ class StandardLoggingPayloadSetup:
     ) -> StandardLoggingPayloadErrorInformation:
         from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 
-        # Check for 'code' first (used by ProxyException), then fall back to 'status_code' (used by LiteLLM exceptions),
-        # then to 'response.status_code' (used by httpx.HTTPStatusError, where neither top-level attr is set).
-        # Ensure error_code is always a string for Prisma Python JSON field compatibility
+        # ProxyException uses .code, LiteLLM exceptions use .status_code,
+        # httpx.HTTPStatusError exposes status only as .response.status_code.
+        # Stringified for Prisma JSON compatibility.
         error_code_attr = getattr(original_exception, "code", None)
         if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
             error_status: str = str(error_code_attr)

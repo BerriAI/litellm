@@ -1,29 +1,13 @@
-"""
-LIT-3193 — Class 3: admin / management endpoints.
-
-Admin endpoints don't go through ``_handle_llm_api_exception``. They use
-``management_endpoint_wrapper`` (litellm/proxy/management_helpers/utils.py),
-which catches every exception, calls
-``open_telemetry_logger.async_management_endpoint_failure_hook``, and
-re-raises. That hook is the OTEL integration point — both for failures
-(4xx admin gap from the ticket) and successes.
-
-Each cell asserts the four SERVER-span attributes
-(``http.response.status_code``, ``url.path``, ``http.route``, duration > 0)
-on the parent span the auth layer opened, just like the unified and
-passthrough classes.
-"""
+"""LIT-3193 — admin / management endpoints. Drives the
+async_management_endpoint_{success,failure}_hook integration points."""
 
 import asyncio
 from datetime import datetime
-from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
 
 from litellm.proxy._types import (
     ManagementEndpointLoggingPayload,
-    ProxyException,
     UserAPIKeyAuth,
 )
 
@@ -45,7 +29,6 @@ def _real_user_api_key_dict(parent_span):
 
 
 async def _drive_admin_failure(*, otel, exception, parent_span, route):
-    """Mirror ``management_endpoint_wrapper``'s ``except Exception`` block."""
     payload = ManagementEndpointLoggingPayload(
         route=route,
         request_data={},
@@ -61,7 +44,6 @@ async def _drive_admin_failure(*, otel, exception, parent_span, route):
 
 
 async def _drive_admin_success(*, otel, parent_span, route, response):
-    """Mirror ``management_endpoint_wrapper``'s success block."""
     payload = ManagementEndpointLoggingPayload(
         route=route,
         request_data={},
@@ -75,9 +57,6 @@ async def _drive_admin_success(*, otel, parent_span, route, response):
     )
 
 
-# ---------------------------------------------------------------------------
-# /key/generate — deep matrix
-# ---------------------------------------------------------------------------
 KEY_GENERATE_PATH = "/key/generate"
 
 
@@ -89,10 +68,7 @@ KEY_GENERATE_PATH = "/key/generate"
         (make_fastapi_http_exception(403, "non-admin"), 403),
         (make_fastapi_http_exception(422, "validation"), 422),
         (HttpStatusException(500, "DB unreachable"), 500),
-        # Pins the contract that ``_record_exception_on_span`` extracts the
-        # status via ``get_error_information``'s ``response.status_code``
-        # fallback for any entry point — e.g. an admin endpoint whose DB
-        # adapter wraps an httpx client and raises HTTPStatusError.
+        # Pins .response.status_code fallback through the admin path.
         (make_httpx_status_error(500, "upstream blew up"), 500),
     ],
     ids=["400", "401", "403", "422", "500", "500-httpx"],
@@ -146,9 +122,6 @@ def test_key_generate_success_stamps_server_span(
     )
 
 
-# ---------------------------------------------------------------------------
-# Smoke matrix across other admin endpoints — one 4xx + one 5xx each
-# ---------------------------------------------------------------------------
 SMOKE_ADMIN_ENDPOINTS = [
     "/key/info",
     "/key/update",

@@ -1,17 +1,5 @@
-"""
-LIT-3193 — Class 2: passthrough endpoints.
-
-Passthrough requests bypass ``_handle_llm_api_exception``: when the upstream
-returns ``>=300``, ``pass_through_endpoint`` raises an ``HTTPException`` with
-the upstream's status, which is caught by its outer ``except Exception``.
-That handler calls ``proxy_logging_obj.post_call_failure_hook`` directly
-(``pass_through_endpoints.py:1109``), and *that* is the OTEL integration
-point.
-
-Vertex is the deep matrix; the other providers are smoke-tested with one 4xx
-and one 5xx each so the SERVER span gets stamped regardless of which
-provider's wrapper opened it.
-"""
+"""LIT-3193 — passthrough endpoints. Drives proxy_logging.post_call_failure_hook
+(the integration point pass_through_endpoint reaches on upstream >=300)."""
 
 import asyncio
 
@@ -44,8 +32,6 @@ def _proxy_logging():
 
 
 def _drive_passthrough_failure(*, exception, user_api_key_dict):
-    """Mirror ``pass_through_endpoint``'s ``except Exception`` block:
-    it calls ``proxy_logging_obj.post_call_failure_hook`` and then re-raises."""
     asyncio.run(
         _proxy_logging().post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -55,9 +41,6 @@ def _drive_passthrough_failure(*, exception, user_api_key_dict):
     )
 
 
-# ---------------------------------------------------------------------------
-# Vertex deep matrix — upstream 4xx/5xx + LiteLLM auth fail
-# ---------------------------------------------------------------------------
 VERTEX_PATH = "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
 
 
@@ -65,12 +48,10 @@ VERTEX_PATH = "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/
     "exception, expected_status",
     [
         (make_fastapi_http_exception(401, "no proxy key"), 401),
-        # The passthrough wrapper re-raises upstream 4xx as HTTPException(status=upstream.status):
         (make_fastapi_http_exception(400, "bad request"), 400),
         (make_fastapi_http_exception(403, "upstream forbidden"), 403),
         (make_fastapi_http_exception(404, "upstream not found"), 404),
         (make_fastapi_http_exception(429, "upstream rate limit"), 429),
-        # Upstream 5xx surface as httpx.HTTPStatusError before being wrapped — both shapes appear:
         (make_httpx_status_error(500, "upstream blew up"), 500),
         (make_httpx_status_error(502, "bad gateway"), 502),
         (make_httpx_status_error(503, "service unavailable"), 503),
@@ -112,9 +93,6 @@ def test_vertex_passthrough_failure_stamps_server_span(
     )
 
 
-# ---------------------------------------------------------------------------
-# Smoke matrix across other passthrough providers — one 4xx + one 5xx each
-# ---------------------------------------------------------------------------
 SMOKE_PASSTHROUGHS = [
     ("/bedrock/model/anthropic.claude-v2/invoke", "/bedrock/{endpoint:path}"),
     ("/anthropic/v1/messages", "/anthropic/{endpoint:path}"),
@@ -143,8 +121,6 @@ def test_passthrough_failure_stamps_server_span(
     otel_with_exporter,
     register_otel_callback,
 ):
-    """Confirm SERVER-span stamping works for every passthrough provider's
-    URL shape — same hook chain, just a different path."""
     _otel, exporter = otel_with_exporter
     server_span = server_span_factory(path, http_route=http_route)
     uakd = _real_user_api_key_dict(server_span)
