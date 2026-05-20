@@ -2960,6 +2960,10 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             split_string = key.split("/", 1)
             if split_string[-1] not in litellm.openrouter_models:
                 litellm.openrouter_models.add(split_string[-1])
+        elif value.get("litellm_provider") == "orcarouter":
+            split_string = key.split("/", 1)
+            if split_string[-1] not in litellm.orcarouter_models:
+                litellm.orcarouter_models.add(split_string[-1])
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)
@@ -3941,6 +3945,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "orcarouter"
             and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
             and custom_llm_provider != "wandb"
@@ -4642,6 +4647,17 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "openrouter":
         optional_params = litellm.OpenrouterConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "orcarouter":
+        optional_params = litellm.OrcaRouterConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6390,6 +6406,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "orcarouter":
+            if "ORCAROUTER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ORCAROUTER_API_KEY")
         elif custom_llm_provider == "vercel_ai_gateway":
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6636,6 +6657,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        ## orcarouter
+        elif model in litellm.orcarouter_models:
+            if "ORCAROUTER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ORCAROUTER_API_KEY")
         ## vercel_ai_gateway
         elif model in litellm.vercel_ai_gateway_models:
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
@@ -8189,6 +8216,7 @@ class ProviderConfigManager:
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
             LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.ORCAROUTER: (lambda: litellm.OrcaRouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
@@ -8422,6 +8450,12 @@ class ProviderConfigManager:
             )
 
             return OpenrouterEmbeddingConfig()
+        elif litellm.LlmProviders.ORCAROUTER == provider:
+            from litellm.llms.orcarouter.embedding.transformation import (
+                OrcaRouterEmbeddingConfig,
+            )
+
+            return OrcaRouterEmbeddingConfig()
         elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
             from litellm.llms.vercel_ai_gateway.embedding.transformation import (
                 VercelAIGatewayEmbeddingConfig,

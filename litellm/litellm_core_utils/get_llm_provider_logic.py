@@ -207,6 +207,16 @@ def get_llm_provider(  # noqa: PLR0915
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
+        # OrcaRouter: mirror OpenRouter's prefix-stripping behavior. IDs like
+        # "orcarouter/openai/gpt-5" must become "openai/gpt-5"; the router-level
+        # "orcarouter/auto" (no inner slash after the outer prefix is removed)
+        # must stay intact so OrcaRouter recognizes it as the adaptive router.
+        if custom_llm_provider == "orcarouter" and model.startswith("orcarouter/"):
+            remainder = model[len("orcarouter/") :]
+            if "/" in remainder:
+                return remainder, custom_llm_provider, dynamic_api_key, api_base
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
         if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
@@ -419,6 +429,9 @@ def get_llm_provider(  # noqa: PLR0915
         ## openrouter
         elif model in litellm.openrouter_models:
             custom_llm_provider = "openrouter"
+        ## orcarouter
+        elif model in litellm.orcarouter_models:
+            custom_llm_provider = "orcarouter"
         ## maritalk
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"

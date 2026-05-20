@@ -244,6 +244,7 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+orcarouter_key: Optional[str] = None
 datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
@@ -537,6 +538,7 @@ mistral_chat_models: Set = set()
 text_completion_codestral_models: Set = set()
 anthropic_models: Set = set()
 openrouter_models: Set = set()
+orcarouter_models: Set = set()
 datarobot_models: Set = set()
 vertex_language_models: Set = set()
 vertex_vision_models: Set = set()
@@ -691,6 +693,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.add(key)
+        elif value.get("litellm_provider") == "orcarouter":
+            orcarouter_models.add(key)
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
@@ -941,6 +945,7 @@ model_list = list(
     | anthropic_models
     | set(replicate_models)
     | openrouter_models
+    | orcarouter_models
     | datarobot_models
     | set(huggingface_models)
     | vertex_chat_models
@@ -1030,6 +1035,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "orcarouter": orcarouter_models,
     "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models
@@ -1424,6 +1430,9 @@ if TYPE_CHECKING:
     from .llms.maritalk import MaritalkConfig as MaritalkConfig
     from .llms.openrouter.chat.transformation import (
         OpenrouterConfig as OpenrouterConfig,
+    )
+    from .llms.orcarouter.chat.transformation import (
+        OrcaRouterConfig as OrcaRouterConfig,
     )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
