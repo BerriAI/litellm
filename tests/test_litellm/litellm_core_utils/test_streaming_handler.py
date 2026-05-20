@@ -2265,3 +2265,66 @@ async def test_queue_wrapper_cleanup_on_anext_exception():
             await stream.__anext__()
 
     assert stream._queue_wrapper is None
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_put_returns_on_loop_exception():
+    """_put exits gracefully when run_coroutine_threadsafe raises a non-timeout exception (line 113-114)."""
+    loop = asyncio.get_running_loop()
+    wrapper = _SyncIteratorToQueue(iter(["x"]), loop)
+
+    # Consume the one item normally
+    assert await wrapper.get() == "x"
+    # Producer now tries to put _QUEUE_EXHAUSTED — wait for thread to finish
+    await asyncio.sleep(0.1)
+    assert not wrapper._thread.is_alive()
+    wrapper.close()
+
+    # Now test the exception path: create a wrapper where _put hits a
+    # non-TimeoutError exception from fut.result()
+    mock_future = MagicMock()
+    mock_future.result = MagicMock(side_effect=RuntimeError("loop closed"))
+
+    with patch(
+        "asyncio.run_coroutine_threadsafe",
+        return_value=mock_future,
+    ):
+        wrapper2 = _SyncIteratorToQueue(iter(["a", "b"]), loop)
+        # Producer thread starts, calls _put("a"), gets RuntimeError → returns
+        await asyncio.sleep(0.3)
+
+    # Thread should have exited (silently returned from _put)
+    assert not wrapper2._thread.is_alive()
+    wrapper2.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_cleanup_on_httpx_timeout():
+    """_queue_wrapper is cleaned up when httpx.TimeoutException is raised during streaming."""
+    import httpx
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    def gen_then_timeout():
+        yield "chunk1"
+        raise httpx.ReadTimeout("Connection timed out")
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.stream_options = None
+    logging_obj.messages = []
+
+    stream = CustomStreamWrapper(
+        completion_stream=gen_then_timeout(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    # First __anext__ creates the queue wrapper and returns chunk1
+    # But chunk_creator may fail on raw string — the important thing is
+    # that the httpx.TimeoutException triggers cleanup
+    with pytest.raises(httpx.TimeoutException):
+        while True:
+            await stream.__anext__()
+
+    assert stream._queue_wrapper is None
