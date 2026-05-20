@@ -242,26 +242,11 @@ _TOKEN_BASED_CUSTOM_PRICING_KEYS = frozenset(
 
 
 def _has_token_based_custom_pricing(model_info: Optional[dict]) -> bool:
-    if model_info is None:
+    if not model_info:
         return False
     return any(
         model_info.get(key) is not None for key in _TOKEN_BASED_CUSTOM_PRICING_KEYS
     )
-
-
-def _resolve_effective_model_cost_info(
-    model: str,
-    model_cost_ref: dict,
-    custom_pricing: Optional[bool],
-) -> Optional[dict]:
-    if custom_pricing is not True:
-        return None
-
-    model_info = model_cost_ref.get(model)
-    if _has_token_based_custom_pricing(model_info=model_info):
-        return model_info
-
-    return None
 
 
 def _get_additional_costs(
@@ -621,12 +606,7 @@ def cost_per_token(
         )
 
     # Prefer explicit custom pricing before provider-specific dispatch (#25204).
-    custom_model_info = _resolve_effective_model_cost_info(
-        model=model,
-        model_cost_ref=model_cost_ref,
-        custom_pricing=custom_pricing,
-    )
-    if custom_model_info is not None:
+    if custom_pricing and _has_token_based_custom_pricing(model_cost_ref.get(model)):
         return generic_cost_per_token(
             model=model,
             usage=usage_block,
@@ -634,7 +614,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
 
-    elif custom_llm_provider == "vertex_ai":
+    if custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
