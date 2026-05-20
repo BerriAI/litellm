@@ -3025,8 +3025,12 @@ if MCP_AVAILABLE:
         passthrough_servers = [
             srv
             for srv in allowed_servers
-            if srv.extra_headers
-            and any(h.lower() == "authorization" for h in srv.extra_headers)
+            # Restrict to genuine OAuth pass-through servers (auth_type none +
+            # Authorization in extra_headers). Gateway-managed OAuth2 servers
+            # must not receive the ``resource_metadata=`` challenge emitted
+            # below — they require ``authorization_uri=`` pointing at the
+            # gateway AS metadata.
+            if srv.is_oauth_passthrough
             # Exclude M2M servers: _prepare_mcp_server_headers skips caller
             # Authorization when has_client_credentials is set, so probing
             # those with the caller's token would send the wrong credential.
