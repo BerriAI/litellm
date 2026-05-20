@@ -2133,7 +2133,7 @@ from litellm.litellm_core_utils.streaming_handler import _SyncIteratorToQueue
 async def test_queue_wrapper_delivers_chunks_in_order():
     """All chunks from the sync iterator arrive in order via the queue."""
     items = list(range(10))
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     wrapper = _SyncIteratorToQueue(iter(items), loop)
 
     results = []
@@ -2153,7 +2153,7 @@ async def test_queue_wrapper_propagates_exception():
         yield "chunk2"
         raise ValueError("intentional error")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     wrapper = _SyncIteratorToQueue(failing_iter(), loop)
 
     assert await wrapper.get() == "chunk1"
@@ -2174,7 +2174,7 @@ async def test_queue_wrapper_close_stops_producer():
             call_count += 1
             yield call_count
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     wrapper = _SyncIteratorToQueue(counting_iter(), loop)
 
     await wrapper.get()
@@ -2185,10 +2185,21 @@ async def test_queue_wrapper_close_stops_producer():
     assert call_count == count_after_close or call_count <= count_after_close + 1
 
 
+@pytest.mark.asyncio
+async def test_queue_wrapper_empty_stream():
+    """An empty iterator raises StopAsyncIteration immediately."""
+    loop = asyncio.get_running_loop()
+    wrapper = _SyncIteratorToQueue(iter([]), loop)
+
+    with pytest.raises(StopAsyncIteration):
+        await wrapper.get()
+    wrapper.close()
+
+
 def test_queue_wrapper_no_aiter():
     """Queue wrapper must NOT expose __aiter__ to avoid is_async_iterable() rerouting."""
     loop = asyncio.new_event_loop()
-    wrapper = _SyncIteratorToQueue(iter([]), loop)
+    wrapper = _SyncIteratorToQueue(iter([1]), loop)
     assert not hasattr(wrapper, "__aiter__")
     assert not hasattr(wrapper, "__anext__")
     wrapper.close()
