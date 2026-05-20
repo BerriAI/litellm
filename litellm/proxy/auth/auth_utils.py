@@ -511,11 +511,13 @@ def get_request_route(request: Request) -> str:
         ).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        # Only strip root_path when it is a meaningful prefix. Trailing
-        # slashes are stripped above so the result always keeps its leading
-        # "/" — stripping a bare "/" or "/prefix/" would otherwise produce
-        # paths like "team/new" and break route matching.
-        if root_path and raw_path.startswith(root_path):
+        # Strip root_path only when it matches whole path segments — guarding
+        # against sibling paths like "/apifoo" being truncated under
+        # root_path="/api". Trailing slashes on root_path are stripped above,
+        # so bare "/" or "/prefix/" still leave the leading "/" intact.
+        if root_path and (
+            raw_path == root_path or raw_path.startswith(root_path + "/")
+        ):
             return raw_path[len(root_path) :]
         return raw_path
     except Exception as e:

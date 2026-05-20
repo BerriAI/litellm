@@ -200,21 +200,15 @@ class IPAddressUtils:
 
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
-            trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
-            if not trusted_ranges:
-                IPAddressUtils.is_request_from_trusted_proxy(
-                    request, general_settings=general_settings
-                )
+            if not IPAddressUtils.is_request_from_trusted_proxy(
+                request, general_settings=general_settings
+            ):
+                direct_ip = request.client.host if request.client else None
+                if general_settings.get("mcp_trusted_proxy_ranges"):
+                    # Direct connection isn't in any configured trusted CIDR.
+                    verbose_proxy_logger.warning(
+                        "XFF header from untrusted IP %s, ignoring", direct_ip
+                    )
+                    return direct_ip
                 return _get_request_ip_address(request, use_x_forwarded_for=False)
-            # Validate direct connection is from trusted proxy
-            direct_ip = request.client.host if request.client else None
-            trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(
-                trusted_ranges
-            )
-            if not IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks):
-                # Untrusted source trying to set XFF - ignore XFF, use direct IP
-                verbose_proxy_logger.warning(
-                    "XFF header from untrusted IP %s, ignoring", direct_ip
-                )
-                return direct_ip
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
