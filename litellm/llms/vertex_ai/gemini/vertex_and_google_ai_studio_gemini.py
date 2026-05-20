@@ -296,7 +296,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Whether to include `id` on function_call / function_response parts.
 
-        Gemini 3.5+ on Google AI Studio accepts (and returns) `id` for strict
+        Gemini 3+ on Google AI Studio accepts (and returns) `id` for strict
         tool-call matching. Vertex AI rejects the field with HTTP 400.
         """
         if custom_llm_provider != "gemini":
