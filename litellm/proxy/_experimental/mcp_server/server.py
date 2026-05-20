@@ -342,16 +342,23 @@ if MCP_AVAILABLE:
         """
         List all available tools
         """
-        # Get user authentication from context variable
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = get_auth_context()
+        # Get user authentication from context variable.
+        # Keep this inside a try/except so that a missing context variable
+        # (e.g. middleware failure or out-of-context invocation) still returns
+        # [] rather than propagating an exception that breaks the MCP stream.
+        try:
+            (
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+                _client_ip,
+            ) = get_auth_context()
+        except Exception as e:
+            verbose_logger.exception(f"Error in list_tools - get_auth_context: {str(e)}")
+            return []
         with mcp_span(
             SPAN_MCP_PROTOCOL_LIST_TOOLS,
             attributes={
@@ -420,16 +427,28 @@ if MCP_AVAILABLE:
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
 
-        # Validate arguments
-        (
-            user_api_key_auth,
-            mcp_auth_header,
-            mcp_servers,
-            mcp_server_auth_headers,
-            oauth2_headers,
-            raw_headers,
-            _client_ip,
-        ) = get_auth_context()
+        # Get user authentication from context variable.
+        # Guard with try/except so a missing context variable (e.g. middleware
+        # failure or out-of-context invocation) returns a structured error
+        # rather than propagating an exception that breaks the MCP stream.
+        try:
+            (
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+                _client_ip,
+            ) = get_auth_context()
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error in mcp_server_tool_call - get_auth_context: {str(e)}"
+            )
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                isError=True,
+            )
 
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
