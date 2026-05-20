@@ -564,7 +564,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not (
             _supports_factory(
                 model=model,
-                custom_llm_provider=None,
+                custom_llm_provider="bedrock",
                 key="supports_output_config",
             )
             or AnthropicConfig._model_supports_effort_param(model)

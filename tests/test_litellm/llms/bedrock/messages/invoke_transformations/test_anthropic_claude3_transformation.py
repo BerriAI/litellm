@@ -694,7 +694,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
 
     mock_supports_factory.assert_called_with(
         model="us.anthropic.claude-opus-4-7",
-        custom_llm_provider=None,
+        custom_llm_provider="bedrock",
         key="supports_output_config",
     )
     assert result["output_config"] == {"effort": "high"}
