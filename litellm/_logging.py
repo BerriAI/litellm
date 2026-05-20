@@ -469,13 +469,9 @@ class CredentialScrubberFilter(logging.Filter):
             if isinstance(record.args, dict):
                 record.args = {
                     k: (
-                        (
-                            _REDACTED
-                            if _SECRET_KEY_NAME_RE.match(k)
-                            else _scrub_secrets(str(v))
-                        )
-                        if isinstance(v, str)
-                        else v
+                        _REDACTED
+                        if _SECRET_KEY_NAME_RE.match(k)
+                        else (_scrub_secrets(str(v)) if isinstance(v, str) else v)
                     )
                     for k, v in record.args.items()
                 }

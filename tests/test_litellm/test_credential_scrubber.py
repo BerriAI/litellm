@@ -201,3 +201,14 @@ class TestCredentialScrubberFilter:
         f.filter(record)
         assert "sk-rawsecretvalue123" not in str(record.args)
         assert "[REDACTED]" in str(record.args)
+
+    def test_dict_args_secret_key_non_string_value_redacted(self):
+        # Branch: dict key is a secret name but value is not a str (e.g. bytes).
+        # Key-name check must fire regardless of value type.
+        from litellm._logging import CredentialScrubberFilter
+
+        f = CredentialScrubberFilter()
+        record = self._make_record("config %s", {"api_key": b"sk-bytessecret123"})
+        f.filter(record)
+        assert "sk-bytessecret123" not in str(record.args)
+        assert "[REDACTED]" in str(record.args)
