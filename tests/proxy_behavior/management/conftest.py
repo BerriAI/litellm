@@ -54,6 +54,19 @@ async def proxy_app():
     config_path = _write_minimal_proxy_config()
     await initialize(config=config_path)
     async with proxy_startup_event(app):
+        # The lifespan kicks off ``prisma_client.check_view_exists()`` as a
+        # fire-and-forget background task. That task creates the
+        # ``LiteLLM_VerificationTokenView`` SQL view used by ``user_api_key_auth``
+        # to resolve a token to its user / role / team. On a fresh Postgres
+        # (CI), the first test races the task — the view doesn't exist yet,
+        # ``user_api_key_dict.user_id`` resolves to ``None``, and every authz
+        # check that depends on it fails confusingly. Locally the view already
+        # exists from prior runs, masking the race. Await it explicitly here
+        # so the suite is deterministic regardless of DB state.
+        from litellm.proxy import proxy_server as _proxy_server
+
+        if _proxy_server.prisma_client is not None:
+            await _proxy_server.prisma_client.check_view_exists()
         yield app
 
 
