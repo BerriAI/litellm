@@ -158,6 +158,42 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             },
         )
 
+    def _has_applicable_rate_limits(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> bool:
+        """
+        Check if any rate limits apply to batches.
+
+        Returns:
+            True if at least one enforceable limit exists, False otherwise.
+        """
+        # Global API key limits
+        if user_api_key_dict.rpm_limit is not None or user_api_key_dict.tpm_limit is not None:
+            return True
+
+        # User limits
+        if user_api_key_dict.user_rpm_limit is not None or user_api_key_dict.user_tpm_limit is not None:
+            return True
+
+        # Team limits
+        if user_api_key_dict.team_rpm_limit is not None or user_api_key_dict.team_tpm_limit is not None:
+            return True
+
+        # Team member limits
+        if user_api_key_dict.team_member_rpm_limit is not None or user_api_key_dict.team_member_tpm_limit is not None:
+            return True
+
+        # End user limits
+        if user_api_key_dict.end_user_rpm_limit is not None or user_api_key_dict.end_user_tpm_limit is not None:
+            return True
+
+        # Organization limits
+        if user_api_key_dict.organization_rpm_limit is not None or user_api_key_dict.organization_tpm_limit is not None:
+            return True
+
+        return False
+
     async def _check_and_increment_batch_counters(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -432,6 +468,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if not input_file_id:
                 verbose_proxy_logger.debug(
                     "No input_file_id in batch request, skipping rate limiting"
+                )
+                return data
+            
+            # Check if any rate limits apply before reading file
+            if not self._has_applicable_rate_limits(user_api_key_dict):
+                verbose_proxy_logger.debug(
+                    "No applicable rate limits defined for batch, skipping file retrieval"
                 )
                 return data
 
