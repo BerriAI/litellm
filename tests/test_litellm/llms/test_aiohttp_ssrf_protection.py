@@ -3,6 +3,7 @@ import ipaddress
 import pytest
 from unittest.mock import patch
 
+import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import (
     _SSRFGuardResolver,
     _assert_not_private_url,
@@ -88,6 +89,61 @@ class TestAiohttpSSRFProtection:
             return_value=[(None, None, None, None, ("not-an-ip", None))],
         ):
             _assert_not_private_url("https://example.com/")  # should not raise
+
+
+class TestAllowInternalIpsOptOut:
+    """allow_requests_to_internal_ips=True disables SSRF protection for on-prem use."""
+
+    def setup_method(self):
+        self._original = litellm.allow_requests_to_internal_ips
+
+    def teardown_method(self):
+        litellm.allow_requests_to_internal_ips = self._original
+
+    def test_private_ip_allowed_when_flag_set(self):
+        litellm.allow_requests_to_internal_ips = True
+        _assert_not_private_url("http://10.0.0.1/internal")  # must not raise
+
+    def test_localhost_allowed_when_flag_set(self):
+        litellm.allow_requests_to_internal_ips = True
+        _assert_not_private_url("http://127.0.0.1:11434/api/chat")  # Ollama local
+
+    def test_aws_metadata_allowed_when_flag_set(self):
+        litellm.allow_requests_to_internal_ips = True
+        _assert_not_private_url("http://169.254.169.254/latest/meta-data/")
+
+    def test_flag_false_still_blocks(self):
+        litellm.allow_requests_to_internal_ips = False
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_url("http://10.0.0.1/internal")
+
+    @pytest.mark.asyncio
+    async def test_resolver_allows_private_when_flag_set(self):
+        litellm.allow_requests_to_internal_ips = True
+        resolver = _SSRFGuardResolver()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 443))]
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                result = await resolver.resolve("internal.corp", 443)
+            assert result[0]["host"] == "10.0.0.1"
+
+        await run()
+
+    @pytest.mark.asyncio
+    async def test_resolver_blocks_private_when_flag_false(self):
+        litellm.allow_requests_to_internal_ips = False
+        resolver = _SSRFGuardResolver()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 443))]
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            with patch.object(loop, "getaddrinfo", return_value=mock_infos):
+                with pytest.raises(ValueError, match="private/reserved"):
+                    await resolver.resolve("evil.internal", 443)
+
+        await run()
 
 
 class TestSSRFGuardOnRequestMethods:

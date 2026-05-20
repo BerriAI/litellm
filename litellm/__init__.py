@@ -494,6 +494,11 @@ force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
 network_mock: bool = False  # When True, use mock transport — no real network calls
+allow_requests_to_internal_ips: bool = (
+    False  # When True, disables SSRF protection for private/reserved IPs.
+    # Only set this for self-hosted or on-prem deployments where api_base
+    # intentionally points at an internal address (e.g. local Ollama, vLLM).
+)
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
