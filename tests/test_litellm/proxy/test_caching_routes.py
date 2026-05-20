@@ -124,12 +124,12 @@ def test_cache_ping_failure(mock_redis_failure):
     assert "litellm_cache_params" in error_details
     assert "health_check_cache_params" in error_details
 
-    # Verify specific error message
-    assert "invalid username-password pair" in error_details["message"]
+    # Verify generic static message (exception text must not leak to clients)
+    assert error_details["message"] == "Service Unhealthy"
 
 
 def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
-    """CWE-209: Stack trace must not appear in the HTTP 503 response body."""
+    """CWE-209: Stack trace and exception text must not appear in the HTTP 503 response body."""
     response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
     assert response.status_code == 503
 
@@ -145,33 +145,33 @@ def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
     assert (
         'File "' not in raw_body
     ), "CWE-209: Python stack frame paths exposed in HTTP 503 response body"
+    # Exception text (e.g. Redis hostnames/IPs) must not leak either
+    assert (
+        "invalid username-password pair" not in raw_body
+    ), "CWE-209: Exception message text exposed in HTTP 503 response body"
 
-    # The error message field should still describe the failure
+    # The error message should be the safe static string
     error_details = json.loads(error["message"])
-    assert "invalid username-password pair" in error_details["message"]
+    assert error_details["message"] == "Service Unhealthy"
 
 
 def test_cache_ping_no_cache_initialized():
-    """Test cache ping when no cache is initialized"""
-    # Set cache to None
+    """Test cache ping when no cache is initialized returns 503 with a clear message."""
     original_cache = litellm.cache
     litellm.cache = None
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
-    assert response.status_code == 503
+    try:
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+        )
+        assert response.status_code == 503
 
-    data = response.json()
-    print("response data=", json.dumps(data, indent=4))
-    assert "error" in data
-    error = data["error"]
-
-    # Verify error contains all expected fields
-    assert "message" in error
-    error_details = json.loads(error["message"])
-    assert "Cache not initialized. litellm.cache is None" in error_details["message"]
-
-    # Restore original cache
-    litellm.cache = original_cache
+        data = response.json()
+        print("response data=", json.dumps(data, indent=4))
+        # HTTPException propagates directly; detail is a plain string in the response
+        assert "Cache not initialized" in str(data)
+    finally:
+        litellm.cache = original_cache
 
 
 def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_success):
