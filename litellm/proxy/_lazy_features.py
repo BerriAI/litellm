@@ -85,6 +85,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/v1/agents", "/agents", "/agent/"),
     ),
     LazyFeature(
+        name="gemini_agents",
+        module_path="litellm.proxy.google_endpoints.agents_endpoints",
+        path_prefixes=("/v1beta/agents",),
+    ),
+    LazyFeature(
         name="a2a",
         module_path="litellm.proxy.agent_endpoints.a2a_endpoints",
         path_prefixes=("/a2a", "/v1/a2a"),

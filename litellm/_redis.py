@@ -100,6 +100,8 @@ def _get_redis_cluster_kwargs(client=None):
         "azure_tenant_id",
         "azure_client_secret",
         "max_connections",
+        "socket_timeout",
+        "socket_connect_timeout",
     }
 
     return available_args
