@@ -1499,14 +1499,16 @@ class BaseAWSLLM:
         )
 
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        # Normalize header keys to lowercase before merging to prevent duplicate
-        # Content-Type/content-type entries in the SigV4 canonical string.  If
-        # both cases survive as separate dict keys, botocore joins their values
-        # ("application/json, application/json") and the resulting signature
-        # doesn't match the single-value header sent over the wire (401).
-        normalized: dict = {k.lower(): v for k, v in (headers or {}).items()}
-        normalized.setdefault("content-type", "application/json")
-        headers = normalized
+        headers = headers or {}
+        # Only add Content-Type if the caller hasn't already set it under any
+        # casing.  Without this guard, get_anthropic_headers() supplies a
+        # lowercase "content-type" key and the prepend below would add an
+        # uppercase "Content-Type" key alongside it.  botocore's AWSRequest
+        # treats them as the same header and joins the values into
+        # "application/json, application/json" in the SigV4 canonical string,
+        # while the actual request only sends one value — causing a 401.
+        if not any(k.lower() == "content-type" for k in headers):
+            headers = {"Content-Type": "application/json", **headers}
 
         aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(
@@ -1523,8 +1525,9 @@ class BaseAWSLLM:
         for header_name, header_value in headers.items():
             if header_value is not None:
                 request_headers_dict[header_name] = header_value
-        if "authorization" in headers:  # prevent sigv4 from overwriting the auth header
-            request_headers_dict.pop("authorization", None)
-            request_headers_dict["Authorization"] = headers["authorization"]
+        if (
+            headers is not None and "Authorization" in headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["Authorization"]
 
         return request_headers_dict, request.body
