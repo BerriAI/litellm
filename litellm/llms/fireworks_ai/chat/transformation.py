@@ -26,6 +26,7 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
+    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -254,15 +255,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
     # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
     # this index requires a full scan of model_cost (tens of thousands of
-    # entries), so we memoize it and invalidate when the dict identity or size
-    # changes. The cached value is a list of (key_short, model_info) tuples
-    # restricted to fireworks_ai/* entries.
+    # entries), so we memoize it. The cache key is (id(model_cost),
+    # mutation_generation): the generation counter is bumped on every
+    # register_model / reload path, so add+remove or in-place value
+    # replacement (which can leave id and len unchanged) still invalidates.
     _fireworks_index_cache: Optional[Tuple[int, int, List[Tuple[str, dict]]]] = None
 
     @classmethod
     def _get_fireworks_index(cls) -> List[Tuple[str, dict]]:
         model_cost = litellm.model_cost
-        signature = (id(model_cost), len(model_cost))
+        signature = (id(model_cost), get_model_cost_mutation_generation())
         cached = cls._fireworks_index_cache
         if (
             cached is not None
