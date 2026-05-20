@@ -92,6 +92,8 @@ from litellm.types.utils import CallTypesLiteral
 # Module-level singleton for the JWKS discovery endpoint to access.
 _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None
 
+_MCP_JWT_CALL_TYPES = frozenset({"call_mcp_tool", "list_mcp_tools"})
+
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
 _jwks_cache: Dict[str, tuple] = {}
 _JWKS_CACHE_TTL = 3600  # 1 hour
@@ -603,17 +605,23 @@ class MCPJWTSigner(CustomGuardrail):
     # FR-10: Scope building
     # ------------------------------------------------------------------
 
-    def _build_scope(self, raw_tool_name: str) -> str:
+    def _build_scope(
+        self,
+        raw_tool_name: str,
+        call_type: Optional[CallTypesLiteral] = None,
+    ) -> str:
         """
         Build the JWT scope string.
 
         When allowed_scopes is configured: join them verbatim.
         Otherwise auto-generate minimal, least-privilege scopes:
           - Tool call   → mcp:tools/call  mcp:tools/<name>:call
-          - No tool     → mcp:tools/call  mcp:tools/list
+          - No tool     → mcp:tools/list
 
         NOTE: tools/list is intentionally NOT granted on tool-call JWTs to
         prevent callers from enumerating tools they didn't ask to use.
+        Conversely, tools/call is NOT granted on tools/list-only JWTs so an
+        intercepted list token cannot be replayed to invoke tools.
         """
         if self.allowed_scopes is not None:
             return " ".join(self.allowed_scopes)
@@ -623,8 +631,14 @@ class MCPJWTSigner(CustomGuardrail):
         )
         if tool_name:
             scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
+        elif call_type == "call_mcp_tool":
+            # Tool-call request reached the signer without a tool name (e.g.
+            # missing mcp_tool_name in hook data). Fall back to a generic
+            # tools/call scope so the upstream server still accepts the
+            # invocation rather than rejecting it as a tools/list-only token.
+            scopes = ["mcp:tools/call"]
         else:
-            scopes = ["mcp:tools/call", "mcp:tools/list"]
+            scopes = ["mcp:tools/list"]
         return " ".join(scopes)
 
     # ------------------------------------------------------------------
@@ -673,6 +687,7 @@ class MCPJWTSigner(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         jwt_claims: Optional[Dict[str, Any]] = None,
+        call_type: Optional[CallTypesLiteral] = None,
     ) -> Dict[str, Any]:
         """
         Build JWT claims for the outbound MCP access token.
@@ -713,7 +728,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         # scope (FR-10)
         raw_tool_name: str = data.get("mcp_tool_name", "")
-        claims["scope"] = self._build_scope(raw_tool_name)
+        claims["scope"] = self._build_scope(raw_tool_name, call_type=call_type)
 
         # optional_claims passthrough (FR-15)
         claims = self._passthrough_optional_claims(claims, jwt_claims)
@@ -779,16 +794,20 @@ class MCPJWTSigner(CustomGuardrail):
         Verifies the incoming token (when configured), validates required claims,
         then signs an outbound JWT and injects it as the Authorization header.
 
-        All non-MCP call types pass through unchanged.
+        Signs outbound MCP tool calls and tools/list requests.
         """
-        if call_type != "call_mcp_tool":
+        if call_type not in _MCP_JWT_CALL_TYPES:
             return data
+
+        hook_data = dict(data)
+        if call_type == "list_mcp_tools":
+            hook_data["mcp_tool_name"] = ""
 
         # ------------------------------------------------------------------
         # FR-5: Verify incoming token before re-signing
         # ------------------------------------------------------------------
         jwt_claims: Optional[Dict[str, Any]] = None
-        raw_token: Optional[str] = data.get("incoming_bearer_token")
+        raw_token: Optional[str] = hook_data.get("incoming_bearer_token")
 
         if self.access_token_discovery_uri and raw_token:
             # Three-dot pattern → JWT;  otherwise opaque.
@@ -837,7 +856,9 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # Build outbound access token
         # ------------------------------------------------------------------
-        claims = self._build_claims(user_api_key_dict, data, jwt_claims)
+        claims = self._build_claims(
+            user_api_key_dict, hook_data, jwt_claims, call_type=call_type
+        )
 
         signed_token = jwt.encode(
             claims,
@@ -848,7 +869,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         # Merge into existing extra_headers — a prior guardrail in the chain may
         # have already injected tracing headers or correlation IDs.
-        existing_headers: Dict[str, str] = data.get("extra_headers") or {}
+        existing_headers: Dict[str, str] = hook_data.get("extra_headers") or {}
         new_headers: Dict[str, str] = {
             **existing_headers,
             "Authorization": f"Bearer {signed_token}",
@@ -875,17 +896,74 @@ class MCPJWTSigner(CustomGuardrail):
                 claims, self._kid
             )
 
-        data["extra_headers"] = new_headers
+        hook_data["extra_headers"] = new_headers
 
         verbose_proxy_logger.debug(
             "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d "
-            "verified=%s channel=%s",
+            "verified=%s channel=%s call_type=%s",
             claims.get("sub"),
             claims.get("act", {}).get("sub"),
-            data.get("mcp_tool_name"),
+            hook_data.get("mcp_tool_name"),
             claims["exp"],
             jwt_claims is not None,
             bool(self.channel_token_audience),
+            call_type,
         )
 
-        return data
+        return hook_data
+
+
+async def inject_mcp_jwt_headers_for_upstream(
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+    extra_headers: Optional[Dict[str, str]] = None,
+    raw_headers: Optional[Dict[str, str]] = None,
+    *,
+    for_list_tools: bool = False,
+    mcp_tool_name: str = "",
+) -> Dict[str, str]:
+    """
+    Sign outbound MCP headers when MCPJWTSigner is configured.
+
+    Used by tools/list paths that do not go through proxy pre_call_hook.
+    """
+    merged = dict(extra_headers or {})
+    signer = get_mcp_jwt_signer()
+    if signer is None or user_api_key_dict is None:
+        return merged
+
+    normalized_raw = {k.lower(): v for k, v in (raw_headers or {}).items()}
+    incoming_bearer_token: Optional[str] = None
+    auth_hdr = normalized_raw.get("authorization", "")
+    if auth_hdr.lower().startswith("bearer "):
+        incoming_bearer_token = auth_hdr[len("bearer ") :]
+
+    hook_data: Dict[str, Any] = {
+        "mcp_tool_name": "" if for_list_tools else mcp_tool_name,
+        "incoming_bearer_token": incoming_bearer_token,
+        "extra_headers": merged,
+    }
+    call_type: CallTypesLiteral = (
+        "list_mcp_tools" if for_list_tools else "call_mcp_tool"
+    )
+    try:
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415
+            proxy_logging_obj as _proxy_logging,
+        )
+
+        shared_cache = (
+            _proxy_logging.internal_usage_cache.dual_cache
+            if _proxy_logging is not None
+            else DualCache()
+        )
+    except Exception:
+        shared_cache = DualCache()
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=shared_cache,
+        data=hook_data,
+        call_type=call_type,
+    )
+    if isinstance(result, dict) and result.get("extra_headers"):
+        merged.update(result["extra_headers"])
+    return merged
