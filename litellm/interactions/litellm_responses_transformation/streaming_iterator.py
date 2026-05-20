@@ -83,6 +83,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         # Tracks whether we've already emitted a terminal completion event so
         # the StopIteration fallback path doesn't double-emit.
         self._sent_completion_event = False
+        # ID resolved from the first upstream chunk (item_id on a text delta or
+        # response.id on response.created). Persisted so the EOF terminal
+        # events stay correlated with the start events delivered earlier.
+        self._interaction_id: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Event builders
@@ -200,6 +204,8 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             interaction_id = (
                 getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
             )
+            if self._interaction_id is None:
+                self._interaction_id = interaction_id
 
             events: List[InteractionsAPIStreamingResponse] = []
             if not self.sent_interaction_start:
@@ -221,6 +227,8 @@ class LiteLLMResponsesInteractionsStreamingIterator:
                     if hasattr(responses_chunk, "response")
                     else None
                 ) or f"interaction_{id(self)}"
+                if self._interaction_id is None:
+                    self._interaction_id = response_id
                 return [self._build_interaction_start_event(response_id)]
             return []
 
@@ -251,11 +259,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self._sent_completion_event:
             return []
 
+        fallback_id = self._interaction_id or f"interaction_{id(self)}"
         terminal: List[InteractionsAPIStreamingResponse] = []
         if self.sent_content_start:
-            terminal.append(self._build_content_stop_event(None))
+            terminal.append(self._build_content_stop_event(fallback_id))
         if self.sent_interaction_start or self.collected_text:
-            terminal.append(self._build_completion_event(f"interaction_{id(self)}"))
+            terminal.append(self._build_completion_event(fallback_id))
             self._sent_completion_event = True
         return terminal
 

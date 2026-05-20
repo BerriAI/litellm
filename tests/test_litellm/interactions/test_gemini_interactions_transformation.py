@@ -446,6 +446,8 @@ class TestStreamingIterator:
                 "content": [{"type": "text", "text": "hi"}],
             }
         ]
+        # EOF-flushed terminal event must carry the same id as interaction.created.
+        assert terminal.id == emitted[0].id == "item_1"
 
     def test_response_completed_emits_stop_then_completion(self):
         """ResponseCompletedEvent expands into step.stop + interaction.completed."""
