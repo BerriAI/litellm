@@ -602,6 +602,28 @@ Since you shouldn't use 12.5, round down to **10** to leave a safety buffer. Thi
 - Total maximum connections: 8 workers × 10 connections = 80 connections
 - This stays safely under your database's 100 connection limit
 
+### Cap Idle DB Connections + Pass Extra Prisma URL Params
+
+If you're seeing a large number of idle Prisma connections that never close, set `database_socket_timeout` so Prisma closes any connection that's been silent past the threshold. You can also bound how long Prisma waits to open a new connection with `database_connect_timeout`, and pass arbitrary extra query-string params through to Prisma via `database_extra_connection_params`.
+
+These map to the Prisma [PostgreSQL connection URL params](https://www.prisma.io/docs/orm/overview/databases/postgresql) of the same name (minus the `database_` prefix), and LiteLLM appends them to both `DATABASE_URL` and `DIRECT_URL`.
+
+```yaml
+general_settings:
+  database_connection_pool_limit: 20
+  database_socket_timeout: 300   # close any connection idle/slow for >5 min
+  database_connect_timeout: 15   # fail fast if a new connection can't be established within 15s
+  database_extra_connection_params:
+    pgbouncer: "true"            # set if running behind PgBouncer
+    statement_cache_size: 0
+    sslmode: "require"
+```
+
+**Notes:**
+- `database_socket_timeout` is the main knob for capping idle DB connections from LiteLLM.
+- `database_connect_timeout` and `database_socket_timeout` are omitted from the URL when unset, so Prisma's defaults apply.
+- `database_extra_connection_params` is an untyped passthrough — any key you set here **overrides** the LiteLLM-set defaults for that key (e.g. you can override `pool_timeout` from this dict). Use it for `sslmode`, `pgbouncer`, `statement_cache_size`, or any other Prisma URL param.
+
 ## LiteLLM License Key (Enterprise)
 
 To enable [LiteLLM Enterprise features](https://docs.litellm.ai/docs/enterprise), set your license key as an environment variable:
