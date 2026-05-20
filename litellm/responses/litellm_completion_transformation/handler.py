@@ -61,12 +61,15 @@ class LiteLLMCompletionTransformationHandler:
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
+        # OpenAI Responses client metadata is not a chat.completions parameter.
+        # Some custom OpenAI-compatible providers reject unknown kwargs before
+        # making the HTTP call.
+        completion_args.pop("client_metadata", None)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
-            **litellm_completion_request,
-            **kwargs,
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -112,6 +115,10 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
+        # OpenAI Responses client metadata is not a chat.completions parameter.
+        # Some custom OpenAI-compatible providers reject unknown kwargs before
+        # making the HTTP call.
+        acompletion_args.pop("client_metadata", None)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper

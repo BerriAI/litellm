@@ -147,6 +147,35 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
         )
 
 
+def test_glm_json_object_injects_json_hint_when_missing(config: OpenAIConfig):
+    messages = [{"role": "user", "content": "Reply with one word."}]
+    result = config.transform_request(
+        model="custom_openai/GLM-5.1",
+        messages=messages,  # type: ignore[arg-type]
+        optional_params={"response_format": {"type": "json_object"}},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = result["messages"]
+    assert transformed_messages[0]["role"] == "system"
+    assert "json" in str(transformed_messages[0]["content"]).lower()
+
+
+def test_glm_json_object_does_not_inject_when_prompt_has_json(config: OpenAIConfig):
+    messages = [{"role": "user", "content": "Return JSON only."}]
+    result = config.transform_request(
+        model="custom_openai/GLM-5.1",
+        messages=messages,  # type: ignore[arg-type]
+        optional_params={"response_format": {"type": "json_object"}},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = result["messages"]
+    assert transformed_messages[0]["role"] == "user"
+
+
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(
