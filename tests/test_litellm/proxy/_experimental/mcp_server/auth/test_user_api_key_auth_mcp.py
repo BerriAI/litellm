@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call as mock_call, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -918,7 +918,9 @@ class TestMCPPassthroughColdStartAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            mock_mgr.get_mcp_server_by_name.assert_not_called()
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "passthrough_server", client_ip=""
+            )
 
     async def test_cold_start_rejects_server_specific_authorization_header(self):
         from fastapi import HTTPException
@@ -1016,7 +1018,7 @@ class TestMCPPassthroughColdStartAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+            assert mock_mgr.get_mcp_server_by_name.call_args_list[-1] == mock_call(
                 "passthrough_server", client_ip="203.0.113.10"
             )
 
@@ -1111,7 +1113,7 @@ class TestMCPPassthroughColdStartAdmission:
             (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
-            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+            assert mock_mgr.get_mcp_server_by_name.call_args_list[-1] == mock_call(
                 "passthrough_server", client_ip=""
             )
 
@@ -1148,7 +1150,7 @@ class TestMCPPassthroughColdStartAdmission:
             (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
-            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+            assert mock_mgr.get_mcp_server_by_name.call_args_list[-1] == mock_call(
                 "passthrough_server", client_ip=""
             )
 
@@ -1996,7 +1998,7 @@ class TestMCPDelegateAuthToUpstream:
             delegate_auth_to_upstream=True,
         )
 
-        def lookup_by_name(name):
+        def lookup_by_name(name, **_kwargs):
             # Only the *exact* delegated name resolves. Anything else (e.g.
             # ``delegated_server/extra``) returns None so the bypass fails.
             if name == "delegated_server":
@@ -2059,7 +2061,7 @@ class TestMCPDelegateAuthToUpstream:
             auth_type=MCPAuth.api_key,
         )
 
-        def lookup_by_name(name):
+        def lookup_by_name(name, **_kwargs):
             return {
                 "delegated_server": delegate_server,
                 "non_delegate_server": non_delegate,
