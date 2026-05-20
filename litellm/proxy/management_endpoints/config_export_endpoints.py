@@ -440,19 +440,7 @@ async def export_config(
     - End-user records (LiteLLM_EndUserTable)
     - Deployment-specific settings (database_url, host, port, etc.)
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admins can export config",
-        )
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Database not connected. Cannot export config.",
-        )
+    prisma_client = _get_prisma_with_auth(user_api_key_dict, action="export")
 
     # Resolve which sections to include
     if include:
@@ -497,7 +485,6 @@ async def export_config(
                 await prisma_client.db.litellm_organizationtable.find_many(
                     take=limit,
                     order={"created_at": "asc"},
-                    include={"litellm_budget_table": True},
                 ),
             )
             envelope["organizations"] = [
@@ -614,6 +601,29 @@ async def export_config(
 
 
 # ---------------------------------------------------------------------------
+# Validates the user as PROXY_ADMIN and returns a Prisma client instance.
+# ---------------------------------------------------------------------------
+
+
+def _get_prisma_with_auth(user_api_key_dict: UserAPIKeyAuth, action: str = "access"):
+    from litellm.proxy.proxy_server import prisma_client  # avoid circular import
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only proxy admins can {action} config",
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database not connected. Cannot {action} config.",
+        )
+
+    return prisma_client
+
+
+# ---------------------------------------------------------------------------
 # POST /config/import
 # ---------------------------------------------------------------------------
 
@@ -647,19 +657,7 @@ async def import_config(
     If a section fails, that section is rolled back; already-committed sections
     are not affected.  The result object reports per-section outcomes.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admins can import config",
-        )
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Database not connected. Cannot import config.",
-        )
+    prisma_client = _get_prisma_with_auth(user_api_key_dict, action="import")
 
     # Structural + dependency validation — fail fast before touching DB
     data = body.data
