@@ -37,11 +37,17 @@ async def test_each_actor_can_self_info(actor, proxy_client, world):
     )
 
 
-async def test_proxy_admin_actor_can_create_keys_for_others(proxy_client, world):
+async def test_proxy_admin_actor_can_create_keys_for_others(
+    proxy_client, prisma, world
+):
     """Diagnostic: the seeded PROXY_ADMIN actor must be able to /key/generate
     a key for another user. If this fails, the user_role is not propagating
     through user_api_key_auth → the actor's auth context disagrees with the
-    DB row, and the cause is elsewhere in the auth stack (not the seed)."""
+    DB row, and the cause is elsewhere in the auth stack (not the seed).
+
+    On failure we also probe the underlying state so the CI log tells us
+    exactly which surface returned the wrong shape: the raw token row, the
+    user row, and the combined view (what the auth resolver consumes)."""
     seeder = world.keys[Actor.PROXY_ADMIN]
     target_user_id = world.keys[Actor.OWNER].user_id
 
@@ -50,9 +56,24 @@ async def test_proxy_admin_actor_can_create_keys_for_others(proxy_client, world)
         headers={"Authorization": f"Bearer {seeder.cleartext}"},
         json={"key_alias": "diag-proxy-admin-seeder", "user_id": target_user_id},
     )
-    assert resp.status_code == 200, (
-        f"PROXY_ADMIN-seeded actor can't create keys for others: "
-        f"{resp.status_code} {resp.text}\n"
-        f"  seeder user_id: {seeder.user_id}\n"
-        f"  target user_id: {target_user_id}"
-    )
+    if resp.status_code != 200:
+        token_row = await prisma.db.litellm_verificationtoken.find_unique(
+            where={"token": seeder.hashed}
+        )
+        user_row = await prisma.db.litellm_usertable.find_unique(
+            where={"user_id": seeder.user_id}
+        )
+        view_rows = await prisma.db.query_raw(
+            'SELECT user_id, user_role FROM "LiteLLM_VerificationTokenView" '
+            'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = '
+            '"LiteLLM_VerificationTokenView".user_id WHERE token = $1',
+            seeder.hashed,
+        )
+        pytest.fail(
+            f"PROXY_ADMIN-seeded actor can't create keys for others: "
+            f"{resp.status_code} {resp.text}\n"
+            f"  seeder user_id (expected): {seeder.user_id}\n"
+            f"  token row.user_id        : {getattr(token_row, 'user_id', '<missing>')!r}\n"
+            f"  user  row.user_role      : {getattr(user_row, 'user_role', '<missing>')!r}\n"
+            f"  view  row                 : {view_rows!r}"
+        )
