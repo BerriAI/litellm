@@ -53,16 +53,24 @@ def _prune_oauth_metadata_cache(now: Optional[float] = None) -> None:
     for cache_key in expired_cache_keys:
         _OAUTH_METADATA_CACHE.pop(cache_key, None)
 
-    if len(_OAUTH_METADATA_CACHE) <= _OAUTH_METADATA_CACHE_MAX_SIZE:
-        return
+    if len(_OAUTH_METADATA_CACHE) > _OAUTH_METADATA_CACHE_MAX_SIZE:
+        overflow = len(_OAUTH_METADATA_CACHE) - _OAUTH_METADATA_CACHE_MAX_SIZE
+        cache_keys_by_expiry = sorted(
+            _OAUTH_METADATA_CACHE,
+            key=lambda cache_key: _OAUTH_METADATA_CACHE[cache_key][0],
+        )
+        for cache_key in cache_keys_by_expiry[:overflow]:
+            _OAUTH_METADATA_CACHE.pop(cache_key, None)
 
-    overflow = len(_OAUTH_METADATA_CACHE) - _OAUTH_METADATA_CACHE_MAX_SIZE
-    cache_keys_by_expiry = sorted(
-        _OAUTH_METADATA_CACHE,
-        key=lambda cache_key: _OAUTH_METADATA_CACHE[cache_key][0],
-    )
-    for cache_key in cache_keys_by_expiry[:overflow]:
-        _OAUTH_METADATA_CACHE.pop(cache_key, None)
+    # Drop locks whose cache entry has been evicted and that aren't currently
+    # held; held locks stay so in-flight callers continue to coalesce.
+    for cache_key in list(_OAUTH_METADATA_FETCH_LOCKS):
+        if cache_key in _OAUTH_METADATA_CACHE:
+            continue
+        lock = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
+        if lock is None or lock.locked():
+            continue
+        _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
 
 def encode_state_with_base_url(

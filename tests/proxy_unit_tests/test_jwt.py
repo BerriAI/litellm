@@ -1757,7 +1757,56 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_multi_issuer_jwt_rejects_unknown_issuer(monkeypatch):
+async def test_multi_issuer_jwt_falls_back_to_global_jwks_for_unknown_issuer(
+    monkeypatch,
+):
+    """Unknown ``iss`` claims fall through to the global ``JWT_PUBLIC_KEY_URL``
+    path so adding the new ``issuers`` config to a live deployment doesn't
+    break tokens minted by issuers that still rely on the legacy global JWKS.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    configured_issuer = "https://issuer.example.com"
+    unknown_issuer = "https://unknown-issuer.example.com"
+    global_jwks_url = "https://global.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", global_jwks_url)
+
+    configured_private_key, configured_jwk = _get_rsa_key_and_jwk(kid="configured-key")
+    unknown_private_key, unknown_jwk = _get_rsa_key_and_jwk(kid="global-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": configured_issuer,
+                "jwks_url": f"{configured_issuer}/keys",
+                "audience": "expected-audience",
+            }
+        ],
+        keys_by_url={
+            f"{configured_issuer}/keys": [configured_jwk],
+            global_jwks_url: [unknown_jwk],
+        },
+    )
+    token = _encode_rsa_jwt(
+        private_key=unknown_private_key,
+        issuer=unknown_issuer,
+        audience="expected-audience",
+        kid="global-key",
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims["iss"] == unknown_issuer
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_jwt_unknown_issuer_without_global_jwks_rejected(
+    monkeypatch,
+):
+    """When there is no ``JWT_PUBLIC_KEY_URL`` to fall back to, an unknown
+    ``iss`` claim still fails — the fallback path raises ``Missing JWT
+    Public Key URL`` rather than the legacy ``Unsupported JWT issuer``.
+    """
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
 
@@ -1783,7 +1832,7 @@ async def test_multi_issuer_jwt_rejects_unknown_issuer(monkeypatch):
     with pytest.raises(Exception) as exc:
         await jwt_handler.auth_jwt(token=token)
 
-    assert "Unsupported JWT issuer" in str(exc.value)
+    assert "Missing JWT Public Key URL" in str(exc.value)
 
 
 @pytest.mark.asyncio

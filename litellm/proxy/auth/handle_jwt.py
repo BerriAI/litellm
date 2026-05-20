@@ -883,17 +883,17 @@ class JWTHandler:
 
         claims = self.get_unverified_claims(token=token)
         if claims is None:
-            raise Exception("Invalid JWT Submitted")
+            return None
 
         issuer = claims.get("iss")
         if not isinstance(issuer, str) or not issuer:
-            raise Exception("JWT issuer claim is required when issuer config is set")
+            return None
 
         for issuer_config in issuer_configs:
             if issuer_config.issuer == issuer:
                 return issuer_config
 
-        raise Exception(f"Unsupported JWT issuer: {issuer}")
+        return None
 
     def _get_jwks_url_for_issuer(self, issuer_config: JWTIssuerConfig) -> str:
         if issuer_config.jwks_url:

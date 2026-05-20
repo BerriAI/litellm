@@ -7,7 +7,9 @@ Covers:
   network errors as HTTP 502).
 """
 
+import asyncio
 import sys
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -20,6 +22,7 @@ sys.path.insert(0, "../../../../../")
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     _OAUTH_METADATA_CACHE,
+    _OAUTH_METADATA_FETCH_LOCKS,
     _build_oauth_protected_resource_response,
 )
 from litellm.proxy._types import MCPTransport
@@ -42,8 +45,10 @@ def _mock_mcp_client_ip():
 def _clear_metadata_cache():
     """Prevent cross-test cache bleed for the oauth-protected-resource TTL cache."""
     _OAUTH_METADATA_CACHE.clear()
+    _OAUTH_METADATA_FETCH_LOCKS.clear()
     yield
     _OAUTH_METADATA_CACHE.clear()
+    _OAUTH_METADATA_FETCH_LOCKS.clear()
 
 
 def _make_request(base_url: str = "https://gateway.example.com/") -> Request:
@@ -231,6 +236,37 @@ def test_oauth_metadata_cache_prunes_to_max_size():
         f"server-{max_size + 9}",
         f"https://upstream/{max_size + 9}",
     ) in _OAUTH_METADATA_CACHE
+
+
+def test_oauth_metadata_fetch_locks_pruned_alongside_cache():
+    now = 1_000_000.0
+    cached_key = ("server-active", "https://upstream/active")
+    expired_key = ("server-expired", "https://upstream/expired")
+    orphan_key = ("server-orphan", "https://upstream/orphan")
+
+    _OAUTH_METADATA_CACHE[cached_key] = (now + 100, {"index": 0})
+    _OAUTH_METADATA_CACHE[expired_key] = (now - 1, {"index": 1})
+
+    _OAUTH_METADATA_FETCH_LOCKS[cached_key] = asyncio.Lock()
+    _OAUTH_METADATA_FETCH_LOCKS[expired_key] = asyncio.Lock()
+    _OAUTH_METADATA_FETCH_LOCKS[orphan_key] = asyncio.Lock()
+
+    discoverable_endpoints._prune_oauth_metadata_cache(now)
+
+    assert cached_key in _OAUTH_METADATA_FETCH_LOCKS
+    assert expired_key not in _OAUTH_METADATA_FETCH_LOCKS
+    assert orphan_key not in _OAUTH_METADATA_FETCH_LOCKS
+
+
+@pytest.mark.asyncio
+async def test_oauth_metadata_fetch_locks_held_lock_preserved_during_prune():
+    held_key = ("server-busy", "https://upstream/busy")
+    held_lock = asyncio.Lock()
+    _OAUTH_METADATA_FETCH_LOCKS[held_key] = held_lock
+
+    async with held_lock:
+        discoverable_endpoints._prune_oauth_metadata_cache(time.time())
+        assert held_key in _OAUTH_METADATA_FETCH_LOCKS
 
 
 @pytest.mark.asyncio
