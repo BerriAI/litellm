@@ -241,20 +241,70 @@ class TestYouComSearch:
             config.get_complete_url(api_base="https://x.example/", optional_params={})
             == "https://x.example/v1/search"
         )
+        # With an API key configured, default base is the keyed endpoint.
         assert (
             config.get_complete_url(api_base=None, optional_params={})
             == "https://ydc-index.io/v1/search"
         )
 
-    def test_you_com_search_raises_without_api_key(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_you_com_search_keyless_free_tier(self, monkeypatch):
         """
-        validate_environment must raise when no YOUCOM_API_KEY is set
-        and no api_key is explicitly passed.
+        Without YOUCOM_API_KEY, the adapter targets the keyless free-tier
+        endpoint and sends no X-API-Key header.
+        """
+        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {
+                "web": [
+                    {
+                        "title": "Keyless Result",
+                        "url": "https://example.com/keyless",
+                        "snippets": ["snippet from keyless tier"],
+                        "description": "desc",
+                        "page_age": "2025-03-01T00:00:00Z",
+                    }
+                ],
+                "news": [],
+            },
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="hello world",
+                search_provider="you_com",
+            )
+
+            call_args = mock_post.call_args
+            assert (
+                call_args.kwargs["url"] == "https://api.you.com/v1/agents/search"
+            )
+            headers = call_args.kwargs.get("headers", {})
+            assert "X-API-Key" not in headers
+            assert headers["Content-Type"] == "application/json"
+
+            assert len(response.results) == 1
+            assert response.results[0].title == "Keyless Result"
+
+    def test_you_com_search_validate_environment_keyless(self, monkeypatch):
+        """
+        validate_environment must NOT raise when no key is configured —
+        the keyless free tier is the default behavior.
         """
         monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
 
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         config = YouComSearchConfig()
-        with pytest.raises(ValueError, match="YOUCOM_API_KEY"):
-            config.validate_environment(headers={}, api_key=None)
+        headers = config.validate_environment(headers={}, api_key=None)
+        assert "X-API-Key" not in headers
+        assert headers["Content-Type"] == "application/json"

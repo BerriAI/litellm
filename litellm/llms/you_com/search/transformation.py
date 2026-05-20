@@ -40,7 +40,11 @@ class YouComSearchRequest(_YouComSearchRequestRequired, total=False):
 
 
 class YouComSearchConfig(BaseSearchConfig):
+    # Keyed tier (higher rate limits): authenticate with X-API-Key.
     YOU_COM_API_BASE = "https://ydc-index.io"
+    # Keyless free tier: IP-throttled (100 queries/day) and requires no auth.
+    # Used automatically when YOUCOM_API_KEY is not set.
+    YOU_COM_FREE_API_BASE = "https://api.you.com/v1/agents/search"
 
     @staticmethod
     def ui_friendly_name() -> str:
@@ -53,13 +57,17 @@ class YouComSearchConfig(BaseSearchConfig):
         api_base: Optional[str] = None,
         **kwargs,
     ) -> Dict:
+        """
+        Set headers for the You.com Search API.
+
+        If YOUCOM_API_KEY (or an explicit api_key) is present, use the keyed
+        endpoint with the `X-API-Key` header. Otherwise fall through to the
+        keyless free tier; no auth header is required.
+        """
         api_key = api_key or get_secret_str("YOUCOM_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "YOUCOM_API_KEY is not set. Set `YOUCOM_API_KEY` environment variable."
-            )
-        headers["X-API-Key"] = api_key
         headers["Content-Type"] = "application/json"
+        if api_key:
+            headers["X-API-Key"] = api_key
         return headers
 
     def get_complete_url(
@@ -69,12 +77,29 @@ class YouComSearchConfig(BaseSearchConfig):
         data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
-        api_base = (
-            api_base or get_secret_str("YOUCOM_API_BASE") or self.YOU_COM_API_BASE
-        )
+        """
+        Pick the endpoint based on whether an API key is configured.
+
+        - api_base explicit override     -> use it as-is (normalized)
+        - YOUCOM_API_KEY set             -> keyed endpoint (ydc-index.io/v1/search)
+        - no key                         -> keyless free tier (api.you.com/v1/agents/search)
+        """
+        if api_base is None:
+            api_base = get_secret_str("YOUCOM_API_BASE")
+
+        if api_base is None:
+            api_key = get_secret_str("YOUCOM_API_KEY")
+            if api_key:
+                api_base = self.YOU_COM_API_BASE
+            else:
+                # Keyless free tier already includes the full path.
+                return self.YOU_COM_FREE_API_BASE
+
         api_base = api_base.rstrip("/")
 
-        if not api_base.endswith("/v1/search"):
+        if not api_base.endswith("/v1/search") and not api_base.endswith(
+            "/v1/agents/search"
+        ):
             api_base = f"{api_base}/v1/search"
 
         return api_base
