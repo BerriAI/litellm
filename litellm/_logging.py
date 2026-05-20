@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -429,3 +430,45 @@ def _is_debugging_on() -> bool:
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+_SECRET_KEY_RE = re.compile(
+    r"(?i)"
+    r"(api[_\-]?key|secret[_\-]?key|access[_\-]?key|auth[_\-]?token|"
+    r"password|passwd|token|bearer|credential|private[_\-]?key|"
+    r"encryption[_\-]?key|master[_\-]?key|redis[_\-]?password|"
+    r"client[_\-]?secret|aws[_\-]?secret|gcp[_\-]?key|litellm[_\-]?key)"
+    r'(["\']?\s*[:=]\s*["\']?)([^\s\'"&,}\]]{6,})'
+)
+_REDACTED = "[REDACTED]"
+
+
+def _scrub_secrets(text: str) -> str:
+    """Replace secret values in log text with [REDACTED]."""
+    return _SECRET_KEY_RE.sub(lambda m: m.group(1) + m.group(2) + _REDACTED, text)
+
+
+class CredentialScrubberFilter(logging.Filter):
+    """Logging filter that redacts credential values from all log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg and isinstance(record.msg, str):
+            record.msg = _scrub_secrets(record.msg)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {
+                    k: _scrub_secrets(str(v)) if isinstance(v, str) else v
+                    for k, v in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(
+                    _scrub_secrets(str(a)) if isinstance(a, str) else a
+                    for a in record.args
+                )
+        return True
+
+
+_credential_scrubber = CredentialScrubberFilter()
+verbose_logger.addFilter(_credential_scrubber)
+verbose_proxy_logger.addFilter(_credential_scrubber)
+verbose_router_logger.addFilter(_credential_scrubber)
