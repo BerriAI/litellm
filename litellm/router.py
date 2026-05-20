@@ -5670,6 +5670,7 @@ class Router:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         container_id = kwargs.get("container_id")
+        _forwarded_model_id = kwargs.get("model_id")
         if isinstance(container_id, str):
             decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
             original_id = decoded.get("response_id", container_id)
@@ -5678,7 +5679,14 @@ class Router:
             decoded_provider = decoded.get("custom_llm_provider")
             if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
                 kwargs["custom_llm_provider"] = decoded_provider
-            model_id = decoded.get("model_id")
+            # Fall back to the model_id forwarded by the proxy when the container_id
+            # is a native upstream ID (e.g. Azure hex cntr_) that carries no LiteLLM
+            # routing payload, so deployment credentials (api_base, api_key) are applied.
+            model_id = decoded.get("model_id") or (
+                _forwarded_model_id.strip()
+                if isinstance(_forwarded_model_id, str) and _forwarded_model_id.strip()
+                else None
+            )
             if model_id:
                 kwargs["model"] = model_id
                 return await self._ageneric_api_call_with_fallbacks(
