@@ -272,8 +272,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         # Fallback: preserve historical substring matching for model name
         # variants (e.g. fine-tuned or regionally-suffixed versions of a
-        # known model). Look for any fireworks_ai entry whose normalized
-        # short name is a substring of our normalized short name.
+        # known model). Pick the *longest* matching entry so a more specific
+        # known model (e.g. "qwen3-8b-instruct") wins over a less specific
+        # one (e.g. "qwen3-8b") when the query model is more specific still.
+        best_match_short: Optional[str] = None
+        best_match_value: Optional[bool] = None
         for key, model_info in litellm.model_cost.items():
             if not key.startswith("fireworks_ai/"):
                 continue
@@ -284,10 +287,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
             key_short = key[len("fireworks_ai/") :]
             if key_short.startswith("accounts/fireworks/models/"):
                 key_short = key_short[len("accounts/fireworks/models/") :]
-            if key_short and key_short in short_name:
-                return cast(Optional[bool], model_info.get(capability))
+            if not key_short or key_short not in short_name:
+                continue
+            if best_match_short is None or len(key_short) > len(best_match_short):
+                best_match_short = key_short
+                best_match_value = cast(Optional[bool], model_info.get(capability))
 
-        return None
+        return best_match_value
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
         supports_function_calling_value = self._get_model_cost_capability(

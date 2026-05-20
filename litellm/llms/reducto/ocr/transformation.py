@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -19,11 +19,6 @@ from litellm.llms.reducto.common import (
 
 
 class _BaseReductoOCRConfig(BaseOCRConfig):
-    def __init__(self) -> None:
-        super().__init__()
-        self._api_key: Optional[str] = None
-        self._api_base: Optional[str] = None
-
     def map_ocr_params(
         self,
         non_default_params: dict,
@@ -54,9 +49,6 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
                 "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
             )
 
-        self._api_key = resolved_key
-        self._api_base = (api_base or REDUCTO_API_BASE).rstrip("/")
-
         return {
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
@@ -83,32 +75,56 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
             )
         return source_url
 
-    def _ensure_file_id_sync(self, model: str, document: DocumentType) -> str:
+    @staticmethod
+    def _resolve_credentials(
+        api_key: Optional[str], api_base: Optional[str]
+    ) -> Tuple[str, str]:
+        from litellm.secret_managers.main import get_secret_str
+
+        resolved_key = api_key or get_secret_str("REDUCTO_API_KEY")
+        if resolved_key is None:
+            raise ValueError(
+                "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+            )
+        resolved_base = (api_base or REDUCTO_API_BASE).rstrip("/")
+        return resolved_key, resolved_base
+
+    def _ensure_file_id_sync(
+        self,
+        model: str,
+        document: DocumentType,
+        api_key: Optional[str],
+        api_base: Optional[str],
+    ) -> str:
         source_url = self._get_source_url(document=document, model=model)
         file_id, raw_bytes, mime = extract_file_id_or_bytes(source_url, model=model)
         if file_id is not None:
             return file_id
-        if self._api_key is None:
-            raise ValueError("Reducto API key was not initialized before OCR upload.")
+        resolved_key, resolved_base = self._resolve_credentials(api_key, api_base)
         return upload_bytes_sync(
             raw_bytes=raw_bytes or b"",
             mime=mime,
-            api_key=self._api_key,
-            api_base=self._api_base,
+            api_key=resolved_key,
+            api_base=resolved_base,
         )
 
-    async def _ensure_file_id_async(self, model: str, document: DocumentType) -> str:
+    async def _ensure_file_id_async(
+        self,
+        model: str,
+        document: DocumentType,
+        api_key: Optional[str],
+        api_base: Optional[str],
+    ) -> str:
         source_url = self._get_source_url(document=document, model=model)
         file_id, raw_bytes, mime = extract_file_id_or_bytes(source_url, model=model)
         if file_id is not None:
             return file_id
-        if self._api_key is None:
-            raise ValueError("Reducto API key was not initialized before OCR upload.")
+        resolved_key, resolved_base = self._resolve_credentials(api_key, api_base)
         return await upload_bytes_async(
             raw_bytes=raw_bytes or b"",
             mime=mime,
-            api_key=self._api_key,
-            api_base=self._api_base,
+            api_key=resolved_key,
+            api_base=resolved_base,
         )
 
     def transform_ocr_response(
@@ -146,7 +162,12 @@ class ReductoParseV3Config(_BaseReductoOCRConfig):
         headers: dict,
         **kwargs,
     ) -> OCRRequestData:
-        file_id = self._ensure_file_id_sync(model=model, document=document)
+        file_id = self._ensure_file_id_sync(
+            model=model,
+            document=document,
+            api_key=kwargs.get("api_key"),
+            api_base=kwargs.get("api_base"),
+        )
         return OCRRequestData(data={"input": file_id, **optional_params}, files=None)
 
     async def async_transform_ocr_request(
@@ -157,7 +178,12 @@ class ReductoParseV3Config(_BaseReductoOCRConfig):
         headers: dict,
         **kwargs,
     ) -> OCRRequestData:
-        file_id = await self._ensure_file_id_async(model=model, document=document)
+        file_id = await self._ensure_file_id_async(
+            model=model,
+            document=document,
+            api_key=kwargs.get("api_key"),
+            api_base=kwargs.get("api_base"),
+        )
         return OCRRequestData(data={"input": file_id, **optional_params}, files=None)
 
 
@@ -180,7 +206,12 @@ class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
         headers: dict,
         **kwargs,
     ) -> OCRRequestData:
-        file_id = self._ensure_file_id_sync(model=model, document=document)
+        file_id = self._ensure_file_id_sync(
+            model=model,
+            document=document,
+            api_key=kwargs.get("api_key"),
+            api_base=kwargs.get("api_base"),
+        )
         return OCRRequestData(
             data=self._build_legacy_body(
                 file_id=file_id, optional_params=optional_params
@@ -196,7 +227,12 @@ class ReductoParseLegacyConfig(_BaseReductoOCRConfig):
         headers: dict,
         **kwargs,
     ) -> OCRRequestData:
-        file_id = await self._ensure_file_id_async(model=model, document=document)
+        file_id = await self._ensure_file_id_async(
+            model=model,
+            document=document,
+            api_key=kwargs.get("api_key"),
+            api_base=kwargs.get("api_base"),
+        )
         return OCRRequestData(
             data=self._build_legacy_body(
                 file_id=file_id, optional_params=optional_params
