@@ -945,9 +945,22 @@ async def inject_mcp_jwt_headers_for_upstream(
     call_type: CallTypesLiteral = (
         "list_mcp_tools" if for_list_tools else "call_mcp_tool"
     )
+    try:
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415
+            proxy_logging_obj as _proxy_logging,
+        )
+
+        shared_cache = (
+            _proxy_logging.internal_usage_cache.dual_cache
+            if _proxy_logging is not None
+            else DualCache()
+        )
+    except Exception:
+        shared_cache = DualCache()
+
     result = await signer.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
-        cache=DualCache(),
+        cache=shared_cache,
         data=hook_data,
         call_type=call_type,
     )
