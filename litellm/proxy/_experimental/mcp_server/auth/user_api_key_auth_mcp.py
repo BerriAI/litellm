@@ -19,10 +19,18 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
     """Parse a single MCP server name from /mcp/{name} or /{name}/mcp path patterns.
-    Returns None for the aggregate /mcp route (no bypass for multi-server paths)."""
-    m = re.match(r"^/mcp/([^/,?#]+)", path)
+    Returns None for the aggregate /mcp route (no bypass for multi-server paths).
+
+    Multi-server CSV paths like ``/mcp/server1,server2`` also return ``None`` —
+    the cold-start bypass must not activate when any of the co-targeted servers
+    might not be passthrough-eligible. The regex stops at ``/?#`` only; the
+    comma check is handled explicitly below."""
+    m = re.match(r"^/mcp/([^/?#]+)", path)
     if m:
-        return [m.group(1)]
+        segment = m.group(1)
+        if "," in segment:
+            return None
+        return [segment]
     m = re.match(r"^/([^/,?#]+)/mcp", path)
     if m:
         return [m.group(1)]
@@ -32,10 +40,15 @@ def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
 def _is_mcp_passthrough_cold_start(
     scope: Scope, mcp_servers: Optional[List[str]], client_ip: Optional[str]
 ) -> bool:
-    """True when the request targets a pass-through server with no auth headers —
-    the cold-start OAuth discovery case per RFC 9728 / MCP Authorization spec.
-    Lets the route handler's 401 emitter produce the spec-compliant WWW-Authenticate
-    challenge instead of surfacing a generic admission error."""
+    """True only when EVERY targeted server is a pass-through server with no
+    auth headers — the cold-start OAuth discovery case per RFC 9728 / MCP
+    Authorization spec. Lets the route handler's 401 emitter produce the
+    spec-compliant WWW-Authenticate challenge instead of surfacing a generic
+    admission error.
+
+    Uses "all" semantics (mirrors :meth:`MCPRequestHandler._target_servers_use_oauth2`):
+    one non-passthrough target in a co-targeted set must not flip the bypass
+    open for the others. Fails closed when any target cannot be resolved."""
     if not mcp_servers:
         return False
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -46,9 +59,9 @@ def _is_mcp_passthrough_cold_start(
         server = global_mcp_server_manager.get_mcp_server_by_name(
             name, client_ip=client_ip
         )
-        if server is not None and getattr(server, "is_oauth_passthrough", False):
-            return True
-    return False
+        if server is None or not getattr(server, "is_oauth_passthrough", False):
+            return False
+    return True
 
 
 def _is_litellm_auth_admission_error(exc: Exception) -> bool:

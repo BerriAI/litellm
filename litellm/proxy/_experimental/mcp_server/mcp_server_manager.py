@@ -153,16 +153,6 @@ def _extract_upstream_auth_failure(
                         www_authenticate = None
                 return status_code, www_authenticate
 
-        if isinstance(current, HTTPStatusError):
-            status_code = getattr(current.response, "status_code", None)
-            if isinstance(status_code, int) and status_code in (401, 403):
-                www_authenticate = None
-                try:
-                    www_authenticate = current.response.headers.get("www-authenticate")
-                except Exception:
-                    pass
-                return status_code, www_authenticate
-
         # anyio / PEP 654 ExceptionGroup
         sub_exceptions = getattr(current, "exceptions", None)
         if sub_exceptions:
