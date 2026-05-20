@@ -54,24 +54,34 @@ Need Help or want dedicated support ? Talk to a founder [here]: (https://enterpr
 
 ## 2. Recommended Machine Specifications
 
-For optimal performance in production, we recommend the following minimum machine specifications:
+For optimal performance in production, we recommend the following resource configuration.
 
-| Resource | Recommended Value |
-|----------|------------------|
-| CPU      | 4 vCPU           |
-| Memory   | 8 GB RAM         |
+**1. Memory `requests` and `limits`**
 
-These specifications provide:
-- Sufficient compute power for handling concurrent requests
-- Adequate memory for request processing and caching
+```yaml
+resources:
+  requests:
+    cpu: "1" # should be 1*num_workers
+    memory: "4Gi" # should be 4*num_workers
+  limits:
+    cpu: "1"
+    memory: "4Gi"
+```
+
+**2. HPA thresholds**
+
+```yaml
+targetCPUUtilizationPercentage: 60
+targetMemoryUtilizationPercentage: 80
+```
 
 
-## 3. On Kubernetes — Match Uvicorn Workers to CPU Count [Suggested CMD]
+## 3. On Kubernetes — Use 1 Uvicorn Worker per Pod [Suggested CMD]
 
-Use this Docker `CMD`. It automatically matches Uvicorn workers to the pod’s CPU count, ensuring each worker uses one core efficiently for better throughput and stable latency.
+We recommend running **1 Uvicorn worker per pod** and scaling out horizontally with more pods rather than more workers per pod. This gives the most stable latency under load and works best with the HPA thresholds above.
 
 ```shell
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "1"]
 ```
 
 > **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
