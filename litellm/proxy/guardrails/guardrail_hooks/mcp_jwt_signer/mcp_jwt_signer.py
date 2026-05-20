@@ -605,7 +605,11 @@ class MCPJWTSigner(CustomGuardrail):
     # FR-10: Scope building
     # ------------------------------------------------------------------
 
-    def _build_scope(self, raw_tool_name: str) -> str:
+    def _build_scope(
+        self,
+        raw_tool_name: str,
+        call_type: Optional[CallTypesLiteral] = None,
+    ) -> str:
         """
         Build the JWT scope string.
 
@@ -627,6 +631,12 @@ class MCPJWTSigner(CustomGuardrail):
         )
         if tool_name:
             scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
+        elif call_type == "call_mcp_tool":
+            # Tool-call request reached the signer without a tool name (e.g.
+            # missing mcp_tool_name in hook data). Fall back to a generic
+            # tools/call scope so the upstream server still accepts the
+            # invocation rather than rejecting it as a tools/list-only token.
+            scopes = ["mcp:tools/call"]
         else:
             scopes = ["mcp:tools/list"]
         return " ".join(scopes)
@@ -677,6 +687,7 @@ class MCPJWTSigner(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         jwt_claims: Optional[Dict[str, Any]] = None,
+        call_type: Optional[CallTypesLiteral] = None,
     ) -> Dict[str, Any]:
         """
         Build JWT claims for the outbound MCP access token.
@@ -717,7 +728,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         # scope (FR-10)
         raw_tool_name: str = data.get("mcp_tool_name", "")
-        claims["scope"] = self._build_scope(raw_tool_name)
+        claims["scope"] = self._build_scope(raw_tool_name, call_type=call_type)
 
         # optional_claims passthrough (FR-15)
         claims = self._passthrough_optional_claims(claims, jwt_claims)
@@ -845,7 +856,9 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # Build outbound access token
         # ------------------------------------------------------------------
-        claims = self._build_claims(user_api_key_dict, hook_data, jwt_claims)
+        claims = self._build_claims(
+            user_api_key_dict, hook_data, jwt_claims, call_type=call_type
+        )
 
         signed_token = jwt.encode(
             claims,
