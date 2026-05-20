@@ -90,7 +90,7 @@ const FillUserFieldsModal: React.FC<FillUserFieldsModalProps> = ({
           <>
             <Text className="text-sm text-gray-600 block">
               These values are private to you. Your admin configured this MCP
-              server to require per-user credentials.
+              server to require these per-user credentials:
             </Text>
             <Form layout="vertical">
               {perUserDefs.map((d) => (

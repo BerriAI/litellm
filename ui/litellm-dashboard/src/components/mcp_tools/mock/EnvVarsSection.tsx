@@ -3,7 +3,7 @@
 // caller can persist the values to localStorage on submit.
 
 import React from "react";
-import { Form, Input, Select, Space, Button, Tooltip, Tag, Typography } from "antd";
+import { Form, Input, Select, Button, Tooltip, Tag, Typography } from "antd";
 import {
   InfoCircleOutlined,
   MinusCircleOutlined,
@@ -57,16 +57,12 @@ const EnvVarsSection: React.FC = () => {
               </div>
             )}
             {fields.map(({ key, name, ...restField }) => (
-              <Space
-                key={key}
-                className="flex w-full"
-                align="baseline"
-                size="middle"
-              >
+              <div key={key} className="flex gap-3 items-baseline">
                 <Form.Item
                   {...restField}
                   name={[name, "name"]}
-                  className="flex-1 mb-0"
+                  className="mb-0"
+                  style={{ flex: 1 }}
                   rules={[
                     {
                       pattern: /^[A-Z_][A-Z0-9_]*$/,
@@ -83,7 +79,8 @@ const EnvVarsSection: React.FC = () => {
                 <Form.Item
                   {...restField}
                   name={[name, "value"]}
-                  className="flex-1 mb-0"
+                  className="mb-0"
+                  style={{ flex: 1 }}
                   shouldUpdate
                 >
                   <ValueField fieldName={name} />
@@ -98,15 +95,20 @@ const EnvVarsSection: React.FC = () => {
                   <Select
                     options={[
                       { value: "global", label: "Global" },
-                      { value: "per_user", label: "Per-user field" },
+                      { value: "per_user", label: "Per-user" },
                     ]}
                   />
                 </Form.Item>
-                <MinusCircleOutlined
-                  onClick={() => remove(name)}
-                  className="text-gray-500 hover:text-red-500 cursor-pointer"
-                />
-              </Space>
+                <div
+                  style={{ width: 24 }}
+                  className="flex items-center justify-center"
+                >
+                  <MinusCircleOutlined
+                    onClick={() => remove(name)}
+                    className="text-gray-500 hover:text-red-500 cursor-pointer"
+                  />
+                </div>
+              </div>
             ))}
             <Button
               type="dashed"
@@ -137,7 +139,7 @@ const ValueField: React.FC<{
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
       placeholder={
-        isPerUser ? "set by each user" : "e.g. postgresql"
+        isPerUser ? "Defined per user" : "e.g. postgresql"
       }
       disabled={isPerUser}
       className="rounded-md font-mono"
