@@ -396,7 +396,7 @@ Check that:
 The server has `client_id`/`client_secret`/`token_url` configured so LiteLLM is fetching a machine-to-machine token instead of using the per-user OAuth2 token. To use per-user tokens, remove the client credentials from the server config.
 
 
-## Delegate Auth to Upstream (PKCE Passthrough)
+## Delegate Auth to Upstream (PKCE Passthrough) {#delegate-auth-to-upstream-pkce-passthrough}
 
 For OAuth2 MCP servers where the client (Claude Code, Cursor, ChatGPT, etc.) already authenticates directly against the upstream server's own OAuth issuer, you can opt the route into **upstream-delegated auth**: LiteLLM stops checking its own API key / SSO and lets the client's PKCE flow run end-to-end with the upstream MCP server.
 
@@ -413,6 +413,14 @@ mcp_servers:
 ```
 
 That's the entire change. The flag is honored **only** when `auth_type: oauth2`; setting it on any other auth type is silently ignored.
+
+:::warning Internal-only (`available_on_public_internet: false`) **and** upstream PKCE delegation
+
+Using **`available_on_public_internet: false`** together with **`delegate_auth_to_upstream: true`** on an **`auth_type: oauth2`** interactive server (not `oauth2_flow: client_credentials`) still allows **anonymous** callers to reach the upstream OAuth2 **`/authorize`** flow and complete PKCE for matching MCP routes **without a LiteLLM API key session**. The internal-only flag mainly controls IP-based discovery and related behavior ([see guide](./mcp_public_internet.md)); it does **not** disable this delegate bypass.
+
+**What to do:** Enforce access at the upstream IdP and network edge. The LiteLLM UI surfaces a warning when both settings are enabled; the proxy logs a warning when the server is loaded from config or the database.
+
+:::
 
 ### How It Works
 

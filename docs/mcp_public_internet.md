@@ -14,6 +14,12 @@ Control which MCP servers are visible to external callers (e.g., ChatGPT, Claude
 | Network Config | `mcp_internal_ip_ranges` in `general_settings` |
 | Supported Clients | ChatGPT, Claude Desktop, Cursor, OpenAI API, or any MCP client |
 
+:::warning Interaction with `delegate_auth_to_upstream`
+
+If an MCP server is **`available_on_public_internet: false`** (internal for IP-based discovery) **and** has **`delegate_auth_to_upstream: true`** with **`auth_type: oauth2`** (interactive PKCE, not M2M), anonymous callers can still use the upstream OAuth **`/authorize`** path without a LiteLLM session. See [MCP OAuth — Delegate Auth to Upstream](./mcp_oauth.md#delegate-auth-to-upstream-pkce-passthrough) for details and mitigations.
+
+:::
+
 ## How It Works
 
 When a request arrives at LiteLLM's MCP endpoints, LiteLLM checks the caller's IP address to determine whether they are an **internal** or **external** caller:
