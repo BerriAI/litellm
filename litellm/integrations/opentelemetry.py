@@ -2962,6 +2962,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
 
+            # Stamp http.response.status_code = 200 on the SERVER span and
+            # end it; the management wrapper otherwise leaves the parent
+            # open and unstamped.
+            self.set_response_status_code_attribute(parent_otel_span, 200)
+            parent_otel_span.end(end_time=_end_time_ns)
+
     async def async_management_endpoint_failure_hook(
         self,
         logging_payload: ManagementEndpointLoggingPayload,
@@ -3011,6 +3017,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
+
+            # Stamp the SERVER span with the structured error info (incl.
+            # http.response.status_code) and end it. Without this, admin
+            # 4xx/5xx responses never carry status on the parent span.
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+
+            error_information = StandardLoggingPayloadSetup.get_error_information(
+                original_exception=_exception,
+            )
+            self._record_exception_on_span(
+                span=parent_otel_span,
+                kwargs={
+                    "exception": _exception,
+                    "standard_logging_object": {"error_information": error_information},
+                },
+            )
+            parent_otel_span.end(end_time=_end_time_ns)
 
     def create_litellm_proxy_request_started_span(
         self,
