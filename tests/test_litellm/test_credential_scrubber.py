@@ -27,13 +27,11 @@ class TestScrubSecrets:
         assert "my-very-secret-key-123" not in result
         assert "[REDACTED]" in result
 
-    def test_bearer_token_redacted(self):
-        # CredentialScrubberFilter matches key=value / key:value format.
-        # "Authorization: Bearer <token>" (space-separated) is handled by the
-        # existing SecretRedactionFilter; here we test the key:value log pattern.
+    def test_access_token_redacted(self):
+        # Covers access_token key-name pattern (replaces bare "token" which was too broad)
         from litellm._logging import _scrub_secrets
 
-        result = _scrub_secrets("auth_token: eyJhbGciOiJSUzI1NiJ9abcdef")
+        result = _scrub_secrets("access_token: eyJhbGciOiJSUzI1NiJ9abcdef")
         assert "eyJhbGciOiJSUzI1NiJ9abcdef" not in result
         assert "[REDACTED]" in result
 
@@ -180,3 +178,26 @@ class TestCredentialScrubberFilter:
             type(f).__name__ for f in log_module.verbose_router_logger.filters
         ]
         assert "CredentialScrubberFilter" in filter_types
+
+    def test_filter_respects_disable_redaction_env_var(self):
+        # Branch: _ENABLE_SECRET_REDACTION is False — filter must pass record unmodified
+        from unittest.mock import patch
+
+        from litellm._logging import CredentialScrubberFilter
+
+        with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
+            f = CredentialScrubberFilter()
+            record = self._make_record("api_key=sk-secret123456789")
+            f.filter(record)
+            assert "sk-secret123456789" in record.msg
+
+    def test_dict_args_secret_key_name_redacts_raw_value(self):
+        # Branch: dict key is itself a secret field name — raw value must be redacted
+        # even without a key=value pattern inside the value string.
+        from litellm._logging import CredentialScrubberFilter
+
+        f = CredentialScrubberFilter()
+        record = self._make_record("config %s", {"api_key": "sk-rawsecretvalue123"})
+        f.filter(record)
+        assert "sk-rawsecretvalue123" not in str(record.args)
+        assert "[REDACTED]" in str(record.args)
