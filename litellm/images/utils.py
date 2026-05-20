@@ -80,6 +80,14 @@ class ImageEditRequestUtils:
         filtered_params = {
             k: v for k, v in params.items() if k in valid_keys and v is not None
         }
+        # Multipart form data delivers all fields as strings; coerce n to int so
+        # Azure's backend validation (which does integer comparisons) doesn't fail
+        # with "TypeError: '<=' not supported between instances of 'str' and 'int'".
+        if "n" in filtered_params and isinstance(filtered_params["n"], str):
+            try:
+                filtered_params["n"] = int(filtered_params["n"])
+            except (ValueError, TypeError):
+                filtered_params.pop("n", None)
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
     @staticmethod

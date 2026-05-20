@@ -773,3 +773,50 @@ async def test_image_edit_array_handling():
 
         # Verify that both calls were made to the API
         assert mock_post.call_count == 2
+
+
+def test_image_edit_n_coercion_from_string():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/27978.
+
+    When the proxy receives a multipart/form-data request, all form fields
+    arrive as strings (e.g. n='1' instead of n=1).  Azure's backend validates
+    n as an integer and raises:
+        TypeError: '<=' not supported between instances of 'str' and 'int'
+    unless litellm coerces the value before forwarding the request.
+    """
+    from litellm.images.utils import ImageEditRequestUtils
+
+    # Simulate what _read_request_body returns for a multipart form upload
+    params_from_form = {
+        "n": "1",  # string, as delivered by multipart form data
+        "model": "azure/gpt-image-2",
+        "prompt": "make it ghibli",
+        "size": "1024x1024",
+    }
+
+    result = ImageEditRequestUtils.get_requested_image_edit_optional_param(
+        params_from_form
+    )
+
+    assert result["n"] == 1, f"Expected n=1 (int), got n={result['n']!r}"
+    assert isinstance(result["n"], int), f"Expected int, got {type(result['n'])}"
+
+
+def test_image_edit_n_coercion_invalid_string():
+    """n cannot be parsed → it is dropped silently rather than crashing."""
+    from litellm.images.utils import ImageEditRequestUtils
+
+    params = {"n": "not_a_number", "model": "azure/gpt-image-2", "prompt": "test"}
+    result = ImageEditRequestUtils.get_requested_image_edit_optional_param(params)
+    assert "n" not in result, "Invalid n string should be dropped, not passed through"
+
+
+def test_image_edit_n_already_int():
+    """When n is already an int (direct SDK call), it passes through unchanged."""
+    from litellm.images.utils import ImageEditRequestUtils
+
+    params = {"n": 2, "model": "azure/gpt-image-2", "prompt": "test"}
+    result = ImageEditRequestUtils.get_requested_image_edit_optional_param(params)
+    assert result["n"] == 2
+    assert isinstance(result["n"], int)
