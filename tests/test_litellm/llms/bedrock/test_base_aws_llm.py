@@ -539,6 +539,51 @@ def test_sign_request_with_sigv4():
         assert result_body == mock_request.body
 
 
+def test_sign_request_caller_authorization_overrides_sigv4():
+    """
+    When a caller pre-supplies an Authorization header, _sign_request must not
+    let SigV4's Authorization win.  The returned dict should contain exactly one
+    Authorization key (uppercase, canonical) with the caller's value — no
+    duplicate lowercase 'authorization' entry alongside it.
+    """
+    llm = BaseAWSLLM()
+
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    mock_sigv4 = MagicMock()
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "Authorization": "AWS4-HMAC-SHA256 Credential=sigv4-generated",
+        "Content-Type": "application/json",
+    }
+    mock_request.body = b'{"prompt": "test"}'
+
+    caller_auth = "Bearer caller-supplied-token"
+
+    with (
+        patch("botocore.auth.SigV4Auth", return_value=mock_sigv4),
+        patch("botocore.awsrequest.AWSRequest", return_value=mock_request),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-west-2"),
+    ):
+        result_headers, _ = llm._sign_request(
+            service_name="aws-external-anthropic",
+            headers={"Authorization": caller_auth, "content-type": "application/json"},
+            optional_params={"aws_region_name": "us-west-2"},
+            request_data={"prompt": "test"},
+            api_base="https://aws-external-anthropic.us-west-2.api.aws/v1/messages",
+        )
+
+    # Caller's value must win over SigV4's generated one
+    assert result_headers["Authorization"] == caller_auth
+
+    # Must not have a separate lowercase 'authorization' duplicate
+    auth_keys = [k for k in result_headers if k.lower() == "authorization"]
+    assert len(auth_keys) == 1, (
+        f"Expected exactly one Authorization key, got {auth_keys}. "
+        "Duplicate keys can cause unpredictable behaviour in HTTP clients."
+    )
+
+
 def test_sign_request_with_api_key_bearer_token():
     """
     Test that _sign_request uses the api_key parameter as a bearer token when provided
