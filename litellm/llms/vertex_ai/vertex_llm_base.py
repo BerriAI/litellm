@@ -366,7 +366,17 @@ class VertexBase:
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
-        credentials.refresh(Request())
+        # Serialize all refreshes on this VertexBase across threads.
+        # ``credentials.refresh()`` is not safe to call concurrently on the
+        # same credentials object, and this method is invoked from three
+        # places that can run on different threads:
+        #   - sync ``get_access_token`` (already holds ``_sync_refresh_lock``)
+        #   - the async slow path (via ``asyncify`` in a worker thread)
+        #   - the background proactive refresh task (via ``asyncify``)
+        # ``_sync_refresh_lock`` is an ``RLock`` so reentrant acquisition
+        # from the sync path is safe.
+        with self._sync_refresh_lock:
+            credentials.refresh(Request())
 
     def _acquire_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
         """Increment the refcount and return the lock for ``credential_cache_key``.
