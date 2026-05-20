@@ -1900,6 +1900,17 @@ def ocr_cost(
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
         if cost_per_credit is not None or ocr_cost_per_page is None:
+            # Surface missing usage data instead of silently under-reporting
+            # cost. The previous behavior raised ValueError; we now return 0.0
+            # for credit-priced or unpriced models, so log a warning to keep
+            # the regression visible to operators.
+            verbose_logger.warning(
+                "OCR cost: model=%s custom_llm_provider=%s response.usage_info."
+                "pages_processed is None and credits=%s; returning 0.0 cost.",
+                model,
+                custom_llm_provider,
+                credits,
+            )
             return 0.0, 0.0
         raise ValueError("OCR response pages_processed is None")
 
