@@ -51,16 +51,10 @@ def client_no_auth(fake_env_vars):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
 
-def test_proxy_reducto_ocr_json_passthrough(client_no_auth):
-    mocked_response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="Proxy OCR")],
-        model="parse-v3",
-        usage_info=OCRUsageInfo(pages_processed=1, credits=1),
-    )
-
+def test_proxy_reducto_ocr_json_rejects_reducto_id(client_no_auth):
     with patch(
         "litellm.proxy.proxy_server.llm_router.aocr",
-        new=AsyncMock(return_value=mocked_response),
+        new=AsyncMock(),
     ) as mock_aocr:
         response = client_no_auth.post(
             "/v1/ocr",
@@ -75,12 +69,64 @@ def test_proxy_reducto_ocr_json_passthrough(client_no_auth):
             },
         )
 
+    assert response.status_code >= 400
+    assert "reducto://" in response.text
+    assert mock_aocr.await_count == 0
+
+
+def test_proxy_reducto_ocr_json_rejects_reducto_id_in_image_url(client_no_auth):
+    with patch(
+        "litellm.proxy.proxy_server.llm_router.aocr",
+        new=AsyncMock(),
+    ) as mock_aocr:
+        response = client_no_auth.post(
+            "/v1/ocr",
+            json={
+                "model": "reducto/parse-v3",
+                "document": {
+                    "type": "image_url",
+                    "image_url": "reducto://proxy.png",
+                },
+            },
+        )
+
+    assert response.status_code >= 400
+    assert "reducto://" in response.text
+    assert mock_aocr.await_count == 0
+
+
+def test_proxy_reducto_ocr_json_passthrough_data_uri(client_no_auth):
+    mocked_response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="Proxy OCR")],
+        model="parse-v3",
+        usage_info=OCRUsageInfo(pages_processed=1, credits=1),
+    )
+
+    data_uri = "data:application/pdf;base64,JVBERi0xLjQK"
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router.aocr",
+        new=AsyncMock(return_value=mocked_response),
+    ) as mock_aocr:
+        response = client_no_auth.post(
+            "/v1/ocr",
+            json={
+                "model": "reducto/parse-v3",
+                "document": {
+                    "type": "document_url",
+                    "document_url": data_uri,
+                },
+                "api_key": "proxy-key",
+                "api_base": "https://platform.reducto.ai",
+            },
+        )
+
     assert response.status_code == 200
     assert mock_aocr.await_count == 1
     assert mock_aocr.await_args.kwargs["model"] == "reducto/parse-v3"
     assert mock_aocr.await_args.kwargs["document"] == {
         "type": "document_url",
-        "document_url": "reducto://proxy.pdf",
+        "document_url": data_uri,
     }
     assert mock_aocr.await_args.kwargs["api_key"] == "proxy-key"
     assert mock_aocr.await_args.kwargs["api_base"] == "https://platform.reducto.ai"

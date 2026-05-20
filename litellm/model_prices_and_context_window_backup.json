@@ -29103,6 +29103,8 @@
     "reducto/parse-legacy": {
         "litellm_provider": "reducto",
         "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
         "supported_endpoints": [
             "/v1/ocr"
         ]
@@ -29110,6 +29112,8 @@
     "reducto/parse-v3": {
         "litellm_provider": "reducto",
         "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
         "supported_endpoints": [
             "/v1/ocr"
         ]
