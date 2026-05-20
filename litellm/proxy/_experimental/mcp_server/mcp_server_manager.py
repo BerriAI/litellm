@@ -3060,7 +3060,23 @@ class MCPServerManager:
             if server.needs_user_oauth_token:
                 # Skip OAuth2 servers that rely on user-provided tokens
                 continue
-            tools = await self._get_tools_from_server(server)
+            try:
+                tools = await self._get_tools_from_server(server)
+            except MCPUpstreamAuthError as e:
+                # Pass-through servers expect a user-supplied bearer token;
+                # at startup we have none, so an upstream 401 is normal.
+                # Swallow it so we keep mapping the remaining servers.
+                verbose_logger.debug(
+                    f"Skipping tool name mapping for server {server.name} "
+                    f"due to upstream auth error: {str(e)}"
+                )
+                continue
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Failed to get tools from server {server.name} during "
+                    f"tool name mapping initialization: {str(e)}"
+                )
+                continue
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping

@@ -893,6 +893,22 @@ async def _build_oauth_protected_resource_response(
             response = {**upstream_metadata, "resource": resource_url}
             return response
 
+        # Upstream responded but with non-200 or non-dict payload. For
+        # pass-through servers the gateway is NOT the authorization server,
+        # so we must not fall through to the default gateway metadata —
+        # that would point clients at the wrong IdP.
+        verbose_logger.warning(
+            "Upstream oauth-protected-resource metadata unavailable for "
+            f"pass-through MCP server {mcp_server.name!r}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Upstream oauth-protected-resource metadata unavailable "
+                f"for MCP server {mcp_server.name!r}"
+            ),
+        )
+
     return {
         "authorization_servers": [
             (
