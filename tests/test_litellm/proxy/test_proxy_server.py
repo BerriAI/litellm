@@ -7501,10 +7501,13 @@ class TestCostTrackingSingleDBLogger:
             with patch("litellm.logging_callback_manager", mock_callback_manager):
                 cost_tracking()
 
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
         add_callback_call = mock_callback_manager.add_litellm_callback.call_args[0][0]
         add_async_call = (
             mock_callback_manager.add_litellm_async_success_callback.call_args[0][0]
         )
+        assert isinstance(add_callback_call, _ProxyDBLogger)
         assert add_callback_call is add_async_call
 
     def test_cost_tracking_noop_when_prisma_client_is_none(self):
