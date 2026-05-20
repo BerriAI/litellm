@@ -489,7 +489,7 @@ You must finish this setup before starting the proxy server.
 
 These are settings for the LiteLLM Proxy Server. 
 
-See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-settings).
+See All General Settings [here](https://docs.litellm.ai/docs/proxy/config_settings).
 
 1. **`master_key`** (`str`)
    - **Description**: 
