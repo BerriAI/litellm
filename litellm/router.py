@@ -4699,6 +4699,8 @@ class Router:
             BaseResponsesAPIStreamingIterator,
         )
 
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. A shallow copy alone is not enough: the primary
         # attempt mutates nested dicts in place — notably `litellm_metadata`,
@@ -4708,17 +4710,19 @@ class Router:
         # copy would still share its reference, leaking primary-deployment
         # metadata into the mid-stream fallback request.
         #
-        # We avoid `copy.deepcopy` on the full kwargs because it can contain
-        # non-deepcopyable objects (logging handles, async clients, etc.).
+        # We avoid deep-copying the full kwargs because it can contain
+        # non-deepcopyable objects (logging handles, async clients, etc.);
+        # `safe_deep_copy` deep-copies the metadata dicts key-by-key with a
+        # fallback to the original reference for any non-picklable value.
         # The original_generic_function is preserved so the per-attempt
         # helper knows which underlying API to call on fallback.
         fallback_kwargs: Dict[str, Any] = kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
-            fallback_kwargs["litellm_metadata"] = copy.deepcopy(
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(
                 fallback_kwargs["litellm_metadata"]
             )
         if isinstance(fallback_kwargs.get("metadata"), dict):
-            fallback_kwargs["metadata"] = copy.deepcopy(fallback_kwargs["metadata"])
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
         fallback_kwargs["original_generic_function"] = original_function
 
         response = await self._ageneric_api_call_with_fallbacks(
