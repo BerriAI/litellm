@@ -1437,8 +1437,10 @@ class MCPServerManager:
             # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
             # Skip entirely when the signer is not configured (avoid an unnecessary
             # dict copy on every list call), when the server has its own static
-            # Authorization header, or when a per-user mcp_auth_header has already
-            # been resolved — admin-configured static auth and per-user OAuth must
+            # Authorization header, when a per-user mcp_auth_header has already
+            # been resolved, or when the caller already supplied an Authorization
+            # entry in extra_headers (e.g. a per-user OAuth token resolved
+            # upstream) — admin-configured static auth and per-user OAuth must
             # take precedence so the signer doesn't silently overwrite e.g. an
             # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
             # applies extra_headers after writing Authorization from auth_value, so
@@ -1454,11 +1456,16 @@ class MCPServerManager:
                     isinstance(k, str) and k.lower() == "authorization"
                     for k in static_headers.keys()
                 )
+                has_extra_authorization = bool(extra_headers) and any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in (extra_headers or {}).keys()
+                )
 
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
                     and not mcp_auth_header
+                    and not has_extra_authorization
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
                         user_api_key_dict=user_api_key_auth,
