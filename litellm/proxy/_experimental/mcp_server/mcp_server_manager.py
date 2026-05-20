@@ -2828,20 +2828,30 @@ class MCPServerManager:
         prefixed_tool_name = add_server_prefix_to_name(name, server_name)
         mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
         resolved_by_server_name_only = False
+        normalized_server_name = normalize_server_name(server_name)
+
+        def _candidate_matches_server_name(candidate: MCPServer) -> bool:
+            for identifier in (
+                candidate.alias,
+                candidate.server_name,
+                candidate.name,
+            ):
+                if identifier and normalize_server_name(identifier) == (
+                    normalized_server_name
+                ):
+                    return True
+            return False
+
         if mcp_server is None:
             for candidate in self.get_registry().values():
-                if normalize_server_name(candidate.name) == normalize_server_name(
-                    server_name
-                ):
+                if _candidate_matches_server_name(candidate):
                     mcp_server = candidate
                     resolved_by_server_name_only = True
                     break
         if mcp_server is None:
             fallback = self._get_mcp_server_from_tool_name(name)
             if fallback is not None and (
-                not server_name
-                or normalize_server_name(fallback.name)
-                == normalize_server_name(server_name)
+                not server_name or _candidate_matches_server_name(fallback)
             ):
                 mcp_server = fallback
         if mcp_server is None:
