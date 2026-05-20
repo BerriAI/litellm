@@ -1522,6 +1522,7 @@ if MCP_AVAILABLE:
                         token_cookie,
                         master_key,
                         algorithms=["HS256"],
+                        options={"verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
                         cookie_key = decoded.get("key", "")
