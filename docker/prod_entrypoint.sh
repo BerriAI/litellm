@@ -1,11 +1,5 @@
 #!/bin/sh
 
-if [ "$SEPARATE_HEALTH_APP" = "1" ]; then
-    export LITELLM_ARGS="$@"
-    export SUPERVISORD_STOPWAITSECS="${SUPERVISORD_STOPWAITSECS:-3600}"
-    exec supervisord -c /etc/supervisord.conf
-fi
-
 # Azure Monitor OTEL auto-instrumentation. Picked up by opentelemetry-instrument
 # automatically when azure-monitor-opentelemetry distro is installed and
 # APPLICATIONINSIGHTS_CONNECTION_STRING is set. Set OTEL_DISABLED=true to bypass.
