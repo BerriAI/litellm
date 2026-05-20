@@ -70,6 +70,40 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 | `litellm_input_tokens_metric`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
 | `litellm_output_tokens_metric`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
 
+#### Token type detail metrics
+
+Per-token-type counters that break out the `usage.prompt_tokens_details` and `usage.completion_tokens_details` fields providers report (e.g. OpenAI prompt caching, Anthropic prompt caching, audio I/O, reasoning tokens). These are **additive** to the totals above — the existing `litellm_input_tokens_metric` / `litellm_output_tokens_metric` / `litellm_total_tokens_metric` counters are unchanged.
+
+Each detail counter is **sparse**: it is only incremented when the provider reports a non-zero value for the corresponding field, so providers that don't expose a given detail will not produce a series for it. The label set is identical to the parent input / output token counter, so you can join cleanly in PromQL.
+
+| Metric Name                                      | Source field on `usage`                                              | Typical providers                                  |
+|--------------------------------------------------|----------------------------------------------------------------------|----------------------------------------------------|
+| `litellm_input_cached_tokens_metric`             | `prompt_tokens_details.cached_tokens`                                | OpenAI prompt cache, Anthropic `cache_read_input_tokens`, DeepSeek `prompt_cache_hit_tokens` |
+| `litellm_input_cache_creation_tokens_metric`     | `prompt_tokens_details.cache_creation_tokens`                        | Anthropic `cache_creation_input_tokens` (prompt cache writes) |
+| `litellm_input_audio_tokens_metric`              | `prompt_tokens_details.audio_tokens`                                 | OpenAI `gpt-4o-audio-*`, Gemini audio inputs       |
+| `litellm_output_reasoning_tokens_metric`         | `completion_tokens_details.reasoning_tokens`                         | OpenAI `o1-*` / `o3-*`, Anthropic extended thinking |
+| `litellm_output_audio_tokens_metric`             | `completion_tokens_details.audio_tokens`                             | OpenAI `gpt-4o-audio-*` audio outputs              |
+
+Example PromQL — cache-hit ratio for a model group:
+
+```promql
+sum by (requested_model) (rate(litellm_input_cached_tokens_metric_total[5m]))
+/
+sum by (requested_model) (rate(litellm_input_tokens_metric_total[5m]))
+```
+
+Example PromQL — reasoning-token share of output:
+
+```promql
+sum by (requested_model) (rate(litellm_output_reasoning_tokens_metric_total[5m]))
+/
+sum by (requested_model) (rate(litellm_output_tokens_metric_total[5m]))
+```
+
+:::info
+`litellm_input_cached_tokens_metric` tracks **provider-side** prompt-cache reads (the provider reports a cached portion of the input). This is different from `litellm_cached_tokens_metric`, which tracks LiteLLM's own response-cache hits (the entire response was served from LiteLLM's cache and no provider request was made).
+:::
+
 ### Team - Budget
 
 
