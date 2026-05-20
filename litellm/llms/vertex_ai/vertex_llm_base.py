@@ -54,10 +54,12 @@ class VertexBase:
         # Uses a regular dict (not WeakValueDictionary) so the lock identity is
         # stable across concurrent callers — a weak reference can be GC'd
         # between two coroutines arriving at the lock, breaking single-flight.
-        # Entries are explicitly pruned by _maybe_prune_async_refresh_lock once
-        # no coroutine holds or is waiting on the lock, so the dict stays
-        # bounded even in long-running high-cardinality deployments.
+        # An explicit refcount tracks the number of coroutines currently using
+        # each lock; the entry is pruned when the count reaches zero, so the
+        # dict stays bounded even in long-running high-cardinality deployments
+        # without depending on any private asyncio internals.
         self._async_refresh_locks: Dict[tuple, asyncio.Lock] = {}
+        self._async_refresh_lock_refcounts: Dict[tuple, int] = {}
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
         self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.
@@ -366,31 +368,36 @@ class VertexBase:
 
         credentials.refresh(Request())
 
-    def _get_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
-        """Get or create an asyncio.Lock for the given credential cache key."""
-        return self._async_refresh_locks.setdefault(
+    def _acquire_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
+        """Increment the refcount and return the lock for ``credential_cache_key``.
+
+        Every call must be paired with ``_release_async_refresh_lock`` once the
+        caller is done with the lock so the entry can be pruned when no other
+        coroutine is holding or waiting on it.
+        """
+        lock = self._async_refresh_locks.setdefault(
             credential_cache_key, asyncio.Lock()
         )
+        self._async_refresh_lock_refcounts[credential_cache_key] = (
+            self._async_refresh_lock_refcounts.get(credential_cache_key, 0) + 1
+        )
+        return lock
 
-    def _maybe_prune_async_refresh_lock(
+    def _release_async_refresh_lock(
         self, credential_cache_key: tuple, lock: asyncio.Lock
     ) -> None:
-        """Drop ``lock`` from ``_async_refresh_locks`` if no coroutine is using it.
+        """Decrement the refcount and drop the lock entry when it reaches zero.
 
         Must be called only after the caller has released ``lock`` (i.e. once
         the surrounding ``async with`` has exited). asyncio is cooperative, so
-        the check-then-pop sequence below runs atomically with respect to other
-        coroutines — a waiter that arrives later will simply create a fresh
-        lock under the same key, which is fine because the previous batch is
-        already done.
+        the decrement-then-pop sequence below runs atomically with respect to
+        other coroutines.
         """
-        if lock.locked():
+        remaining = self._async_refresh_lock_refcounts.get(credential_cache_key, 0) - 1
+        if remaining > 0:
+            self._async_refresh_lock_refcounts[credential_cache_key] = remaining
             return
-        waiters = getattr(lock, "_waiters", None)
-        if waiters:
-            for fut in waiters:
-                if not fut.cancelled():
-                    return
+        self._async_refresh_lock_refcounts.pop(credential_cache_key, None)
         if self._async_refresh_locks.get(credential_cache_key) is lock:
             self._async_refresh_locks.pop(credential_cache_key, None)
 
@@ -988,7 +995,7 @@ class VertexBase:
             return cached
 
         # === SLOW PATH (per-key lock) ===
-        lock = self._get_async_refresh_lock(credential_cache_key)
+        lock = self._acquire_async_refresh_lock(credential_cache_key)
         try:
             async with lock:
                 # Double-check after acquiring lock — another coroutine may have refreshed.
@@ -1089,11 +1096,7 @@ class VertexBase:
 
                 return _credentials.token, project_id
         finally:
-            # Drop the lock from the registry once we're done with it. Safe to
-            # call here because asyncio.Lock.__aexit__ releases the lock before
-            # control reaches finally, and asyncio is cooperative so the prune
-            # check-and-pop is atomic with respect to other coroutines.
-            self._maybe_prune_async_refresh_lock(credential_cache_key, lock)
+            self._release_async_refresh_lock(credential_cache_key, lock)
 
     async def _ensure_access_token_async(
         self,

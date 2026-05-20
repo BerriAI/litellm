@@ -1784,13 +1784,19 @@ class TestVertexBase:
         vertex_base = VertexBase()
         key = ("creds", "project-1")
 
-        lock_a = vertex_base._get_async_refresh_lock(key)
-        async with lock_a:
-            lock_b = vertex_base._get_async_refresh_lock(key)
-            assert lock_a is lock_b, (
-                "While a coroutine still holds the lock, concurrent callers must "
-                "receive the same Lock instance to preserve single-flight."
-            )
+        lock_a = vertex_base._acquire_async_refresh_lock(key)
+        try:
+            async with lock_a:
+                lock_b = vertex_base._acquire_async_refresh_lock(key)
+                try:
+                    assert lock_a is lock_b, (
+                        "While a coroutine still holds the lock, concurrent callers must "
+                        "receive the same Lock instance to preserve single-flight."
+                    )
+                finally:
+                    vertex_base._release_async_refresh_lock(key, lock_b)
+        finally:
+            vertex_base._release_async_refresh_lock(key, lock_a)
 
     @pytest.mark.asyncio
     async def test_async_refresh_lock_pruned_after_release(self):
@@ -1829,6 +1835,7 @@ class TestVertexBase:
             "expected per-key locks to be pruned once no coroutine holds or "
             f"waits on them; found {len(vertex_base._async_refresh_locks)}"
         )
+        assert len(vertex_base._async_refresh_lock_refcounts) == 0
 
     @pytest.mark.asyncio
     async def test_async_refresh_lock_kept_while_waiter_pending(self):
@@ -1837,33 +1844,39 @@ class TestVertexBase:
         in the registry and single-flight breaks."""
         vertex_base = VertexBase()
         key = ("creds", "project-1")
-        lock = vertex_base._get_async_refresh_lock(key)
 
-        async def hold_then_release(release: asyncio.Event):
-            async with lock:
-                await release.wait()
-
+        holder_lock = vertex_base._acquire_async_refresh_lock(key)
         release_holder = asyncio.Event()
-        holder = asyncio.create_task(hold_then_release(release_holder))
+
+        async def hold_then_release():
+            async with holder_lock:
+                await release_holder.wait()
+            vertex_base._release_async_refresh_lock(key, holder_lock)
+
+        holder = asyncio.create_task(hold_then_release())
         await asyncio.sleep(0)  # let holder grab the lock
 
         async def queue_for_lock():
-            async with lock:
-                pass
+            waiter_lock = vertex_base._acquire_async_refresh_lock(key)
+            try:
+                async with waiter_lock:
+                    pass
+            finally:
+                vertex_base._release_async_refresh_lock(key, waiter_lock)
 
         waiter = asyncio.create_task(queue_for_lock())
-        await asyncio.sleep(0)  # let waiter enter lock._waiters
+        await asyncio.sleep(0)  # let waiter queue on the lock
 
-        # Prune would normally only run after `async with` exit; call it
-        # directly while the holder is still active and the waiter is queued.
-        vertex_base._maybe_prune_async_refresh_lock(key, lock)
         assert (
-            vertex_base._async_refresh_locks.get(key) is lock
+            vertex_base._async_refresh_locks.get(key) is holder_lock
         ), "lock with active holder/waiter must not be pruned"
 
         release_holder.set()
         await holder
         await waiter
+
+        assert key not in vertex_base._async_refresh_locks
+        assert key not in vertex_base._async_refresh_lock_refcounts
 
     @pytest.mark.asyncio
     async def test_fast_path_no_lock(self):
@@ -1893,11 +1906,11 @@ class TestVertexBase:
             "project-1",
         )
 
-        # Spy on _get_async_refresh_lock to verify it's never called
+        # Spy on _acquire_async_refresh_lock to verify it's never called
         with patch.object(
             vertex_base,
-            "_get_async_refresh_lock",
-            wraps=vertex_base._get_async_refresh_lock,
+            "_acquire_async_refresh_lock",
+            wraps=vertex_base._acquire_async_refresh_lock,
         ) as mock_get_lock:
             token, project = await vertex_base._ensure_access_token_async(
                 credentials=credentials,
