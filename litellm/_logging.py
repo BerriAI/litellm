@@ -480,6 +480,19 @@ class CredentialScrubberFilter(logging.Filter):
                     _scrub_secrets(str(a)) if isinstance(a, str) else a
                     for a in record.args
                 )
+        if record.exc_info and record.exc_info[1] is not None:
+            try:
+                record.exc_text = _scrub_secrets(
+                    logging.Formatter().formatException(record.exc_info)
+                )
+            except Exception:
+                pass
+        for key, value in list(record.__dict__.items()):
+            if key not in _STANDARD_RECORD_ATTRS:
+                if _SECRET_KEY_NAME_RE.match(key) and value is not None:
+                    setattr(record, key, _REDACTED)
+                elif isinstance(value, str):
+                    setattr(record, key, _scrub_secrets(value))
         return True
 
 

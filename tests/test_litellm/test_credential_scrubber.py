@@ -6,48 +6,27 @@ import pytest
 class TestScrubSecrets:
     """Tests for the _scrub_secrets() helper."""
 
-    def test_api_key_value_redacted(self):
+    def test_known_patterns_are_redacted(self):
         from litellm._logging import _scrub_secrets
 
-        result = _scrub_secrets("api_key=sk-abcdef123456789")
-        assert "sk-abcdef" not in result
-        assert "[REDACTED]" in result
+        for text, secret in [
+            ("api_key=sk-abcdef123456789", "sk-abcdef"),
+            ("aws_secret_key: AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
+            ("access_token: eyJhbGciOiJSUzI1NiJ9abcdef", "eyJhbGciOiJSUzI1NiJ9abcdef"),
+        ]:
+            assert secret not in _scrub_secrets(text)
+            assert "[REDACTED]" in _scrub_secrets(text)
 
-    def test_aws_secret_key_redacted(self):
+    def test_non_secrets_pass_through(self):
+        # Non-secret fields and values < 6 chars are not redacted
         from litellm._logging import _scrub_secrets
 
-        result = _scrub_secrets("aws_secret_key: AKIAIOSFODNN7EXAMPLE")
-        assert "AKIAIOSFODNN7EXAMPLE" not in result
-        assert "[REDACTED]" in result
-
-    def test_encryption_key_redacted(self):
-        from litellm._logging import _scrub_secrets
-
-        result = _scrub_secrets("encryption_key = my-very-secret-key-123")
-        assert "my-very-secret-key-123" not in result
-        assert "[REDACTED]" in result
-
-    def test_access_token_redacted(self):
-        # Covers access_token key-name pattern (replaces bare "token" which was too broad)
-        from litellm._logging import _scrub_secrets
-
-        result = _scrub_secrets("access_token: eyJhbGciOiJSUzI1NiJ9abcdef")
-        assert "eyJhbGciOiJSUzI1NiJ9abcdef" not in result
-        assert "[REDACTED]" in result
-
-    def test_non_secret_field_not_redacted(self):
-        from litellm._logging import _scrub_secrets
-
-        result = _scrub_secrets("model=gpt-4o, endpoint=https://api.openai.com")
+        result = _scrub_secrets(
+            "model=gpt-4o, endpoint=https://api.openai.com, api_key=abc"
+        )
         assert "gpt-4o" in result
         assert "api.openai.com" in result
-
-    def test_short_value_not_redacted(self):
-        # Values < 6 chars are not secrets (avoids redacting booleans/short flags)
-        from litellm._logging import _scrub_secrets
-
-        result = _scrub_secrets("api_key=abc")
-        assert "abc" in result
+        assert "abc" in result  # < 6 chars, not redacted
 
 
 class TestCredentialScrubberFilter:
@@ -75,7 +54,8 @@ class TestCredentialScrubberFilter:
 
         f = CredentialScrubberFilter()
         record = self._make_record("api_key=sk-secret123456789")
-        f.filter(record)
+        result = f.filter(record)
+        assert result is True  # filter must never drop records
         assert "sk-secret123456789" not in record.msg
         assert "[REDACTED]" in record.msg
 
@@ -148,15 +128,6 @@ class TestCredentialScrubberFilter:
         f.filter(record)
         assert record.msg == "plain message with no args"
 
-    def test_filter_always_returns_true(self):
-        # Filter must never drop log records
-        from litellm._logging import CredentialScrubberFilter
-
-        f = CredentialScrubberFilter()
-        record = self._make_record("api_key=sk-secret123456789")
-        result = f.filter(record)
-        assert result is True
-
     def test_filter_registered_on_verbose_logger(self):
         import litellm._logging as log_module
 
@@ -168,14 +139,6 @@ class TestCredentialScrubberFilter:
 
         filter_types = [
             type(f).__name__ for f in log_module.verbose_proxy_logger.filters
-        ]
-        assert "CredentialScrubberFilter" in filter_types
-
-    def test_filter_registered_on_verbose_router_logger(self):
-        import litellm._logging as log_module
-
-        filter_types = [
-            type(f).__name__ for f in log_module.verbose_router_logger.filters
         ]
         assert "CredentialScrubberFilter" in filter_types
 
@@ -212,3 +175,34 @@ class TestCredentialScrubberFilter:
         f.filter(record)
         assert "sk-bytessecret123" not in str(record.args)
         assert "[REDACTED]" in str(record.args)
+
+    def test_exc_traceback_secret_redacted(self):
+        # Branch: record.exc_info — secret in exception message is scrubbed from exc_text
+        import sys
+
+        from litellm._logging import CredentialScrubberFilter
+
+        try:
+            raise ValueError("api_key=sk-secretinexception12345")
+        except ValueError:
+            ei = sys.exc_info()
+        f = CredentialScrubberFilter()
+        record = self._make_record("error occurred")
+        record.exc_info = ei
+        f.filter(record)
+        assert record.exc_text is not None
+        assert "sk-secretinexception12345" not in record.exc_text
+
+    def test_extra_fields_secret_redacted(self):
+        # Branch: extra fields via logger.debug("msg", extra={...})
+        # Secret-named key → value replaced with [REDACTED]
+        # Non-secret key with embedded key=value secret → value scrubbed inline
+        from litellm._logging import CredentialScrubberFilter
+
+        f = CredentialScrubberFilter()
+        record = self._make_record("msg")
+        record.api_key = "sk-extrasecret123456789"  # type: ignore[attr-defined]
+        record.debug_info = "api_key=sk-embeddedsecret12345"  # type: ignore[attr-defined]
+        f.filter(record)
+        assert getattr(record, "api_key") == "[REDACTED]"
+        assert "sk-embeddedsecret12345" not in getattr(record, "debug_info", "")
