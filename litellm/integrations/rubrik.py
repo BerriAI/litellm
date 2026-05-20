@@ -142,8 +142,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             self._flush_task = self._start_periodic_flush_task()
 
     async def aclose(self):
-        """Close the dedicated tool blocking HTTP client."""
+        """Close the dedicated HTTP clients used by this logger."""
         await self.tool_blocking_client.close()
+        await self.async_httpx_client.close()
 
     # -- Guardrail hook --------------------------------------------------------
 

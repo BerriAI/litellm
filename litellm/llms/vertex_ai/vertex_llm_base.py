@@ -434,6 +434,33 @@ class VertexBase:
                 return creds.token, resolved_project
         return None
 
+    def _try_get_usable_cached_token(
+        self,
+        credential_cache_key: tuple,
+        project_id: Optional[str],
+    ) -> Optional[Tuple[str, str, "TokenState", Any, Optional[str]]]:
+        """
+        Look up cached credentials and return usable token info for FRESH or
+        STALE tokens (both are still valid for outbound requests). STALE
+        tokens are returned along with their state and the underlying
+        credentials object so the caller can schedule a background refresh
+        without holding the per-key async lock.
+        """
+        from google.auth.credentials import TokenState
+
+        creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
+        if creds is None:
+            return None
+        token_state = self._get_token_state(creds)
+        if token_state not in (TokenState.FRESH, TokenState.STALE):
+            return None
+        if creds.token is None or not isinstance(creds.token, str):
+            return None
+        resolved_project = project_id or cached_project_id
+        if not resolved_project:
+            return None
+        return creds.token, resolved_project, token_state, creds, cached_project_id
+
     def _unpack_cached_credentials(
         self, credential_cache_key: tuple
     ) -> Tuple[Any, Optional[str]]:
@@ -1010,10 +1037,21 @@ class VertexBase:
         credential_cache_key = (cache_credentials, project_id)
 
         # === FAST PATH (no lock) ===
-        # If credentials are FRESH (valid, not near expiry), return immediately.
-        cached = self._try_get_cached_token(credential_cache_key, project_id)
-        if cached is not None:
-            return cached
+        # If credentials are FRESH or STALE, return immediately without
+        # touching the per-key async lock. STALE tokens are still usable;
+        # we kick off a deduplicated background refresh so subsequent
+        # requests get a fresh token, but we must not serialize concurrent
+        # callers on the lock just to schedule that refresh.
+        usable = self._try_get_usable_cached_token(credential_cache_key, project_id)
+        if usable is not None:
+            cached_token, resolved_project, token_state, creds, cached_project_id = (
+                usable
+            )
+            if token_state == TokenState.STALE:
+                self._schedule_background_refresh(
+                    creds, credential_cache_key, cached_project_id
+                )
+            return cached_token, resolved_project
 
         # === SLOW PATH (per-key lock) ===
         lock = self._acquire_async_refresh_lock(credential_cache_key)

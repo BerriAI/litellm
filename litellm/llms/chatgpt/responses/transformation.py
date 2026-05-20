@@ -203,7 +203,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ResponsesAPIStreamEvents.ERROR,
             ):
-                error_message = self._extract_error_message(parsed_chunk)
+                extracted_error = self._extract_error_message(parsed_chunk)
+                if extracted_error is not None:
+                    error_message = extracted_error
 
         return completed_response, error_message
 
