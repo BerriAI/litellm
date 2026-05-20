@@ -1120,7 +1120,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
         if delta_content:
             if not self.sent_content_part_added_event:
-                self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+                self._cached_item_id = (
+                    self._cached_item_id or chunk.id or f"msg_{uuid.uuid4()}"
+                )
                 if not self._message_item_added_after_reasoning:
                     self._pending_response_events.append(
                         self.create_output_item_added_event()
@@ -1130,7 +1132,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._pending_response_events.append(
                     self.create_content_part_added_event()
                 )
-            item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+            item_id = self._cached_item_id or chunk.id or f"msg_{uuid.uuid4()}"
             self._sequence_number += 1
             text_delta_event = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
