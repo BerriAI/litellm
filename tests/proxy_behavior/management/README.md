@@ -61,8 +61,7 @@ tests/proxy_behavior/management/
 ├── test_key_update.py             # Slice 10
 ├── test_key_regenerate.py         # Slice 11
 ├── test_key_delete.py             # Slice 12
-├── regression_replay/README.md    # G4 — fix-PR → catching-scenario mapping
-└── mutmut_triage/pr1.md           # G5 — survivor classification protocol
+└── regression_replay/README.md    # G4 — fix-PR → catching-scenario mapping
 ```
 
 ## Conventions
@@ -95,8 +94,14 @@ PR1's evidence for each G1–G5 + PR1.M1–M3 gate lives in:
 - **G2** — `pytest --durations=…` summary in the PR description (≤ 10 min).
 - **G3** — `test_no_management_imports.py` is part of the suite itself.
 - **G4** — `regression_replay/README.md`.
-- **G5** — `mutmut_triage/pr1.md`, filled in after the first manually-triggered
-  `mutation-test.yml` run.
+- **G5** — Trigger `.github/workflows/mutation-test.yml` manually
+  (`gh workflow run mutation-test.yml`); the workflow uses the
+  `[tool.mutmut].tests_dir` entries in `pyproject.toml` to include this
+  suite. Triage every surviving mutant inside the six Tier-1 handler
+  functions (kill or accept-with-reason) — zero unreviewed survivors is
+  the binding gate. Record the survivor count + kill rate in a follow-up
+  PR comment or a triage doc filed alongside that follow-up (we don't
+  commit empty stubs).
 - **PR1.M1** — total scenario count, this README's "Layout" section.
 - **PR1.M2** — this README + the workflow YAML are the local-repro contract.
-- **PR1.M3** — `mutmut_triage/pr1.md` "Baseline metrics" table.
+- **PR1.M3** — Recorded in the manual mutmut follow-up (see G5 above).
