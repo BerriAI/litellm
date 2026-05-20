@@ -219,31 +219,38 @@ class TestRedactNestedMatchAndRegexKeys:
 class TestSafeDeepCopyConcurrentMutation:
     def test_no_runtime_error_on_concurrent_dict_mutation(self):
         """safe_deep_copy must not raise RuntimeError when another thread mutates the dict."""
-        data = {f"key_{i}": f"value_{i}" for i in range(200)}
-        barrier = threading.Barrier(2, timeout=5)
-        errors = []
+        errors: list = []
 
-        def mutator():
-            barrier.wait()
-            for i in range(200, 400):
-                data[f"key_{i}"] = f"value_{i}"
+        for _ in range(50):
+            data = {f"key_{i}": f"value_{i}" for i in range(200)}
+            barrier = threading.Barrier(2, timeout=5)
+            results: list = []
 
-        def copier():
-            barrier.wait()
-            try:
-                safe_deep_copy(data)
-            except RuntimeError as e:
-                if "dictionary changed size during iteration" in str(e):
+            def mutator():
+                barrier.wait()
+                for i in range(200, 400):
+                    data[f"key_{i}"] = f"value_{i}"
+
+            def copier():
+                barrier.wait()
+                try:
+                    result = safe_deep_copy(data)
+                    results.append(result)
+                except Exception as e:
                     errors.append(e)
 
-        t1 = threading.Thread(target=mutator)
-        t2 = threading.Thread(target=copier)
-        t1.start()
-        t2.start()
-        t1.join(timeout=5)
-        t2.join(timeout=5)
+            t1 = threading.Thread(target=mutator)
+            t2 = threading.Thread(target=copier)
+            t1.start()
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
 
-        assert not errors, "safe_deep_copy raised RuntimeError on concurrent mutation"
+            if results:
+                assert isinstance(results[0], dict)
+                assert len(results[0]) >= 200
+
+        assert not errors, f"safe_deep_copy raised {errors[0]!r} on concurrent mutation"
 
     def test_existing_behavior_preserved(self):
         """safe_deep_copy still correctly deep-copies nested structures."""
