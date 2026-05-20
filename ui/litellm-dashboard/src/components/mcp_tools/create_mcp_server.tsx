@@ -12,6 +12,12 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./mock/EnvVarsSection";
+import {
+  setEnvVarDefinitions,
+  notifyEnvVarsChanged,
+  EnvVarDefinition,
+} from "./mock/mockMcpEnvVars";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -286,8 +292,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         token_validation_json: rawTokenValidationJson,
+        mock_env_vars: mockEnvVarsRaw,
         ...restValues
       } = values;
+
+      // PROTOTYPE: persist the env-var definitions to localStorage keyed by
+      // the server alias. Replaced once the backend stores these properly.
+      const cleanedEnvVars: EnvVarDefinition[] = Array.isArray(mockEnvVarsRaw)
+        ? mockEnvVarsRaw
+            .filter((row: any) => row && row.name && String(row.name).trim() !== "")
+            .map((row: any) => ({
+              name: String(row.name).trim(),
+              value: row.scope === "per_user" ? "" : (row.value ?? ""),
+              scope: row.scope === "per_user" ? "per_user" : "global",
+            }))
+        : [];
+      const aliasForEnvVars =
+        (restValues.alias && String(restValues.alias).trim()) ||
+        (restValues.server_name && String(restValues.server_name).trim()) ||
+        "";
+      if (aliasForEnvVars && cleanedEnvVars.length > 0) {
+        setEnvVarDefinitions(aliasForEnvVars, cleanedEnvVars);
+        notifyEnvVarsChanged();
+      }
 
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
@@ -987,6 +1014,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
+
+          {/* PROTOTYPE: Environment variables (global vs per-user) */}
+          <div className="mt-8">
+            <EnvVarsSection />
           </div>
 
           {/* Permission Management / Access Control Section */}

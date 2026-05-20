@@ -6,6 +6,7 @@ import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
 import { CheckOutlined } from "@ant-design/icons";
+import UserFieldsStatusCell from "./mock/UserFieldsStatusCell";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,6 +93,10 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  // PROTOTYPE: hooks for the env-var user-fields demo
+  userIdForMockFields?: string,
+  onOpenFillFields?: (server: MCPServer) => void,
+  onOpenMockDemo?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -294,6 +299,21 @@ export const mcpServerColumns = (
           Connect
         </button>
       ) : null;
+    },
+  },
+  {
+    id: "mock_user_fields",
+    header: "My Credentials",
+    cell: ({ row }) => {
+      const alias = row.original.alias || row.original.server_name || "";
+      return (
+        <UserFieldsStatusCell
+          serverAlias={alias}
+          userId={userIdForMockFields || ""}
+          onOpenFill={() => onOpenFillFields?.(row.original)}
+          onOpenDemo={() => onOpenMockDemo?.(row.original)}
+        />
+      );
     },
   },
   {

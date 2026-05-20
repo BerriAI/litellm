@@ -21,6 +21,8 @@ import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import FillUserFieldsModal from "./mock/FillUserFieldsModal";
+import MockClaudeCodeModal from "./mock/MockClaudeCodeModal";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -64,7 +66,34 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  // PROTOTYPE: state for the per-user fields demo
+  const [fillFieldsServer, setFillFieldsServer] = useState<MCPServer | null>(null);
+  const [mockDemoServer, setMockDemoServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
+
+  // PROTOTYPE: deep-link via ?fill_fields=<alias> (used by the mock Claude
+  // Code error message). Looks the alias up in the loaded server list and
+  // opens the fill modal.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!serversWithHealth || serversWithHealth.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const fillAlias = params.get("fill_fields");
+    if (!fillAlias) return;
+    const match = serversWithHealth.find(
+      (s) => (s.alias || s.server_name) === fillAlias,
+    );
+    if (match) {
+      setFillFieldsServer(match);
+      params.delete("fill_fields");
+      const newSearch = params.toString();
+      const newUrl =
+        window.location.pathname +
+        (newSearch ? `?${newSearch}` : "") +
+        window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [serversWithHealth]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -173,8 +202,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        userID ?? "",
+        (server: MCPServer) => setFillFieldsServer(server),
+        (server: MCPServer) => setMockDemoServer(server),
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, userID],
   );
 
   function handleDelete(server_id: string) {
@@ -459,6 +491,33 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             setByokModalServer(null);
           }}
           accessToken={accessToken || ""}
+        />
+      )}
+
+      {/* PROTOTYPE: per-user env-var fill modal */}
+      {fillFieldsServer && (
+        <FillUserFieldsModal
+          open={!!fillFieldsServer}
+          serverAlias={
+            fillFieldsServer.alias || fillFieldsServer.server_name || ""
+          }
+          serverName={fillFieldsServer.server_name}
+          userId={userID || ""}
+          onClose={() => setFillFieldsServer(null)}
+        />
+      )}
+
+      {/* PROTOTYPE: simulated Claude Code error/success preview */}
+      {mockDemoServer && (
+        <MockClaudeCodeModal
+          open={!!mockDemoServer}
+          serverAlias={
+            mockDemoServer.alias || mockDemoServer.server_name || ""
+          }
+          serverName={mockDemoServer.server_name}
+          userId={userID || ""}
+          onClose={() => setMockDemoServer(null)}
+          onOpenFillModal={() => setFillFieldsServer(mockDemoServer)}
         />
       )}
     </div>
