@@ -299,9 +299,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
     def _get_response_stream_shape(self):
-        from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
+        from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
-        return BEDROCK_RESPONSE_STREAM_SHAPE
+        return get_bedrock_response_stream_shape()
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
