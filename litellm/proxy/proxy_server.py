@@ -1892,10 +1892,9 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-        litellm.logging_callback_manager.add_litellm_async_success_callback(
-            _ProxyDBLogger()
-        )
+        db_logger = _ProxyDBLogger()
+        litellm.logging_callback_manager.add_litellm_callback(db_logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(db_logger)
 
 
 async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
@@ -2710,11 +2709,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:

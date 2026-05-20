@@ -7487,3 +7487,36 @@ class TestSortModelsByDisplayName:
             all_models=models, sort_by="model_name", sort_order="asc"
         )
         assert [m["model_name"] for m in sorted_models] == ["alpha", "beta"]
+
+
+class TestCostTrackingSingleDBLogger:
+    def test_cost_tracking_creates_single_db_logger_instance(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.proxy.proxy_server import cost_tracking
+
+        mock_callback_manager = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", new="fake-client"):
+            with patch("litellm.logging_callback_manager", mock_callback_manager):
+                cost_tracking()
+
+        add_callback_call = mock_callback_manager.add_litellm_callback.call_args[0][0]
+        add_async_call = (
+            mock_callback_manager.add_litellm_async_success_callback.call_args[0][0]
+        )
+        assert add_callback_call is add_async_call
+
+    def test_cost_tracking_noop_when_prisma_client_is_none(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.proxy.proxy_server import cost_tracking
+
+        mock_callback_manager = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", new=None):
+            with patch("litellm.logging_callback_manager", mock_callback_manager):
+                cost_tracking()
+
+        mock_callback_manager.add_litellm_callback.assert_not_called()
+        mock_callback_manager.add_litellm_async_success_callback.assert_not_called()
