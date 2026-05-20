@@ -673,6 +673,26 @@ def cost_per_token(  # noqa: PLR0915
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
+    """
+    Calculate the cost of a Replicate completion based on wall-clock runtime.
+
+    Replicate bills by GPU-seconds rather than tokens, so for unmapped Replicate
+    models LiteLLM estimates cost as ``price_per_second * total_time``. All
+    currently supported models are assumed to run on an A100 80GB; the per-second
+    rate comes from ``DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND`` (default $0.0014/s,
+    overridable via the environment variable of the same name). See
+    https://replicate.com/pricing.
+
+    Args:
+        completion_response: The provider response dict. Used only as a fallback
+            source for runtime when ``total_time`` is not provided.
+        total_time: Request runtime in **milliseconds**. When 0.0 (the default),
+            the function falls back to deriving runtime from
+            ``completion_response`` ("created" / "ended" fields).
+
+    Returns:
+        Estimated cost in USD as a float.
+    """
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public = DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
