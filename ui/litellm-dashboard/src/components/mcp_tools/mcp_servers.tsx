@@ -15,11 +15,13 @@ import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
 import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
-import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
+import { DiscoverableMCPServer, MCPServer, MCPServerProps, MCPUserEnvVarsStatus, Team } from "./types";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
+import UserEnvVarsModal from "./UserEnvVarsModal";
+import { listMCPUserEnvVarStatus } from "../networking";
 import { getSecureItem } from "@/utils/secureStorage";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
@@ -64,7 +66,51 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
+  const [envVarStatusByServer, setEnvVarStatusByServer] = useState<Record<string, MCPUserEnvVarsStatus>>({});
   const isInternalUser = userRole === "Internal User";
+
+  const refetchEnvVarStatus = useCallback(async () => {
+    if (!accessToken) {
+      setEnvVarStatusByServer({});
+      return;
+    }
+    try {
+      const statuses = await listMCPUserEnvVarStatus(accessToken);
+      const map: Record<string, MCPUserEnvVarsStatus> = {};
+      for (const s of statuses) {
+        map[s.server_id] = s;
+      }
+      setEnvVarStatusByServer(map);
+    } catch (err) {
+      console.warn("Failed to load MCP env-var status", err);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    refetchEnvVarStatus();
+  }, [refetchEnvVarStatus, mcpServers]);
+
+  // Deep-link support: open the modal automatically when the URL contains
+  // ?fill_env_vars=<server_id>. This is the link users follow from the
+  // friendly error returned by the proxy when a per-user var is missing.
+  useEffect(() => {
+    if (typeof window === "undefined" || !mcpServers) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const targetId = params.get("fill_env_vars");
+    if (!targetId) return;
+    const target = mcpServers.find((s) => s.server_id === targetId);
+    if (target) {
+      setEnvVarsModalServer(target);
+      // Strip the query param so the modal doesn't re-open on every render.
+      params.delete("fill_env_vars");
+      const cleaned = params.toString();
+      const newUrl = `${window.location.pathname}${cleaned ? `?${cleaned}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", newUrl);
+    }
+  }, [mcpServers]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -173,8 +219,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        envVarStatusByServer,
+        (server: MCPServer) => setEnvVarsModalServer(server),
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, envVarStatusByServer],
   );
 
   function handleDelete(server_id: string) {
@@ -461,6 +509,16 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken || ""}
         />
       )}
+
+      <UserEnvVarsModal
+        server={envVarsModalServer}
+        open={!!envVarsModalServer}
+        accessToken={accessToken}
+        onClose={() => setEnvVarsModalServer(null)}
+        onSaved={() => {
+          refetchEnvVarStatus();
+        }}
+      />
     </div>
   );
 };

@@ -19,7 +19,10 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
-from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
+from litellm.proxy._experimental.mcp_server.utils import (
+    MCPMissingUserEnvVarsError,
+    merge_mcp_headers,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -885,6 +888,23 @@ if MCP_AVAILABLE:
                 requested_server_id=canonical_server_id,
             )
             return result
+        except MCPMissingUserEnvVarsError as e:
+            verbose_logger.info(
+                "MCP tool call missing per-user env vars: server_id=%s missing=%s",
+                e.server_id,
+                e.missing,
+            )
+            raise HTTPException(
+                status_code=412,
+                detail={
+                    "error": "missing_user_env_vars",
+                    "message": str(e),
+                    "server_id": e.server_id,
+                    "server_name": e.server_name,
+                    "missing": e.missing,
+                    "setup_url": e.setup_url,
+                },
+            )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(

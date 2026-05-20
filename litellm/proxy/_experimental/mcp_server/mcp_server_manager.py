@@ -50,14 +50,19 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_env_var_setup_url,
+    collect_env_var_references,
     compute_short_server_prefix,
     get_server_prefix,
+    interpolate_headers,
     is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
+    parse_admin_env_vars,
     split_server_prefix_from_name,
     validate_mcp_server_name,
 )
@@ -188,6 +193,25 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     else:
         # Already a dictionary
         return data
+
+
+def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
+
+    Returns ``None`` for empty / null / unparseable input. Accepts strings
+    (raw JSON) or already-materialized lists.
+    """
+    if data is None or data == "" or data == []:
+        return None
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return parsed if isinstance(parsed, list) else None
+    if isinstance(data, list):
+        return data
+    return None
 
 
 class MCPServerManager:
@@ -396,6 +420,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
@@ -668,6 +693,7 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )
@@ -767,6 +793,7 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
@@ -1300,6 +1327,93 @@ class MCPServerManager:
 
         return resolved_env
 
+    async def _resolve_static_headers_with_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Return server.static_headers with ``${NAME}`` interpolated.
+
+        Globals come from ``server.env_vars`` entries with ``scope=="global"``.
+        Per-user values come from the ``LiteLLM_MCPUserEnvVars`` row for the
+        calling user.
+
+        Raises ``MCPMissingUserEnvVarsError`` when ``static_headers`` reference
+        a per-user variable that the calling user has not yet supplied. This
+        is converted into a user-facing 412 by the REST layer.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers and not env_vars:
+            return static_headers
+
+        global_values, user_specs = parse_admin_env_vars(env_vars)
+        user_var_names = {spec["name"] for spec in user_specs}
+
+        # If no env vars are configured, return static_headers as-is.
+        if not global_values and not user_specs:
+            return static_headers
+
+        # Figure out which user-scoped vars are actually referenced.
+        referenced = collect_env_var_references(strings=(static_headers or {}).values())
+        referenced_user_vars = referenced & user_var_names
+
+        user_values: Dict[str, str] = {}
+        if referenced_user_vars:
+            user_values = await self._load_user_env_vars(server, user_api_key_auth)
+
+            missing = sorted(
+                name for name in referenced_user_vars if not user_values.get(name)
+            )
+            if missing:
+                raise MCPMissingUserEnvVarsError(
+                    server_id=server.server_id,
+                    server_name=server.server_name or server.name,
+                    missing=missing,
+                    setup_url=build_env_var_setup_url(server.server_id),
+                )
+
+        merged_vars: Dict[str, str] = {**global_values, **user_values}
+        if not static_headers:
+            return static_headers
+        return interpolate_headers(static_headers, merged_vars)
+
+    async def _load_user_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Dict[str, str]:
+        """Best-effort lookup of the calling user's env var values for ``server``.
+
+        Returns an empty dict when no user is available or the DB lookup
+        fails — callers detect missing values via name lookup, not by an
+        exception here.
+        """
+        if user_api_key_auth is None:
+            return {}
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return {}
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            return {}
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            get_user_env_vars,
+        )
+
+        try:
+            return await get_user_env_vars(prisma_client, user_id, server.server_id)
+        except Exception as exc:
+            verbose_logger.debug(
+                "MCPServerManager: failed to load user env vars for "
+                "user=%s server=%s: %s",
+                user_id,
+                server.server_id,
+                exc,
+            )
+            return {}
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -1429,10 +1543,13 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server, user_api_key_auth
+            )
+            if resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(resolved_static_headers)
 
             # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
             # Skip entirely when the signer is not configured (avoid an unnecessary
@@ -2675,6 +2792,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2754,10 +2872,17 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        # Interpolate env vars into static_headers. Raises
+        # MCPMissingUserEnvVarsError when the calling user has not filled in
+        # a required per-user variable — the REST layer converts that into
+        # a friendly 412 with a setup URL.
+        resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+            mcp_server, user_api_key_auth
+        )
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -3039,6 +3164,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
