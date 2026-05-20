@@ -370,7 +370,9 @@ class MCPRequestHandler:
             return False
 
         for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                name, client_ip=client_ip
+            )
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
         return True
@@ -407,9 +409,7 @@ class MCPRequestHandler:
             return False
 
         for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(
-                name, client_ip=client_ip
-            )
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
             # `is True` is intentional: opt-in must be an explicit boolean
