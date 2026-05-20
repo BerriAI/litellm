@@ -64,6 +64,23 @@ def extract_file_id_or_bytes(
     return None, raw_bytes, mime
 
 
+def _extract_file_id_from_upload_response(response: Any) -> str:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError(
+            "Reducto /upload returned a non-JSON 200 response: {}".format(response.text)
+        ) from exc
+    file_id = (payload or {}).get("file_id") if isinstance(payload, dict) else None
+    if not isinstance(file_id, str) or not file_id:
+        raise ValueError(
+            "Reducto /upload returned 200 without a file_id; got payload={}".format(
+                payload
+            )
+        )
+    return file_id
+
+
 def upload_bytes_sync(
     raw_bytes: bytes,
     mime: Optional[str],
@@ -79,7 +96,7 @@ def upload_bytes_sync(
         timeout=request_timeout,
     )
     response.raise_for_status()
-    return response.json()["file_id"]
+    return _extract_file_id_from_upload_response(response)
 
 
 async def upload_bytes_async(
@@ -97,7 +114,7 @@ async def upload_bytes_async(
         timeout=request_timeout,
     )
     response.raise_for_status()
-    return response.json()["file_id"]
+    return _extract_file_id_from_upload_response(response)
 
 
 def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
