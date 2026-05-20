@@ -305,6 +305,7 @@ LiteLLM supports customizing the following Datadog environment variables
 | `LITELLM_DD_AGENT_PORT` | Port of DataDog agent for log intake | "10518" | ❌ No |
 | `DD_ENV` | Environment tag for your logs (e.g., "production", "staging") | "unknown" | ❌ No |
 | `DD_SERVICE` | Service name for your logs | "litellm-server" | ❌ No |
+| `DD_LLMOBS_ML_APP` | Default ml_app name for LLM Observability (Application column). Can be overridden per-request via `metadata.ml_app`. | Falls back to `DD_SERVICE` | ❌ No |
 | `DD_SOURCE` | Source name for your logs | "litellm" | ❌ No |
 | `DD_VERSION` | Version tag for your logs | "unknown" | ❌ No |
 | `HOSTNAME` | Hostname tag for your logs | "" | ❌ No |
