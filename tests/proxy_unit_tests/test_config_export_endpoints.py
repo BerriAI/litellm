@@ -22,7 +22,9 @@ from litellm.proxy.management_endpoints.config_export_endpoints import (
     ImportSectionResult,
     LiteLLMExportEnvelope,
     _deep_merge,
+    _import_general_settings,
     _import_keys_section,
+    _import_section,
     _is_redacted,
     _redact_credential_values,
     _redact_mcp_credentials,
@@ -915,3 +917,526 @@ async def test_import_keys_dry_run_counts_update_without_writing():
 
     assert sr.updated == 1
     prisma.db.litellm_verificationtoken.update_many.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _import_general_settings — all live-write and skip paths
+# ---------------------------------------------------------------------------
+
+
+def _make_config_row(name, value):
+    row = MagicMock()
+    row.param_name = name
+    row.param_value = value
+    return row
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_creates_new_safe_key():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(return_value=[])  # nothing exists
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"max_parallel_requests": 50},
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.created == 1
+    assert sr.total_processed == 1
+    prisma.db.litellm_config.create.assert_called_once_with(
+        data={"param_name": "max_parallel_requests", "param_value": 50}
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_skips_existing_on_conflict_skip():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(
+        return_value=[_make_config_row("max_parallel_requests", 10)]
+    )
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"max_parallel_requests": 99},
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.skipped == 1
+    assert sr.created == 0
+    prisma.db.litellm_config.create.assert_not_called()
+    prisma.db.litellm_config.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_updates_existing_on_conflict_replace():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(
+        return_value=[_make_config_row("max_parallel_requests", 10)]
+    )
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"max_parallel_requests": 99},
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1
+    prisma.db.litellm_config.update.assert_called_once_with(
+        where={"param_name": "max_parallel_requests"},
+        data={"param_value": 99},
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_merges_dict_values():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(
+        return_value=[_make_config_row("slack_alerting_settings", {"channel": "#ops"})]
+    )
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"slack_alerting_settings": {"alert_on_spend": True}},
+        conflict="merge",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1
+    call_data = prisma.db.litellm_config.update.call_args.kwargs["data"]["param_value"]
+    assert call_data["channel"] == "#ops"
+    assert call_data["alert_on_spend"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_skips_unsafe_key():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(return_value=[])
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"database_url": "postgres://secret"},
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.skipped == 1
+    assert len(sr.warnings) == 1
+    assert "not in safe export allow-list" in sr.warnings[0]
+    prisma.db.litellm_config.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_dry_run_counts_without_writing():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(
+        return_value=[_make_config_row("max_parallel_requests", 10)]
+    )
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"max_parallel_requests": 99, "alerting": ["slack"]},
+        conflict="replace",
+        dry_run=True,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1  # max_parallel_requests exists
+    assert sr.created == 1  # alerting is new
+    prisma.db.litellm_config.create.assert_not_called()
+    prisma.db.litellm_config.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_general_settings_exception_counted_as_error():
+    prisma = make_prisma()
+    prisma.db.litellm_config.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.create = AsyncMock(side_effect=Exception("db boom"))
+
+    sr = ImportSectionResult()
+    await _import_general_settings(
+        prisma_client=prisma,
+        settings={"max_parallel_requests": 50},
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.errors == 1
+    assert any("db boom" in w for w in sr.warnings)
+
+
+# ---------------------------------------------------------------------------
+# _upsert — merge, missing-id, and exception paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_merge_deep_merges_and_writes():
+    table = MagicMock()
+    table.update = AsyncMock()
+
+    existing = {"team_id": "t1", "metadata": {"env": "dev"}, "team_alias": "old"}
+    incoming = {"team_id": "t1", "metadata": {"region": "us"}, "team_alias": "new"}
+
+    sr = ImportSectionResult()
+    await _upsert(
+        table=table,
+        rec=incoming,
+        id_field="team_id",
+        conflict="merge",
+        dry_run=False,
+        section_result=sr,
+        existing_map={"t1": existing},
+    )
+
+    assert sr.updated == 1
+    table.update.assert_called_once()
+    data_sent = table.update.call_args.kwargs["data"]
+    assert data_sent["metadata"]["env"] == "dev"
+    assert data_sent["metadata"]["region"] == "us"
+    assert data_sent["team_alias"] == "new"
+    assert "team_id" not in data_sent
+
+
+@pytest.mark.asyncio
+async def test_upsert_skips_record_with_missing_id():
+    table = MagicMock()
+    table.create = AsyncMock()
+
+    sr = ImportSectionResult()
+    await _upsert(
+        table=table,
+        rec={"team_alias": "no-id"},
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},
+    )
+
+    assert sr.skipped == 1
+    assert len(sr.warnings) == 1
+    table.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_exception_counted_as_error():
+    table = MagicMock()
+    table.create = AsyncMock(side_effect=Exception("constraint violation"))
+
+    sr = ImportSectionResult()
+    await _upsert(
+        table=table,
+        rec={"team_id": "t1", "team_alias": "alpha"},
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},  # not in map → triggers create
+    )
+
+    assert sr.errors == 1
+    assert any("constraint violation" in w for w in sr.warnings)
+
+
+@pytest.mark.asyncio
+async def test_upsert_dry_run_create_vs_skip():
+    table = MagicMock()
+    sr = ImportSectionResult()
+
+    # new record → dry_run create
+    await _upsert(
+        table=table,
+        rec={"team_id": "new"},
+        id_field="team_id",
+        conflict="skip",
+        dry_run=True,
+        section_result=sr,
+        existing_map={},
+    )
+    assert sr.created == 1
+
+    # existing record, skip conflict → dry_run skip
+    await _upsert(
+        table=table,
+        rec={"team_id": "existing"},
+        id_field="team_id",
+        conflict="skip",
+        dry_run=True,
+        section_result=sr,
+        existing_map={"existing": {"team_id": "existing"}},
+    )
+    assert sr.skipped == 1
+    table.create.assert_not_called()
+    table.update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _import_section — has_tx=False non-transactional fallback
+# ---------------------------------------------------------------------------
+
+
+class _NoTxTable:
+    """Minimal table stub without a Prisma transaction client."""
+
+    def __init__(self):
+        self.created = []
+        self.updated = []
+
+    async def create(self, data):
+        self.created.append(data)
+
+    async def update(self, where, data):
+        self.updated.append((where, data))
+
+    async def find_many(self, where=None):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_import_section_no_tx_fallback_creates_record():
+    table = _NoTxTable()
+    # has_tx will be False because _NoTxTable has no _client attribute
+    sr = ImportSectionResult()
+    await _import_section(
+        table=table,
+        table_name="litellm_teamtable",
+        records=[{"team_id": "t1", "team_alias": "alpha"}],
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},
+    )
+
+    assert sr.created == 1
+    assert len(table.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_section_no_tx_fallback_exception_counts_error():
+    class _FailTable(_NoTxTable):
+        async def create(self, data):
+            raise Exception("write failed")
+
+    table = _FailTable()
+    sr = ImportSectionResult()
+    await _import_section(
+        table=table,
+        table_name="litellm_teamtable",
+        records=[{"team_id": "t1"}, {"team_id": "t2"}],
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},
+    )
+
+    # exception inside _upsert is caught per-record, not at section level
+    assert sr.errors >= 1
+
+
+# ---------------------------------------------------------------------------
+# User-proposed tests (exercise all orchestrator section branches)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_all_sections_smoke(monkeypatch):
+    prisma = make_prisma()
+
+    async def fake_import_section(**kwargs):
+        sr = kwargs["section_result"]
+        sr.created += len(kwargs.get("records", []))
+        sr.total_processed += len(kwargs.get("records", []))
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.config_export_endpoints._import_section",
+        fake_import_section,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.config_export_endpoints._load_existing",
+        AsyncMock(return_value={}),
+    )
+
+    envelope = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["*"],
+        budgets=[{"budget_id": "b1"}],
+        organizations=[{"organization_id": "o1"}],
+        teams=[{"team_id": "t1"}],
+        users=[{"user_id": "u1"}],
+        keys=[{"key_alias": "k1"}],
+        credentials=[{"credential_name": "c1", "credential_values": {}}],
+        models=[{"model_id": "m1"}],
+        mcp_servers=[{"server_id": "s1"}],
+        agents=[{"agent_name": "a1"}],
+        guardrails=[{"guardrail_name": "g1"}],
+        tags=[{"tag_name": "tag1"}],
+        general_settings={"max_parallel_requests": 10},
+    )
+    body = ImportRequest(data=envelope, dry_run=True)
+
+    with mock_prisma(prisma):
+        result = await import_config(
+            request=make_request(),
+            body=body,
+            user_api_key_dict=make_admin_key(),
+        )
+
+    assert len(result.sections_attempted) >= 10
+
+
+@pytest.mark.asyncio
+async def test_import_handles_exception(monkeypatch):
+    prisma = make_prisma()
+
+    async def fail_import_section(**kwargs):
+        raise Exception("boom")
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.config_export_endpoints._import_section",
+        fail_import_section,
+    )
+
+    envelope = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["teams"],
+        teams=[{"team_id": "t1"}],
+    )
+    body = ImportRequest(data=envelope)
+
+    with mock_prisma(prisma):
+        with pytest.raises(HTTPException) as exc:
+            await import_config(
+                request=make_request(),
+                body=body,
+                user_api_key_dict=make_admin_key(),
+            )
+
+    assert exc.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# _validate_dependencies — missing branches
+# ---------------------------------------------------------------------------
+
+
+def test_validate_dependencies_fails_when_budget_missing_for_org():
+    data = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["organizations", "budgets"],
+        budgets=[],  # b1 not present
+        organizations=[{"organization_id": "o1", "budget_id": "b1"}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_dependencies(data)
+    assert exc_info.value.status_code == 400
+    assert "b1" in str(exc_info.value.detail)
+
+
+def test_validate_dependencies_fails_when_key_references_missing_team():
+    data = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["teams", "keys"],
+        teams=[],  # t1 not present
+        keys=[{"key_alias": "my-key", "team_id": "t1"}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_dependencies(data)
+    assert exc_info.value.status_code == 400
+    assert "t1" in str(exc_info.value.detail)
+
+
+def test_validate_dependencies_fails_when_key_references_missing_user():
+    data = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["users", "keys"],
+        users=[],  # u1 not present
+        keys=[{"key_alias": "my-key", "user_id": "u1"}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_dependencies(data)
+    assert exc_info.value.status_code == 400
+    assert "u1" in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# _get_prisma_with_auth — prisma_client is None → HTTP 500
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_raises_500_when_db_not_connected():
+    fake_module = MagicMock()
+    fake_module.prisma_client = None
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_module}):
+        with pytest.raises(HTTPException) as exc_info:
+            await export_config(
+                request=make_request(),
+                user_api_key_dict=make_admin_key(),
+                include=None,
+                format="json",
+                redact_secrets=True,
+                limit=1000,
+            )
+    assert exc_info.value.status_code == 500
+    assert "Database not connected" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# _import_keys_section — merge path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_keys_merges_existing_via_update_many():
+    existing = MagicMock()
+    existing.key_alias = "my-key"
+    existing.model_dump = MagicMock(
+        return_value={"key_alias": "my-key", "user_id": "u1", "max_budget": 50}
+    )
+
+    prisma = make_prisma()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[existing])
+    prisma.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value=MagicMock(count=1)
+    )
+
+    sr = ImportSectionResult()
+    await _import_keys_section(
+        prisma_client=prisma,
+        records=[{"key_alias": "my-key", "user_id": "u2", "max_budget": 100}],
+        conflict="merge",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1
+    prisma.db.litellm_verificationtoken.update_many.assert_called_once()
+    data_sent = prisma.db.litellm_verificationtoken.update_many.call_args.kwargs["data"]
+    # merge: incoming user_id wins, max_budget wins
+    assert data_sent["user_id"] == "u2"
+    assert data_sent["max_budget"] == 100
+    assert "token" not in data_sent
+    assert "key_alias" not in data_sent
