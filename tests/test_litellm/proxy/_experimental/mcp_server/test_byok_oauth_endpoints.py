@@ -1291,6 +1291,20 @@ def test_validate_trusted_redirect_uri_rejects_native_callback_with_fragment():
     assert exc.value.status_code == 400
 
 
+def test_validate_trusted_redirect_uri_rejects_native_callback_with_query():
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _make_trusted_request("http://localhost:4000/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(
+            req,
+            "cursor://anysphere.cursor-mcp/oauth/callback?injected=anything",
+        )
+    assert exc.value.status_code == 400
+
+
 def test_validate_trusted_redirect_uri_native_path_case_insensitive(monkeypatch):
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
         validate_trusted_redirect_uri,
@@ -1331,6 +1345,25 @@ def test_validate_trusted_redirect_uri_native_wildcard_respects_path_boundary(
         validate_trusted_redirect_uri(
             req, "cursor://anysphere.cursor-mcp/oauth/callback-2"
         )
+
+
+def test_validate_trusted_redirect_uri_native_wildcard_directory_prefix(
+    monkeypatch,
+):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.oauth_utils._DEFAULT_NATIVE_REDIRECT_URIS",
+        [],
+    )
+    monkeypatch.setenv(
+        "MCP_TRUSTED_NATIVE_REDIRECT_URIS",
+        "cursor://anysphere.cursor-mcp/oauth/*",
+    )
+    req = _make_trusted_request("http://localhost:4000/")
+    validate_trusted_redirect_uri(req, "cursor://anysphere.cursor-mcp/oauth/callback")
 
 
 def test_validate_trusted_redirect_uri_rejects_scheme_mismatch_on_same_host():
