@@ -9,22 +9,11 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-import litellm
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-
-
-@pytest.fixture(autouse=True)
-def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
-    )
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 class TestOpenAIGPTConfig:
@@ -106,13 +95,17 @@ class TestOpenAIGPTConfig:
         supported_params = self.config.get_supported_openai_params("gpt-4.1")
         assert "prompt_cache_key" in supported_params
 
-    def test_glm_json_object_injects_json_hint_when_missing(self):
+    def test_glm_json_object_injects_json_hint_when_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.llms.openai.chat.openai_compatible_request_utils.requires_json_keyword_for_json_object",
+            lambda model, custom_llm_provider=None: True,
+        )
         messages = [{"role": "user", "content": "Reply with one word."}]
         result = self.config.transform_request(
             model="custom_openai/GLM-5.1",
             messages=messages,
             optional_params={"response_format": {"type": "json_object"}},
-            litellm_params={},
+            litellm_params={"custom_llm_provider": "custom_openai"},
             headers={},
         )
 
@@ -120,13 +113,17 @@ class TestOpenAIGPTConfig:
         assert transformed_messages[0]["role"] == "system"
         assert "json" in str(transformed_messages[0]["content"]).lower()
 
-    def test_glm_json_object_does_not_inject_when_prompt_has_json(self):
+    def test_glm_json_object_does_not_inject_when_prompt_has_json(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.llms.openai.chat.openai_compatible_request_utils.requires_json_keyword_for_json_object",
+            lambda model, custom_llm_provider=None: True,
+        )
         messages = [{"role": "user", "content": "Return JSON only."}]
         result = self.config.transform_request(
             model="custom_openai/GLM-5.1",
             messages=messages,
             optional_params={"response_format": {"type": "json_object"}},
-            litellm_params={},
+            litellm_params={"custom_llm_provider": "custom_openai"},
             headers={},
         )
 

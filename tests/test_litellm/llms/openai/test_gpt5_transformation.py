@@ -22,15 +22,6 @@ def gpt5_config() -> OpenAIGPT5Config:
     return OpenAIGPT5Config()
 
 
-@pytest.fixture(autouse=True)
-def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
-    )
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
-
-
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
@@ -147,13 +138,19 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
         )
 
 
-def test_glm_json_object_injects_json_hint_when_missing(config: OpenAIConfig):
+def test_glm_json_object_injects_json_hint_when_missing(
+    config: OpenAIConfig, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "litellm.llms.openai.chat.openai_compatible_request_utils.requires_json_keyword_for_json_object",
+        lambda model, custom_llm_provider=None: True,
+    )
     messages = [{"role": "user", "content": "Reply with one word."}]
     result = config.transform_request(
         model="custom_openai/GLM-5.1",
         messages=messages,  # type: ignore[arg-type]
         optional_params={"response_format": {"type": "json_object"}},
-        litellm_params={},
+        litellm_params={"custom_llm_provider": "custom_openai"},
         headers={},
     )
 
@@ -162,13 +159,19 @@ def test_glm_json_object_injects_json_hint_when_missing(config: OpenAIConfig):
     assert "json" in str(transformed_messages[0]["content"]).lower()
 
 
-def test_glm_json_object_does_not_inject_when_prompt_has_json(config: OpenAIConfig):
+def test_glm_json_object_does_not_inject_when_prompt_has_json(
+    config: OpenAIConfig, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "litellm.llms.openai.chat.openai_compatible_request_utils.requires_json_keyword_for_json_object",
+        lambda model, custom_llm_provider=None: True,
+    )
     messages = [{"role": "user", "content": "Return JSON only."}]
     result = config.transform_request(
         model="custom_openai/GLM-5.1",
         messages=messages,  # type: ignore[arg-type]
         optional_params={"response_format": {"type": "json_object"}},
-        litellm_params={},
+        litellm_params={"custom_llm_provider": "custom_openai"},
         headers={},
     )
 

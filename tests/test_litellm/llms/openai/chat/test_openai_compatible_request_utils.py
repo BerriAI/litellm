@@ -3,7 +3,6 @@
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.chat.openai_compatible_request_utils import (
     maybe_inject_json_keyword_hint_for_json_object,
@@ -16,15 +15,6 @@ from litellm.utils import (
     requires_anthropic_request_sanitize,
     requires_json_keyword_for_json_object,
 )
-
-
-@pytest.fixture(autouse=True)
-def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(
-        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
-    )
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def test_requires_json_keyword_for_json_object_reads_model_map():
