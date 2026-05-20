@@ -37,9 +37,9 @@ class ModelResponseIterator:
                     finish_reason="",
                     usage=(
                         ChatCompletionUsageBlock(
-                            prompt_tokens=final_usage.prompt_tokens,
-                            completion_tokens=final_usage.completion_tokens,
-                            total_tokens=final_usage.total_tokens,
+                            prompt_tokens=final_usage.prompt_tokens or 0,
+                            completion_tokens=final_usage.completion_tokens or 0,
+                            total_tokens=final_usage.total_tokens or 0,
                         )
                         if final_usage is not None
                         else None

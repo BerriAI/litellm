@@ -44,7 +44,10 @@ class _CombinedChunkSplitter:
     silently dropped (only the ``message_delta`` stop event is emitted).
 
     Supports both sync and async iteration, since ``AnthropicStreamWrapper`` exposes
-    both ``__next__`` and ``__anext__``.
+    both ``__next__`` and ``__anext__``. An instance is single-mode: callers must
+    iterate it either synchronously or asynchronously, never both — the two modes
+    hold independent iterator references on the upstream stream and mixing them
+    would advance them out of sync.
     """
 
     def __init__(self, completion_stream: Any):
