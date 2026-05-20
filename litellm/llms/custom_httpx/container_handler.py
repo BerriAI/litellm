@@ -257,14 +257,19 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
                 response = http_client.get(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "DELETE":
                 response = http_client.delete(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
@@ -272,11 +277,11 @@ class GenericContainerHandler:
                         kwargs["file"], headers
                     )
                     response = http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
+                        url=url, headers=headers, params=effective_params, files=files
                     )
                 else:
                     response = http_client.post(
-                        url=url, headers=headers, params=query_params
+                        url=url, headers=headers, params=effective_params
                     )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
@@ -376,14 +381,19 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
                 response = await http_client.get(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "DELETE":
                 response = await http_client.delete(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
@@ -391,11 +401,11 @@ class GenericContainerHandler:
                         kwargs["file"], headers
                     )
                     response = await http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
+                        url=url, headers=headers, params=effective_params, files=files
                     )
                 else:
                     response = await http_client.post(
-                        url=url, headers=headers, params=query_params
+                        url=url, headers=headers, params=effective_params
                     )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
