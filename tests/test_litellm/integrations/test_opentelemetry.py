@@ -66,7 +66,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
         mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
         mock_span.set_attribute.assert_any_call(
-            "guardrail_response", "filtered_content"
+            "guardrail_response", safe_dumps("filtered_content")
         )
         mock_span.set_attribute.assert_any_call(
             "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
@@ -1169,7 +1169,7 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
         mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
         mock_span.set_attribute.assert_any_call(
-            "guardrail_response", "filtered_content"
+            "guardrail_response", safe_dumps("filtered_content")
         )
         mock_span.set_attribute.assert_any_call(
             "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
