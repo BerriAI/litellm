@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Collection, Dict, List, Optional
+from typing import Any, Collection, Dict, FrozenSet, List, Optional, Tuple
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -11,6 +11,119 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.types.router import Deployment
+
+# Fields the proxy populates itself during request processing. These are
+# removed from the incoming request body so downstream code works with the
+# expected shape — caller-supplied values here would collide with or shadow
+# the proxy's own. disable_global_guardrails and opted_out_global_guardrails
+# are intentionally excluded; they're handled by the auth layer's
+# _guardrail_modification_check.
+_RESTRICTED_TOP_LEVEL_FIELDS: FrozenSet[str] = frozenset(
+    {
+        "proxy_server_request",
+        "standard_logging_object",
+        "secret_fields",
+        "litellm_logging_obj",
+    }
+)
+
+# mock_response / mock_tool_calls short-circuit the real LLM call and are
+# meant for test/dev use. Removed from client payloads by default; set
+# ``general_settings.allow_client_side_mock_response: true`` in config.yaml
+# to accept client-supplied values. Internal code (guardrails, health
+# checks) sets these server-side after ingress and is unaffected.
+_MOCK_RESPONSE_FIELDS: FrozenSet[str] = frozenset({"mock_response", "mock_tool_calls"})
+
+_RESTRICTED_METADATA_FIELDS: FrozenSet[str] = frozenset(
+    {
+        "applied_guardrails",
+        "applied_policies",
+        "policy_sources",
+        "pillar_response_headers",
+        "pillar_flagged",
+        "pillar_scanners",
+        "pillar_evidence",
+        "pillar_evidence_truncated",
+        "pillar_session_id_response",
+        "semantic-similarity",  # hyphenated, matches redis_semantic_cache.py
+        "_guardrail_pipelines",
+        "_pipeline_managed_guardrails",
+    }
+)
+
+# The proxy writes user_api_key_* fields into metadata during
+# add_litellm_data_to_request; any incoming values of the same shape are
+# removed to avoid collisions. Safe here because this strip only runs on
+# raw ingress bodies, before the proxy populates its own values.
+_RESTRICTED_METADATA_PREFIXES: Tuple[str, ...] = ("user_api_key_",)
+
+_METADATA_CONTAINER_KEYS: Tuple[str, ...] = ("metadata", "litellm_metadata")
+
+
+def _client_mock_response_allowed() -> bool:
+    """Check the proxy's ``general_settings.allow_client_side_mock_response``.
+
+    Lazy-imported because ``general_settings`` lives on ``proxy_server`` and
+    we don't want an import cycle (``proxy_server`` imports this module).
+    In non-proxy contexts (SDK, unit tests that don't start the proxy) the
+    import succeeds but the dict is empty, so the function returns False
+    and the fields are removed by default.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except ImportError:
+        return False
+    return bool(general_settings.get("allow_client_side_mock_response"))
+
+
+def _strip_internal_metadata_keys(metadata: dict) -> bool:
+    """Remove restricted keys from `metadata` in place; return True if anything was removed."""
+    removed = False
+    for key in list(metadata.keys()):
+        if key in _RESTRICTED_METADATA_FIELDS or key.startswith(
+            _RESTRICTED_METADATA_PREFIXES
+        ):
+            del metadata[key]
+            removed = True
+    return removed
+
+
+def strip_internal_control_fields(data: dict) -> None:
+    """Remove proxy-internal fields from a user-supplied request body in place.
+
+    Metadata containers can arrive as either a dict or a JSON string (the
+    latter happens with multipart/form-data and some extra_body paths);
+    both shapes are handled. Idempotent — safe to call on an
+    already-cleaned dict.
+
+    Only runs at ingress (before the proxy enriches `data` with its own
+    user_api_key_* / internal fields). Do not call on an enriched body.
+    """
+    if not isinstance(data, dict):
+        return
+
+    for key in _RESTRICTED_TOP_LEVEL_FIELDS:
+        data.pop(key, None)
+
+    if not _client_mock_response_allowed():
+        for key in _MOCK_RESPONSE_FIELDS:
+            data.pop(key, None)
+
+    for container_key in _METADATA_CONTAINER_KEYS:
+        container = data.get(container_key)
+        if isinstance(container, dict):
+            _strip_internal_metadata_keys(container)
+        elif isinstance(container, str):
+            try:
+                parsed = json.loads(container)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(parsed, dict) and _strip_internal_metadata_keys(parsed):
+                # ensure_ascii=False keeps non-ASCII characters in their
+                # original UTF-8 form rather than \uXXXX-escaping them, so
+                # the re-serialized string stays as close to the original
+                # representation as possible.
+                data[container_key] = json.dumps(parsed, ensure_ascii=False)
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -32,6 +145,11 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             request=request
         )
         if _cached_request_body is not None:
+            # The cache was populated by this function after the strip
+            # ran, so it's already in the expected shape. Do NOT re-strip
+            # here — by this point the proxy may have enriched the body
+            # with its own user_api_key_* / internal fields, which would
+            # be incorrectly removed.
             return _cached_request_body
 
         _request_headers: dict = _safe_get_request_headers(request=request)
@@ -79,6 +197,10 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
                         )
+
+        # Strip proxy-internal fields before anything downstream (including
+        # the cache) sees the body.
+        strip_internal_control_fields(parsed_body)
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
@@ -253,6 +375,11 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
             parsed_form_data.setdefault(clean_key, []).append(value)
         else:
             parsed_form_data[key] = value
+    # Same ingress sanitization as _read_request_body — multipart endpoints
+    # (audio transcription, skills, container uploads, passthrough) route
+    # through here directly via get_request_body and would otherwise bypass
+    # the strip that JSON ingress applies.
+    strip_internal_control_fields(parsed_form_data)
     return parsed_form_data
 
 
@@ -412,6 +539,11 @@ def extract_nested_form_metadata(
             verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {str(e)}")
             continue
 
+    # Same ingress sanitization as _read_request_body / get_form_data —
+    # this function is reached from endpoints that call request.form()
+    # directly (file uploads via files_endpoints.py), so without this the
+    # bracket-notation form path bypasses the strip applied elsewhere.
+    _strip_internal_metadata_keys(metadata)
     return metadata
 
 
