@@ -4935,12 +4935,14 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     assert reverse == {}
 
 
-def test_is_glm_5_1_family_model():
+def test_requires_anthropic_request_sanitize_from_model_map():
+    from litellm.utils import requires_anthropic_request_sanitize
+
     config = AnthropicConfig()
-    assert config._is_glm_5_1_family_model("custom_openai/GLM-5.1") is True
-    assert config._is_glm_5_1_family_model("glm_5_1") is True
-    assert config._is_glm_5_1_family_model("claude-opus-4-7") is False
-    assert config._is_glm_5_1_family_model(None) is False
+    assert config._requires_anthropic_request_sanitize("custom_openai/GLM-5.1") is True
+    assert requires_anthropic_request_sanitize("custom_openai/glm_5_1") is True
+    assert config._requires_anthropic_request_sanitize("claude-opus-4-7") is False
+    assert config._requires_anthropic_request_sanitize(None) is False
 
 
 def test_sanitize_request_messages_injects_fallback_when_no_user_or_assistant():

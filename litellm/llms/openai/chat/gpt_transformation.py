@@ -35,6 +35,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.openai.chat.openai_compatible_request_utils import (
+    maybe_inject_json_keyword_hint_for_json_object,
+    messages_contain_json_keyword,
+    normalize_flat_function_tools,
+    response_format_is_json_object,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -444,13 +450,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
             model=model, messages=messages, tools=optional_params.get("tools", [])
         )
-        tools = self._normalize_flat_function_tools(tools)
+        tools = normalize_flat_function_tools(tools)
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
-        messages = self._maybe_inject_json_hint_for_glm(
-            model=model, messages=messages, optional_params=optional_params
+        messages = maybe_inject_json_keyword_hint_for_json_object(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            custom_llm_provider=litellm_params.get("custom_llm_provider"),
         )
 
         return {
@@ -478,14 +487,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             messages=transformed_messages,
             tools=optional_params.get("tools", []),
         )
-        tools = self._normalize_flat_function_tools(tools)
+        tools = normalize_flat_function_tools(tools)
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
         if self.__class__._is_base_class:
-            transformed_messages = self._maybe_inject_json_hint_for_glm(
+            transformed_messages = maybe_inject_json_keyword_hint_for_json_object(
                 model=model,
                 messages=transformed_messages,
                 optional_params=optional_params,
+                custom_llm_provider=litellm_params.get("custom_llm_provider"),
             )
             return {
                 "model": model,
@@ -500,50 +510,25 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     @staticmethod
     def _response_format_is_json_object(optional_params: dict) -> bool:
-        response_format = optional_params.get("response_format")
-        return (
-            isinstance(response_format, dict)
-            and response_format.get("type") == "json_object"
-        )
+        return response_format_is_json_object(optional_params)
 
     @staticmethod
     def _messages_contain_json_keyword(messages: List[AllMessageValues]) -> bool:
-        stack: list[Any] = list(messages)
-        while stack:
-            value = stack.pop()
-            if isinstance(value, str):
-                if "json" in value.lower():
-                    return True
-            elif isinstance(value, list):
-                stack.extend(value)
-            elif isinstance(value, dict):
-                stack.extend(value.values())
-        return False
+        return messages_contain_json_keyword(messages)
 
     def _maybe_inject_json_hint_for_glm(
         self,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        custom_llm_provider: Optional[str] = None,
     ) -> List[AllMessageValues]:
-        """
-        GLM-5.1 requires the prompt to include the word "json" when
-        response_format={"type":"json_object"} is requested.
-        """
-        normalized_model = model.lower()
-        is_glm_5_1 = "glm-5.1" in normalized_model or "glm_5_1" in normalized_model
-        if not is_glm_5_1:
-            return messages
-        if not self._response_format_is_json_object(optional_params):
-            return messages
-        if self._messages_contain_json_keyword(messages):
-            return messages
-
-        json_hint: AllMessageValues = {
-            "role": "system",
-            "content": "Return valid JSON only.",
-        }
-        return [json_hint, *messages]
+        return maybe_inject_json_keyword_hint_for_json_object(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None
@@ -551,52 +536,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _normalize_flat_function_tools(
         self, tools: Optional[List["ChatCompletionToolParam"]]
     ) -> Optional[List["ChatCompletionToolParam"]]:
-        """
-        Normalize flat function tools to OpenAI chat.completions shape.
-        """
-        if tools is None:
-            return None
-
-        normalized_tools: List["ChatCompletionToolParam"] = []
-        for tool in tools:
-            if not isinstance(tool, dict) or tool.get("type") != "function":
-                normalized_tools.append(tool)
-                continue
-
-            existing_function = tool.get("function")
-            if isinstance(existing_function, dict):
-                normalized_tools.append(tool)
-                continue
-
-            name = tool.get("name")
-            if name is None:
-                normalized_tools.append(tool)
-                continue
-
-            parameters = tool.get("parameters")
-            if not isinstance(parameters, dict):
-                parameters = {"type": "object"}
-            elif "type" not in parameters:
-                parameters = {**parameters, "type": "object"}
-
-            function_payload: Dict[str, Any] = {
-                "name": name,
-                "description": tool.get("description") or "",
-                "parameters": parameters,
-                "strict": bool(tool.get("strict", False)),
-            }
-            normalized_tool: Dict[str, Any] = {
-                **{
-                    key: value
-                    for key, value in tool.items()
-                    if key not in {"name", "description", "parameters", "strict"}
-                },
-                "type": "function",
-                "function": function_payload,
-            }
-            normalized_tools.append(cast("ChatCompletionToolParam", normalized_tool))
-
-        return normalized_tools
+        normalized = normalize_flat_function_tools(tools)
+        return cast(Optional[List["ChatCompletionToolParam"]], normalized)
 
     def _check_and_fix_if_content_is_tool_call(
         self, content: str, optional_params: dict

@@ -12996,6 +12996,45 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "GLM-5.1": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_anthropic_request_sanitize": true,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "glm-5.1": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_anthropic_request_sanitize": true,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "glm_5_1": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_anthropic_request_sanitize": true,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "kimi-k2-thinking-251104": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "volcengine",

@@ -86,6 +86,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    requires_anthropic_request_sanitize,
     supports_reasoning,
     token_counter,
 )
@@ -937,11 +938,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             initial_tool["authorization_token"] = authorization_token
         return initial_tool
 
-    def _is_glm_5_1_family_model(self, model: Optional[str]) -> bool:
+    def _requires_anthropic_request_sanitize(self, model: Optional[str]) -> bool:
         if not isinstance(model, str):
             return False
-        normalized = model.lower()
-        return "glm-5.1" in normalized or "glm_5_1" in normalized
+        return requires_anthropic_request_sanitize(model=model)
 
     def _is_non_empty_text_content(self, content: Any) -> bool:
         return isinstance(content, str) and bool(content.strip())
@@ -1565,7 +1565,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "tools":
                 anthropic_tools, mcp_servers = self._map_tools(
                     value,
-                    strict_sanitize=self._is_glm_5_1_family_model(model),
+                    strict_sanitize=self._requires_anthropic_request_sanitize(model),
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
@@ -1953,7 +1953,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
-        strict_sanitize = self._is_glm_5_1_family_model(model)
+        strict_sanitize = self._requires_anthropic_request_sanitize(model)
         if strict_sanitize:
             messages = self._sanitize_request_messages(messages)
 

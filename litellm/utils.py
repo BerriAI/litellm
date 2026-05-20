@@ -2781,6 +2781,34 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def requires_json_keyword_for_json_object(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the model requires the prompt to include the word "json" when
+    response_format={"type":"json_object"} is used.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="requires_json_keyword_for_json_object",
+    )
+
+
+def requires_anthropic_request_sanitize(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if Anthropic request transformation should drop invalid messages/tools
+    instead of failing the whole request.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="requires_anthropic_request_sanitize",
+    )
+
+
 def supports_native_structured_output(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -5530,6 +5558,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             return True
         elif custom_llm_provider == "github":
             # Allow github/<model> aliases to reuse existing provider metadata.
+            return True
+        elif custom_llm_provider == "custom_openai" and model_info[
+            "litellm_provider"
+        ] in ("openai", "custom_openai"):
+            # OpenAI-compatible custom routes reuse OpenAI model metadata.
             return True
         else:
             return False
