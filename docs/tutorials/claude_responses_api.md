@@ -8,7 +8,7 @@ This tutorial shows how to call Claude models through LiteLLM proxy from Claude 
 
 :::info 
 
-This tutorial is based on [Anthropic's official LiteLLM configuration documentation](https://docs.anthropic.com/en/docs/claude-code/llm-gateway#litellm-configuration). This integration allows you to use any LiteLLM supported model through Claude Code with centralized authentication, usage tracking, and cost controls.
+This tutorial is based on [Anthropic's official LiteLLM configuration documentation](https://code.claude.com/docs/en/llm-gateway#litellm-configuration). This integration allows you to use any LiteLLM supported model through Claude Code with centralized authentication, usage tracking, and cost controls.
 
 :::
 
@@ -93,20 +93,25 @@ curl -X POST http://0.0.0.0:4000/v1/messages \
 
 ### 4. Configure Claude Code
 
+#### Static API key
+
+Set a fixed LiteLLM key as `ANTHROPIC_AUTH_TOKEN`:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY"
+```
+
+:::tip
+`$LITELLM_KEY` can be your proxy **master key** or a **virtual key**. A master key gives Claude Code access to all proxy models. A virtual key is limited to the models that key has access to.
+:::
+
 #### Method 1: Unified Endpoint (Recommended)
 
 Configure Claude Code to use LiteLLM's unified endpoint:
 
-Either a virtual key / master key can be used here
-
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
-export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
-
-:::tip
-LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual key would be limited to the models set in UI
-:::
 
 #### Method 2: Provider-specific Pass-through Endpoint
 
@@ -114,8 +119,41 @@ Alternatively, use the Anthropic pass-through endpoint:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000/anthropic"
-export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
+
+#### Dynamic API key with helper
+
+For rotating keys or per-user authentication, Claude Code can run a script to fetch a key (for example, a JWT) instead of a static `ANTHROPIC_AUTH_TOKEN`.
+
+1. Create an API key helper script:
+
+```bash
+#!/bin/bash
+# ~/bin/get-litellm-key.sh
+
+# Example: Generate JWT token
+jwt encode \
+  --secret="${JWT_SECRET}" \
+  --exp="+1h" \
+  '{"user":"'${USER}'","team":"engineering"}'
+```
+
+2. Configure Claude Code settings to use the helper:
+
+```json
+{
+  "apiKeyHelper": "~/bin/get-litellm-key.sh"
+}
+```
+
+3. Set token refresh interval:
+
+```bash
+# Refresh every hour (3600000 ms)
+export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3600000
+```
+
+This value will be sent as `Authorization` and `X-Api-Key` headers. The `apiKeyHelper` has lower precedence than `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 
 ### 5. Use Claude Code
 
