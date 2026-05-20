@@ -453,14 +453,22 @@ class ProxyInitializationHelpers:
 
 @click.command()
 @click.option(
-    "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
+    "--host",
+    default="0.0.0.0",
+    help="Host for the server to listen on.",
+    envvar=["LITELLM_HOST", "HOST"],
 )
-@click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
+@click.option(
+    "--port",
+    default=4000,
+    help="Port to bind the server to.",
+    envvar=["LITELLM_PORT", "PORT"],
+)
 @click.option(
     "--num_workers",
     default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
     help="Number of uvicorn / gunicorn workers to spin up. Default is 1 (from DEFAULT_NUM_WORKERS_LITELLM_PROXY)",
-    envvar="NUM_WORKERS",
+    envvar=["LITELLM_NUM_WORKERS", "NUM_WORKERS"],
 )
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
@@ -487,7 +495,7 @@ class ProxyInitializationHelpers:
     is_flag=True,
     type=bool,
     help="To debug the input",
-    envvar="DEBUG",
+    envvar=["LITELLM_DEBUG", "DEBUG"],
 )
 @click.option(
     "--detailed_debug",
@@ -495,7 +503,7 @@ class ProxyInitializationHelpers:
     is_flag=True,
     type=bool,
     help="To view detailed debug logs",
-    envvar="DETAILED_DEBUG",
+    envvar=["LITELLM_DETAILED_DEBUG", "DETAILED_DEBUG"],
 )
 @click.option(
     "--use_queue",
@@ -605,14 +613,14 @@ class ProxyInitializationHelpers:
     default=None,
     type=str,
     help="Path to the SSL keyfile. Use this when you want to provide SSL certificate when starting proxy",
-    envvar="SSL_KEYFILE_PATH",
+    envvar=["LITELLM_SSL_KEYFILE_PATH", "SSL_KEYFILE_PATH"],
 )
 @click.option(
     "--ssl_certfile_path",
     default=None,
     type=str,
     help="Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy",
-    envvar="SSL_CERTFILE_PATH",
+    envvar=["LITELLM_SSL_CERTFILE_PATH", "SSL_CERTFILE_PATH"],
 )
 @click.option(
     "--ciphers",
@@ -638,7 +646,7 @@ class ProxyInitializationHelpers:
     default=None,
     type=int,
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
-    envvar="KEEPALIVE_TIMEOUT",
+    envvar=["LITELLM_KEEPALIVE_TIMEOUT", "KEEPALIVE_TIMEOUT"],
 )
 @click.option(
     "--timeout_worker_healthcheck",
@@ -649,21 +657,30 @@ class ProxyInitializationHelpers:
         "Requires uvicorn>=0.37.0. Only applies when running uvicorn directly with --num_workers>1; "
         "ignored under --run_gunicorn / --run_hypercorn."
     ),
-    envvar="TIMEOUT_WORKER_HEALTHCHECK",
+    envvar=[
+        "LITELLM_TIMEOUT_WORKER_HEALTHCHECK",
+        "TIMEOUT_WORKER_HEALTHCHECK",
+    ],
 )
 @click.option(
     "--max_requests_before_restart",
     default=None,
     type=int,
     help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
-    envvar="MAX_REQUESTS_BEFORE_RESTART",
+    envvar=[
+        "LITELLM_MAX_REQUESTS_BEFORE_RESTART",
+        "MAX_REQUESTS_BEFORE_RESTART",
+    ],
 )
 @click.option(
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
     help="Exit with error if database migration fails on startup.",
-    envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+    envvar=[
+        "LITELLM_ENFORCE_PRISMA_MIGRATION_CHECK",
+        "ENFORCE_PRISMA_MIGRATION_CHECK",
+    ],
 )
 @click.option(
     "--use_v2_migration_resolver",

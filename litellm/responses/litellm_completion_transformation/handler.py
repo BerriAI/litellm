@@ -58,10 +58,6 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args = {}
-        completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
-
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
