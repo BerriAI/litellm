@@ -826,11 +826,14 @@ class VertexBase:
                     else credentials
                 )
                 resolved_cache_key = (cache_credentials, project_id)
-                if resolved_cache_key not in self._credentials_project_mapping:
-                    self._credentials_project_mapping[resolved_cache_key] = (
-                        _credentials,
-                        credential_project_id,
-                    )
+                # Always overwrite — any pre-existing entry at the resolved key
+                # references the OLD credentials object we just replaced, and
+                # leaving it would force the next request to do a redundant
+                # refresh/reauth before realizing the cached creds are stale.
+                self._credentials_project_mapping[resolved_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
 
             if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
@@ -1037,11 +1040,15 @@ class VertexBase:
                 if project_id is None and isinstance(credential_project_id, str):
                     project_id = credential_project_id
                     resolved_cache_key = (cache_credentials, project_id)
-                    if resolved_cache_key not in self._credentials_project_mapping:
-                        self._credentials_project_mapping[resolved_cache_key] = (
-                            _credentials,
-                            credential_project_id,
-                        )
+                    # Always overwrite — a pre-existing entry at the resolved
+                    # key may reference stale credentials (e.g. from before a
+                    # reauth that only repopulated the unresolved key), which
+                    # would force the next request through an unnecessary
+                    # refresh/reauth cycle.
+                    self._credentials_project_mapping[resolved_cache_key] = (
+                        _credentials,
+                        credential_project_id,
+                    )
 
                 # Use google-auth's token_state to decide refresh strategy:
                 # - STALE: token is usable but within REFRESH_THRESHOLD (3:45) of
