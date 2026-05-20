@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-from litellm.llms.watsonx.common_utils import IBMWatsonXMixin 
+from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
@@ -28,11 +28,11 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
     ) -> Tuple["URL", str]:
         """
         Construct complete Watsonx URL with version parameter.
-        
+
         This ensures the version parameter is ALWAYS included in the URL,
         solving the query parameter issue.
         """
-        base_target_url = self.get_api_base(api_base) or self._get_base_url(api_base)
+        base_target_url = self.get_api_base(api_base)
 
         # Use the format_url helper to construct URL with query params
         complete_url = self.format_url(
@@ -47,13 +47,20 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
     def get_api_base(
         api_base: Optional[str] = None,
     ) -> Optional[str]:
-        return api_base or get_secret_str("WATSONX_API_BASE")
+        return api_base or IBMWatsonXMixin._get_base_url(
+            self=IBMWatsonXMixin, api_base=api_base
+        )
 
     @staticmethod
     def get_api_key(
         api_key: Optional[str] = None,
     ) -> Optional[str]:
-        return api_key or get_secret_str("WATSON_API_KEY")
+        return (
+            api_key
+            or IBMWatsonXMixin.get_watsonx_credentials(
+                optional_params=dict(), api_base=None, api_key=api_key
+            )["api_key"]
+        )
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:

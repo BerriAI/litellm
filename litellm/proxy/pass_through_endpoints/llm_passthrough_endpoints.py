@@ -2425,6 +2425,7 @@ def create_generic_websocket_passthrough_endpoint(
         cost_per_request=cost_per_request,
     )
 
+
 @router.api_route(
     "/watsonx/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -2455,8 +2456,7 @@ async def watsonx_proxy_route(
 
     if provider_config is None:
         raise HTTPException(
-            status_code=404,
-            detail="Watsonx passthrough config not found"
+            status_code=404, detail="Watsonx passthrough config not found"
         )
 
     # Get complete URL with version parameter
@@ -2465,7 +2465,7 @@ async def watsonx_proxy_route(
         api_key=None,
         model="",
         endpoint=endpoint,
-        request_query_params=dict(request.query_params),
+        request_query_params=None,
         litellm_params={},
     )
 
@@ -2491,8 +2491,9 @@ async def watsonx_proxy_route(
         if _request_body.get("stream"):
             is_streaming_request = True
 
-    request_query_params = dict()
-    request_query_params["version"] = litellm.WATSONX_DEFAULT_API_VERSION
+    request_query_params = dict(request.query_params)
+    if request_query_params.get("version") is None:
+        request_query_params["version"] = litellm.WATSONX_DEFAULT_API_VERSION
 
     # Create pass-through endpoint
     endpoint_func = create_pass_through_route(
