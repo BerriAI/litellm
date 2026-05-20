@@ -4586,34 +4586,24 @@ def test_tool_choice_stripped_when_no_tools():
     it must be popped before _transform_inference_params to avoid
     ValidationException from Bedrock.
     """
-    from unittest.mock import MagicMock, patch
-
     from litellm.llms.bedrock.chat.converse_transformation import (
         AmazonConverseConfig,
     )
 
     config = AmazonConverseConfig()
-    inference_params = {
+    optional_params = {
         "temperature": 0.7,
         "tool_choice": {"auto": {}},
     }
 
-    with patch.object(
-        config,
-        "_transform_request",
-        wraps=config._transform_request,
-    ):
-        messages = [{"role": "user", "content": [{"text": "Hello"}]}]
-        optional_params = dict(inference_params)
+    result = config.transform_request(
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={"api_base": None},
+        headers={},
+    )
 
-        result = config.transform_request(
-            model="anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params=optional_params,
-            litellm_params={"api_base": None},
-            headers={},
-        )
-
-        inference_config = result.get("inferenceConfig", {})
-        assert "tool_choice" not in inference_config
-        assert result.get("toolConfig") is None
+    inference_config = result.get("inferenceConfig", {})
+    assert "tool_choice" not in inference_config
+    assert result.get("toolConfig") is None
