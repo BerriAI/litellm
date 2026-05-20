@@ -19,8 +19,10 @@ from litellm.proxy.management_endpoints.config_export_endpoints import (
     SAFE_GENERAL_SETTINGS_KEYS,
     ImportRequest,
     ImportResult,
+    ImportSectionResult,
     LiteLLMExportEnvelope,
     _deep_merge,
+    _import_keys_section,
     _is_redacted,
     _redact_credential_values,
     _redact_mcp_credentials,
@@ -800,3 +802,116 @@ def test_import_result_has_sections_attempted():
     r = ImportResult(dry_run=False, conflict="skip")
     r.sections_attempted = ["teams", "models"]
     assert "teams" in r.sections_attempted
+
+
+# ---------------------------------------------------------------------------
+# _import_keys_section unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_keys_skips_new_key_no_token():
+    """Keys not present in the DB cannot be created — token (PK) was not exported."""
+    prisma = make_prisma()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    sr = ImportSectionResult()
+    await _import_keys_section(
+        prisma_client=prisma,
+        records=[{"key_alias": "my-key", "user_id": "u1"}],
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.skipped == 1
+    assert sr.created == 0
+    assert any("cannot be created" in w for w in sr.warnings)
+    prisma.db.litellm_verificationtoken.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_keys_skips_existing_on_conflict_skip():
+    """Existing key with conflict=skip leaves the record untouched."""
+    existing = MagicMock()
+    existing.key_alias = "my-key"
+
+    prisma = make_prisma()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[existing])
+
+    sr = ImportSectionResult()
+    await _import_keys_section(
+        prisma_client=prisma,
+        records=[{"key_alias": "my-key", "user_id": "u1"}],
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.skipped == 1
+    assert sr.updated == 0
+    prisma.db.litellm_verificationtoken.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_import_keys_updates_existing_via_update_many_on_replace():
+    """Existing key with conflict=replace calls update_many (not update) and strips protected fields."""
+    existing = MagicMock()
+    existing.key_alias = "my-key"
+
+    prisma = make_prisma()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[existing])
+    prisma.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value=MagicMock(count=1)
+    )
+
+    sr = ImportSectionResult()
+    await _import_keys_section(
+        prisma_client=prisma,
+        records=[
+            {
+                "key_alias": "my-key",
+                "token": "should-be-stripped",
+                "spend": 9.9,
+                "user_id": "u1",
+                "max_budget": 100,
+            }
+        ],
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1
+    assert sr.errors == 0
+    prisma.db.litellm_verificationtoken.update_many.assert_called_once()
+    call_kwargs = prisma.db.litellm_verificationtoken.update_many.call_args.kwargs
+    assert call_kwargs["where"] == {"key_alias": "my-key"}
+    data_sent = call_kwargs["data"]
+    assert "token" not in data_sent
+    assert "key_alias" not in data_sent
+    assert "spend" not in data_sent
+    assert data_sent.get("user_id") == "u1"
+    assert data_sent.get("max_budget") == 100
+
+
+@pytest.mark.asyncio
+async def test_import_keys_dry_run_counts_update_without_writing():
+    """dry_run=True counts existing keys as updated without calling update_many."""
+    existing = MagicMock()
+    existing.key_alias = "my-key"
+
+    prisma = make_prisma()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[existing])
+
+    sr = ImportSectionResult()
+    await _import_keys_section(
+        prisma_client=prisma,
+        records=[{"key_alias": "my-key", "user_id": "u1"}],
+        conflict="replace",
+        dry_run=True,
+        section_result=sr,
+    )
+
+    assert sr.updated == 1
+    prisma.db.litellm_verificationtoken.update_many.assert_not_called()

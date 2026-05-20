@@ -78,6 +78,12 @@ _STRIP_FIELDS: Dict[str, List[str]] = {
 
 ALL_SECTIONS = list(_STRIP_FIELDS.keys()) + ["general_settings"]
 
+# Fields that must never appear in a keys UPDATE payload.
+# token     — @id primary key, written once at creation, immutable thereafter.
+# key_alias — used as the WHERE clause; must not also be in the data dict.
+# spend     — operational counter managed by the proxy, not a configuration field.
+_KEYS_UPDATE_STRIP: Set[str] = {"token", "key_alias", "spend"}
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -369,7 +375,7 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 async def _load_existing(
     table: Any,
     id_field: str,
-    ids: List[str],
+    ids: List[Any],
 ) -> Dict[str, Any]:
     """
     Fetch all records matching `ids` in a single query and return an
@@ -390,6 +396,529 @@ async def _load_existing(
         if key is not None:
             result[str(key)] = d
     return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers for export_config and import_config (extracted to satisfy PLR0915)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_sections(include: Optional[str]) -> Set[str]:
+    """Parse and validate the ?include= query param; return the set of sections."""
+    if not include:
+        return set(ALL_SECTIONS)
+    requested = {s.strip() for s in include.split(",")}
+    unknown = requested - set(ALL_SECTIONS)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown sections: {unknown}. Valid sections: {ALL_SECTIONS}",
+        )
+    return requested
+
+
+async def _fetch_export_sections(
+    prisma_client: Any,
+    sections: Set[str],
+    limit: int,
+    redact_secrets: bool,
+    envelope: Dict[str, Any],
+) -> None:
+    """Fetch each requested section from the DB and write it into envelope."""
+
+    def _cap(section: str, rows: list) -> list:
+        if len(rows) == limit:
+            envelope["truncated_sections"].append(section)
+        return rows
+
+    if "budgets" in sections:
+        rows = _cap(
+            "budgets",
+            await prisma_client.db.litellm_budgettable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["budgets"] = [_strip(r, _STRIP_FIELDS["budgets"]) for r in rows]
+
+    if "organizations" in sections:
+        rows = _cap(
+            "organizations",
+            await prisma_client.db.litellm_organizationtable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["organizations"] = [
+            _strip(r, _STRIP_FIELDS["organizations"]) for r in rows
+        ]
+
+    if "teams" in sections:
+        rows = _cap(
+            "teams",
+            await prisma_client.db.litellm_teamtable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["teams"] = [_strip(r, _STRIP_FIELDS["teams"]) for r in rows]
+
+    if "users" in sections:
+        rows = _cap(
+            "users",
+            await prisma_client.db.litellm_usertable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["users"] = [_strip(r, _STRIP_FIELDS["users"]) for r in rows]
+
+    if "keys" in sections:
+        rows = _cap(
+            "keys",
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["keys"] = [_strip(r, _STRIP_FIELDS["keys"]) for r in rows]
+
+    if "credentials" in sections:
+        rows = _cap(
+            "credentials",
+            await prisma_client.db.litellm_credentialstable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        records = [_strip(r, _STRIP_FIELDS["credentials"]) for r in rows]
+        if redact_secrets:
+            records = [_redact_credential_values(rec) for rec in records]
+        envelope["credentials"] = records
+
+    if "models" in sections:
+        rows = _cap(
+            "models",
+            await prisma_client.db.litellm_proxymodeltable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["models"] = [_strip(r, _STRIP_FIELDS["models"]) for r in rows]
+
+    if "mcp_servers" in sections:
+        rows = _cap(
+            "mcp_servers",
+            await prisma_client.db.litellm_mcpservertable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        records = [_strip(r, _STRIP_FIELDS["mcp_servers"]) for r in rows]
+        if redact_secrets:
+            records = [_redact_mcp_credentials(rec) for rec in records]
+        envelope["mcp_servers"] = records
+
+    if "agents" in sections:
+        rows = _cap(
+            "agents",
+            await prisma_client.db.litellm_agentstable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["agents"] = [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
+
+    if "guardrails" in sections:
+        rows = _cap(
+            "guardrails",
+            await prisma_client.db.litellm_guardrailstable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["guardrails"] = [_strip(r, _STRIP_FIELDS["guardrails"]) for r in rows]
+
+    if "tags" in sections:
+        rows = _cap(
+            "tags",
+            await prisma_client.db.litellm_tagtable.find_many(
+                take=limit, order={"created_at": "asc"}
+            ),
+        )
+        envelope["tags"] = [_strip(r, _STRIP_FIELDS["tags"]) for r in rows]
+
+    if "general_settings" in sections:
+        gs_rows = await prisma_client.db.litellm_config.find_many(
+            where={"param_name": {"in": list(SAFE_GENERAL_SETTINGS_KEYS)}}
+        )
+        envelope["general_settings"] = {
+            r.param_name: r.param_value for r in gs_rows if r.param_value is not None
+        }
+
+
+async def _import_keys_section(
+    prisma_client: Any,
+    records: List[Dict[str, Any]],
+    conflict: str,
+    dry_run: bool,
+    section_result: "ImportSectionResult",
+) -> None:
+    """
+    Keys are exported for metadata visibility only.
+
+    - Create: impossible — token (@id, primary key) is not exported for
+      security reasons.  New keys must be created via POST /key/generate.
+    - Skip: existing records are left untouched.
+    - Replace / Merge: metadata fields are updated via update_many(), which
+      accepts a non-unique WHERE clause.  key_alias has @@index (not @unique
+      or @id), so table.update(where={"key_alias": ...}) would raise a Prisma
+      validation error; update_many() is the correct API for this schema.
+      token, key_alias, and spend are always stripped from the UPDATE payload.
+    """
+    # Phase 1 — separate keyless records (unconditionally skipped) from
+    # importable ones.  total_processed is counted here for all records so
+    # phase 3 does not double-count.
+    importable: List[Dict[str, Any]] = []
+    for rec in records:
+        section_result.total_processed += 1
+        if not rec.get("key_alias"):
+            section_result.skipped += 1
+            section_result.warnings.append(
+                "Skipped key with no key_alias — cannot re-import without a stable identifier"
+            )
+        else:
+            importable.append(rec)
+
+    if not importable:
+        return
+
+    # Phase 2 — batch-fetch existing rows (avoids N+1 queries).
+    aliases = [r["key_alias"] for r in importable]
+    existing_rows = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"key_alias": {"in": aliases}}
+    )
+    existing_aliases: Set[str] = {
+        row.key_alias for row in existing_rows if row.key_alias
+    }
+    existing_by_alias: Dict[str, Any] = {
+        row.key_alias: row for row in existing_rows if row.key_alias
+    }
+
+    # Phase 3 — per-record decisions.
+    for rec in importable:
+        alias = rec["key_alias"]
+
+        if alias not in existing_aliases:
+            # Cannot create: token (primary key) was not exported.
+            section_result.skipped += 1
+            section_result.warnings.append(
+                f"Skipped key '{alias}' — new keys cannot be created during import "
+                "(token/primary key is not exported). Create via POST /key/generate."
+            )
+            continue
+
+        if conflict == "skip":
+            section_result.skipped += 1
+            continue
+
+        if dry_run:
+            section_result.updated += 1
+            continue
+
+        # Build the UPDATE payload.
+        if conflict == "merge":
+            existing_obj = existing_by_alias[alias]
+            base = (
+                existing_obj.model_dump()
+                if hasattr(existing_obj, "model_dump")
+                else dict(existing_obj)
+            )
+            update_data = _deep_merge(base, rec)
+        else:
+            update_data = dict(rec)
+
+        # Strip fields that must not appear in the UPDATE statement.
+        for field in _KEYS_UPDATE_STRIP:
+            update_data.pop(field, None)
+
+        try:
+            # update_many() accepts non-unique WHERE clauses; update() does not.
+            await prisma_client.db.litellm_verificationtoken.update_many(
+                where={"key_alias": alias},
+                data=update_data,
+            )
+            section_result.updated += 1
+        except Exception as e:
+            section_result.errors += 1
+            section_result.warnings.append(f"Failed to update key '{alias}': {e}")
+
+
+async def _import_identity_sections(
+    prisma_client: Any,
+    data: "LiteLLMExportEnvelope",
+    conflict: str,
+    dry_run: bool,
+    result: "ImportResult",
+) -> None:
+    """Import budgets, organizations, teams, users (dependency order, first half)."""
+    if data.budgets is not None:
+        result.sections_attempted.append("budgets")
+        em = await _load_existing(
+            prisma_client.db.litellm_budgettable,
+            "budget_id",
+            [r.get("budget_id") for r in data.budgets if r.get("budget_id")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_budgettable,
+            table_name="litellm_budgettable",
+            records=data.budgets,
+            id_field="budget_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.budgets,
+            existing_map=em,
+        )
+
+    if data.organizations is not None:
+        result.sections_attempted.append("organizations")
+        em = await _load_existing(
+            prisma_client.db.litellm_organizationtable,
+            "organization_id",
+            [
+                r.get("organization_id")
+                for r in data.organizations
+                if r.get("organization_id")
+            ],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_organizationtable,
+            table_name="litellm_organizationtable",
+            records=data.organizations,
+            id_field="organization_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.organizations,
+            existing_map=em,
+        )
+
+    if data.teams is not None:
+        result.sections_attempted.append("teams")
+        em = await _load_existing(
+            prisma_client.db.litellm_teamtable,
+            "team_id",
+            [r.get("team_id") for r in data.teams if r.get("team_id")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_teamtable,
+            table_name="litellm_teamtable",
+            records=data.teams,
+            id_field="team_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.teams,
+            existing_map=em,
+        )
+
+    if data.users is not None:
+        result.sections_attempted.append("users")
+        em = await _load_existing(
+            prisma_client.db.litellm_usertable,
+            "user_id",
+            [r.get("user_id") for r in data.users if r.get("user_id")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_usertable,
+            table_name="litellm_usertable",
+            records=data.users,
+            id_field="user_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.users,
+            existing_map=em,
+        )
+
+
+async def _import_resource_sections(
+    prisma_client: Any,
+    data: "LiteLLMExportEnvelope",
+    conflict: str,
+    dry_run: bool,
+    result: "ImportResult",
+) -> None:
+    """Import keys, credentials, models, mcp_servers, agents, guardrails, tags, general_settings."""
+    if data.keys is not None:
+        result.sections_attempted.append("keys")
+        await _import_keys_section(
+            prisma_client=prisma_client,
+            records=data.keys,
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.keys,
+        )
+
+    if data.credentials is not None:
+        result.sections_attempted.append("credentials")
+        importable_creds: List[Dict[str, Any]] = []
+        for rec in data.credentials:
+            if _is_redacted(rec.get("credential_values")):
+                result.credentials.skipped += 1
+                result.credentials.total_processed += 1
+                result.credentials.warnings.append(
+                    f"Skipped credential '{rec.get('credential_name')}' — "
+                    "credential_values is redacted. Bind secrets manually."
+                )
+            else:
+                importable_creds.append(rec)
+        em = await _load_existing(
+            prisma_client.db.litellm_credentialstable,
+            "credential_name",
+            [
+                r["credential_name"]
+                for r in importable_creds
+                if r.get("credential_name")
+            ],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_credentialstable,
+            table_name="litellm_credentialstable",
+            records=importable_creds,
+            id_field="credential_name",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.credentials,
+            existing_map=em,
+        )
+
+    if data.models is not None:
+        result.sections_attempted.append("models")
+        em = await _load_existing(
+            prisma_client.db.litellm_proxymodeltable,
+            "model_id",
+            [r.get("model_id") for r in data.models if r.get("model_id")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_proxymodeltable,
+            table_name="litellm_proxymodeltable",
+            records=data.models,
+            id_field="model_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.models,
+            existing_map=em,
+        )
+
+    await _import_mcp_agents_tail(prisma_client, data, conflict, dry_run, result)
+
+
+async def _import_mcp_agents_tail(
+    prisma_client: Any,
+    data: "LiteLLMExportEnvelope",
+    conflict: str,
+    dry_run: bool,
+    result: "ImportResult",
+) -> None:
+    """Import mcp_servers, agents, guardrails, tags, general_settings."""
+    if data.mcp_servers is not None:
+        result.sections_attempted.append("mcp_servers")
+        cleaned_servers: List[Dict[str, Any]] = []
+        for rec in data.mcp_servers:
+            if _is_redacted(rec.get("credentials")):
+                result.mcp_servers.warnings.append(
+                    f"MCP server '{rec.get('server_name')}' imported without credentials — "
+                    "credentials are redacted. Bind manually."
+                )
+                rec = {k: v for k, v in rec.items() if k != "credentials"}
+            cleaned_servers.append(rec)
+        em = await _load_existing(
+            prisma_client.db.litellm_mcpservertable,
+            "server_id",
+            [r.get("server_id") for r in cleaned_servers if r.get("server_id")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_mcpservertable,
+            table_name="litellm_mcpservertable",
+            records=cleaned_servers,
+            id_field="server_id",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.mcp_servers,
+            existing_map=em,
+        )
+
+    if data.agents is not None:
+        result.sections_attempted.append("agents")
+        em = await _load_existing(
+            prisma_client.db.litellm_agentstable,
+            "agent_name",
+            [r.get("agent_name") for r in data.agents if r.get("agent_name")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_agentstable,
+            table_name="litellm_agentstable",
+            records=data.agents,
+            id_field="agent_name",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.agents,
+            existing_map=em,
+        )
+
+    if data.guardrails is not None:
+        result.sections_attempted.append("guardrails")
+        em = await _load_existing(
+            prisma_client.db.litellm_guardrailstable,
+            "guardrail_name",
+            [
+                r.get("guardrail_name")
+                for r in data.guardrails
+                if r.get("guardrail_name")
+            ],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_guardrailstable,
+            table_name="litellm_guardrailstable",
+            records=data.guardrails,
+            id_field="guardrail_name",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.guardrails,
+            existing_map=em,
+        )
+
+    if data.tags is not None:
+        result.sections_attempted.append("tags")
+        em = await _load_existing(
+            prisma_client.db.litellm_tagtable,
+            "tag_name",
+            [r.get("tag_name") for r in data.tags if r.get("tag_name")],
+        )
+        await _import_section(
+            table=prisma_client.db.litellm_tagtable,
+            table_name="litellm_tagtable",
+            records=data.tags,
+            id_field="tag_name",
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.tags,
+            existing_map=em,
+        )
+
+    if data.general_settings is not None:
+        result.sections_attempted.append("general_settings")
+        await _import_general_settings(
+            prisma_client=prisma_client,
+            settings=data.general_settings,
+            conflict=conflict,
+            dry_run=dry_run,
+            section_result=result.general_settings,
+        )
+
+
+async def _import_all_sections(
+    prisma_client: Any,
+    data: "LiteLLMExportEnvelope",
+    conflict: str,
+    dry_run: bool,
+    result: "ImportResult",
+) -> None:
+    """
+    Process all sections in dependency order.  Each section runs inside its
+    own DB transaction so a failure in one section does not roll back
+    already-committed sections.
+    """
+    await _import_identity_sections(prisma_client, data, conflict, dry_run, result)
+    await _import_resource_sections(prisma_client, data, conflict, dry_run, result)
 
 
 # ---------------------------------------------------------------------------
@@ -441,20 +970,7 @@ async def export_config(
     - Deployment-specific settings (database_url, host, port, etc.)
     """
     prisma_client = _get_prisma_with_auth(user_api_key_dict, action="export")
-
-    # Resolve which sections to include
-    if include:
-        requested = {s.strip() for s in include.split(",")}
-        unknown = requested - set(ALL_SECTIONS)
-        if unknown:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown sections: {unknown}. Valid sections: {ALL_SECTIONS}",
-            )
-        sections = requested
-    else:
-        sections = set(ALL_SECTIONS)
-
+    sections = _resolve_sections(include)
     envelope: Dict[str, Any] = {
         "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "source_instance": str(request.base_url).rstrip("/"),
@@ -462,132 +978,10 @@ async def export_config(
         "row_limit": limit,
         "truncated_sections": [],
     }
-
-    def _maybe_truncated(section: str, rows: list) -> list:
-        """Record the section as truncated if we hit the row cap."""
-        if len(rows) == limit:
-            envelope["truncated_sections"].append(section)
-        return rows
-
     try:
-        if "budgets" in sections:
-            rows = _maybe_truncated(
-                "budgets",
-                await prisma_client.db.litellm_budgettable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["budgets"] = [_strip(r, _STRIP_FIELDS["budgets"]) for r in rows]
-
-        if "organizations" in sections:
-            rows = _maybe_truncated(
-                "organizations",
-                await prisma_client.db.litellm_organizationtable.find_many(
-                    take=limit,
-                    order={"created_at": "asc"},
-                ),
-            )
-            envelope["organizations"] = [
-                _strip(r, _STRIP_FIELDS["organizations"]) for r in rows
-            ]
-
-        if "teams" in sections:
-            rows = _maybe_truncated(
-                "teams",
-                await prisma_client.db.litellm_teamtable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["teams"] = [_strip(r, _STRIP_FIELDS["teams"]) for r in rows]
-
-        if "users" in sections:
-            rows = _maybe_truncated(
-                "users",
-                await prisma_client.db.litellm_usertable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["users"] = [_strip(r, _STRIP_FIELDS["users"]) for r in rows]
-
-        if "keys" in sections:
-            rows = _maybe_truncated(
-                "keys",
-                await prisma_client.db.litellm_verificationtoken.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["keys"] = [_strip(r, _STRIP_FIELDS["keys"]) for r in rows]
-
-        if "credentials" in sections:
-            rows = _maybe_truncated(
-                "credentials",
-                await prisma_client.db.litellm_credentialstable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            records = [_strip(r, _STRIP_FIELDS["credentials"]) for r in rows]
-            if redact_secrets:
-                records = [_redact_credential_values(rec) for rec in records]
-            envelope["credentials"] = records
-
-        if "models" in sections:
-            rows = _maybe_truncated(
-                "models",
-                await prisma_client.db.litellm_proxymodeltable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["models"] = [_strip(r, _STRIP_FIELDS["models"]) for r in rows]
-
-        if "mcp_servers" in sections:
-            rows = _maybe_truncated(
-                "mcp_servers",
-                await prisma_client.db.litellm_mcpservertable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            records = [_strip(r, _STRIP_FIELDS["mcp_servers"]) for r in rows]
-            if redact_secrets:
-                records = [_redact_mcp_credentials(rec) for rec in records]
-            envelope["mcp_servers"] = records
-
-        if "agents" in sections:
-            rows = _maybe_truncated(
-                "agents",
-                await prisma_client.db.litellm_agentstable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["agents"] = [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
-
-        if "guardrails" in sections:
-            rows = _maybe_truncated(
-                "guardrails",
-                await prisma_client.db.litellm_guardrailstable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["guardrails"] = [
-                _strip(r, _STRIP_FIELDS["guardrails"]) for r in rows
-            ]
-
-        if "tags" in sections:
-            rows = _maybe_truncated(
-                "tags",
-                await prisma_client.db.litellm_tagtable.find_many(
-                    take=limit, order={"created_at": "asc"}
-                ),
-            )
-            envelope["tags"] = [_strip(r, _STRIP_FIELDS["tags"]) for r in rows]
-
-        if "general_settings" in sections:
-            rows = await prisma_client.db.litellm_config.find_many(
-                where={"param_name": {"in": list(SAFE_GENERAL_SETTINGS_KEYS)}}
-            )
-            envelope["general_settings"] = {
-                r.param_name: r.param_value for r in rows if r.param_value is not None
-            }
-
+        await _fetch_export_sections(
+            prisma_client, sections, limit, redact_secrets, envelope
+        )
     except Exception as e:
         verbose_proxy_logger.error(f"config/export failed: {e}")
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
@@ -595,7 +989,6 @@ async def export_config(
     if format == "yaml":
         content = yaml.dump(envelope, allow_unicode=True, sort_keys=False)
         return Response(content=content, media_type="application/yaml")
-
     content = json.dumps(envelope, indent=2, default=str)
     return Response(content=content, media_type="application/json")
 
@@ -658,19 +1051,15 @@ async def import_config(
     are not affected.  The result object reports per-section outcomes.
     """
     prisma_client = _get_prisma_with_auth(user_api_key_dict, action="import")
-
-    # Structural + dependency validation — fail fast before touching DB
     data = body.data
     _validate_envelope(data)
     _validate_dependencies(data)
-
     conflict = body.conflict
     dry_run = body.dry_run
     result = ImportResult(dry_run=dry_run, conflict=conflict)
     triggered_by = getattr(user_api_key_dict, "user_id", None) or getattr(
         user_api_key_dict, "api_key", "unknown"
     )
-
     verbose_proxy_logger.info(
         "config/import started: triggered_by=%s dry_run=%s conflict=%s "
         "source=%s exported_at=%s",
@@ -680,304 +1069,26 @@ async def import_config(
         data.source_instance,
         data.exported_at,
     )
-
     try:
-        # ------------------------------------------------------------------ #
-        # Process sections in dependency order.
-        # Each section is wrapped in its own transaction so a failure in one
-        # section does not roll back already-committed sections.
-        # Trade-off vs a single transaction:
-        #   + shorter lock window per section
-        #   + partial success is recoverable and clearly reported
-        #   - not fully atomic across sections (acceptable for config promotion)
-        # ------------------------------------------------------------------ #
-
-        # -- budgets --
-        if data.budgets is not None:
-            result.sections_attempted.append("budgets")
-            ids = [r.get("budget_id") for r in data.budgets if r.get("budget_id")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_budgettable, "budget_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_budgettable,
-                table_name="litellm_budgettable",
-                records=data.budgets,
-                id_field="budget_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.budgets,
-                existing_map=existing_map,
-            )
-
-        # -- organizations --
-        if data.organizations is not None:
-            result.sections_attempted.append("organizations")
-            ids = [
-                r.get("organization_id")
-                for r in data.organizations
-                if r.get("organization_id")
-            ]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_organizationtable, "organization_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_organizationtable,
-                table_name="litellm_organizationtable",
-                records=data.organizations,
-                id_field="organization_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.organizations,
-                existing_map=existing_map,
-            )
-
-        # -- teams --
-        if data.teams is not None:
-            result.sections_attempted.append("teams")
-            ids = [r.get("team_id") for r in data.teams if r.get("team_id")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_teamtable, "team_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_teamtable,
-                table_name="litellm_teamtable",
-                records=data.teams,
-                id_field="team_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.teams,
-                existing_map=existing_map,
-            )
-
-        # -- users --
-        if data.users is not None:
-            result.sections_attempted.append("users")
-            ids = [r.get("user_id") for r in data.users if r.get("user_id")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_usertable, "user_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_usertable,
-                table_name="litellm_usertable",
-                records=data.users,
-                id_field="user_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.users,
-                existing_map=existing_map,
-            )
-
-        # -- keys — upsert by key_alias; skip those without one --
-        if data.keys is not None:
-            result.sections_attempted.append("keys")
-            importable_keys: List[Dict[str, Any]] = []
-            for rec in data.keys:
-                if not rec.get("key_alias"):
-                    result.keys.skipped += 1
-                    result.keys.total_processed += 1
-                    result.keys.warnings.append(
-                        "Skipped key with no key_alias — cannot re-import without a stable identifier"
-                    )
-                else:
-                    importable_keys.append(rec)
-            aliases = [r["key_alias"] for r in importable_keys]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_verificationtoken, "key_alias", aliases
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_verificationtoken,
-                table_name="litellm_verificationtoken",
-                records=importable_keys,
-                id_field="key_alias",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.keys,
-                existing_map=existing_map,
-            )
-
-        # -- credentials — skip redacted ones --
-        if data.credentials is not None:
-            result.sections_attempted.append("credentials")
-            importable_creds: List[Dict[str, Any]] = []
-            for rec in data.credentials:
-                if _is_redacted(rec.get("credential_values")):
-                    result.credentials.skipped += 1
-                    result.credentials.total_processed += 1
-                    result.credentials.warnings.append(
-                        f"Skipped credential '{rec.get('credential_name')}' — "
-                        "credential_values is redacted. Bind secrets manually."
-                    )
-                else:
-                    importable_creds.append(rec)
-            names = [
-                r["credential_name"]
-                for r in importable_creds
-                if r.get("credential_name")
-            ]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_credentialstable, "credential_name", names
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_credentialstable,
-                table_name="litellm_credentialstable",
-                records=importable_creds,
-                id_field="credential_name",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.credentials,
-                existing_map=existing_map,
-            )
-
-        # -- models --
-        if data.models is not None:
-            result.sections_attempted.append("models")
-            ids = [r.get("model_id") for r in data.models if r.get("model_id")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_proxymodeltable, "model_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_proxymodeltable,
-                table_name="litellm_proxymodeltable",
-                records=data.models,
-                id_field="model_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.models,
-                existing_map=existing_map,
-            )
-
-        # -- mcp_servers — strip redacted credentials before import --
-        if data.mcp_servers is not None:
-            result.sections_attempted.append("mcp_servers")
-            cleaned_servers: List[Dict[str, Any]] = []
-            for rec in data.mcp_servers:
-                if _is_redacted(rec.get("credentials")):
-                    result.mcp_servers.warnings.append(
-                        f"MCP server '{rec.get('server_name')}' imported without credentials — "
-                        "credentials are redacted. Bind manually."
-                    )
-                    rec = {k: v for k, v in rec.items() if k != "credentials"}
-                cleaned_servers.append(rec)
-            ids = [r.get("server_id") for r in cleaned_servers if r.get("server_id")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_mcpservertable, "server_id", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_mcpservertable,
-                table_name="litellm_mcpservertable",
-                records=cleaned_servers,
-                id_field="server_id",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.mcp_servers,
-                existing_map=existing_map,
-            )
-
-        # -- agents --
-        if data.agents is not None:
-            result.sections_attempted.append("agents")
-            ids = [r.get("agent_name") for r in data.agents if r.get("agent_name")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_agentstable, "agent_name", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_agentstable,
-                table_name="litellm_agentstable",
-                records=data.agents,
-                id_field="agent_name",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.agents,
-                existing_map=existing_map,
-            )
-
-        # -- guardrails --
-        if data.guardrails is not None:
-            result.sections_attempted.append("guardrails")
-            ids = [
-                r.get("guardrail_name")
-                for r in data.guardrails
-                if r.get("guardrail_name")
-            ]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_guardrailstable, "guardrail_name", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_guardrailstable,
-                table_name="litellm_guardrailstable",
-                records=data.guardrails,
-                id_field="guardrail_name",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.guardrails,
-                existing_map=existing_map,
-            )
-
-        # -- tags --
-        if data.tags is not None:
-            result.sections_attempted.append("tags")
-            ids = [r.get("tag_name") for r in data.tags if r.get("tag_name")]
-            existing_map = await _load_existing(
-                prisma_client.db.litellm_tagtable, "tag_name", ids
-            )
-            await _import_section(
-                table=prisma_client.db.litellm_tagtable,
-                table_name="litellm_tagtable",
-                records=data.tags,
-                id_field="tag_name",
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.tags,
-                existing_map=existing_map,
-            )
-
-        # -- general_settings — handled separately (key/value table, not entity) --
-        if data.general_settings is not None:
-            result.sections_attempted.append("general_settings")
-            await _import_general_settings(
-                prisma_client=prisma_client,
-                settings=data.general_settings,
-                conflict=conflict,
-                dry_run=dry_run,
-                section_result=result.general_settings,
-            )
-
+        await _import_all_sections(prisma_client, data, conflict, dry_run, result)
     except HTTPException:
         raise
     except Exception as e:
         verbose_proxy_logger.error("config/import failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
-    # Audit log summary
+    non_gs = [s for s in result.sections_attempted if s != "general_settings"]
     verbose_proxy_logger.info(
         "config/import complete: triggered_by=%s dry_run=%s sections=%s "
         "totals=created:%d updated:%d skipped:%d errors:%d",
         triggered_by,
         dry_run,
         result.sections_attempted,
-        sum(
-            getattr(result, s).created
-            for s in result.sections_attempted
-            if s != "general_settings"
-        ),
-        sum(
-            getattr(result, s).updated
-            for s in result.sections_attempted
-            if s != "general_settings"
-        ),
-        sum(
-            getattr(result, s).skipped
-            for s in result.sections_attempted
-            if s != "general_settings"
-        ),
-        sum(
-            getattr(result, s).errors
-            for s in result.sections_attempted
-            if s != "general_settings"
-        ),
+        sum(getattr(result, s).created for s in non_gs),
+        sum(getattr(result, s).updated for s in non_gs),
+        sum(getattr(result, s).skipped for s in non_gs),
+        sum(getattr(result, s).errors for s in non_gs),
     )
-
     return result
 
 
