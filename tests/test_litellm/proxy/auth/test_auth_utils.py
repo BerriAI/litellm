@@ -282,6 +282,28 @@ def test_get_model_from_request_includes_file_endpoint_header_model():
     )
 
 
+def test_get_model_from_request_includes_vector_store_query_model():
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": "vs_plain_openai"},
+            route="/v1/vector_stores/{vector_store_id}",
+            request_query_params={"model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+
+
+def test_get_model_from_request_includes_vector_store_header_model():
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": "vs_plain_openai"},
+            route="/v1/vector_stores/{vector_store_id}",
+            request_headers={"x-litellm-model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+
+
 def test_get_model_from_request_ignores_routing_header_on_standard_llm_routes():
     assert (
         get_model_from_request(
