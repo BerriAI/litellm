@@ -1385,6 +1385,38 @@ class TestToolTransformation:
             == "string"
         )
 
+    def test_transform_drops_unsupported_responses_builtin_tools(self):
+        """shell/computer_use_preview are not valid Chat Completions tools."""
+        tools = [
+            {
+                "type": "function",
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+            {"type": "shell", "environment": {"type": "local"}},
+            {
+                "type": "computer_use_preview",
+                "display_width": 1024,
+                "display_height": 768,
+                "environment": "mac",
+            },
+        ]
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "read_file"
+
 
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""

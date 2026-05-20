@@ -111,6 +111,58 @@ def test_minimax_provider_config_manager():
     assert isinstance(config, MinimaxChatConfig)
 
 
+def test_normalize_custom_tools_to_function_converts_responses_custom_tool():
+    tools = [
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch",
+            "input_schema": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        }
+    ]
+    normalized = MinimaxChatConfig._normalize_custom_tools_to_function(tools)
+    assert normalized[0]["type"] == "function"
+    assert normalized[0]["function"]["name"] == "apply_patch"
+    assert normalized[0]["function"]["description"] == "Apply a patch"
+    assert normalized[0]["function"]["parameters"]["type"] == "object"
+    assert normalized[0]["function"]["parameters"]["properties"] == {}
+
+
+def test_normalize_custom_tools_to_function_preserves_non_custom_tools():
+    tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
+    normalized = MinimaxChatConfig._normalize_custom_tools_to_function(tools)
+    assert normalized == tools
+
+
+def test_normalize_custom_tools_to_function_skips_custom_without_name():
+    tools = [{"type": "custom", "description": "no name"}]
+    normalized = MinimaxChatConfig._normalize_custom_tools_to_function(tools)
+    assert normalized == tools
+
+
+def test_map_openai_params_normalizes_custom_tools():
+    config = MinimaxChatConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "apply_patch",
+                    "description": "Apply patch",
+                }
+            ]
+        },
+        optional_params={},
+        model="MiniMax-M2.1",
+        drop_params=True,
+    )
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][0]["function"]["name"] == "apply_patch"
+
+
 @pytest.mark.skip(reason="Requires actual MiniMax API key")
 def test_minimax_chat_completion_basic():
     """Test basic chat completion with MiniMax OpenAI-compatible API"""

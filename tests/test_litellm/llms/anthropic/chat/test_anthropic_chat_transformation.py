@@ -4933,3 +4933,97 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_is_glm_5_1_family_model():
+    config = AnthropicConfig()
+    assert config._is_glm_5_1_family_model("custom_openai/GLM-5.1") is True
+    assert config._is_glm_5_1_family_model("glm_5_1") is True
+    assert config._is_glm_5_1_family_model("claude-opus-4-7") is False
+    assert config._is_glm_5_1_family_model(None) is False
+
+
+def test_sanitize_request_messages_injects_fallback_when_no_user_or_assistant():
+    config = AnthropicConfig()
+    result = config._sanitize_request_messages([{"role": "system", "content": "sys"}])
+    assert any(m.get("role") == "user" for m in result)
+
+
+def test_sanitize_request_messages_drops_invalid_roles_and_empty_text():
+    config = AnthropicConfig()
+    messages = [
+        {"role": "invalid", "content": "x"},
+        {"role": "user", "content": "   "},
+        {"role": "user", "content": "hello"},
+    ]
+    result = config._sanitize_request_messages(messages)
+    assert len(result) == 1
+    assert result[0]["content"] == "hello"
+
+
+def test_sanitize_request_messages_filters_empty_text_blocks_keeps_non_text():
+    config = AnthropicConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "  "},
+                {"type": "image", "source": {"type": "base64", "data": "abc"}},
+            ],
+        }
+    ]
+    result = config._sanitize_request_messages(messages)
+    assert len(result) == 1
+    assert len(result[0]["content"]) == 1
+    assert result[0]["content"][0]["type"] == "image"
+
+
+def test_sanitize_request_messages_non_list_returns_fallback():
+    config = AnthropicConfig()
+    result = config._sanitize_request_messages(None)
+    assert result[0]["role"] == "user"
+    assert "continue" in result[0]["content"].lower()
+
+
+def test_map_tools_strict_sanitize_drops_invalid_tools():
+    config = AnthropicConfig()
+    tools = ["not-a-dict", {"name": "no-type"}]
+    anthropic_tools, mcp = config._map_tools(tools, strict_sanitize=True)
+    assert anthropic_tools == []
+    assert mcp == []
+
+
+def test_map_tools_strict_sanitize_drops_tool_helper_failures():
+    config = AnthropicConfig()
+    tools = [{"type": "function"}]
+    anthropic_tools, mcp = config._map_tools(tools, strict_sanitize=True)
+    assert anthropic_tools == []
+    assert mcp == []
+
+
+def test_map_openai_params_glm_strict_sanitize_drops_non_anthropic_tools():
+    config = AnthropicConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {"type": "shell", "environment": {"type": "local"}},
+                {"type": "namespace", "name": "tools"},
+            ]
+        },
+        optional_params={},
+        model="custom_openai/GLM-5.1",
+        drop_params=False,
+    )
+    assert result.get("tools", []) == []
+
+
+def test_transform_request_glm_sanitizes_empty_messages():
+    config = AnthropicConfig()
+    data = config.transform_request(
+        model="custom_openai/GLM-5.1",
+        messages=[{"role": "system", "content": "   "}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "messages" in data

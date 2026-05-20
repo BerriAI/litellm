@@ -185,6 +185,25 @@ class TestOpenAIGPTConfig:
 
         assert result["tools"][0] == nested_tools[0]
 
+    def test_normalize_flat_function_tools_skips_non_function_tools(self):
+        tools = [{"type": "shell", "environment": {"type": "local"}}]
+        result = self.config._normalize_flat_function_tools(tools)
+        assert result == tools
+
+    def test_normalize_flat_function_tools_without_name_passthrough(self):
+        tools = [{"type": "function", "description": "missing name"}]
+        result = self.config._normalize_flat_function_tools(tools)
+        assert "function" not in result[0]
+
+    def test_messages_contain_json_keyword_nested_structure(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "please return json output"}],
+            }
+        ]
+        assert OpenAIGPTConfig._messages_contain_json_keyword(messages) is True
+
 
 class TestGetOptionalParamsIntegration:
     """Integration tests using litellm.get_optional_params()"""

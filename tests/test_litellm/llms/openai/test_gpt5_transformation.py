@@ -232,6 +232,49 @@ def test_custom_openai_transform_request_preserves_nested_function_tools(
     assert result["tools"][0] == nested_tools[0]
 
 
+def test_normalize_flat_function_tools_skips_non_function_tools(config: OpenAIConfig):
+    tools = [{"type": "shell", "environment": {"type": "local"}}]
+    result = config._normalize_flat_function_tools(tools)
+    assert result == tools
+
+
+def test_normalize_flat_function_tools_without_name_passthrough(config: OpenAIConfig):
+    tools = [{"type": "function", "description": "missing name"}]
+    result = config._normalize_flat_function_tools(tools)
+    assert "function" not in result[0]
+
+
+def test_normalize_flat_function_tools_adds_object_type_to_parameters(
+    config: OpenAIConfig,
+):
+    tools = [
+        {
+            "type": "function",
+            "name": "search",
+            "parameters": {"properties": {"q": {"type": "string"}}},
+        }
+    ]
+    result = config._normalize_flat_function_tools(tools)
+    assert result[0]["function"]["parameters"]["type"] == "object"
+
+
+def test_messages_contain_json_keyword_nested_structure(config: OpenAIConfig):
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "please return json output"}],
+        }
+    ]
+    assert OpenAIConfig._messages_contain_json_keyword(messages) is True
+
+
+def test_messages_contain_json_keyword_returns_false_when_absent(
+    config: OpenAIConfig,
+):
+    messages = [{"role": "user", "content": "plain text only"}]
+    assert OpenAIConfig._messages_contain_json_keyword(messages) is False
+
+
 def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
     """Test that GPT-5-Codex allows temperature=1."""
     params = config.map_openai_params(

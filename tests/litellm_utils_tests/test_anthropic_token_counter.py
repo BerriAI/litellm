@@ -43,3 +43,20 @@ class TestAnthropicTokenCounter(BaseTokenCounterTest):
 
     def get_custom_llm_provider(self) -> str:
         return "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_token_counter_skips_non_anthropic_api_base():
+    counter = AnthropicTokenCounter()
+    result = await counter.count_tokens(
+        model_to_use="claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "api_base": "https://custom-anthropic-proxy.example.com/v1",
+                "api_key": "test-key",
+            }
+        },
+    )
+    assert result is None

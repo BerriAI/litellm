@@ -1016,6 +1016,40 @@ class TestTranslateResponse:
         assert result["content"][0]["type"] == "text"
         assert result["content"][0]["text"] == "Dict-based response"
 
+    def test_generic_response_output_item_message_becomes_text_block(self):
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_bridge_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(type="output_text", text="Bridged message", annotations=[])
+            ],
+        )
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Bridged message"
+
+    def test_generic_response_output_item_reasoning_becomes_thinking_block(self):
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="reasoning",
+            id="rs_bridge_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(type="output_text", text="Bridged reasoning", annotations=[])
+            ],
+        )
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["type"] == "thinking"
+        assert result["content"][0]["thinking"] == "Bridged reasoning"
+
     def test_dict_function_call_item(self):
         """Dict-shaped function_call item is converted to tool_use block."""
         output_item = {
