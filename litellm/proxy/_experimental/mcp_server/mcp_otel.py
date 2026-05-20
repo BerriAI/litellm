@@ -66,7 +66,6 @@ ATTR_MCP_ALLOWED_SERVER_COUNT = "mcp.allowed_server_count"
 ATTR_MCP_REQUESTED_SERVER_ID = "mcp.requested_server_id"
 ATTR_MCP_AUTH_TYPE = "mcp.auth.type"
 ATTR_MCP_IS_BYOK = "mcp.server.is_byok"
-ATTR_MCP_PROTOCOL_VERSION = "mcp.protocol_version"
 ATTR_MCP_RESULT_IS_ERROR = "mcp.result.is_error"
 
 
@@ -188,15 +187,24 @@ def mcp_span(
                 pass
 
 
-def set_mcp_span_attribute(span: Optional[Any], key: str, value: Any) -> None:
+def set_mcp_span_attribute(
+    span: Optional[Any],
+    key: str,
+    value: Any,
+    _otel: Optional["OpenTelemetryType"] = None,
+) -> None:
     """Set an attribute on a span yielded by :func:`mcp_span`.
 
     Safe to call when ``span`` is ``None`` (no-op when OTEL is not
     configured) or ``value`` is ``None``.
+
+    Pass ``_otel`` when you already hold the logger reference (e.g. after
+    calling :func:`set_mcp_span_attributes` in the same code block) to avoid
+    a redundant callback-list scan.
     """
     if span is None or value is None:
         return
-    otel = _get_active_otel_logger()
+    otel = _otel or _get_active_otel_logger()
     if otel is None:
         return
     try:
@@ -208,15 +216,23 @@ def set_mcp_span_attribute(span: Optional[Any], key: str, value: Any) -> None:
 
 
 def set_mcp_span_attributes(
-    span: Optional[Any], attributes: Optional[Dict[str, Any]]
-) -> None:
-    """Bulk variant of :func:`set_mcp_span_attribute`."""
+    span: Optional[Any],
+    attributes: Optional[Dict[str, Any]],
+    _otel: Optional["OpenTelemetryType"] = None,
+) -> Optional["OpenTelemetryType"]:
+    """Bulk variant of :func:`set_mcp_span_attribute`.
+
+    Returns the resolved OTEL logger so callers that immediately follow with
+    a :func:`set_mcp_span_attribute` call can pass it via ``_otel=`` and
+    skip the second lookup.
+    """
     if span is None or not attributes:
-        return
-    otel = _get_active_otel_logger()
+        return None
+    otel = _otel or _get_active_otel_logger()
     if otel is None:
-        return
+        return None
     _coerce_attributes(otel, span, attributes)
+    return otel
 
 
 def with_mcp_span(

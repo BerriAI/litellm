@@ -2219,7 +2219,9 @@ if MCP_AVAILABLE:
         # Backfill resolved-server attributes onto the OTEL span. We do
         # this *before* permission/BYOK checks so the span carries the
         # right context even when the request is rejected.
-        set_mcp_span_attributes(
+        # set_mcp_span_attributes returns the resolved otel logger so the
+        # follow-up set_mcp_span_attribute call below can reuse it.
+        _span_otel = set_mcp_span_attributes(
             _otel_span,
             {
                 ATTR_MCP_TOOL_NAME: original_tool_name,
@@ -2436,10 +2438,12 @@ if MCP_AVAILABLE:
         # trip if the tool itself returned an error). Surfacing this on
         # the span lets dashboards distinguish "transport ok / tool failed"
         # from "transport failed".
+        # Reuse _span_otel resolved above to avoid a second callback-list scan.
         set_mcp_span_attribute(
             _otel_span,
             ATTR_MCP_RESULT_IS_ERROR,
             bool(getattr(response, "isError", False)),
+            _otel=_span_otel,
         )
         return response
 
