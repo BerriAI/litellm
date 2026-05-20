@@ -12982,6 +12982,34 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "deepseek.v4-flash": {
+        "input_cost_per_token": 1.4e-07,
+        "cache_read_input_token_cost": 2.8e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 384000,
+        "max_tokens": 1.0e+06,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_native_structured_output": true
+    },
+    "deepseek.v4-pro": {
+        "input_cost_per_token": 4.35e-07,
+        "cache_read_input_token_cost": 3.625e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 384000,
+        "max_tokens": 1.0e+06,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_native_structured_output": true
+    },
     "glm-4-7-251222": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "volcengine",
