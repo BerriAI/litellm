@@ -3,7 +3,7 @@ import sys
 import pytest
 import asyncio
 from typing import Optional
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -128,6 +128,26 @@ def test_multiturn_tool_calls():
     )
 
     print("follow_up_response=", follow_up_response)
+
+
+def test_response_api_handler_merges_metadata_and_service_tier_without_error():
+    """Sync path must merge kwargs like async; double-splat raises TypeError."""
+    handler = LiteLLMCompletionTransformationHandler()
+
+    with patch("litellm.completion", new_callable=MagicMock) as mock_completion:
+        mock_completion.return_value = ModelResponse(
+            id="id", created=0, model="test", object="chat.completion", choices=[]
+        )
+        handler.response_api_handler(
+            model="test",
+            input="hi",
+            responses_api_request={},
+            metadata={"trace": "abc"},
+            service_tier="auto",
+        )
+        assert mock_completion.call_count == 1
+        assert mock_completion.call_args.kwargs["metadata"] == {"trace": "abc"}
+        assert mock_completion.call_args.kwargs["service_tier"] == "auto"
 
 
 @pytest.mark.asyncio
