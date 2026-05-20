@@ -2296,8 +2296,13 @@ class Router:
                     from litellm.main import stream_chunk_builder
 
                     built = stream_chunk_builder(chunks=chunks)
-                    if built is not None and built.usage is not None:
-                        chat = built.usage
+                    # stream_chunk_builder returns ModelResponse |
+                    # TextCompletionResponse | None. ModelResponse sets .usage
+                    # in __init__ rather than declaring it as a class field, so
+                    # static narrowing doesn't expose it. Mirror the sync path
+                    # (_completion_streaming_iterator) and pull via getattr.
+                    chat = getattr(built, "usage", None) if built is not None else None
+                    if chat is not None:
                         # getattr-with-default because the test path may
                         # substitute a SimpleNamespace lacking some fields;
                         # real Usage instances always have them.
@@ -2388,7 +2393,12 @@ class Router:
         and may regenerate — same trade-off as the chat-completions path
         for non-Anthropic fallbacks.
         """
-        base: List[Dict[str, Any]]
+        # base/continuation are List[Any] because ResponseInputParam items
+        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
+        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
+        # rejects the list() spread of input_val. We cast the combined list to
+        # ResponseInputParam at the return.
+        base: List[Any]
         if isinstance(input_val, str):
             base = [
                 {
@@ -2401,7 +2411,7 @@ class Router:
             base = list(input_val)
         else:
             base = []
-        continuation: List[Dict[str, Any]] = [
+        continuation: List[Any] = [
             {
                 "type": "message",
                 "role": "developer",
