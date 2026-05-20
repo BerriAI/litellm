@@ -67,6 +67,7 @@ def test_extract_opik_metadata_requester_metadata_overrides_all_other_sources():
             "opik": {
                 "workspace": "requester-workspace",
                 "thread_id": "requester-thread",
+                "project_name": "requester-project",
             }
         },
     }
@@ -77,7 +78,7 @@ def test_extract_opik_metadata_requester_metadata_overrides_all_other_sources():
     )
 
     assert result == {
-        "project_name": "request-project",
+        "project_name": "requester-project",
         "workspace": "requester-workspace",
         "thread_id": "requester-thread",
     }

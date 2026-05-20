@@ -41,12 +41,12 @@ def extract_opik_metadata(
     """
     Merge Opik metadata from three sources in increasing priority order:
 
-      1. user_api_key_auth_metadata  – lowest priority (operator-level defaults)
-      2. litellm_metadata (request)  – overrides auth-key defaults
-      3. requester_metadata          – highest priority (e.g. proxy header overrides)
+      1. user_api_key_auth_metadata– lowest priority (operator-level defaults)
+      2. litellm_metadata (request)– overrides auth-key defaults
+      3. requester_metadata – highest priority (e.g. proxy header overrides)
 
     Args:
-        litellm_metadata: Metadata from litellm_params.
+        litellm_metadata: Metadata from litellm_params.mak
         standard_logging_metadata: Metadata from standard_logging_object.
 
     Returns:
