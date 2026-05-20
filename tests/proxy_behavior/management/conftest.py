@@ -62,3 +62,27 @@ async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
         transport=transport, base_url="http://testserver"
     ) as client:
         yield client
+
+
+@pytest_asyncio.fixture(scope="session")
+async def prisma(proxy_app):
+    """The connected PrismaClient the lifespan opened."""
+    from litellm.proxy import proxy_server
+
+    assert (
+        proxy_server.prisma_client is not None
+    ), "FastAPI lifespan did not connect prisma — harness is wrong."
+    return proxy_server.prisma_client
+
+
+@pytest_asyncio.fixture(scope="session")
+async def world(prisma):
+    """The immutable read-world seed.
+
+    Re-seeds at session start so each pytest invocation gets a clean world.
+    Tests must not mutate these rows; write tests use Slice 5's namespace +
+    teardown fixtures for scratch entities.
+    """
+    from .actors import seed_world
+
+    return await seed_world(prisma)
