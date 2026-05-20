@@ -45,7 +45,9 @@ def test_no_management_endpoint_imports():
     for path in _iter_py_files():
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
             if FORBIDDEN_IMPORT.search(line):
-                violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+                violations.append(
+                    f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}"
+                )
     assert not violations, (
         "tests/proxy_behavior/ must not import from litellm.proxy.management_endpoints "
         "(G3 — assert at the HTTP boundary). Violations:\n  " + "\n  ".join(violations)
@@ -57,7 +59,9 @@ def test_no_user_api_key_auth_mocking():
     for path in _iter_py_files():
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
             if FORBIDDEN_AUTH_MOCK.search(line):
-                violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+                violations.append(
+                    f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}"
+                )
     assert not violations, (
         "tests/proxy_behavior/ must not mock user_api_key_auth (G3 — auth runs for "
         "real). Violations:\n  " + "\n  ".join(violations)
