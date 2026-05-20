@@ -296,6 +296,76 @@ def test_streaming_chunk_id_raw():
     assert not result.item_id.startswith("resp_")  # Should NOT have resp_ prefix
 
 
+class TestStreamingIteratorNextPath:
+    """Cover __next__ path that enqueues transform output via pending events."""
+
+    def test_next_returns_text_delta_after_initial_output_item_events(self):
+        from unittest.mock import Mock
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        mock_stream_wrapper = Mock()
+        mock_logging_obj = Mock()
+        mock_stream_wrapper.logging_obj = mock_logging_obj
+
+        chunk1 = ModelResponseStream(
+            id="chatcmpl-first-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+        chunk2 = ModelResponseStream(
+            id="chatcmpl-second-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=" World", role=None),
+                    finish_reason=None,
+                )
+            ],
+        )
+        mock_stream_wrapper.__iter__ = Mock(return_value=mock_stream_wrapper)
+        mock_stream_wrapper.__next__ = Mock(side_effect=[chunk1, chunk2, StopIteration])
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="Say Hello World",
+            responses_api_request={},
+        )
+        iterator.sent_response_created_event = True
+        iterator.sent_response_in_progress_event = True
+
+        events = []
+        for _ in range(6):
+            try:
+                events.append(next(iterator))
+            except StopIteration:
+                break
+
+        text_deltas = [
+            event
+            for event in events
+            if getattr(event, "type", None) == "response.output_text.delta"
+        ]
+        assert len(text_deltas) >= 1
+        assert text_deltas[0].item_id == "chatcmpl-first-id"
+        assert any(delta.delta == " World" for delta in text_deltas)
+
+
 class TestReasoningToMessageStreamingBridge:
     """Cover reasoning item id reuse and message item emission after reasoning."""
 

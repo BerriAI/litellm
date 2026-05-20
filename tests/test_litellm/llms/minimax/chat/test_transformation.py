@@ -143,6 +143,21 @@ def test_normalize_custom_tools_to_function_skips_custom_without_name():
     assert normalized == tools
 
 
+def test_normalize_custom_tools_to_function_returns_non_list_tools_unchanged():
+    assert MinimaxChatConfig._normalize_custom_tools_to_function(None) is None
+    assert MinimaxChatConfig._normalize_custom_tools_to_function("tools") == "tools"
+
+
+def test_normalize_custom_tools_to_function_preserves_non_dict_tool_entries():
+    tools = [
+        "invalid",
+        {"type": "function", "function": {"name": "search", "parameters": {}}},
+    ]
+    normalized = MinimaxChatConfig._normalize_custom_tools_to_function(tools)
+    assert normalized[0] == "invalid"
+    assert normalized[1]["type"] == "function"
+
+
 def test_map_openai_params_normalizes_custom_tools():
     config = MinimaxChatConfig()
     result = config.map_openai_params(

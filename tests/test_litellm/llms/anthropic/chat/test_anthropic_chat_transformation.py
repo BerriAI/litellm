@@ -5029,3 +5029,51 @@ def test_transform_request_glm_sanitizes_empty_messages():
         headers={},
     )
     assert "messages" in data
+
+
+def test_map_tool_helper_computer_function_missing_parameters_raises():
+    config = AnthropicConfig()
+    tool = {
+        "type": "computer_use",
+        "function": {"name": "computer"},
+    }
+    with pytest.raises(ValueError, match="Missing required parameter: parameters"):
+        config._map_tool_helper(tool)  # type: ignore[arg-type]
+
+
+def test_sanitize_request_messages_skips_non_dict_messages():
+    config = AnthropicConfig()
+    result = config._sanitize_request_messages(
+        ["not-a-message", {"role": "user", "content": "hello"}]
+    )
+    assert len(result) == 1
+    assert result[0]["content"] == "hello"
+
+
+def test_sanitize_request_messages_skips_non_dict_blocks_in_list_content():
+    config = AnthropicConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "not-a-block",
+                {"type": "text", "text": "hello"},
+            ],
+        }
+    ]
+    result = config._sanitize_request_messages(messages)
+    assert len(result) == 1
+    assert len(result[0]["content"]) == 1
+    assert result[0]["content"][0]["text"] == "hello"
+
+
+def test_map_tools_strict_sanitize_raises_for_invalid_tool_when_not_strict():
+    config = AnthropicConfig()
+    with pytest.raises(ValueError, match="Invalid tool payload"):
+        config._map_tools(["not-a-dict"], strict_sanitize=False)
+
+
+def test_map_tools_strict_sanitize_raises_for_missing_type_when_not_strict():
+    config = AnthropicConfig()
+    with pytest.raises(ValueError, match="Missing required tool field: type"):
+        config._map_tools([{"name": "no-type"}], strict_sanitize=False)
