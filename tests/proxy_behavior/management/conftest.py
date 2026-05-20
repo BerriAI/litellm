@@ -64,7 +64,21 @@ async def proxy_app():
     os.environ.setdefault("CONFIG_FILE_PATH", config_path)
 
     await initialize(config=config_path)
+
+    # /key/regenerate (and a few other Tier-1 endpoints) are gated behind
+    # ``premium_user`` — without a LITELLM_LICENSE the proxy returns 500
+    # "Enterprise feature" for those calls. The behavior matrix isn't about
+    # licensing; it's about authz. Force the proxy into premium mode so the
+    # matrix pins the real authz behavior, not the licensing gate.
+    from litellm.proxy import proxy_server as _proxy_server
+
+    _proxy_server.premium_user = True
+
     async with proxy_startup_event(app):
+        # The lifespan re-runs ``premium_user = _license_check.is_premium()``
+        # which flips it back. Force it again after the lifespan settles.
+        _proxy_server.premium_user = True
+
         # The lifespan kicks off ``prisma_client.check_view_exists()`` as a
         # fire-and-forget background task. That task creates the
         # ``LiteLLM_VerificationTokenView`` SQL view used by ``user_api_key_auth``
