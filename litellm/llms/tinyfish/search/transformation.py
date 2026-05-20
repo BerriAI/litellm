@@ -28,7 +28,8 @@ class TinyfishSearchRequest(_TinyfishSearchRequestRequired, total=False):
     location: str
     language: str
     page: int
-    include_thumbnail: str
+    include_thumbnail: bool
+    max_results: int
 
 
 class TinyfishSearchConfig(BaseSearchConfig):
@@ -86,6 +87,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         if "country" in optional_params:
             request_data["location"] = optional_params["country"]
 
+        if "max_results" in optional_params:
+            request_data["max_results"] = min(int(optional_params["max_results"]), 20)
+
         if "search_domain_filter" in optional_params:
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
@@ -117,8 +121,13 @@ class TinyfishSearchConfig(BaseSearchConfig):
     ) -> SearchResponse:
         response_json = raw_response.json()
 
+        query_params = raw_response.request.url.params if raw_response.request else {}
+        max_results = max(1, min(int(query_params.get("max_results", 20)), 20))
+
         results: List[SearchResult] = []
         for item in response_json.get("results", []):
+            if len(results) >= max_results:
+                break
             results.append(
                 SearchResult(
                     title=item.get("title", ""),
