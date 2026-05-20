@@ -25,6 +25,7 @@ from litellm.llms.gemini.interactions.transformation import (
 )
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
+    ResponseCompletedEvent,
     ResponseCreatedEvent,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -151,7 +152,12 @@ class TestTransformRequest:
         request_body = config.transform_request(
             model=None,
             agent="my-custom-slides-agent",
-            input=[{"type": "text", "text": "Create a 5-slide presentation about AI trends."}],
+            input=[
+                {
+                    "type": "text",
+                    "text": "Create a 5-slide presentation about AI trends.",
+                }
+            ],
             optional_params={
                 "environment": "remote",
                 "stream": False,
@@ -306,7 +312,55 @@ class TestStreamingIterator:
         assert chunk.id == "resp_123"
 
     def test_text_delta_sequence_new_schema(self):
-        """First two OutputTextDeltaEvents emit created + step.start; third emits step.delta."""
+        """First chunk yields created + step.start + step.delta; later chunks yield step.delta."""
+        it = self._make_iterator(use_legacy=False)
+
+        first_events = it._events_for_chunk(self._make_text_delta("Hello"))
+        assert [e.event_type for e in first_events] == [
+            "interaction.created",
+            "step.start",
+            "step.delta",
+        ]
+        assert first_events[-1].delta == {"type": "text", "text": "Hello"}
+        assert it.sent_interaction_start is True
+        assert it.sent_content_start is True
+
+        second_events = it._events_for_chunk(self._make_text_delta(" World"))
+        assert [e.event_type for e in second_events] == ["step.delta"]
+        assert second_events[0].delta == {"type": "text", "text": " World"}
+
+        third_events = it._events_for_chunk(self._make_text_delta("!"))
+        assert [e.event_type for e in third_events] == ["step.delta"]
+        assert third_events[0].delta == {"type": "text", "text": "!"}
+
+    def test_text_delta_sequence_legacy_schema(self):
+        """Legacy: first chunk yields interaction.start + content.start + content.delta."""
+        it = self._make_iterator(use_legacy=True)
+
+        first_events = it._events_for_chunk(self._make_text_delta("Hello"))
+        assert [e.event_type for e in first_events] == [
+            "interaction.start",
+            "content.start",
+            "content.delta",
+        ]
+        assert first_events[-1].delta == {"type": "text", "text": "Hello"}
+
+        second_events = it._events_for_chunk(self._make_text_delta(" World"))
+        assert [e.event_type for e in second_events] == ["content.delta"]
+        assert second_events[0].delta == {"type": "text", "text": " World"}
+
+    def test_first_text_delta_without_item_id_uses_fallback_id(self):
+        it = self._make_iterator(use_legacy=False)
+        event = self._make_text_delta("Hi")
+        event.item_id = None
+
+        events = it._events_for_chunk(event)
+
+        assert events[0].event_type == "interaction.created"
+        assert events[0].id == f"interaction_{id(it)}"
+
+    def test_first_text_delta_emits_text_via_compat_shim(self):
+        """The legacy single-chunk shim must surface the synthetic events AND the delta."""
         it = self._make_iterator(use_legacy=False)
 
         first = it._transform_responses_chunk_to_interactions_chunk(
@@ -314,57 +368,134 @@ class TestStreamingIterator:
         )
         assert first is not None
         assert first.event_type == "interaction.created"
-        assert it.sent_interaction_start is True
-        assert it.sent_content_start is False
 
-        second = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta(" World")
-        )
+        second = it.__next__() if it._pending_events else None
         assert second is not None
         assert second.event_type == "step.start"
-        assert it.sent_content_start is True
 
-        third = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("!")
-        )
+        third = it.__next__() if it._pending_events else None
         assert third is not None
         assert third.event_type == "step.delta"
-        assert third.delta == {"type": "text", "text": "!"}
+        assert third.delta == {"type": "text", "text": "Hello"}
 
-    def test_text_delta_sequence_legacy_schema(self):
-        """Legacy: interaction.start → content.start → content.delta."""
-        it = self._make_iterator(use_legacy=True)
-
-        first = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
-        assert first is not None
-        assert first.event_type == "interaction.start"
-
-        second = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta(" World")
-        )
-        assert second is not None
-        assert second.event_type == "content.start"
-        assert second.delta == {"type": "text", "text": ""}
-
-        third = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("!")
-        )
-        assert third is not None
-        assert third.event_type == "content.delta"
-        assert third.delta == {"type": "text", "text": "!"}
-
-    def test_first_text_delta_without_item_id_uses_fallback_id(self):
+    def test_response_created_then_text_delta_emits_step_start_and_delta(self):
+        """Realistic flow: response.created arrives first, then text delta."""
         it = self._make_iterator(use_legacy=False)
-        event = self._make_text_delta("Hi")
-        event.item_id = None
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(event)
+        first = it._events_for_chunk(self._make_response_created())
+        assert [e.event_type for e in first] == ["interaction.created"]
 
-        assert chunk is not None
-        assert chunk.event_type == "interaction.created"
-        assert chunk.id == f"interaction_{id(it)}"
+        second = it._events_for_chunk(self._make_text_delta("Hello"))
+        assert [e.event_type for e in second] == ["step.start", "step.delta"]
+        assert second[-1].delta == {"type": "text", "text": "Hello"}
+
+    def test_no_text_token_is_dropped_during_streaming(self):
+        """Concatenated step.delta payloads must equal the upstream text."""
+        it = self._make_iterator(use_legacy=False)
+
+        chunks = ["Hello", " ", "world", "!"]
+        emitted_text = ""
+        for c in chunks:
+            for ev in it._events_for_chunk(self._make_text_delta(c)):
+                if ev.event_type == "step.delta":
+                    assert ev.delta is not None
+                    emitted_text += ev.delta["text"]
+
+        assert emitted_text == "Hello world!"
+
+    def test_stop_iteration_fallback_emits_completion_event(self):
+        """If upstream ends without ResponseCompletedEvent, terminal events still flow."""
+        from unittest.mock import MagicMock
+
+        text_event = self._make_text_delta("hi")
+        sync_iter = MagicMock()
+        sync_iter.__iter__ = lambda self: self
+        sync_iter.__next__ = MagicMock(side_effect=[text_event, StopIteration])
+
+        original = litellm.use_legacy_interactions_schema
+        litellm.use_legacy_interactions_schema = False
+        try:
+            it = LiteLLMResponsesInteractionsStreamingIterator(
+                model="gpt-5.4",
+                litellm_custom_stream_wrapper=sync_iter,
+                request_input="hi",
+                optional_params={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        emitted: list = []
+        try:
+            while True:
+                emitted.append(next(it))
+        except StopIteration:
+            pass
+
+        event_types = [e.event_type for e in emitted]
+        assert event_types == [
+            "interaction.created",
+            "step.start",
+            "step.delta",
+            "step.stop",
+            "interaction.completed",
+        ]
+        terminal = emitted[-1]
+        assert terminal.steps == [
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": "hi"}],
+            }
+        ]
+        # EOF-flushed terminal event must carry the same id as interaction.created.
+        assert terminal.id == emitted[0].id == "item_1"
+
+    def test_response_completed_emits_stop_then_completion(self):
+        """ResponseCompletedEvent expands into step.stop + interaction.completed."""
+        from unittest.mock import MagicMock
+
+        text_event = self._make_text_delta("hi")
+        completed = MagicMock(spec=ResponseCompletedEvent)
+        completed.response = MagicMock(id="resp_999")
+
+        sync_iter = MagicMock()
+        sync_iter.__iter__ = lambda self: self
+        sync_iter.__next__ = MagicMock(side_effect=[text_event, completed])
+
+        original = litellm.use_legacy_interactions_schema
+        litellm.use_legacy_interactions_schema = False
+        try:
+            it = LiteLLMResponsesInteractionsStreamingIterator(
+                model="gpt-5.4",
+                litellm_custom_stream_wrapper=sync_iter,
+                request_input="hi",
+                optional_params={},
+            )
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
+        emitted: list = []
+        try:
+            while True:
+                emitted.append(next(it))
+        except StopIteration:
+            pass
+
+        event_types = [e.event_type for e in emitted]
+        assert event_types == [
+            "interaction.created",
+            "step.start",
+            "step.delta",
+            "step.stop",
+            "interaction.completed",
+        ]
+        # StopIteration fallback path must NOT add a duplicate completion event.
+        assert event_types.count("interaction.completed") == 1
+        # When the stream starts directly with a text delta (no preceding
+        # response.created), the terminal events must reuse the id derived from
+        # the first chunk's item_id rather than switching to response.id, so
+        # consumers can correlate the start and completion events by id.
+        assert emitted[0].id == "item_1"
+        assert emitted[-1].id == "item_1"
 
 
 class TestInteractionOperationUrls:
