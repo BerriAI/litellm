@@ -4,6 +4,9 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+import builtins
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -11,6 +14,8 @@ import pytest
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.types.utils import LlmProviders
 
 
@@ -125,6 +130,199 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
 
 
 @pytest.mark.asyncio
+async def test_execute_search_passes_configured_search_tool_credentials(monkeypatch):
+    """Search interception should use credentials from the selected router search tool."""
+    monkeypatch.setenv("FOO_BAR", "custom-perplexity-key")
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(
+        search_tools=[
+            {
+                "search_tool_name": "perplexity-search",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "os.environ/FOO_BAR",
+                    "api_base": "https://custom.perplexity.example",
+                },
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(
+        object="search",
+        results=[
+            SearchResult(
+                title="LiteLLM",
+                url="https://docs.litellm.ai",
+                snippet="LiteLLM search result",
+            )
+        ],
+    )
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger(search_tool_name="perplexity-search")
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key="custom-perplexity-key",
+        api_base="https://custom.perplexity.example",
+    )
+    assert structured_response is search_response
+    assert "LiteLLM" in search_text
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_to_first_search_tool_credentials(monkeypatch):
+    """If the requested search tool is missing, use the first configured tool's credentials."""
+    monkeypatch.setenv("CUSTOM_SEARCH_BASE", "https://fallback.perplexity.example")
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(
+        search_tools=[
+            {
+                "search_tool_name": "default-perplexity-search",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "literal-perplexity-key",
+                    "api_base": "os.environ/CUSTOM_SEARCH_BASE",
+                },
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger(search_tool_name="missing-search-tool")
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key="literal-perplexity-key",
+        api_base="https://fallback.perplexity.example",
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+@pytest.mark.asyncio
+async def test_execute_search_uses_default_perplexity_without_router_tools(monkeypatch):
+    """Search interception should not pass stale credentials when no router tools exist."""
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(search_tools=[])
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key=None,
+        api_base=None,
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+@pytest.mark.asyncio
+async def test_execute_search_uses_default_perplexity_when_router_import_fails(
+    monkeypatch,
+):
+    """Search interception should still work when proxy router import is unavailable."""
+    real_import = builtins.__import__
+
+    def raise_for_proxy_server(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "litellm.proxy.proxy_server":
+            raise ImportError("proxy unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", raise_for_proxy_server)
+
+    search_response = SearchResponse(object="search", results=[])
+    asearch = AsyncMock(return_value=search_response)
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    search_text, structured_response = await logger._execute_search("what is litellm")
+
+    asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="perplexity",
+        api_key=None,
+        api_base=None,
+    )
+    assert structured_response is search_response
+    assert "search" in search_text
+
+
+def test_search_provider_credentials_resolve_configured_values(monkeypatch):
+    """Credential resolver should resolve supported values and ignore unsupported ones."""
+    monkeypatch.setenv("FOO_BAR", "custom-perplexity-key")
+
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={
+            "api_key": "os.environ/FOO_BAR",
+            "api_base": "https://custom.perplexity.example",
+        }
+    )
+
+    assert api_key == "custom-perplexity-key"
+    assert api_base == "https://custom.perplexity.example"
+
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={"api_key": 123, "api_base": None}
+    )
+
+    assert api_key is None
+    assert api_base is None
+
+
+@pytest.mark.asyncio
+async def test_execute_search_reraises_search_errors(monkeypatch):
+    """Search interception should not hide provider search failures."""
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.llm_router = SimpleNamespace(search_tools=[])
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    asearch = AsyncMock(side_effect=RuntimeError("search failed"))
+    monkeypatch.setattr(
+        "litellm.integrations.websearch_interception.handler.litellm.asearch",
+        asearch,
+    )
+
+    logger = WebSearchInterceptionLogger()
+
+    with pytest.raises(RuntimeError, match="search failed"):
+        await logger._execute_search("what is litellm")
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
@@ -132,8 +330,6 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     to the follow-up LLM request, causing "Extra inputs are not permitted" errors
     from providers like Bedrock that use strict parameter validation.
     """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
     # Simulate kwargs that would be passed during agentic loop execution
     kwargs_with_internal_flags = {
         "_websearch_interception_converted_stream": True,

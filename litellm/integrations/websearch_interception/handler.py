@@ -27,6 +27,7 @@ from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.router_utils.search_api_router import SearchAPIRouter
 from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
@@ -1068,6 +1069,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 llm_router = None
 
             # Determine search provider from router's search_tools
+            search_api_key: Optional[str] = None
+            search_api_base: Optional[str] = None
             search_provider: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
@@ -1079,8 +1082,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get(
-                            "search_provider"
+                        litellm_params = search_tool.get("litellm_params", {})
+                        search_provider = litellm_params.get("search_provider")
+                        (
+                            search_api_key,
+                            search_api_base,
+                        ) = SearchAPIRouter._resolve_search_provider_credentials(
+                            tool_litellm_params=litellm_params
                         )
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
@@ -1095,8 +1103,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get(
-                        "search_provider"
+                    litellm_params = first_tool.get("litellm_params", {})
+                    search_provider = litellm_params.get("search_provider")
+                    (
+                        search_api_key,
+                        search_api_base,
+                    ) = SearchAPIRouter._resolve_search_provider_credentials(
+                        tool_litellm_params=litellm_params
                     )
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
@@ -1105,6 +1118,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
                 search_provider = "perplexity"
+                search_api_key = None
+                search_api_base = None
                 verbose_logger.debug(
                     "WebSearchInterception: No search tools configured in router, "
                     f"using default provider '{search_provider}'"
@@ -1113,7 +1128,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            result = await litellm.asearch(
+                query=query,
+                search_provider=search_provider,
+                api_key=search_api_key,
+                api_base=search_api_base,
+            )
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
