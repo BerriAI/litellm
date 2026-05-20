@@ -508,16 +508,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     @staticmethod
     def _messages_contain_json_keyword(messages: List[AllMessageValues]) -> bool:
-        def _contains_json(value: Any) -> bool:
+        stack: list[Any] = list(messages)
+        while stack:
+            value = stack.pop()
             if isinstance(value, str):
-                return "json" in value.lower()
-            if isinstance(value, list):
-                return any(_contains_json(v) for v in value)
-            if isinstance(value, dict):
-                return any(_contains_json(v) for v in value.values())
-            return False
-
-        return any(_contains_json(message) for message in messages)
+                if "json" in value.lower():
+                    return True
+            elif isinstance(value, list):
+                stack.extend(value)
+            elif isinstance(value, dict):
+                stack.extend(value.values())
+        return False
 
     def _maybe_inject_json_hint_for_glm(
         self,
