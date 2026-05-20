@@ -1,5 +1,7 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import threading
+
 import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
@@ -7,6 +9,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    safe_deep_copy,
 )
 
 
@@ -176,7 +179,11 @@ class TestRedactNestedMatchAndRegexKeys:
                 {
                     "sensitiveInformationPolicy": {
                         "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
+                            {
+                                "type": "NAME",
+                                "match": "secret-name",
+                                "action": "BLOCKED",
+                            }
                         ]
                     },
                     "wordPolicy": {
@@ -187,17 +194,63 @@ class TestRedactNestedMatchAndRegexKeys:
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
+        assert (
+            out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+                "match"
+            ]
+            == "[REDACTED]"
+        )
         assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
             "[REDACTED]"
         )
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert (
+            payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+                "match"
+            ]
+            == "secret-name"
+        )
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+class TestSafeDeepCopyConcurrentMutation:
+    def test_no_runtime_error_on_concurrent_dict_mutation(self):
+        """safe_deep_copy must not raise RuntimeError when another thread mutates the dict."""
+        data = {f"key_{i}": f"value_{i}" for i in range(200)}
+        barrier = threading.Barrier(2, timeout=5)
+        errors = []
+
+        def mutator():
+            barrier.wait()
+            for i in range(200, 400):
+                data[f"key_{i}"] = f"value_{i}"
+
+        def copier():
+            barrier.wait()
+            try:
+                safe_deep_copy(data)
+            except RuntimeError as e:
+                if "dictionary changed size during iteration" in str(e):
+                    errors.append(e)
+
+        t1 = threading.Thread(target=mutator)
+        t2 = threading.Thread(target=copier)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        assert not errors, "safe_deep_copy raised RuntimeError on concurrent mutation"
+
+    def test_existing_behavior_preserved(self):
+        """safe_deep_copy still correctly deep-copies nested structures."""
+        original = {"a": [1, 2, 3], "b": {"nested": "value"}}
+        copied = safe_deep_copy(original)
+
+        assert copied == original
+        assert copied is not original
+        assert copied["a"] is not original["a"]
+        assert copied["b"] is not original["b"]

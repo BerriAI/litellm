@@ -317,7 +317,7 @@ def safe_deep_copy(data):
     # Step 2: Per-key deepcopy with fallback
     if isinstance(data, dict):
         new_data = {}
-        for k, v in data.items():
+        for k, v in list(data.items()):
             try:
                 new_data[k] = copy.deepcopy(v)
             except Exception:
