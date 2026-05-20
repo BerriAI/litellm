@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 
 import pytest
 
@@ -172,3 +173,32 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_no_runtime_error_on_concurrent_dict_mutation():
+    """safe_dumps must not raise RuntimeError when another thread mutates the dict."""
+    data = {f"key_{i}": f"value_{i}" for i in range(200)}
+    barrier = threading.Barrier(2, timeout=5)
+    errors = []
+
+    def mutator():
+        barrier.wait()
+        for i in range(200, 400):
+            data[f"key_{i}"] = f"value_{i}"
+
+    def serializer():
+        barrier.wait()
+        try:
+            safe_dumps(data)
+        except RuntimeError as e:
+            if "dictionary changed size during iteration" in str(e):
+                errors.append(e)
+
+    t1 = threading.Thread(target=mutator)
+    t2 = threading.Thread(target=serializer)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not errors, "safe_dumps raised RuntimeError on concurrent mutation"

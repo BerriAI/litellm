@@ -26,7 +26,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
         result: Union[dict, list, tuple, set, str]
         if isinstance(obj, dict):
             result = {}
-            for k, v in obj.items():
+            for k, v in list(obj.items()):
                 if isinstance(k, (str)):
                     result[k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
