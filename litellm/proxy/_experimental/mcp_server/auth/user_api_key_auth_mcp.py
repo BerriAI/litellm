@@ -207,7 +207,9 @@ class MCPRequestHandler:
         elif (
             not litellm_api_key
             and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
-                path=request.url.path, mcp_servers=mcp_servers
+                path=request.url.path,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
         ):
             # Operator opted this oauth2 server into upstream-delegated auth
@@ -407,7 +409,7 @@ class MCPRequestHandler:
 
     @staticmethod
     def _target_servers_delegate_auth_to_upstream(
-        path: str, mcp_servers: Optional[List[str]]
+        path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
     ) -> bool:
         """
         True only when EVERY MCP server the request targets is configured for
@@ -437,7 +439,9 @@ class MCPRequestHandler:
             return False
 
         for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                name, client_ip=client_ip
+            )
             if server is None or server.auth_type != MCPAuth.oauth2:
                 return False
             # `is True` is intentional: opt-in must be an explicit boolean

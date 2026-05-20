@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from fastapi import HTTPException
+
 
 class MCPUpstreamAuthError(Exception):
     """Raised when an upstream MCP server returns an authentication failure
@@ -25,3 +27,19 @@ class MCPUpstreamAuthError(Exception):
         self.www_authenticate = www_authenticate
         self.server_name = server_name
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
+
+    def to_http_exception(self) -> HTTPException:
+        """Convert this upstream-auth error into an ``HTTPException`` that
+        preserves the upstream status code and any ``WWW-Authenticate``
+        challenge, so standards-compliant MCP clients can trigger the
+        upstream OAuth flow.
+        """
+        return HTTPException(
+            status_code=self.status_code,
+            detail="Unauthorized",
+            headers=(
+                {"www-authenticate": self.www_authenticate}
+                if self.www_authenticate
+                else None
+            ),
+        )

@@ -445,15 +445,7 @@ if MCP_AVAILABLE:
         except MCPUpstreamAuthError as e:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise HTTPException(
-                status_code=e.status_code,
-                detail="Unauthorized",
-                headers=(
-                    {"www-authenticate": e.www_authenticate}
-                    if e.www_authenticate
-                    else None
-                ),
-            )
+            raise e.to_http_exception()
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -546,15 +538,7 @@ if MCP_AVAILABLE:
         except MCPUpstreamAuthError as e:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise HTTPException(
-                status_code=e.status_code,
-                detail="Unauthorized",
-                headers=(
-                    {"www-authenticate": e.www_authenticate}
-                    if e.www_authenticate
-                    else None
-                ),
-            )
+            raise e.to_http_exception()
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
