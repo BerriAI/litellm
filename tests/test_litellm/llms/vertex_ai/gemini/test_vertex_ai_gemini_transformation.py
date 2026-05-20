@@ -569,6 +569,55 @@ def test_parallel_tool_calls_copy_thought_signature_from_thinking_block():
     assert all(p.get("thoughtSignature") == "sig-turn-123" for p in function_parts)
 
 
+def test_parallel_tool_calls_copy_thought_signature_from_text_thinking_block():
+    """Text-fallback thinking blocks still carry the turn signature."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I need to call both tools.",
+                    "signature": "sig-text-thinking",
+                }
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_temperature",
+                        "arguments": '{"location": "Paris"}',
+                    },
+                    "index": 0,
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_temperature",
+                        "arguments": '{"location": "London"}',
+                    },
+                    "index": 1,
+                },
+            ],
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages, model="gemini-2.5-flash")
+
+    function_parts = [
+        p
+        for p in contents[0]["parts"]
+        if p.get("functionCall") is not None or p.get("function_call") is not None
+    ]
+    assert len(function_parts) == 2
+    assert all(
+        p.get("thoughtSignature") == "sig-text-thinking" for p in function_parts
+    )
+
+
 def test_thought_signature_with_function_call_mode():
     """Test thought signature extraction in function_call mode (is_function_call=True)"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (

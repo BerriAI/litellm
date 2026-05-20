@@ -994,10 +994,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         if (
                             isinstance(existing_part, dict)
                             and existing_part.get("thoughtSignature")
-                            and (
-                                existing_part.get("functionCall") is not None
-                                or existing_part.get("function_call") is not None
-                            )
                         ):
                             turn_thought_signature = existing_part.get(
                                 "thoughtSignature"

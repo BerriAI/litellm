@@ -39,6 +39,7 @@ class PartType(TypedDict, total=False):
     inline_data: BlobType
     file_data: FileDataType
     function_call: FunctionCall
+    functionCall: FunctionCall
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
