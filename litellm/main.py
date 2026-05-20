@@ -3400,6 +3400,69 @@ def completion(  # type: ignore # noqa: PLR0915
             logging.post_call(
                 input=messages, api_key=openai.api_key, original_response=response
             )
+        elif custom_llm_provider == "orcarouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("ORCAROUTER_API_BASE")
+                or "https://api.orcarouter.ai/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.orcarouter_key
+                or get_secret_str("ORCAROUTER_API_KEY")
+            )
+
+            orcarouter_headers = {
+                "HTTP-Referer": get_secret("ORCAROUTER_SITE_URL")
+                or "https://www.orcarouter.ai/",
+                "X-Title": get_secret("ORCAROUTER_APP_NAME") or "liteLLM",
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                orcarouter_headers.update(_headers)
+
+            headers = orcarouter_headers
+
+            ## Load Config
+            config = litellm.OrcaRouterConfig.get_config()
+            for k, v in config.items():
+                if k == "extra_body":
+                    # we use openai 'extra_body' to pass orcarouter specific
+                    # routing fields - models, route
+                    if "extra_body" in optional_params:
+                        optional_params[k].update(v)
+                    else:
+                        optional_params[k] = v
+                elif k not in optional_params:
+                    optional_params[k] = v
+
+            ## COMPLETION CALL
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider="orcarouter",
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=openai.api_key, original_response=response
+            )
         elif custom_llm_provider == "vercel_ai_gateway":
             api_base = (
                 api_base
@@ -5174,6 +5237,48 @@ def embedding(  # noqa: PLR0915
                 openrouter_headers.update(_headers)
 
             headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "orcarouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("ORCAROUTER_API_BASE")
+                or "https://api.orcarouter.ai/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.orcarouter_key
+                or get_secret_str("ORCAROUTER_API_KEY")
+            )
+
+            orcarouter_headers = {
+                "HTTP-Referer": get_secret("ORCAROUTER_SITE_URL")
+                or "https://www.orcarouter.ai/",
+                "X-Title": get_secret("ORCAROUTER_APP_NAME") or "liteLLM",
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                orcarouter_headers.update(_headers)
+
+            headers = orcarouter_headers
 
             response = base_llm_http_handler.embedding(
                 model=model,
