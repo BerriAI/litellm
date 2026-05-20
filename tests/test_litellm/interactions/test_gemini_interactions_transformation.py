@@ -482,6 +482,52 @@ class TestTransformRequestSchemaCoalescing:
         assert rf["type"] == "image"
         assert rf["aspect_ratio"] == "1:1"
 
+    def test_image_config_appended_to_response_format_list_without_mutating_input(
+        self, config
+    ):
+        """When response_format is already a list, image_config must not mutate optional_params."""
+        original = litellm.use_legacy_interactions_schema
+        try:
+            litellm.use_legacy_interactions_schema = False
+            text_rf = {"type": "text", "mime_type": "application/json"}
+            optional_params = {
+                "response_format": [text_rf],
+                "generation_config": {
+                    "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
+                },
+            }
+            original_rf = optional_params["response_format"]
+
+            body = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw and summarise",
+                optional_params=optional_params,
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+            assert optional_params["response_format"] is original_rf
+            assert len(optional_params["response_format"]) == 1
+            assert body["response_format"] == [
+                text_rf,
+                {"type": "image", "aspect_ratio": "16:9", "image_size": "2K"},
+            ]
+
+            # Retry must not append a second image entry into the caller's list.
+            body_retry = config.transform_request(
+                model="gemini/gemini-2.5-flash",
+                agent=None,
+                input="draw and summarise",
+                optional_params=optional_params,
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+            assert len(optional_params["response_format"]) == 1
+            assert body_retry["response_format"] == body["response_format"]
+        finally:
+            litellm.use_legacy_interactions_schema = original
+
     def test_legacy_schema_passes_fields_unchanged(self, config):
         original = litellm.use_legacy_interactions_schema
         try:

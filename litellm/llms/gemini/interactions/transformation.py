@@ -226,7 +226,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                     if existing_rf is None:
                         request_body["response_format"] = image_rf
                     elif isinstance(existing_rf, list):
-                        existing_rf.append(image_rf)
+                        request_body["response_format"] = [*existing_rf, image_rf]
                     else:
                         # Convert single entry to array for multimodal output.
                         request_body["response_format"] = [existing_rf, image_rf]
