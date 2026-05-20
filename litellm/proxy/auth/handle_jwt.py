@@ -922,11 +922,10 @@ class JWTHandler:
     def _apply_issuer_claim_mappings(
         self, token: dict, issuer_config: JWTIssuerConfig
     ) -> dict:
-        source_token = {**token}
-        for claim in self.LITELLM_INTERNAL_CLAIMS:
-            token.pop(claim, None)
-
-        token[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
+        normalized: dict = {
+            k: v for k, v in token.items() if k not in self.LITELLM_INTERNAL_CLAIMS
+        }
+        normalized[self.LITELLM_JWT_ISSUER_CLAIM] = issuer_config.issuer
         claim_mappings = [
             (issuer_config.user_id_jwt_field, self.LITELLM_USER_ID_CLAIM),
             (issuer_config.user_email_jwt_field, self.LITELLM_USER_EMAIL_CLAIM),
@@ -940,13 +939,13 @@ class JWTHandler:
             if source_claim is None:
                 continue
             claim_value = self._get_claim_value_for_issuer_mapping(
-                token=source_token,
+                token=token,
                 claim_field=source_claim,
             )
             if claim_value is not None:
-                token[normalized_claim] = claim_value
+                normalized[normalized_claim] = claim_value
 
-        return token
+        return normalized
 
     def _get_jwk_from_public_key(self, public_key: dict) -> dict:
         jwk = {}

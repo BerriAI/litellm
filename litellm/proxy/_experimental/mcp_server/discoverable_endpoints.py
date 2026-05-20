@@ -1,8 +1,10 @@
+import asyncio
 import json
 import time
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -32,6 +34,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 _OAUTH_METADATA_CACHE: Dict[Tuple[str, str], Tuple[float, dict]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS = 300
 _OAUTH_METADATA_CACHE_MAX_SIZE = 128
+# Per-(server_id, resource_url) async locks so concurrent discovery requests
+# coalesce onto a single upstream fetch instead of issuing N parallel calls.
+_OAUTH_METADATA_FETCH_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
 
 router = APIRouter(
     tags=["mcp"],
@@ -746,59 +751,61 @@ async def fetch_upstream_oauth_protected_resource(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    host_base = f"{upstream.scheme}://{upstream.netloc}"
-    candidates = [f"{host_base}/.well-known/oauth-protected-resource"]
-    # RFC 9728 §3.1 path fallback
-    if upstream.path and upstream.path not in ("", "/"):
-        candidates.append(
-            f"{host_base}/.well-known/oauth-protected-resource"
-            f"{upstream.path.rstrip('/')}"
+    lock = _OAUTH_METADATA_FETCH_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        now = time.time()
+        cached = _OAUTH_METADATA_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+        host_base = f"{upstream.scheme}://{upstream.netloc}"
+        candidates = [f"{host_base}/.well-known/oauth-protected-resource"]
+        # RFC 9728 §3.1 path fallback
+        if upstream.path and upstream.path not in ("", "/"):
+            candidates.append(
+                f"{host_base}/.well-known/oauth-protected-resource"
+                f"{upstream.path.rstrip('/')}"
+            )
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.Oauth2Check
         )
 
-    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-
-    network_errors: list[Exception] = []
-    for candidate in candidates:
-        try:
-            response = await async_client.get(
-                candidate,
-                headers={"Accept": "application/json"},
-            )
-        except Exception as exc:  # network / connect errors
-            if is_network_error(exc):
-                network_errors.append(exc)
-            continue
-        if response.status_code == 200:
+        network_errors: list[Exception] = []
+        for candidate in candidates:
             try:
-                payload = response.json()
-            except Exception:
-                continue
-            if isinstance(payload, dict):
-                now = time.time()
-                _OAUTH_METADATA_CACHE[cache_key] = (
-                    now + _OAUTH_METADATA_CACHE_TTL_SECONDS,
-                    payload,
+                response = await async_client.get(
+                    candidate,
+                    headers={"Accept": "application/json"},
                 )
-                _prune_oauth_metadata_cache(now)
-                return payload
+            except Exception as exc:  # network / connect errors
+                if is_network_error(exc):
+                    network_errors.append(exc)
+                continue
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    now = time.time()
+                    _OAUTH_METADATA_CACHE[cache_key] = (
+                        now + _OAUTH_METADATA_CACHE_TTL_SECONDS,
+                        payload,
+                    )
+                    _prune_oauth_metadata_cache(now)
+                    return payload
 
-    if len(network_errors) == len(candidates):
-        raise network_errors[-1]
+        if len(network_errors) == len(candidates):
+            raise network_errors[-1]
 
-    return None
+        return None
 
 
 def is_network_error(exc: Exception) -> bool:
     """True for transport-layer failures (connection refused, DNS, TLS, timeout)
     as opposed to HTTP protocol errors (4xx/5xx with a valid response)."""
-    name = type(exc).__name__
-    return name in {
-        "ConnectError",
-        "ConnectTimeout",
-        "ReadTimeout",
-        "PoolTimeout",
-        "RemoteProtocolError",
-    }
+    return isinstance(exc, httpx.TransportError)
 
 
 async def _build_oauth_protected_resource_response(

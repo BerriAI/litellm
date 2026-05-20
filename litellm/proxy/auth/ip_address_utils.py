@@ -206,16 +206,15 @@ class IPAddressUtils:
                     request, general_settings=general_settings
                 )
                 return _get_request_ip_address(request, use_x_forwarded_for=False)
-            if trusted_ranges:
-                # Validate direct connection is from trusted proxy
-                direct_ip = request.client.host if request.client else None
-                trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(
-                    trusted_ranges
+            # Validate direct connection is from trusted proxy
+            direct_ip = request.client.host if request.client else None
+            trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(
+                trusted_ranges
+            )
+            if not IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks):
+                # Untrusted source trying to set XFF - ignore XFF, use direct IP
+                verbose_proxy_logger.warning(
+                    "XFF header from untrusted IP %s, ignoring", direct_ip
                 )
-                if not IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks):
-                    # Untrusted source trying to set XFF - ignore XFF, use direct IP
-                    verbose_proxy_logger.warning(
-                        "XFF header from untrusted IP %s, ignoring", direct_ip
-                    )
-                    return direct_ip
+                return direct_ip
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
