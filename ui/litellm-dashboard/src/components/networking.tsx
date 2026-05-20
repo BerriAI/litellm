@@ -354,7 +354,7 @@ export const handleError = async (errorData: string | any) => {
       const browserLocation = getWindowLocation();
       if (browserLocation) {
         const pathname = browserLocation.pathname;
-        if (pathname.startsWith("/")) {
+        if (pathname.startsWith("/") && !pathname.startsWith("//")) {
           window.location.href = pathname;
         }
       }
