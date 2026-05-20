@@ -641,6 +641,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_tool_helper(  # noqa: PLR0915
         self,
         tool: ChatCompletionToolParam,
+        model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None
         mcp_server: Optional[AnthropicMcpServerTool] = None
@@ -664,17 +666,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _description = tool.get("description")
                 # OpenAI Responses custom tools use top-level name/description and
                 # optional free-form `format`, not a Chat Completions `function`
-                # schema. Anthropic tools require an object input_schema, so use
-                # an empty object schema when no JSON schema is provided.
+                # schema. Flat Codex function tools use top-level `parameters`.
+                # Anthropic tools require an object input_schema, so use an empty
+                # object schema when no JSON schema is provided.
                 _input_schema = cast(
                     dict,
-                    tool.get(
-                        "input_schema",
-                        {
-                            "type": "object",
-                            "properties": {},
-                        },
-                    ),
+                    tool.get("input_schema")
+                    or tool.get("parameters")
+                    or {
+                        "type": "object",
+                        "properties": {},
+                    },
                 )
 
             # Anthropic requires input_schema.type to be "object". Normalize
@@ -712,6 +714,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             returned_tool = _tool
 
         elif tool["type"].startswith("computer_"):
+            if tool.get("type") == "computer_use_preview" and (
+                not self._supports_responses_computer_use_preview(
+                    model=model, api_base=api_base
+                )
+            ):
+                return None, None
+
             _function = tool.get("function")
             if isinstance(_function, dict):
                 if "parameters" not in _function:
@@ -943,6 +952,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return False
         return requires_anthropic_request_sanitize(model=model)
 
+    @staticmethod
+    def _supports_responses_computer_use_preview(
+        model: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> bool:
+        """
+        OpenAI Responses ``computer_use_preview`` is only accepted on native Anthropic API.
+
+        Bedrock and Anthropic-compatible gateways (Sophnet, Azure, etc.) reject this
+        tool tag with ValidationException.
+        """
+        model_lower = (model or "").lower()
+        if any(token in model_lower for token in ("-aws", "bedrock", "converse")):
+            return False
+
+        if isinstance(api_base, str) and api_base:
+            return "api.anthropic.com" in api_base
+
+        return True
+
     def _is_non_empty_text_content(self, content: Any) -> bool:
         return isinstance(content, str) and bool(content.strip())
 
@@ -1007,6 +1036,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         tools: List,
         strict_sanitize: bool = False,
+        model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
         anthropic_tools: List[AllAnthropicToolsValues] = []
         mcp_servers: List[AnthropicMcpServerTool] = []
@@ -1031,7 +1062,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 openai_tool = cast(ChatCompletionToolParam, tool)
                 if strict_sanitize:
                     try:
-                        new_tool, mcp_server_tool = self._map_tool_helper(openai_tool)
+                        new_tool, mcp_server_tool = self._map_tool_helper(
+                            openai_tool, model=model, api_base=api_base
+                        )
                     except Exception:
                         litellm.verbose_logger.warning(
                             "Anthropic tool sanitize: dropping invalid tool: %r",
@@ -1040,7 +1073,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         )
                         continue
                 else:
-                    new_tool, mcp_server_tool = self._map_tool_helper(openai_tool)
+                    new_tool, mcp_server_tool = self._map_tool_helper(
+                        openai_tool, model=model, api_base=api_base
+                    )
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)
@@ -1537,6 +1572,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        api_base: Optional[str] = None,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(
             non_default_params=non_default_params
@@ -1566,6 +1602,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 anthropic_tools, mcp_servers = self._map_tools(
                     value,
                     strict_sanitize=self._requires_anthropic_request_sanitize(model),
+                    model=model,
+                    api_base=api_base,
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
@@ -1965,6 +2003,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"], _ = self._map_tools(
                 add_dummy_tool(custom_llm_provider="anthropic"),
                 strict_sanitize=strict_sanitize,
+                model=model,
+                api_base=(
+                    litellm_params.get("api_base")
+                    if isinstance(litellm_params, dict)
+                    else None
+                ),
             )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing

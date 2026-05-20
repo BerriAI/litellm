@@ -1552,7 +1552,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
         optional_params = get_optional_params(
-            **optional_param_args, **non_default_params
+            **optional_param_args, **non_default_params, api_base=api_base
         )
         processed_non_default_params = pre_process_non_default_params(
             model=model,

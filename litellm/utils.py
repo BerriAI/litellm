@@ -4047,6 +4047,7 @@ def get_optional_params(  # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     safety_identifier: Optional[str] = None,
+    api_base: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
@@ -4145,6 +4146,7 @@ def get_optional_params(  # noqa: PLR0915
                 if drop_params is not None and isinstance(drop_params, bool)
                 else False
             ),
+            api_base=api_base,
         )
     elif custom_llm_provider == "anthropic_text":
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
@@ -4797,6 +4799,9 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    # api_base is connection metadata; never forward to provider SDK payloads
+    passed_params.pop("api_base", None)
+
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,

@@ -3851,6 +3851,52 @@ def test_map_tools_codex_responses_tool_mix():
     assert anthropic_tools[1]["type"] == "computer_use_preview"
 
 
+def test_map_tools_codex_responses_tool_mix_skips_computer_on_third_party_gateway():
+    """Sophnet/Bedrock gateways reject computer_use_preview."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a free-form patch",
+        },
+        {
+            "type": "computer_use_preview",
+            "display_width": 1920,
+            "display_height": 1080,
+            "environment": "mac",
+        },
+    ]
+
+    anthropic_tools, mcp_servers = config._map_tools(
+        tools,
+        api_base="https://www.sophnet.com/api/open-apis/anthropic",
+    )
+    assert mcp_servers == []
+    assert len(anthropic_tools) == 1
+    assert anthropic_tools[0]["name"] == "apply_patch"
+
+
+def test_map_tool_helper_flat_function_uses_parameters():
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read a file",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)  # type: ignore[arg-type]
+    assert mcp_server is None
+    assert result is not None
+    assert result["name"] == "read_file"
+    assert result["input_schema"]["properties"] == {"path": {"type": "string"}}
+
+
 def test_map_tools_claude_code_function_tools_unchanged():
     """Claude Code sends Chat Completions function tools (Bash, Task, etc.)."""
     config = AnthropicConfig()
