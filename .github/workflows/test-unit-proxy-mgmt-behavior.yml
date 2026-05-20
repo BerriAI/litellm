@@ -29,10 +29,6 @@ jobs:
       # so the cost of disabling parallelism here is negligible.
       workers: 0
       reruns: 0
-      # Don't abort early — first CI runs need the full failure surface so we
-      # can correlate setup-helper failures (one bad fixture cascades to N
-      # tests) vs. real per-scenario failures. Will tighten back down later.
-      max-failures: 200
       enable-postgres: true
       artifact-name: proxy-mgmt-behavior
       timeout-minutes: 15
