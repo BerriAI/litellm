@@ -26,6 +26,9 @@ class TestBlockedAddress:
     def test_ipv6_ula_blocked(self):
         assert _is_blocked_address(ipaddress.ip_address("fc00::1"))
 
+    def test_ipv6_unspecified_blocked(self):
+        assert _is_blocked_address(ipaddress.ip_address("::"))
+
     def test_0_0_0_0_blocked(self):
         assert _is_blocked_address(ipaddress.ip_address("0.0.0.0"))
 
