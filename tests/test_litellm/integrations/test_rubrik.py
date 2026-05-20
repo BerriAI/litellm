@@ -186,6 +186,24 @@ class TestInitialization:
         assert handler._flush_task is not None
         handler._flush_task.cancel()
 
+    def test_event_hook_defaults_to_post_call_when_none_passed(self, mock_env):
+        """`initialize_guardrail` always passes ``event_hook=litellm_params.mode``
+        (which is ``None`` when the user omits ``mode``). The logger must coerce
+        a None ``event_hook`` to ``post_call`` rather than leaving it as None,
+        which would otherwise cause the guardrail to run on every event hook."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(event_hook=None)
+            assert handler.event_hook == GuardrailEventHooks.post_call
+
+    def test_explicit_event_hook_preserved(self, mock_env):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(event_hook=GuardrailEventHooks.pre_call)
+            assert handler.event_hook == GuardrailEventHooks.pre_call
+
     def test_headers_with_api_key(self, handler):
         assert handler._headers["Authorization"] == "Bearer test-api-key"
         assert handler._headers["Content-Type"] == "application/json"
