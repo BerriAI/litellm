@@ -12,6 +12,9 @@ from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.chat.openai_compatible_request_utils import (
+    normalize_flat_function_tools,
+)
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -1425,6 +1428,9 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
+        chat_completion_tools = (
+            normalize_flat_function_tools(chat_completion_tools) or []
+        )
         return chat_completion_tools, web_search_options
 
     @staticmethod

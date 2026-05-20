@@ -196,12 +196,12 @@ class TestOpenAIGPTConfig:
     def test_normalize_flat_function_tools_skips_non_function_tools(self):
         tools = [{"type": "shell", "environment": {"type": "local"}}]
         result = self.config._normalize_flat_function_tools(tools)
-        assert result == tools
+        assert result == []
 
     def test_normalize_flat_function_tools_without_name_passthrough(self):
         tools = [{"type": "function", "description": "missing name"}]
         result = self.config._normalize_flat_function_tools(tools)
-        assert "function" not in result[0]
+        assert result == []
 
     def test_messages_contain_json_keyword_nested_structure(self):
         messages = [

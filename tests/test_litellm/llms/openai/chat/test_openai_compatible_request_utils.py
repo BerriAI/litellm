@@ -67,7 +67,48 @@ def test_normalize_flat_function_tools_preserves_existing_function_wrapper():
 
 def test_normalize_flat_function_tools_skips_function_without_name():
     tools = [{"type": "function", "description": "missing name"}]
-    assert normalize_flat_function_tools(tools) == tools
+    assert normalize_flat_function_tools(tools) == []
+
+
+def test_normalize_flat_function_tools_drops_codex_builtin_tools():
+    tools = [
+        {
+            "type": "function",
+            "name": "read_file",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {"type": "shell", "environment": {"type": "local"}},
+        {
+            "type": "computer_use_preview",
+            "display_width": 1024,
+            "display_height": 768,
+            "environment": "mac",
+        },
+        {"type": "namespace", "name": "codex"},
+    ]
+    normalized = normalize_flat_function_tools(tools)
+    assert len(normalized) == 1
+    assert normalized[0]["function"]["name"] == "read_file"
+
+
+def test_normalize_flat_function_tools_converts_custom_tools():
+    tools = [
+        {
+            "type": "custom",
+            "name": "my_tool",
+            "description": "Do something",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            },
+        }
+    ]
+    normalized = normalize_flat_function_tools(tools)
+    assert len(normalized) == 1
+    assert normalized[0]["type"] == "function"
+    assert normalized[0]["function"]["name"] == "my_tool"
+    assert normalized[0]["function"]["description"] == "Do something"
+    assert normalized[0]["function"]["parameters"]["type"] == "object"
 
 
 def test_json_hint_appends_to_existing_system_message():
@@ -142,9 +183,7 @@ def test_json_hint_skips_when_prompt_already_contains_json():
 def test_openai_config_delegates_to_shared_normalize_flat_function_tools():
     config = OpenAIConfig()
     tools = [{"type": "shell", "environment": {"type": "local"}}]
-    assert config._normalize_flat_function_tools(
-        tools
-    ) == normalize_flat_function_tools(tools)
+    assert config._normalize_flat_function_tools(tools) == []
 
 
 def test_openai_config_json_helper_shims():

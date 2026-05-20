@@ -5,26 +5,82 @@ Used by OpenAIConfig and OpenAIGPTConfig so Codex/Responses tool and JSON-mode
 fixes stay in one place.
 """
 
-from typing import Any, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import requires_json_keyword_for_json_object
 
 _JSON_OBJECT_HINT = "Return valid JSON only."
 
+# Codex/Responses built-in tools that are not valid Chat Completions tools.
+_CODEX_UNSUPPORTED_CHAT_TOOL_TYPES = frozenset(
+    {"shell", "computer_use_preview", "namespace"}
+)
+
+
+def _coerce_tool_parameters(parameters: Any) -> Dict[str, Any]:
+    if not isinstance(parameters, dict):
+        return {"type": "object"}
+    if "type" not in parameters:
+        return {**parameters, "type": "object"}
+    return parameters
+
+
+def _custom_tool_to_function(tool: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Convert OpenAI Responses style custom tools into chat.completions function tools."""
+    tool_name = tool.get("name")
+    if not isinstance(tool_name, str) or not tool_name:
+        return None
+
+    parameters = tool.get("input_schema")
+    if parameters is None:
+        parameters = tool.get("parameters")
+    parameters = _coerce_tool_parameters(parameters)
+    if parameters.get("type") == "object":
+        parameters.setdefault("properties", {})
+
+    function_payload: Dict[str, Any] = {
+        "name": tool_name,
+        "parameters": parameters,
+        "strict": bool(tool.get("strict", False)),
+    }
+    description = tool.get("description")
+    if isinstance(description, str) and description:
+        function_payload["description"] = description
+
+    return {"type": "function", "function": function_payload}
+
 
 def normalize_flat_function_tools(
     tools: Optional[List[Any]],
 ) -> Optional[List[Any]]:
     """
-    Normalize Responses/Codex flat function tools to OpenAI chat.completions shape.
+    Normalize Responses/Codex tools to OpenAI chat.completions shape.
+
+    - Drops Codex built-in tools (shell, computer_use_preview, namespace)
+    - Converts Responses ``custom`` tools to ``function`` tools
+    - Wraps flat ``function`` tools (name at top level) in a ``function`` object
     """
     if tools is None:
         return None
 
     normalized_tools: List[Any] = []
     for tool in tools:
-        if not isinstance(tool, dict) or tool.get("type") != "function":
+        if not isinstance(tool, dict):
+            normalized_tools.append(tool)
+            continue
+
+        tool_type = tool.get("type")
+        if tool_type in _CODEX_UNSUPPORTED_CHAT_TOOL_TYPES:
+            continue
+
+        if tool_type == "custom":
+            converted = _custom_tool_to_function(tool)
+            if converted is not None:
+                normalized_tools.append(converted)
+            continue
+
+        if tool_type != "function":
             normalized_tools.append(tool)
             continue
 
@@ -35,15 +91,9 @@ def normalize_flat_function_tools(
 
         name = tool.get("name")
         if name is None:
-            normalized_tools.append(tool)
             continue
 
-        parameters = tool.get("parameters")
-        if not isinstance(parameters, dict):
-            parameters = {"type": "object"}
-        elif "type" not in parameters:
-            parameters = {**parameters, "type": "object"}
-
+        parameters = _coerce_tool_parameters(tool.get("parameters"))
         function_payload = {
             "name": name,
             "description": tool.get("description") or "",

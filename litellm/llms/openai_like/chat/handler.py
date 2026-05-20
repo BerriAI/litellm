@@ -15,6 +15,9 @@ from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.openai_compatible_request_utils import (
+    normalize_flat_function_tools,
+)
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import CustomStreamWrapper, ProviderConfigManager
@@ -270,6 +273,17 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 messages = provider_config._transform_messages(
                     messages=messages, model=model
                 )
+
+        if "tools" in optional_params:
+            normalized_tools = normalize_flat_function_tools(
+                optional_params.get("tools")
+            )
+            if normalized_tools is not None:
+                optional_params = {**optional_params, "tools": normalized_tools}
+            else:
+                optional_params = {
+                    k: v for k, v in optional_params.items() if k != "tools"
+                }
 
         data = {
             "model": model,

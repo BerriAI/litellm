@@ -238,13 +238,13 @@ def test_custom_openai_transform_request_preserves_nested_function_tools(
 def test_normalize_flat_function_tools_skips_non_function_tools(config: OpenAIConfig):
     tools = [{"type": "shell", "environment": {"type": "local"}}]
     result = config._normalize_flat_function_tools(tools)
-    assert result == tools
+    assert result == []
 
 
 def test_normalize_flat_function_tools_without_name_passthrough(config: OpenAIConfig):
     tools = [{"type": "function", "description": "missing name"}]
     result = config._normalize_flat_function_tools(tools)
-    assert "function" not in result[0]
+    assert result == []
 
 
 def test_normalize_flat_function_tools_adds_object_type_to_parameters(

@@ -1417,6 +1417,30 @@ class TestToolTransformation:
         assert result_tools[0]["type"] == "function"
         assert result_tools[0]["function"]["name"] == "read_file"
 
+    def test_transform_converts_custom_tools_to_function(self):
+        tools = [
+            {
+                "type": "custom",
+                "name": "codex_tool",
+                "description": "A Codex custom tool",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+            }
+        ]
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "codex_tool"
+
 
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""
