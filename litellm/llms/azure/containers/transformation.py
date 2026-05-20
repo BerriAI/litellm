@@ -40,7 +40,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
         if not api_base:
             return api_base
         parsed = urlparse(api_base)
-        path = parsed.path
+        path = parsed.path.rstrip("/")
         for ep in _AZURE_ENDPOINT_PATHS:
             if path.endswith(ep):
                 return urlunparse(
