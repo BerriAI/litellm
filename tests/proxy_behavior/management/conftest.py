@@ -52,6 +52,17 @@ async def proxy_app():
 
     cleanup_router_config_variables()
     config_path = _write_minimal_proxy_config()
+
+    # proxy_startup_event re-reads master_key from LITELLM_MASTER_KEY (line 776
+    # in proxy_server.py). If unset, the global master_key is overwritten to
+    # None *after* initialize()'s config-derived value, and the entire auth
+    # stack falls into a degraded path that produces user_id=None and a
+    # non-PROXY_ADMIN role for every key, including the master key itself.
+    # Locally this is masked when LITELLM_MASTER_KEY happens to be set in the
+    # shell; CI is clean, which is how this surfaced.
+    os.environ.setdefault("LITELLM_MASTER_KEY", MASTER_KEY)
+    os.environ.setdefault("CONFIG_FILE_PATH", config_path)
+
     await initialize(config=config_path)
     async with proxy_startup_event(app):
         # The lifespan kicks off ``prisma_client.check_view_exists()`` as a
