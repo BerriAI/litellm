@@ -544,6 +544,65 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
+    async def _try_claim_budget_alert(self, cache: DualCache, cache_key: str) -> bool:
+        """
+        Claim the alert key before sending so concurrent requests do not all alert.
+
+        Redis-backed caches use SET NX EX for an atomic cross-process claim. The
+        fallback path preserves the existing best-effort behavior for local-only
+        caches.
+        """
+        ttl = self.alerting_args.budget_alert_ttl
+
+        if cache.redis_cache is not None:
+            try:
+                redis_set_result = await cache.redis_cache.async_set_cache(
+                    key=cache_key,
+                    value="SENT",
+                    ttl=ttl,
+                    nx=True,
+                )
+                if redis_set_result:
+                    if cache.in_memory_cache is not None:
+                        await cache.async_set_cache(
+                            key=cache_key,
+                            value="SENT",
+                            ttl=ttl,
+                            local_only=True,
+                        )
+                    return True
+
+                cached_result = await cache.async_get_cache(key=cache_key)
+                if cached_result is not None:
+                    return False
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "Failed atomic budget alert claim for cache key %s: %s",
+                    cache_key,
+                    str(e),
+                )
+
+        result = await cache.async_get_cache(key=cache_key)
+        if result is not None:
+            return False
+
+        await cache.async_set_cache(
+            key=cache_key,
+            value="SENT",
+            ttl=ttl,
+        )
+        return True
+
+    async def _clear_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
+        try:
+            await cache.async_delete_cache(cache_key)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Failed clearing budget alert claim for cache key %s: %s",
+                cache_key,
+                str(e),
+            )
+
     async def budget_alerts(
         self,
         type: Literal[
@@ -613,25 +672,30 @@ class SlackAlerting(CustomBatchLogger):
         # send alert
         if event is not None and user_info.event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
-            result = await _cache.async_get_cache(key=_cache_key)
-            if result is None:
+            should_send_alert = await self._try_claim_budget_alert(
+                cache=_cache,
+                cache_key=_cache_key,
+            )
+            if should_send_alert:
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
                     **user_info_json,
                 )
-                await self.send_alert(
-                    message=event_message + "\n\n" + user_info_str,
-                    level="High",
-                    alert_type=AlertType.budget_alerts,
-                    user_info=webhook_event,
-                    alerting_metadata={},
-                )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
+                try:
+                    await self.send_alert(
+                        message=event_message + "\n\n" + user_info_str,
+                        level="High",
+                        alert_type=AlertType.budget_alerts,
+                        user_info=webhook_event,
+                        alerting_metadata={},
+                    )
+                except Exception:
+                    await self._clear_budget_alert_claim(
+                        cache=_cache,
+                        cache_key=_cache_key,
+                    )
+                    raise
 
             return
         return
