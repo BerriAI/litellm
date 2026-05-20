@@ -648,6 +648,114 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
     assert "output_format" not in result
 
 
+def test_bedrock_messages_strips_output_config_format_subkey():
+    """``output_config.format`` is stripped (and converted to inline schema) so Bedrock doesn't 400.
+
+    Bedrock Invoke rejects ``output_config.format`` with
+    ``"output_config.format: Extra inputs are not permitted"``. Newer Claude
+    Code releases send this subkey automatically; LiteLLM must drop it (and
+    preserve the structured-output intent via inline schema) so the request
+    reaches Bedrock successfully.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "medium",
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "medium"}
+    # Schema is embedded as inline text in the last user message so the
+    # structured-output intent is preserved on Bedrock.
+    last_user_content = result["messages"][-1]["content"]
+    assert isinstance(last_user_content, list)
+    schema_texts = [
+        b.get("text", "")
+        for b in last_user_content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    assert any('"answer"' in t for t in schema_texts)
+
+
+def test_bedrock_messages_drops_output_config_when_only_unsupported_subkeys():
+    """``output_config`` containing only unsupported subkeys is dropped entirely."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    last_user_content = result["messages"][-1]["content"]
+    assert isinstance(last_user_content, list)
+    schema_texts = [
+        b.get("text", "")
+        for b in last_user_content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    assert any('"answer"' in t for t in schema_texts)
+
+
+def test_bedrock_messages_drops_non_dict_output_config():
+    """Non-dict ``output_config`` is removed entirely to avoid malformed downstream payload."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": "not-a-dict",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+
+
 def test_bedrock_messages_forwards_output_config_for_non_adaptive_model():
     """``output_config`` is forwarded for non-adaptive models so the provider's error surfaces."""
     from litellm.types.router import GenericLiteLLMParams
@@ -917,9 +1025,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "compact_20260112"}]
-        },
+        "context_management": {"edits": [{"type": "compact_20260112"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -930,9 +1036,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
     assert result["max_tokens"] == 4096
 
@@ -964,9 +1068,7 @@ def test_bedrock_messages_filters_unsupported_context_management_edits():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
 
 
