@@ -23,7 +23,6 @@ from typing import Any, Dict, List
 import pytest
 
 from .actors import TEAM_ALPHA, TEAM_BETA, Actor
-from .conftest import MASTER_KEY
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -79,14 +78,20 @@ MARKER_MODEL = "behavior-pin-update-marker-model"
 
 async def _create_scratch_key(
     proxy_client,
-    prisma,
+    seeder_cleartext: str,
     scratch_prefix: str,
     *,
     user_id: str,
     team_id: str = None,
     organization_id: str = None,
 ) -> str:
-    """Seed a fresh key tagged with scratch_prefix and return its cleartext."""
+    """Seed a fresh key tagged with scratch_prefix using the proxy_admin actor.
+
+    Using the seeded PROXY_ADMIN actor (not the bare master key) makes the
+    setup call's auth path deterministic: user_role=PROXY_ADMIN + a concrete
+    user_id, which reliably triggers
+    ``_user_can_only_create_keys_for_themselves``'s admin bypass.
+    """
     body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
     if team_id is not None:
         body["team_id"] = team_id
@@ -94,10 +99,10 @@ async def _create_scratch_key(
         body["organization_id"] = organization_id
     resp = await proxy_client.post(
         "/key/generate",
-        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        headers={"Authorization": f"Bearer {seeder_cleartext}"},
         json=body,
     )
-    assert resp.status_code == 200, f"setup: master /key/generate failed: {resp.text}"
+    assert resp.status_code == 200, f"setup: seeder /key/generate failed: {resp.text}"
     return resp.json()["key"]
 
 
@@ -117,14 +122,15 @@ async def test_key_update_authz_matrix(
 ):
     caller = world.keys[actor]
 
+    seeder = world.keys[Actor.PROXY_ADMIN].cleartext
     if target_shape == "self":
         target_cleartext = await _create_scratch_key(
-            proxy_client, prisma, scratch.prefix, user_id=caller.user_id
+            proxy_client, seeder, scratch.prefix, user_id=caller.user_id
         )
     elif target_shape == "owner":
         target_cleartext = await _create_scratch_key(
             proxy_client,
-            prisma,
+            seeder,
             scratch.prefix,
             user_id=world.keys[Actor.OWNER].user_id,
             team_id=TEAM_ALPHA,
@@ -132,7 +138,7 @@ async def test_key_update_authz_matrix(
     elif target_shape == "cross_org":
         target_cleartext = await _create_scratch_key(
             proxy_client,
-            prisma,
+            seeder,
             scratch.prefix,
             user_id=world.keys[Actor.CROSS_ORG_USER].user_id,
             team_id=TEAM_BETA,

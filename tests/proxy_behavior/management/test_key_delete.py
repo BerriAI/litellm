@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 import pytest
 
 from .actors import TEAM_ALPHA, TEAM_BETA, Actor
-from .conftest import MASTER_KEY
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -47,20 +46,29 @@ _SCENARIOS = [
 
 async def _create_scratch_key(
     proxy_client,
+    seeder_cleartext: str,
     scratch_prefix: str,
     *,
     user_id: str,
     team_id: Optional[str] = None,
 ) -> str:
+    """Seed a scratch key using the proxy_admin actor (not the bare master key).
+
+    The seeded proxy_admin actor's auth path produces user_role=PROXY_ADMIN
+    + a concrete user_id from the DB, which deterministically triggers the
+    ``_user_can_only_create_keys_for_themselves`` PROXY_ADMIN bypass. The
+    bare master key takes a different auth resolution path whose behavior
+    differs between fresh-CI and warm-local environments.
+    """
     body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
     if team_id is not None:
         body["team_id"] = team_id
     resp = await proxy_client.post(
         "/key/generate",
-        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        headers={"Authorization": f"Bearer {seeder_cleartext}"},
         json=body,
     )
-    assert resp.status_code == 200, f"setup: master /key/generate failed: {resp.text}"
+    assert resp.status_code == 200, f"setup: seeder /key/generate failed: {resp.text}"
     return resp.json()["key"]
 
 
@@ -84,11 +92,15 @@ async def test_key_delete_authz_matrix(
 
     if target_shape == "self":
         target_cleartext = await _create_scratch_key(
-            proxy_client, scratch.prefix, user_id=caller.user_id
+            proxy_client,
+            world.keys[Actor.PROXY_ADMIN].cleartext,
+            scratch.prefix,
+            user_id=caller.user_id,
         )
     elif target_shape == "owner":
         target_cleartext = await _create_scratch_key(
             proxy_client,
+            world.keys[Actor.PROXY_ADMIN].cleartext,
             scratch.prefix,
             user_id=world.keys[Actor.OWNER].user_id,
             team_id=TEAM_ALPHA,
@@ -96,6 +108,7 @@ async def test_key_delete_authz_matrix(
     elif target_shape == "cross_org":
         target_cleartext = await _create_scratch_key(
             proxy_client,
+            world.keys[Actor.PROXY_ADMIN].cleartext,
             scratch.prefix,
             user_id=world.keys[Actor.CROSS_ORG_USER].user_id,
             team_id=TEAM_BETA,
