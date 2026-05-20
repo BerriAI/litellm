@@ -490,6 +490,12 @@ class TestStreamingIterator:
         ]
         # StopIteration fallback path must NOT add a duplicate completion event.
         assert event_types.count("interaction.completed") == 1
+        # When the stream starts directly with a text delta (no preceding
+        # response.created), the terminal events must reuse the id derived from
+        # the first chunk's item_id rather than switching to response.id, so
+        # consumers can correlate the start and completion events by id.
+        assert emitted[0].id == "item_1"
+        assert emitted[-1].id == "item_1"
 
 
 class TestInteractionOperationUrls:

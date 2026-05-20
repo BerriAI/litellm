@@ -233,11 +233,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             return []
 
         # Response completed: emit step.stop (if content was started) followed
-        # by the terminal completion event.
+        # by the terminal completion event. Prefer the interaction id already
+        # established by earlier events so consumers can correlate the start
+        # and completion events by id (response.id may differ from the item_id
+        # used to derive the initial id when the stream starts directly with a
+        # text delta).
         if isinstance(responses_chunk, ResponseCompletedEvent):
             self.finished = True
             response = responses_chunk.response
-            response_id = getattr(response, "id", None) or f"interaction_{id(self)}"
+            response_id = (
+                self._interaction_id
+                or getattr(response, "id", None)
+                or f"interaction_{id(self)}"
+            )
 
             terminal: List[InteractionsAPIStreamingResponse] = []
             if self.sent_content_start:
