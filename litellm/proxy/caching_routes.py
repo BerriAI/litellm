@@ -98,13 +98,11 @@ async def cache_ping():
                 litellm_cache_params=safe_dumps(litellm_cache_params),
             )
     except Exception as e:
-        import traceback
-
+        verbose_proxy_logger.exception("Cache health check failed: %s", str(e))
         error_message = {
             "message": f"Service Unhealthy ({str(e)})",
             "litellm_cache_params": safe_dumps(litellm_cache_params),
             "health_check_cache_params": safe_dumps(cleaned_cache_params),
-            "traceback": traceback.format_exc(),
         }
         raise ProxyException(
             message=safe_dumps(error_message),

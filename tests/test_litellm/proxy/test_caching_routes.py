@@ -123,9 +123,31 @@ def test_cache_ping_failure(mock_redis_failure):
     assert "message" in error_details
     assert "litellm_cache_params" in error_details
     assert "health_check_cache_params" in error_details
-    assert "traceback" in error_details
 
     # Verify specific error message
+    assert "invalid username-password pair" in error_details["message"]
+
+
+def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
+    """CWE-209: Stack trace must not appear in the HTTP 503 response body."""
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    assert response.status_code == 503
+
+    data = response.json()
+    error = data.get("error", {})
+    raw_body = json.dumps(data)
+
+    # The word "traceback" (case-insensitive) must not appear anywhere in the response
+    assert (
+        "traceback" not in raw_body.lower()
+    ), "CWE-209: Python traceback exposed in HTTP 503 response body"
+    # Internal frame paths should not leak either
+    assert (
+        'File "' not in raw_body
+    ), "CWE-209: Python stack frame paths exposed in HTTP 503 response body"
+
+    # The error message field should still describe the failure
+    error_details = json.loads(error["message"])
     assert "invalid username-password pair" in error_details["message"]
 
 
