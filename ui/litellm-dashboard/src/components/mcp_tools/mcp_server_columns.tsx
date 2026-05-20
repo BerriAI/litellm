@@ -2,10 +2,11 @@ import { useState } from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, TerminalIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined } from "@ant-design/icons";
+import { CheckOutlined, ExclamationCircleFilled } from "@ant-design/icons";
+import { getAllVariablesFor, getMissingUserFields } from "./header_variables_prototype";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,6 +93,9 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  onOpenUserFields?: (server: MCPServer) => void,
+  onTryInClaudeCode?: (server: MCPServer) => void,
+  userFieldsVersion?: number,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -113,8 +117,18 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const logoUrl = row.original.mcp_info?.logo_url;
       const name = row.original.server_name;
+      // PROTOTYPE: signal when this row needs user input via a red dot prefix.
+      // userFieldsVersion is referenced so the cell re-renders when values change.
+      void userFieldsVersion;
+      const missing = getMissingUserFields(row.original);
+      const needsAttention = missing.length > 0;
       return (
         <div className="flex items-center gap-2">
+          {needsAttention && (
+            <Tooltip title={`${missing.length} user field${missing.length === 1 ? "" : "s"} missing — click "Connect" to set them.`}>
+              <span className="inline-block w-1.5 h-6 bg-red-500 rounded-full -ml-1 mr-1" />
+            </Tooltip>
+          )}
           {logoUrl ? (
             <img
               src={logoUrl}
@@ -123,7 +137,7 @@ export const mcpServerColumns = (
               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           ) : null}
-          <span>{name}</span>
+          <span className={needsAttention ? "font-semibold text-red-700" : ""}>{name}</span>
         </div>
       );
     },
@@ -297,10 +311,54 @@ export const mcpServerColumns = (
     },
   },
   {
+    id: "user_fields",
+    header: "User Fields",
+    cell: ({ row }) => {
+      void userFieldsVersion;
+      const server = row.original;
+      const variables = getAllVariablesFor(server);
+      const perUserVars = variables.filter((v) => v.scope === "per_user");
+      if (perUserVars.length === 0) {
+        return <span className="text-gray-300 text-xs">—</span>;
+      }
+      const missing = getMissingUserFields(server);
+      if (missing.length > 0) {
+        return (
+          <button
+            onClick={() => onOpenUserFields?.(server)}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors animate-pulse-slow"
+            style={{ animation: "none" }}
+          >
+            <ExclamationCircleFilled style={{ color: "#dc2626", fontSize: 12 }} />
+            {missing.length} field{missing.length === 1 ? "" : "s"} missing — Connect
+          </button>
+        );
+      }
+      return (
+        <button
+          onClick={() => onOpenUserFields?.(server)}
+          className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors"
+        >
+          <CheckOutlined style={{ fontSize: 10 }} /> Connected
+        </button>
+      );
+    },
+  },
+  {
     id: "actions",
     header: "Actions",
     cell: ({ row }) => (
       <div className="flex items-center gap-1">
+        {onTryInClaudeCode && (
+          <Tooltip title="Simulate calling this MCP server from Claude Code">
+            <button
+              onClick={() => onTryInClaudeCode(row.original)}
+              className="p-1.5 rounded-md text-gray-400 hover:text-purple-600 hover:bg-purple-50 transition-colors"
+            >
+              <Icon icon={TerminalIcon} size="sm" />
+            </button>
+          </Tooltip>
+        )}
         <Tooltip title="Edit">
           <button
             onClick={() => onEdit(row.original.server_id)}

@@ -2,6 +2,8 @@ import React, { useEffect } from "react";
 import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer, AUTH_TYPE } from "./types";
+import MCPHeaderVariablesSection from "./MCPHeaderVariablesSection";
+import { getAllVariablesFor } from "./header_variables_prototype";
 const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
@@ -41,6 +43,12 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           value: value != null ? String(value) : "",
         }));
         form.setFieldValue("static_headers", staticHeaders);
+      }
+      // PROTOTYPE: hydrate header_variables from local storage so admins can edit
+      // them in the edit-server form (server-side storage is mocked).
+      const storedVariables = getAllVariablesFor(mcpServer);
+      if (storedVariables.length > 0) {
+        form.setFieldValue("header_variables", storedVariables);
       }
       if (typeof mcpServer.allow_all_keys === "boolean") {
         form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
@@ -271,6 +279,8 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               )}
             </Form.List>
           </Form.Item>
+
+          <MCPHeaderVariablesSection />
         </div>
       </Panel>
     </Collapse>

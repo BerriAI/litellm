@@ -18,6 +18,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { setServerVariables, HeaderVariable } from "./header_variables_prototype";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -280,6 +281,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        header_variables: headerVariablesList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -288,6 +290,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
+
+      const headerVariables: HeaderVariable[] = Array.isArray(headerVariablesList)
+        ? headerVariablesList
+            .filter((v: any) => v && typeof v.name === "string" && v.name.trim() !== "")
+            .map((v: any) => ({
+              name: v.name.trim(),
+              value: typeof v.value === "string" ? v.value : "",
+              scope: v.scope === "per_user" ? "per_user" : "global",
+            }))
+        : [];
 
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
@@ -408,6 +420,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         const response = isAdmin
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
+
+        // PROTOTYPE: persist header variables in localStorage keyed by server_id
+        // (with alias as a fallback) so the user dashboard can read them.
+        if (headerVariables.length > 0) {
+          const newServerId = response?.server_id;
+          if (newServerId) setServerVariables(newServerId, headerVariables);
+          if (restValues.alias) setServerVariables(restValues.alias, headerVariables);
+        }
 
         NotificationsManager.success(
           isAdmin

@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import { updateMCPServer, listMCPTools } from "../networking";
+import { setServerVariables, HeaderVariable } from "./header_variables_prototype";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -377,6 +378,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // Ensure access groups is always a string array
       const {
         static_headers: staticHeadersList,
+        header_variables: headerVariablesList,
         credentials: credentialValues,
         stdio_config: rawStdioConfig,
         env_json: rawEnvJson,
@@ -388,6 +390,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
+
+      const headerVariables: HeaderVariable[] = Array.isArray(headerVariablesList)
+        ? headerVariablesList
+            .filter((v: any) => v && typeof v.name === "string" && v.name.trim() !== "")
+            .map((v: any) => ({
+              name: v.name.trim(),
+              value: typeof v.value === "string" ? v.value : "",
+              scope: v.scope === "per_user" ? "per_user" : "global",
+            }))
+        : [];
 
       const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
@@ -575,6 +587,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       const updated = await updateMCPServer(accessToken, payload);
+      // PROTOTYPE: persist header variables alongside server-side updates.
+      setServerVariables(mcpServer.server_id, headerVariables);
+      if (mcpServer.alias) setServerVariables(mcpServer.alias, headerVariables);
       NotificationsManager.success("MCP Server updated successfully");
       onSuccess(updated);
     } catch (error: any) {

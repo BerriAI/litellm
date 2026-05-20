@@ -21,6 +21,10 @@ import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import MCPUserFieldsModal from "./MCPUserFieldsModal";
+import MCPClaudeCodeSimulator from "./MCPClaudeCodeSimulator";
+import { getMissingUserFields } from "./header_variables_prototype";
+import { Alert } from "antd";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -64,6 +68,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [userFieldsServer, setUserFieldsServer] = useState<MCPServer | null>(null);
+  const [claudeCodeServer, setClaudeCodeServer] = useState<MCPServer | null>(null);
+  const [userFieldsVersion, setUserFieldsVersion] = useState(0);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -84,6 +91,25 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       console.error("Failed to restore MCP edit view state", err);
     }
   }, []);
+
+  // PROTOTYPE: deep-link from the simulated Claude Code error page opens the
+  // user-fields modal directly. URL: ?page=mcp-servers&fill_for=<server_id|alias>
+  useEffect(() => {
+    if (typeof window === "undefined" || !mcpServers || mcpServers.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const fillFor = params.get("fill_for");
+    if (!fillFor) return;
+    const target = mcpServers.find(
+      (s) => s.server_id === fillFor || s.alias === fillFor || s.server_name === fillFor,
+    );
+    if (target) {
+      setUserFieldsServer(target);
+      params.delete("fill_for");
+      const newUrl =
+        window.location.pathname + (params.toString() ? `?${params.toString()}` : "") + window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [mcpServers]);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -173,8 +199,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        (server: MCPServer) => setUserFieldsServer(server),
+        (server: MCPServer) => setClaudeCodeServer(server),
+        userFieldsVersion,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, userFieldsVersion],
   );
 
   function handleDelete(server_id: string) {
@@ -414,6 +443,31 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     </div>
                   </div>
                 </div>
+                {(() => {
+                  void userFieldsVersion;
+                  const needsAttention = filteredServers.filter((s) => getMissingUserFields(s).length > 0);
+                  if (needsAttention.length === 0) return null;
+                  return (
+                    <Alert
+                      type="error"
+                      showIcon
+                      className="mt-4"
+                      message={
+                        <span className="font-semibold">
+                          {needsAttention.length} MCP server{needsAttention.length === 1 ? "" : "s"} need
+                          {needsAttention.length === 1 ? "s" : ""} your input before you can use{" "}
+                          {needsAttention.length === 1 ? "it" : "them"}.
+                        </span>
+                      }
+                      description={
+                        <span>
+                          Click the <span className="font-semibold">Connect</span> button on each row below to
+                          fill in your per-user fields (passwords, usernames, tokens, etc).
+                        </span>
+                      }
+                    />
+                  );
+                })()}
                 <div className="w-full mt-6">
                   <DataTable
                     data={filteredServers}
@@ -461,6 +515,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken || ""}
         />
       )}
+
+      <MCPUserFieldsModal
+        server={userFieldsServer}
+        open={!!userFieldsServer}
+        onClose={() => setUserFieldsServer(null)}
+        onSaved={() => setUserFieldsVersion((v) => v + 1)}
+      />
+
+      <MCPClaudeCodeSimulator
+        server={claudeCodeServer}
+        open={!!claudeCodeServer}
+        onClose={() => setClaudeCodeServer(null)}
+        onOpenUserFields={(server) => setUserFieldsServer(server)}
+      />
     </div>
   );
 };
