@@ -63,7 +63,12 @@ def _assert_not_private_url(url: str) -> None:
 
     Validates all DNS answers, not just the first, to prevent A-record rotation attacks.
     Used as a fast-fail guard on the sync path (httpx) and as defence-in-depth on async.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable this check
+    for self-hosted / on-prem deployments where api_base is an internal address.
     """
+    if litellm.allow_requests_to_internal_ips:
+        return
     parsed = urlparse(url)
     hostname = parsed.hostname
     if not hostname:
@@ -104,17 +109,18 @@ class _SSRFGuardResolver(AbstractResolver):
             )
         except socket.gaierror:
             raise  # Propagate so aiohttp wraps it in a ClientConnectorError
-        for info in infos:
-            raw_ip = info[4][0]
-            try:
-                addr = ipaddress.ip_address(raw_ip)
-            except ValueError:
-                continue
-            if _is_blocked_address(addr):
-                raise ValueError(
-                    f"Host '{host}' resolves to a private/reserved IP address "
-                    f"({raw_ip}) which is not allowed (SSRF protection)"
-                )
+        if not litellm.allow_requests_to_internal_ips:
+            for info in infos:
+                raw_ip = info[4][0]
+                try:
+                    addr = ipaddress.ip_address(raw_ip)
+                except ValueError:
+                    continue
+                if _is_blocked_address(addr):
+                    raise ValueError(
+                        f"Host '{host}' resolves to a private/reserved IP address "
+                        f"({raw_ip}) which is not allowed (SSRF protection)"
+                    )
         return [
             {
                 "hostname": host,
@@ -250,26 +256,17 @@ class BaseLLMAIOHTTPHandler:
             and self._owns_session
         ):
             try:
-                import asyncio
-
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Event loop is running - schedule cleanup task
-                        asyncio.create_task(self.close())
-                    else:
-                        # Event loop exists but not running - run cleanup
-                        loop.run_until_complete(self.close())
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.close())
                 except RuntimeError:
-                    # No event loop available - create one for cleanup
+                    # No running loop — run cleanup in a temporary one.
                     loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
                     try:
                         loop.run_until_complete(self.close())
                     finally:
                         loop.close()
             except Exception:
-                # Silently ignore errors during __del__ to avoid issues
                 pass
 
     async def _make_common_async_call(
