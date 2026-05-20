@@ -895,6 +895,18 @@ async def update_batch_in_database(
         if not prisma_client:
             return
 
+        # Always normalize the response's file IDs to unified managed IDs
+        # (mutates in place) so the caller returns unified IDs to the user
+        # even when we skip the DB update below for an unchanged status.
+        await ensure_batch_response_managed_file_ids(
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            user_api_key_dict=user_api_key_dict,
+            db_batch_object=db_batch_object,
+        )
+
         # Only update if status has changed (when db_batch_object is provided)
         if db_batch_object and response.status == db_batch_object.status:
             return
@@ -907,15 +919,6 @@ async def update_batch_in_database(
             verbose_proxy_logger.info(
                 f"Updating batch {batch_id} status to {response.status} after {operation}"
             )
-
-        await ensure_batch_response_managed_file_ids(
-            response=response,
-            managed_files_obj=managed_files_obj,
-            prisma_client=prisma_client,
-            verbose_proxy_logger=verbose_proxy_logger,
-            user_api_key_dict=user_api_key_dict,
-            db_batch_object=db_batch_object,
-        )
 
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
