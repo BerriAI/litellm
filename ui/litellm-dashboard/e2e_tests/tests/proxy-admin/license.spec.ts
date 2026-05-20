@@ -25,7 +25,9 @@ test.describe("Premium license wiring", () => {
 
     // Decode the JWT payload (no signature check — we trust globalSetup ran
     // against our own proxy). Payload is the middle base64url segment.
-    const [, payloadB64] = tokenCookie.value.split(".");
+    const jwtParts = tokenCookie.value.split(".");
+    expect(jwtParts.length, "token cookie is not a 3-part JWT").toBe(3);
+    const [, payloadB64] = jwtParts;
     const payload = JSON.parse(
       Buffer.from(payloadB64, "base64url").toString("utf-8"),
     );
