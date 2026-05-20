@@ -1,7 +1,7 @@
 """
 Re rank api
 
-LiteLLM supports the re rank API format, no paramter transformation occurs
+LiteLLM supports the re rank API format, no parameter transformation occurs
 """
 
 from typing import Any, Dict, List, Optional, Union
