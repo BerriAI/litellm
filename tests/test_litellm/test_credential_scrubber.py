@@ -113,7 +113,13 @@ class TestCredentialScrubberFilter:
 
         f = CredentialScrubberFilter()
         record = self._make_record(
-            "vals=%s %s %s", (42, None, "api_key=sk-secret123456789")
+            "vals=%s %s %s %s",
+            (
+                42,
+                None,
+                "api_key=sk-secret123456789",
+                {"api_key": "sk-dictval12345678901"},
+            ),
         )
         f.filter(record)
         args = record.args
@@ -121,6 +127,7 @@ class TestCredentialScrubberFilter:
         assert args[0] == 42
         assert args[1] is None
         assert "sk-secret123456789" not in str(args[2])
+        assert "sk-dictval12345678901" not in str(args[3])
 
     def test_no_args_no_crash(self):
         # Branch: record.args is falsy (empty tuple)

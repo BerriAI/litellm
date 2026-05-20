@@ -478,7 +478,11 @@ class CredentialScrubberFilter(logging.Filter):
                 }
             elif isinstance(record.args, tuple):
                 record.args = tuple(
-                    _scrub_secrets(str(a)) if isinstance(a, str) else a
+                    (
+                        _scrub_secrets(str(a))
+                        if not isinstance(a, (bool, int, float, type(None)))
+                        else a
+                    )
                     for a in record.args
                 )
         if record.exc_info and record.exc_info[1] is not None:
