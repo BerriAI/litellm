@@ -22,6 +22,15 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
+# Backfill pricing entries from the in-tree backup that the remote-fetched
+# ``model_cost`` (pinned to ``main``) is missing — e.g. when an upstream
+# provider rotates a model id and the test cassette records the new name
+# before the entry lands on ``main``.
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
+    litellm.model_cost.setdefault(_k, _v)
+
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
     _pin_multipart_boundary,
