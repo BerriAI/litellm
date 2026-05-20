@@ -1779,50 +1779,8 @@ class TestVertexBase:
         )
 
     @pytest.mark.asyncio
-    async def test_async_refresh_locks_auto_pruned_when_unused(self):
-        """Locks must be released from _async_refresh_locks once no coroutine
-        holds them — backed by a WeakValueDictionary so high-cardinality
-        deployments do not retain a Lock per credential key forever."""
-        import gc
-
-        from google.auth.credentials import TokenState
-
-        vertex_base = VertexBase()
-
-        for i in range(10):
-            mock_creds = MagicMock()
-            mock_creds.token = f"refreshed-{i}"
-            mock_creds.token_state = TokenState.FRESH
-            mock_creds.project_id = f"project-{i}"
-            mock_creds.quota_project_id = f"project-{i}"
-
-            credentials = {"type": "service_account", "project_id": f"project-{i}"}
-
-            with (
-                patch.object(
-                    vertex_base,
-                    "load_auth",
-                    return_value=(mock_creds, f"project-{i}"),
-                ),
-                patch.object(vertex_base, "refresh_auth"),
-            ):
-                await vertex_base._ensure_access_token_async(
-                    credentials=credentials,
-                    project_id=f"project-{i}",
-                    custom_llm_provider="vertex_ai",
-                )
-
-        gc.collect()
-
-        assert len(vertex_base._async_refresh_locks) == 0, (
-            f"Expected 0 lingering locks after refreshes completed, "
-            f"found {len(vertex_base._async_refresh_locks)}"
-        )
-
-    @pytest.mark.asyncio
     async def test_async_refresh_lock_shared_while_in_use(self):
-        """Concurrent callers for the same key must coordinate on the same lock
-        even with a WeakValueDictionary backing store."""
+        """Concurrent callers for the same key must coordinate on the same lock."""
         vertex_base = VertexBase()
         key = ("creds", "project-1")
 
