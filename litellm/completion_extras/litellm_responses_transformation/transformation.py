@@ -31,6 +31,10 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -634,90 +638,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return cast(List[Dict[str, Any]], response_output)
 
     @classmethod
-    def _update_recovered_output_items(
-        cls,
-        parsed_chunk: Dict[str, Any],
-        recovered_output_items: Dict[int, Dict[str, Any]],
-    ) -> None:
-        item = parsed_chunk.get("item")
-        if not isinstance(item, dict):
-            return
-        try:
-            output_index_raw = parsed_chunk.get("output_index")
-            if output_index_raw is None:
-                raise ValueError("missing output_index")
-            output_index = int(output_index_raw)
-        except (TypeError, ValueError):
-            output_index = len(recovered_output_items)
-        recovered_output_items[output_index] = item
-
-    @classmethod
-    def _update_recovered_text_only_items(
-        cls,
-        parsed_chunk: Dict[str, Any],
-        recovered_output_items: Dict[int, Dict[str, Any]],
-        recovered_text_only_items: Dict[int, Dict[str, Any]],
-    ) -> None:
-        text = parsed_chunk.get("text")
-        if not isinstance(text, str):
-            return
-
-        try:
-            output_index_raw = parsed_chunk.get("output_index")
-            if output_index_raw is None:
-                raise ValueError("missing output_index")
-            output_index = int(output_index_raw)
-        except (TypeError, ValueError):
-            output_index = len(recovered_text_only_items)
-
-        if output_index in recovered_output_items:
-            return
-
-        item = recovered_text_only_items.get(output_index)
-        if item is None:
-            item = {
-                "type": "message",
-                "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
-                "role": "assistant",
-                "status": "completed",
-                "content": [],
-            }
-            recovered_text_only_items[output_index] = item
-
-        content = item.setdefault("content", [])
-        if not isinstance(content, list):
-            return
-
-        try:
-            content_index_raw = parsed_chunk.get("content_index")
-            if content_index_raw is None:
-                raise ValueError("missing content_index")
-            content_index = int(content_index_raw)
-        except (TypeError, ValueError):
-            content_index = len(content)
-
-        while len(content) <= content_index:
-            content.append(
-                {
-                    "type": "output_text",
-                    "text": "",
-                    "annotations": [],
-                }
-            )
-
-        content_item = content[content_index]
-        if not isinstance(content_item, dict):
-            content_item = {}
-            content[content_index] = content_item
-
-        content_item["type"] = "output_text"
-        content_item["text"] = text
-        if parsed_chunk.get("annotations") is not None:
-            content_item["annotations"] = parsed_chunk["annotations"]
-        else:
-            content_item.setdefault("annotations", [])
-
-    @classmethod
     def _recover_output_items_from_raw_sse(
         cls, raw_sse: Optional[str]
     ) -> List[Dict[str, Any]]:
@@ -743,14 +663,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 continue
 
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                cls._update_recovered_output_items(parsed_chunk, recovered_output_items)
+                record_output_item_chunk(
+                    parsed_chunk=parsed_chunk,
+                    output_items=recovered_output_items,
+                )
                 continue
 
             if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
-                cls._update_recovered_text_only_items(
+                record_output_text_chunk(
                     parsed_chunk=parsed_chunk,
-                    recovered_output_items=recovered_output_items,
-                    recovered_text_only_items=recovered_text_only_items,
+                    output_items=recovered_output_items,
+                    text_only_items=recovered_text_only_items,
                 )
 
         # Merge text-only items into the recovered output items. Real
