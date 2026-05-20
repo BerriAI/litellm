@@ -31,6 +31,7 @@ from ._helpers import (
     HttpStatusException,
     assert_server_span_attrs,
     make_fastapi_http_exception,
+    make_httpx_status_error,
 )
 
 
@@ -88,8 +89,13 @@ KEY_GENERATE_PATH = "/key/generate"
         (make_fastapi_http_exception(403, "non-admin"), 403),
         (make_fastapi_http_exception(422, "validation"), 422),
         (HttpStatusException(500, "DB unreachable"), 500),
+        # Pins the contract that ``_record_exception_on_span`` extracts the
+        # status via ``get_error_information``'s ``response.status_code``
+        # fallback for any entry point — e.g. an admin endpoint whose DB
+        # adapter wraps an httpx client and raises HTTPStatusError.
+        (make_httpx_status_error(500, "upstream blew up"), 500),
     ],
-    ids=["400", "401", "403", "422", "500"],
+    ids=["400", "401", "403", "422", "500", "500-httpx"],
 )
 def test_key_generate_failure_stamps_server_span(
     exception,
