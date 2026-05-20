@@ -3208,6 +3208,15 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            await _raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_sse_client_ip,
+            )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
