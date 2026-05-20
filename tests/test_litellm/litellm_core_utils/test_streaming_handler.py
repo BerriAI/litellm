@@ -2354,6 +2354,45 @@ async def test_anext_str_completion_stream():
 
 
 @pytest.mark.asyncio
+async def test_queue_wrapper_cleanup_on_aclose():
+    """aclose() stops the producer thread to prevent leaks on client disconnect."""
+    loop = asyncio.get_running_loop()
+
+    def infinite_iter():
+        i = 0
+        while True:
+            i += 1
+            yield i
+
+    wrapper = _SyncIteratorToQueue(infinite_iter(), loop)
+    await wrapper.get()
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.stream_options = None
+    logging_obj.messages = []
+
+    stream = CustomStreamWrapper(
+        completion_stream=infinite_iter(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    # Force _queue_wrapper to exist
+    stream._queue_wrapper = wrapper
+    assert wrapper._thread.is_alive()
+
+    await stream.aclose()
+
+    assert stream._queue_wrapper is None
+    await asyncio.sleep(0.6)
+    assert not wrapper._thread.is_alive()
+
+
+@pytest.mark.asyncio
 async def test_queue_wrapper_cleanup_on_httpx_timeout():
     """_queue_wrapper is cleaned up when httpx.TimeoutException is raised during streaming (lines 2306-2307)."""
     import httpx

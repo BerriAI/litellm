@@ -268,6 +268,9 @@ class CustomStreamWrapper:
         return self
 
     async def aclose(self):
+        if self._queue_wrapper is not None:
+            self._queue_wrapper.close()
+            self._queue_wrapper = None
         if self.completion_stream is not None:
             stream_to_close = self.completion_stream
             self.completion_stream = None
