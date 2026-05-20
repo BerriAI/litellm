@@ -710,7 +710,10 @@ class ChunkProcessor:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
         if server_tool_use is not None:
-            returned_usage.server_tool_use = server_tool_use
+            if isinstance(server_tool_use, dict):
+                returned_usage.server_tool_use = ServerToolUse(**server_tool_use)
+            else:
+                returned_usage.server_tool_use = server_tool_use
         if web_search_requests is not None:
             if returned_usage.prompt_tokens_details is None:
                 returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(

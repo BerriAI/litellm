@@ -1529,6 +1529,20 @@ class ServerToolUse(BaseModel):
     tool_search_requests: Optional[int] = None
 
 
+def get_usage_web_search_requests(usage: Optional["Usage"]) -> Optional[int]:
+    """Read web_search_requests from Usage.server_tool_use (dict or model)."""
+    if usage is None:
+        return None
+    server_tool_use = getattr(usage, "server_tool_use", None)
+    if server_tool_use is None:
+        return None
+    if isinstance(server_tool_use, dict):
+        value = server_tool_use.get("web_search_requests")
+    else:
+        value = getattr(server_tool_use, "web_search_requests", None)
+    return value if isinstance(value, int) else None
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -1660,7 +1674,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         )
 
         if server_tool_use is not None:
-            self.server_tool_use = server_tool_use
+            if isinstance(server_tool_use, dict):
+                self.server_tool_use = ServerToolUse(**server_tool_use)
+            else:
+                self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 

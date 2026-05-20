@@ -104,17 +104,17 @@ def get_cost_for_anthropic_web_search(
     """
     Get the cost of using a web search tool for Anthropic.
     """
-    from litellm.types.utils import SearchContextCostPerQuery
+    from litellm.types.utils import (
+        SearchContextCostPerQuery,
+        get_usage_web_search_requests,
+    )
 
     ## Check if web search requests are in the usage object
     if model_info is None:
         return 0.0
 
-    if (
-        usage is None
-        or usage.server_tool_use is None
-        or usage.server_tool_use.web_search_requests is None
-    ):
+    web_search_requests = get_usage_web_search_requests(usage)
+    if web_search_requests is None:
         return 0.0
 
     ## Get the cost per web search request
@@ -128,5 +128,5 @@ def get_cost_for_anthropic_web_search(
         return 0.0
 
     ## Calculate the total cost
-    total_cost = cost_per_web_search_request * usage.server_tool_use.web_search_requests
+    total_cost = cost_per_web_search_request * web_search_requests
     return total_cost

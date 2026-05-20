@@ -18,6 +18,7 @@ from litellm.types.utils import (
     SearchContextCostPerQuery,
     StandardBuiltInToolsParams,
     Usage,
+    get_usage_web_search_requests,
 )
 
 
@@ -337,11 +338,7 @@ class StandardBuiltInToolCostTracking:
                 # Anthropic Claude (direct API and Vertex AI) uses server_tool_use.web_search_requests.
                 # Without this check, Claude ModelResponse always falls through to return False
                 # and _handle_web_search_cost() is never called.
-                if (
-                    hasattr(usage, "server_tool_use")
-                    and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
-                ):
+                if get_usage_web_search_requests(usage) is not None:
                     return True
             return False
         elif isinstance(response_object, ResponsesAPIResponse):
@@ -350,11 +347,7 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object, output_type="web_search_call"
             )
         elif usage is not None:
-            if (
-                hasattr(usage, "server_tool_use")
-                and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
-            ):
+            if get_usage_web_search_requests(usage) is not None:
                 return True
             elif (
                 hasattr(usage, "prompt_tokens_details")
