@@ -14917,7 +14917,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 1.5e-06,
         "output_cost_per_token": 1.5e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/models",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
