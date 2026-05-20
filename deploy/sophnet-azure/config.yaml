@@ -1,0 +1,108 @@
+router_settings:
+  routing_strategy: simple-shuffle
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+
+model_list:
+  - model_name: sophnet-glm-5.1
+    litellm_params:
+      model: custom_openai/GLM-5.1
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_1
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.000006
+      output_cost_per_token: 0.000024
+  - model_name: sophnet-glm-5.1
+    litellm_params:
+      model: custom_openai/GLM-5.1
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_2
+
+  - model_name: sophnet-gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_1
+    model_info:
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.00003
+  - model_name: sophnet-gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_2
+
+  - model_name: sophnet-deepseekv4-pro
+    litellm_params:
+      model: custom_openai/DeepSeek-V4-Pro
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_1
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.000009
+      output_cost_per_token: 0.000018
+  - model_name: sophnet-deepseekv4-pro
+    litellm_params:
+      model: custom_openai/DeepSeek-V4-Pro
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_2
+
+  - model_name: sophnet-deepseekv4-flash
+    litellm_params:
+      model: custom_openai/DeepSeek-V4-Flash
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_1
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.000001
+      output_cost_per_token: 0.000002
+  - model_name: sophnet-deepseekv4-flash
+    litellm_params:
+      model: custom_openai/DeepSeek-V4-Flash
+      api_base: https://www.sophnet.com/api/open-apis/v1
+      api_key: os.environ/SOPHNET_API_KEY_2
+
+  - model_name: sophnet-claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_base: https://www.sophnet.com/api/open-apis/anthropic
+      api_key: os.environ/SOPHNET_API_KEY_1
+    model_info:
+      input_cost_per_token: 0.000005
+      output_cost_per_token: 0.000025
+  - model_name: sophnet-claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7-aws
+      api_base: https://www.sophnet.com/api/open-apis/anthropic
+      api_key: os.environ/SOPHNET_API_KEY_1
+  - model_name: sophnet-claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_base: https://www.sophnet.com/api/open-apis/anthropic
+      api_key: os.environ/SOPHNET_API_KEY_2
+  - model_name: sophnet-claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7-aws
+      api_base: https://www.sophnet.com/api/open-apis/anthropic
+      api_key: os.environ/SOPHNET_API_KEY_2
+
+  - model_name: azure-gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://aihubuse23172723967.services.ai.azure.com/openai/v1
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: azure/gpt-5.5
+
+  - model_name: azure-gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: https://aihubuse23172723967.services.ai.azure.com/openai/v1
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: azure/gpt-5.4

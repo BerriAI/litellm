@@ -1,0 +1,5 @@
+FROM ghcr.io/berriai/litellm:main-stable
+
+# Overlay local litellm source onto the official image.
+# Keep the default root user so Prisma/npm cache paths work with PostgreSQL.
+COPY litellm/ /app/litellm/
