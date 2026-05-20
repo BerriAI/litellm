@@ -1852,6 +1852,193 @@ class TestMCPServerManager:
             )
             mock_inject.assert_awaited_once()
 
+    def test_resolve_mcp_server_for_tool_call_via_prefixed_name(self):
+        """Resolution succeeds when the prefixed tool name is in the mapping."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="jira",
+            name="jira",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"jira": server}
+        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+
+        resolved = manager._resolve_mcp_server_for_tool_call("jira", "search_issues")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_via_alias(self):
+        """Resolution falls back to alias/server_name match in the registry."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+
+        resolved = manager._resolve_mcp_server_for_tool_call(
+            "zapier-alias", "create_zap"
+        )
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
+        """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="linear",
+            name="linear",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"linear": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_issue"] = "linear"
+
+        # server_name is empty so the fallback unprefixed lookup runs and matches.
+        resolved = manager._resolve_mcp_server_for_tool_call("", "create_issue")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_raises_when_not_found(self):
+        """ValueError is raised when no resolution path finds the tool."""
+        manager = MCPServerManager()
+        with pytest.raises(ValueError, match="Tool .* not found"):
+            manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_known_server(self):
+        """Server-name match alone must not let unknown tools slip through.
+
+        If the registry has tools for this server but neither the prefixed nor
+        unprefixed tool name is in the mapping, raise rather than returning the
+        server (would otherwise allow tool enumeration via name spoofing).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="github",
+            name="github",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"github": server}
+        # Mapping has *some* tools for github but not "missing_tool".
+        manager.tool_name_to_mcp_server_name_mapping["github-list_repos"] = "github"
+        manager.tool_name_to_mcp_server_name_mapping["list_repos"] = "github"
+
+        with pytest.raises(ValueError, match="Tool missing_tool not found"):
+            manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
+        """Returns input headers unchanged when server does not need user OAuth."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="plain",
+            name="plain",
+            transport=MCPTransport.http,
+        )
+        # needs_user_oauth_token defaults to False.
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="bob")
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=None, user_api_key_auth=user_auth
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_returns_client_supplied_token(self):
+        """Returns the client's oauth2_headers as-is when already set."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        assert server.needs_user_oauth_token is True
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        supplied = {"Authorization": "Bearer client-supplied"}
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=supplied, user_api_key_auth=user_auth
+        )
+        assert result is supplied
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_looks_up_stored_token(self):
+        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        stored = {"Authorization": "Bearer stored-user-token"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value=stored),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result == stored
+        mock_lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
+        """Returns supplied headers (None) when the stored-token lookup raises."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ):
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_no_user_id(self):
+        """Skip lookup entirely when user_api_key_auth has no user_id."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        # user_id is None -> lookup must not happen
+        user_auth = UserAPIKeyAuth(api_key="sk-test")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer x"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+        mock_lookup.assert_not_called()
+
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
         """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
         manager = MCPServerManager()
