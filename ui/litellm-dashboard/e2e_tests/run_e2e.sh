@@ -117,7 +117,7 @@ echo "UI build copied and restructured"
 # --- Python environment ---
 echo "=== Setting up Python environment ==="
 cd "$REPO_ROOT"
-uv sync --group dev --group proxy-dev --extra proxy --quiet
+uv sync --group dev --group proxy-dev --extra proxy --frozen --quiet
 uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
 
 echo "=== Pushing Prisma schema to database ==="
