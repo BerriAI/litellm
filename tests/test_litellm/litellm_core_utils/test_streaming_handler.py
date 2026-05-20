@@ -2204,3 +2204,64 @@ def test_queue_wrapper_no_aiter():
     assert not hasattr(wrapper, "__anext__")
     wrapper.close()
     loop.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_put_exits_on_close_during_backpressure():
+    """Producer exits when close() is called while blocked on backpressure."""
+    import threading
+    from litellm.litellm_core_utils.streaming_handler import _QUEUE_MAX_SIZE
+
+    loop = asyncio.get_running_loop()
+
+    def infinite_iter():
+        i = 0
+        while True:
+            i += 1
+            yield i
+
+    wrapper = _SyncIteratorToQueue(infinite_iter(), loop)
+
+    # Let producer fill the queue completely (don't consume)
+    await asyncio.sleep(0.3)
+
+    # Producer should be blocked on _put (queue full)
+    assert wrapper._thread.is_alive()
+
+    # close() should unblock the producer
+    wrapper.close()
+    await asyncio.sleep(0.7)
+    assert not wrapper._thread.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_queue_wrapper_cleanup_on_anext_exception():
+    """_queue_wrapper is reset when __anext__ hits a non-StopIteration exception."""
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    def failing_gen():
+        yield "first_chunk"
+        raise RuntimeError("provider failure")
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.stream_options = None
+    logging_obj.messages = []
+
+    stream = CustomStreamWrapper(
+        completion_stream=failing_gen(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    # Force into the else branch (non-aiohttp sync iterator path)
+    # by ensuring completion_stream is not str/bytes and not async iterable
+    # The first __anext__ will create _queue_wrapper and the producer will
+    # push first_chunk, then RuntimeError via _QueueError
+    # The second __anext__ should hit the exception, triggering cleanup
+    with pytest.raises(Exception):
+        while True:
+            await stream.__anext__()
+
+    assert stream._queue_wrapper is None
