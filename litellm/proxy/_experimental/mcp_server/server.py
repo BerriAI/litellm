@@ -2096,6 +2096,20 @@ if MCP_AVAILABLE:
         # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
         # server's display name directly.
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server is None and requested_server is not None:
+            # REST callers may pass the raw tool name (no prefix) plus a
+            # ``requested_server_id``. The mapping might only contain the
+            # prefixed form, so retry the lookup with every known prefix of
+            # the requested server before treating the tool as unresolved —
+            # otherwise the tool_server_mismatch guard below is silently
+            # bypassed.
+            for known_prefix in iter_known_server_prefixes(requested_server):
+                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    add_server_prefix_to_name(name, known_prefix)
+                )
+                if candidate is not None:
+                    mcp_server = candidate
+                    break
         if mcp_server is not None:
             server_name = mcp_server.name
 
