@@ -1253,6 +1253,21 @@ def _get_wrapper_timeout(
 
 
 def check_coroutine(value) -> bool:
+    """Return True if ``value`` is an async callable (coroutine function).
+
+    Thin wrapper around the process-wide :class:`CoroutineChecker`, which
+    caches results to avoid repeated ``inspect.iscoroutinefunction`` calls
+    on the hot path. For callables that are not plain functions or methods
+    (e.g. class instances with ``__call__``), the underlying check looks at
+    ``__call__`` to decide.
+
+    Args:
+        value: Any object — typically a callback or callable.
+
+    Returns:
+        True if ``value`` is recognized as an async callable, False otherwise
+        (including when introspection fails).
+    """
     get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
     return get_coroutine_checker().is_async_callable(value)
 
