@@ -237,6 +237,40 @@ claude --model anthropic-vertex
 claude --model azure-gpt-4
 ```
 
+### 6. Switch Models at Runtime with `/model`
+
+Once Claude Code is running, you can switch between any of the models exposed by your LiteLLM proxy using the built-in `/model` command. By default the picker only shows Anthropic's hardcoded models, so to populate it with the models from your LiteLLM proxy you must opt in to **gateway model discovery**.
+
+Set the following environment variable before launching Claude Code:
+
+```bash
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+```
+
+On startup, Claude Code will call `GET /v1/models` against your `ANTHROPIC_BASE_URL` (your LiteLLM proxy) and add each returned model to the `/model` picker, labeled **From gateway**. Inside Claude Code, run:
+
+```
+/model
+```
+
+and select any LiteLLM-managed model (`gpt-4o`, `gemini-3.0-flash-exp`, `anthropic-vertex`, etc.) to switch without restarting the session.
+
+:::info Requirements
+
+- Claude Code **v2.1.129** or later.
+- `ANTHROPIC_BASE_URL` must point at a gateway that serves the Anthropic Messages API format — LiteLLM does this on `/v1/messages`.
+- Discovery is opt-in. Without `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code will not query your proxy's `/v1/models`.
+
+:::
+
+:::tip Surface only specific models
+
+If you only want a subset of your LiteLLM models to show up in the `/model` picker, issue a [virtual key](../proxy/virtual_keys) scoped to those models and use that key as `ANTHROPIC_AUTH_TOKEN`. `/v1/models` will only return models the key can access.
+
+You can also add individual model entries manually via `ANTHROPIC_CUSTOM_MODEL_OPTION` instead of (or in addition to) enabling discovery.
+
+:::
+
 ## How It Works
 
 LiteLLM acts as a unified interface that:
