@@ -154,6 +154,25 @@ test.describe("Proxy Admin - Keys", () => {
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
     await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+
+    // Grab the new key from the success modal (rendered inside a <pre>) and
+    // verify it can call /chat/completions for the model it was scoped to.
+    // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
+    // a fixed "This is a mock response." body.
+    const apiKey = (await page.locator(".ant-modal:visible pre").innerText()).trim();
+    expect(apiKey).toMatch(/^sk-/);
+
+    const response = await page.request.post("/chat/completions", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      data: {
+        model: modelName,
+        messages: [{ role: "user", content: "ping" }],
+      },
+    });
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.choices?.[0]?.message?.content).toBe("This is a mock response.");
+
     await page.keyboard.press("Escape");
 
     await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
