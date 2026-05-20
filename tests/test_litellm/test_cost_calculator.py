@@ -2059,6 +2059,25 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["max_output_tokens"] == 65536
 
 
+def test_gemini_3_1_flash_lite_pricing():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for model_name in (
+        "gemini-3.1-flash-lite",
+        "gemini/gemini-3.1-flash-lite",
+        "vertex_ai/gemini-3.1-flash-lite",
+    ):
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["input_cost_per_token"] == 4.5e-07
+        assert model_info["input_cost_per_audio_token"] == 9e-07
+        assert model_info["output_cost_per_token"] == 2.7e-06
+        assert model_info["output_cost_per_reasoning_token"] == 2.7e-06
+        assert model_info["cache_read_input_token_cost"] == 4.5e-08
+        assert model_info["max_input_tokens"] == 1048576
+
+
 def test_custom_pricing_applies_cache_read_input_cost():
     """
     Bug 1 reproduction: custom_cost_per_token with cache_read_input_token_cost
