@@ -527,6 +527,32 @@ def test_provider_dispatch_preserved_without_custom_pricing(monkeypatch):
     assert completion_cost_value == 0.34
 
 
+def test_provider_dispatch_when_custom_pricing_true_without_token_pricing(monkeypatch):
+    """custom_pricing=True without registered token-based pricing should still
+    fall through to the provider-specific dispatch."""
+    from litellm.cost_calculator import cost_per_token
+
+    model = "anthropic/no-token-pricing-registered"
+
+    def mock_provider_cost(*args, **kwargs):
+        return 0.55, 0.77
+
+    monkeypatch.setattr(
+        "litellm.cost_calculator.anthropic_cost_per_token",
+        mock_provider_cost,
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="anthropic",
+        usage_object=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        custom_pricing=True,
+    )
+
+    assert prompt_cost == 0.55
+    assert completion_cost_value == 0.77
+
+
 def test_per_request_custom_pricing_with_router():
     """When custom pricing is passed as per-request kwargs (not in model_list),
     _select_model_name_for_cost_calc should fall back to the model name
