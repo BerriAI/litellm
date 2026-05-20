@@ -361,6 +361,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         3. Progressively strip leading path components and try each suffix
            relative to this module's directory (jailed).
 
+        The directory jail can be disabled for deployments that legitimately
+        store category files outside the package (e.g. mounted volumes) by
+        setting the environment variable
+        ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS=true``.  Use only in
+        trusted environments where the proxy configuration cannot be influenced
+        by untrusted input.
+
         Args:
             file_path: The file path to resolve (absolute or relative).
 
@@ -369,18 +376,31 @@ class ContentFilterGuardrail(CustomGuardrail):
             resolution fails (caller should check existence).
 
         Raises:
-            ValueError: If the resolved path escapes the module directory.
+            ValueError: If the resolved path escapes the module directory
+                and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
         """
         module_dir = os.path.dirname(__file__)
+        allow_external = (
+            os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower()
+            == "true"
+        )
 
         if os.path.isabs(file_path) or os.path.exists(file_path):
-            self._assert_within_categories_dir(file_path, module_dir)
+            if not allow_external:
+                self._assert_within_categories_dir(file_path, module_dir)
+            else:
+                verbose_proxy_logger.warning(
+                    "LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS is set — "
+                    "skipping directory jail for category_file '%s'",
+                    file_path,
+                )
             return file_path
 
         # Try the full relative path joined to the module directory
         candidate = os.path.join(module_dir, file_path)
         if os.path.exists(candidate):
-            self._assert_within_categories_dir(candidate, module_dir)
+            if not allow_external:
+                self._assert_within_categories_dir(candidate, module_dir)
             return candidate
 
         # Progressively strip leading components to find a matching suffix
@@ -389,15 +409,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
             if os.path.exists(candidate):
-                self._assert_within_categories_dir(candidate, module_dir)
+                if not allow_external:
+                    self._assert_within_categories_dir(candidate, module_dir)
                 return candidate
 
         # File not found via any resolution strategy — jail the module-relative
         # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
         # regardless of CWD or whether the target file exists.
-        self._assert_within_categories_dir(
-            os.path.join(module_dir, file_path), module_dir
-        )
+        if not allow_external:
+            self._assert_within_categories_dir(
+                os.path.join(module_dir, file_path), module_dir
+            )
         return file_path
 
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:

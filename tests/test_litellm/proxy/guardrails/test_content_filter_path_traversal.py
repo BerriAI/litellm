@@ -182,3 +182,32 @@ class TestContentFilterPathTraversal:
             ]
         )
         assert "valid_name" not in guardrail.loaded_categories
+
+    def test_allow_external_paths_env_var_bypasses_jail(self, tmp_path):
+        """LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS=true skips the directory jail."""
+        import os as _os
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        guardrail = ContentFilterGuardrail.__new__(ContentFilterGuardrail)
+        # Create a real file outside the module directory (simulates mounted volume).
+        external_file = tmp_path / "external_categories.yaml"
+        external_file.write_text("category_name: test\n")
+
+        with patch.dict(
+            _os.environ, {"LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS": "true"}
+        ):
+            # Should return the path without raising ValueError.
+            result = guardrail._resolve_category_file_path(str(external_file))
+        assert result == str(external_file)
+
+    def test_traversal_blocked_when_allow_external_not_set(self):
+        """Without the env var the jail still blocks traversal paths."""
+        import os as _os
+
+        guardrail = self._get_guardrail()
+        with patch.dict(_os.environ, {}, clear=False):
+            _os.environ.pop("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", None)
+            with pytest.raises(ValueError, match="outside the allowed categories"):
+                guardrail._resolve_category_file_path("/etc/passwd")
