@@ -1805,6 +1805,53 @@ class TestMCPServerManager:
         assert len(tools_unprefixed) == 1
         assert tools_unprefixed[0].name == "send_email"
 
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_jwt_skipped_when_mcp_auth_header_set(self):
+        """When a per-user mcp_auth_header is resolved, JWT injection must be skipped.
+
+        MCPClient._get_auth_headers() applies extra_headers AFTER writing
+        Authorization from auth_value, so an injected JWT would clobber the
+        user's per-server OAuth token. Regression test for that interaction.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zapier",
+            name="zapier",
+            transport=MCPTransport.http,
+        )
+
+        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with (
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.inject_mcp_jwt_headers_for_upstream",
+                new=AsyncMock(return_value={"Authorization": "Bearer signed-jwt"}),
+            ) as mock_inject,
+        ):
+            # Case A: mcp_auth_header present -> JWT must NOT be injected
+            await manager._get_tools_from_server(
+                server,
+                mcp_auth_header="oauth-user-token",
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_not_called()
+
+            # Case B: no mcp_auth_header -> JWT injection runs as before
+            await manager._get_tools_from_server(
+                server,
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_awaited_once()
+
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
         """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
         manager = MCPServerManager()
