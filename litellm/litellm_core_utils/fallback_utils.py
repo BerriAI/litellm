@@ -47,8 +47,11 @@ async def async_completion_with_fallbacks(**kwargs):
             completion_kwargs = safe_deep_copy(base_kwargs)
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
-                # Deep copy to avoid mutating the caller's fallback dict
-                fallback_copy = safe_deep_copy(fallback)
+                # Wrap in dict(...) so the .pop below never mutates the caller's
+                # dict. safe_deep_copy returns the original object unchanged
+                # when litellm.safe_memory_mode is True; the extra shallow copy
+                # via dict(fallback) keeps this safe in both modes.
+                fallback_copy = safe_deep_copy(dict(fallback))
                 model = fallback_copy.pop("model", original_model)
                 completion_kwargs.update(fallback_copy)
             else:
