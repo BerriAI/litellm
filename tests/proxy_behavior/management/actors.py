@@ -182,6 +182,11 @@ async def seed_world(prisma: PrismaClient) -> World:
         )
 
     # Teams.
+    # NOTE: _get_user_in_team in key_management_endpoints.py checks
+    # ``members_with_roles`` (a JSON array of {user_id, role}), NOT the plain
+    # ``members`` String[] column — so the JSON list is what the team-key authz
+    # gate inspects. Populate both to match what the real /team/new handler
+    # would produce.
     await prisma.db.litellm_teamtable.create(
         data={
             "team_id": TEAM_ALPHA,
@@ -195,6 +200,15 @@ async def seed_world(prisma: PrismaClient) -> World:
                 user_ids[Actor.UNRELATED_SAME_ORG],
                 user_ids[Actor.SERVICE_ACCOUNT],
             ],
+            "members_with_roles": Json(
+                [
+                    {"user_id": user_ids[Actor.TEAM_ADMIN], "role": "admin"},
+                    {"user_id": user_ids[Actor.INTERNAL_USER], "role": "user"},
+                    {"user_id": user_ids[Actor.OWNER], "role": "user"},
+                    {"user_id": user_ids[Actor.UNRELATED_SAME_ORG], "role": "user"},
+                    {"user_id": user_ids[Actor.SERVICE_ACCOUNT], "role": "user"},
+                ]
+            ),
         }
     )
     await prisma.db.litellm_teamtable.create(
@@ -204,6 +218,11 @@ async def seed_world(prisma: PrismaClient) -> World:
             "organization_id": ORG_B,
             "admins": [],
             "members": [user_ids[Actor.CROSS_ORG_USER]],
+            "members_with_roles": Json(
+                [
+                    {"user_id": user_ids[Actor.CROSS_ORG_USER], "role": "user"},
+                ]
+            ),
         }
     )
 
