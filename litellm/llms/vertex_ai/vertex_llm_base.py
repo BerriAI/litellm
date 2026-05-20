@@ -1095,8 +1095,7 @@ class VertexBase:
                 token_state = self._get_token_state(_credentials)
 
                 if token_state == TokenState.STALE:
-                    resolved_project = project_id
-                    if resolved_project is None:
+                    if project_id is None:
                         raise ValueError("Could not resolve project_id")
                     current_token = _credentials.token
                     if current_token is None or not isinstance(current_token, str):
@@ -1109,7 +1108,7 @@ class VertexBase:
                             credential_cache_key,
                             credential_project_id,
                         )
-                        return current_token, resolved_project
+                        return current_token, project_id
 
                 if token_state == TokenState.INVALID:
                     # Drain any in-flight background refresh before invoking
