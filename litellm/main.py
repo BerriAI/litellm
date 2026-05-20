@@ -1030,6 +1030,31 @@ def _should_allow_input_examples(
 
 
 def _drop_input_examples_from_tool(tool: dict) -> dict:
+    """
+    Remove input_examples field from a tool definition and its nested function.
+
+    This function sanitizes tool definitions by removing the `input_examples` field,
+    which may not be supported by all LLM providers. It handles both top-level
+    input_examples and nested input_examples within the function definition.
+
+    Args:
+        tool: A tool definition dictionary with potential structure:
+            {
+                "type": "function",
+                "function": {...},
+                "input_examples": [...]  # This will be removed
+            }
+
+    Returns:
+        dict: A copy of the tool with all `input_examples` fields removed.
+              The original tool dictionary is not modified.
+
+    Examples:
+        >>> tool = {"function": {...}, "input_examples": [...]}
+        >>> clean_tool = _drop_input_examples_from_tool(tool)
+        >>> "input_examples" in clean_tool
+        False
+    """
     tool_copy = tool.copy()
     tool_copy.pop("input_examples", None)
     function = tool_copy.get("function")
