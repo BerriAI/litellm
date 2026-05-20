@@ -21,7 +21,7 @@ from openai.types.chat import ChatCompletion
 load_dotenv()
 
 # used for testing
-LANGFUSE_BASE_URL = "http://127.0.0.1:8090/slow"
+LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production-c715.up.railway.app"
 
 
 async def config_update(session, routing_strategy=None):
