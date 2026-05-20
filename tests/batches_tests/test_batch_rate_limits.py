@@ -1405,3 +1405,169 @@ async def test_async_pre_call_hook_no_input_file_id_skips_processing():
         mock_count.assert_not_called()
         assert result == data
         print("✓ File retrieval skipped when input_file_id is missing")
+
+
+@pytest.mark.asyncio()
+async def test_has_applicable_rate_limits_integration_with_async_pre_call_hook():
+    """
+    Integration test verifying _has_applicable_rate_limits is called in async_pre_call_hook flow.
+    This test ensures the method is exercised in the actual code path and will be covered.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    dual_cache = DualCache()
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=dual_cache)
+    )
+    batch_limiter = rate_limiter._get_batch_rate_limiter()
+
+    # Test 1: No limits - should skip file retrieval and call _has_applicable_rate_limits
+    print("\n=== Test 1: No limits configured ===")
+    user_no_limits = UserAPIKeyAuth(api_key="test-key-no-limits")
+
+    data_with_file = {
+        "input_file_id": "file-123",
+        "custom_llm_provider": "openai",
+    }
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        result = await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_no_limits,
+            cache=dual_cache,
+            data=data_with_file,
+            call_type="acreate_batch",
+        )
+        # _has_applicable_rate_limits returns False, so file retrieval should be skipped
+        mock_count.assert_not_called()
+        print("✓ File retrieval skipped when no limits (correct)")
+
+    # Test 2: With limits - should attempt file retrieval
+    print("\n=== Test 2: RPM limit configured ===")
+    user_with_rpm = UserAPIKeyAuth(api_key="test-key-rpm", rpm_limit=10)
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        mock_count.return_value = BatchFileUsage(request_count=1, total_tokens=50)
+
+        with patch.object(
+            batch_limiter,
+            "_check_and_increment_batch_counters",
+            new_callable=AsyncMock,
+        ):
+            result = await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user_with_rpm,
+                cache=dual_cache,
+                data=data_with_file,
+                call_type="acreate_batch",
+            )
+            # _has_applicable_rate_limits returns True, so file retrieval should be attempted
+            mock_count.assert_called_once()
+            print("✓ File retrieval attempted when limits exist (correct)")
+
+    # Test 3: With TPM limit - should attempt file retrieval
+    print("\n=== Test 3: TPM limit configured ===")
+    user_with_tpm = UserAPIKeyAuth(api_key="test-key-tpm", tpm_limit=1000)
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        mock_count.return_value = BatchFileUsage(request_count=1, total_tokens=50)
+
+        with patch.object(
+            batch_limiter,
+            "_check_and_increment_batch_counters",
+            new_callable=AsyncMock,
+        ):
+            result = await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user_with_tpm,
+                cache=dual_cache,
+                data=data_with_file,
+                call_type="acreate_batch",
+            )
+            # _has_applicable_rate_limits returns True, so file retrieval should be attempted
+            mock_count.assert_called_once()
+            print("✓ File retrieval attempted when TPM limit exists (correct)")
+
+    # Test 4: With user limits - should attempt file retrieval
+    print("\n=== Test 4: User-level limits configured ===")
+    user_with_user_limits = UserAPIKeyAuth(
+        api_key="test-key-user", user_rpm_limit=50, user_tpm_limit=500
+    )
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        mock_count.return_value = BatchFileUsage(request_count=1, total_tokens=50)
+
+        with patch.object(
+            batch_limiter,
+            "_check_and_increment_batch_counters",
+            new_callable=AsyncMock,
+        ):
+            result = await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user_with_user_limits,
+                cache=dual_cache,
+                data=data_with_file,
+                call_type="acreate_batch",
+            )
+            mock_count.assert_called_once()
+            print("✓ File retrieval attempted when user limits exist (correct)")
+
+    # Test 5: With team limits - should attempt file retrieval
+    print("\n=== Test 5: Team-level limits configured ===")
+    user_with_team_limits = UserAPIKeyAuth(
+        api_key="test-key-team", team_rpm_limit=200, team_tpm_limit=2000
+    )
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        mock_count.return_value = BatchFileUsage(request_count=1, total_tokens=50)
+
+        with patch.object(
+            batch_limiter,
+            "_check_and_increment_batch_counters",
+            new_callable=AsyncMock,
+        ):
+            result = await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user_with_team_limits,
+                cache=dual_cache,
+                data=data_with_file,
+                call_type="acreate_batch",
+            )
+            mock_count.assert_called_once()
+            print("✓ File retrieval attempted when team limits exist (correct)")
+
+    # Test 6: With organization limits - should attempt file retrieval
+    print("\n=== Test 6: Organization limits configured ===")
+    user_with_org_limits = UserAPIKeyAuth(
+        api_key="test-key-org",
+        organization_rpm_limit=300,
+        organization_tpm_limit=3000,
+    )
+
+    with patch.object(
+        batch_limiter, "count_input_file_usage", new_callable=AsyncMock
+    ) as mock_count:
+        mock_count.return_value = BatchFileUsage(request_count=1, total_tokens=50)
+
+        with patch.object(
+            batch_limiter,
+            "_check_and_increment_batch_counters",
+            new_callable=AsyncMock,
+        ):
+            result = await batch_limiter.async_pre_call_hook(
+                user_api_key_dict=user_with_org_limits,
+                cache=dual_cache,
+                data=data_with_file,
+                call_type="acreate_batch",
+            )
+            mock_count.assert_called_once()
+            print("✓ File retrieval attempted when organization limits exist (correct)")
+
+    print("\n=== Integration test passed ===")
+    print("✓ _has_applicable_rate_limits is properly called in async_pre_call_hook flow")
+    print("✓ All code branches are exercised in realistic scenarios")
