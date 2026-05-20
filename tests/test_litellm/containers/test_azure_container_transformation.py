@@ -882,7 +882,8 @@ class TestAzureContainerKnownFailureRegressions:
         assert captured["data"]["custom_llm_provider"] == "azure"
         assert captured["data"]["model_id"] == "model_abc123"
 
-    def test_regression_get_container_forwarding_params_sets_model_id_for_managed_id(
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_sets_model_id_for_managed_id(
         self,
     ):
         """get_container_forwarding_params must extract model_id from a
@@ -901,18 +902,74 @@ class TestAzureContainerKnownFailureRegressions:
             container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
         )
 
-        params = get_container_forwarding_params(
+        params = await get_container_forwarding_params(
             container_id=encoded_id,
             original_container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
             custom_llm_provider="azure",
         )
 
-        assert params.get("model_id") == "deployment-uuid-123", (
-            "model_id must be forwarded to the router for managed container IDs"
-        )
+        assert (
+            params.get("model_id") == "deployment-uuid-123"
+        ), "model_id must be forwarded to the router for managed container IDs"
         assert params.get("container_id") == (
             "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
         )
+        assert params.get("custom_llm_provider") == "azure"
+
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_recovers_model_id_for_native_id(
+        self, monkeypatch
+    ):
+        """Native Azure IDs (``cntr_<hex>``) cannot be decoded, so model_id
+        must be recovered from the ownership row's ``unified_object_id`` —
+        the encoded form captured at create time when the router selected a
+        specific deployment. Without this, the router-side fallback for
+        native IDs in ``_init_containers_api_endpoints`` is dead code.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy.container_endpoints import ownership
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        native_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        encoded_stored_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id=native_id,
+        )
+
+        ownership._CONTAINER_STORED_ID_CACHE.flush_cache()
+        ownership._CONTAINER_OWNER_CACHE.flush_cache()
+
+        table = AsyncMock()
+        table.find_first.return_value = SimpleNamespace(
+            created_by="user-1",
+            file_purpose=ownership.CONTAINER_OBJECT_PURPOSE,
+            unified_object_id=encoded_stored_id,
+        )
+        prisma_client = SimpleNamespace(
+            db=SimpleNamespace(litellm_managedobjecttable=table)
+        )
+        monkeypatch.setattr(
+            ownership,
+            "_get_prisma_client",
+            AsyncMock(return_value=prisma_client),
+        )
+
+        params = await get_container_forwarding_params(
+            container_id=native_id,
+            original_container_id=native_id,
+            custom_llm_provider="azure",
+        )
+
+        assert params.get("model_id") == "deployment-uuid-123", (
+            "model_id must be recovered from the stored unified_object_id "
+            "for native upstream container IDs"
+        )
+        assert params.get("container_id") == native_id
         assert params.get("custom_llm_provider") == "azure"
 
     @pytest.mark.asyncio
