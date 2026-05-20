@@ -438,3 +438,44 @@ def test_merge_agent_headers_util_empty_dicts_returns_none():
 
     result = merge_agent_headers(dynamic_headers={}, static_headers={})
     assert result is None
+
+
+def test_merge_agent_headers_util_case_insensitive_static_wins():
+    """Static ``Authorization`` strips dynamic ``authorization`` (HTTP headers are case-insensitive)."""
+    from litellm.proxy.agent_endpoints.utils import merge_agent_headers
+
+    result = merge_agent_headers(
+        dynamic_headers={"authorization": "Bearer caller-token", "x-extra": "d"},
+        static_headers={"Authorization": "Bearer admin-token"},
+    )
+    assert result == {"Authorization": "Bearer admin-token", "x-extra": "d"}
+
+
+def test_merge_agent_headers_util_case_insensitive_no_dynamic_leak():
+    """No case-variant of a static header can leak through from dynamic headers."""
+    from litellm.proxy.agent_endpoints.utils import merge_agent_headers
+
+    result = merge_agent_headers(
+        dynamic_headers={"AUTHORIZATION": "Bearer caller", "authorization": "x"},
+        static_headers={"Authorization": "Bearer admin"},
+    )
+    assert result == {"Authorization": "Bearer admin"}
+
+
+@pytest.mark.asyncio
+async def test_convention_header_blocked_by_case_variant_static():
+    """Static ``Authorization`` blocks caller-rewritten lowercase ``authorization``."""
+    mock_agent = _make_mock_agent(
+        static_headers={"Authorization": "Bearer admin-token"}
+    )
+    mock_agent.agent_name = "my-agent"
+    mock_request = _make_mock_request(
+        extra_headers={"x-a2a-my-agent-authorization": "Bearer caller-token"}
+    )
+
+    mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
+    assert headers is not None
+    assert headers == {"Authorization": "Bearer admin-token"}
+    assert "authorization" not in headers
