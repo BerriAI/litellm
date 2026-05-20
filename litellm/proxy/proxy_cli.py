@@ -55,8 +55,9 @@ def _build_db_connection_url_params(
     """
     params: dict = {
         "connection_limit": connection_limit,
-        "pool_timeout": pool_timeout,
     }
+    if pool_timeout is not None:
+        params["pool_timeout"] = pool_timeout
     if connect_timeout is not None:
         params["connect_timeout"] = connect_timeout
     if socket_timeout is not None:
