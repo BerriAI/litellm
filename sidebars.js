@@ -737,6 +737,7 @@ const sidebars = {
             "anthropic_unified/messages_to_responses_mapping",
           ]
         },
+        "count_tokens",
         "anthropic_count_tokens",
         "moderation",
         "ocr",
