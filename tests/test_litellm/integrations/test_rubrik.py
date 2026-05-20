@@ -830,7 +830,7 @@ class TestExtractBlockedTools:
         result = RubrikLogger._extract_blocked_tools(service_resp, [tc])
         assert result is None
 
-    def test_some_blocked_returns_result(self):
+    def test_some_blocked_returns_explanation(self):
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
         tc1 = ChatCompletionMessageToolCall(
@@ -855,9 +855,7 @@ class TestExtractBlockedTools:
         }
         result = RubrikLogger._extract_blocked_tools(service_resp, [tc1, tc2])
         assert result is not None
-        assert len(result.allowed_tools) == 1
-        assert result.allowed_tools[0].id == "call_1"
-        assert "blocked fn2" in result.explanation
+        assert "blocked fn2" in result
 
     def test_empty_choices_raises(self):
         with pytest.raises(Exception, match="empty response"):
@@ -881,8 +879,7 @@ class TestExtractBlockedTools:
         }
         result = RubrikLogger._extract_blocked_tools(service_resp, [tc])
         assert result is not None
-        assert result.allowed_tools == []
-        assert "blocked everything" in result.explanation
+        assert "blocked everything" in result
 
 
 # -- Sanitize proxy server request -------------------------------------------

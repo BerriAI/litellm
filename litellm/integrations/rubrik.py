@@ -6,7 +6,6 @@ import random
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
@@ -37,14 +36,6 @@ if TYPE_CHECKING:
 _ENDPOINT_ANTHROPIC_MESSAGES = "/messages"
 _WEBHOOK_PATH_TOOL_BLOCKING = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
-
-
-@dataclass
-class BlockedToolsResult:
-    """Returned by _extract_blocked_tools when at least one tool was blocked."""
-
-    allowed_tools: list
-    explanation: str
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
@@ -210,12 +201,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         service_response = await self._post_to_tool_blocking_service(
             response_data, req_data
         )
-        blocked = self._extract_blocked_tools(service_response, message_tool_calls)
+        blocked_explanation = self._extract_blocked_tools(
+            service_response, message_tool_calls
+        )
 
-        if blocked:
+        if blocked_explanation is not None:
             model = self._resolve_model(request_data, call_details)
             raise ModifyResponseException(
-                message=blocked.explanation,
+                message=blocked_explanation,
                 model=model,
                 request_data=request_data,
                 guardrail_name=self.guardrail_name,
@@ -504,12 +497,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _extract_blocked_tools(
         service_response: dict[str, Any],
         all_tool_calls: list[ChatCompletionMessageToolCall],
-    ) -> BlockedToolsResult | None:
-        """Determine whether any tool calls were blocked by the service.
+    ) -> Optional[str]:
+        """Return the blocking explanation if any tool calls were blocked.
 
         Compares the service response (which contains only allowed tools) against
-        the full set of tool calls. Returns None if all tools are allowed, or a
-        BlockedToolsResult.
+        the full set of tool calls. Returns ``None`` if all tools are allowed, or
+        the explanation string (prefixed with newlines) otherwise.
 
         Expects service_response in OpenAI chat completion format:
             {"choices": [{"message": {"tool_calls": [...], "content": "..."}}]}
@@ -523,13 +516,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         blocking_explanation = message.get("content", "")
 
         allowed_ids = {tc["id"] for tc in returned_tool_calls if tc.get("id")}
-        allowed_tools = [tc for tc in all_tool_calls if tc.id in allowed_ids]
+        allowed_count = sum(1 for tc in all_tool_calls if tc.id in allowed_ids)
 
-        if len(allowed_tools) == len(all_tool_calls):
+        if allowed_count == len(all_tool_calls):
             return None
 
         explanation = blocking_explanation or "Tool call blocked by policy."
-        return BlockedToolsResult(
-            allowed_tools=allowed_tools,
-            explanation=f"\n\n{explanation}",
-        )
+        return f"\n\n{explanation}"
