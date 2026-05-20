@@ -2,7 +2,7 @@
 
 Get started by creating a free API key via https://brave.com/search/api/.
 
-For documentation on other parameters supported by the Brave Search API, visit https://api-dashboard.search.brave.com/api-reference/web/search.
+For documentation on other parameters supported by the Brave Search API, visit https://api-dashboard.search.brave.com/api-reference/web/search/post.
 
 ## LiteLLM Python SDK
 
