@@ -39,9 +39,7 @@ def _drop_unsupported_hosted_tools(data: Dict[str, Any]) -> None:
     filtered_tools = [
         tool
         for tool in tools
-        if not (
-            isinstance(tool, dict) and tool.get("type") in unsupported_tool_types
-        )
+        if not (isinstance(tool, dict) and tool.get("type") in unsupported_tool_types)
     ]
     if len(filtered_tools) != len(tools):
         data["tools"] = filtered_tools
