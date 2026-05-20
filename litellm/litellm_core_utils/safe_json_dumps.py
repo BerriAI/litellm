@@ -32,7 +32,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             seen.remove(id(obj))
             return result
         elif isinstance(obj, list):
-            result = [_serialize(item, seen, depth + 1) for item in obj]
+            result = [_serialize(item, seen, depth + 1) for item in list(obj)]
             seen.remove(id(obj))
             return result
         elif isinstance(obj, tuple):
@@ -40,7 +40,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             seen.remove(id(obj))
             return result
         elif isinstance(obj, set):
-            result = sorted([_serialize(item, seen, depth + 1) for item in obj])
+            result = sorted([_serialize(item, seen, depth + 1) for item in list(obj)])
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):

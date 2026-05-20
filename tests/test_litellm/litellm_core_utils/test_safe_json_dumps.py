@@ -209,3 +209,39 @@ def test_no_runtime_error_on_concurrent_dict_mutation():
             assert len(results[0]) > 0
 
     assert not errors, f"safe_dumps raised {errors[0]!r} on concurrent mutation"
+
+
+def test_no_runtime_error_on_concurrent_list_mutation():
+    """safe_dumps must not raise RuntimeError when another thread mutates a nested list."""
+    errors: list = []
+
+    for _ in range(50):
+        data = {"messages": [f"msg_{i}" for i in range(100)]}
+        barrier = threading.Barrier(2, timeout=5)
+        results: list = []
+
+        def mutator():
+            barrier.wait()
+            for i in range(100, 200):
+                data["messages"].append(f"msg_{i}")
+
+        def serializer():
+            barrier.wait()
+            try:
+                result = safe_dumps(data)
+                results.append(result)
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=mutator)
+        t2 = threading.Thread(target=serializer)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        if results:
+            assert isinstance(results[0], str)
+            assert '"messages"' in results[0]
+
+    assert not errors, f"safe_dumps raised {errors[0]!r} on concurrent list mutation"
