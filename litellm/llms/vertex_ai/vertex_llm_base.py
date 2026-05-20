@@ -8,7 +8,8 @@ import asyncio
 import json
 import os
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+import weakref
+from typing import TYPE_CHECKING, Any, Dict, Literal, MutableMapping, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -51,7 +52,12 @@ class VertexBase:
         self.async_handler: Optional[AsyncHTTPHandler] = None
         # Per-credential-key asyncio.Lock for single-flight async refresh.
         # Prevents thundering herd when token expires under high concurrency.
-        self._async_refresh_locks: Dict[tuple, asyncio.Lock] = {}
+        # Uses a WeakValueDictionary so a lock is auto-pruned once no coroutine
+        # holds it any more — keeps the dict bounded in high-cardinality
+        # deployments without breaking single-flight while a refresh is active.
+        self._async_refresh_locks: MutableMapping[tuple, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
         self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.

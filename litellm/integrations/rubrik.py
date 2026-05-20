@@ -123,13 +123,30 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if self.key:
             self._headers["Authorization"] = f"Bearer {self.key}"
 
+        # Periodic flush is started lazily on the first log event so that
+        # low-traffic deployments still get their batches drained even when the
+        # logger is instantiated outside a running event loop (sync init).
+        self._flush_task: Optional[asyncio.Task[Any]] = (
+            self._start_periodic_flush_task()
+        )
+
+    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+        """Start the periodic flush task only when an event loop is already running."""
         try:
-            asyncio.create_task(self.periodic_flush())
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             verbose_logger.debug(
-                "Rubrik: no running event loop at init time; "
-                "periodic_flush will not run automatically."
+                "Rubrik logger init: no running event loop, "
+                "periodic flush will start on first log event."
             )
+            return None
+        return loop.create_task(self.periodic_flush())
+
+    def _ensure_periodic_flush_task(self) -> None:
+        # Synchronous helper: in asyncio's cooperative model there is no await
+        # between the check and assignment, so two callers cannot race here.
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = self._start_periodic_flush_task()
 
     async def aclose(self):
         """Close the dedicated tool blocking HTTP client."""
@@ -343,6 +360,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     async def _enqueue_log_event(self, kwargs: dict, event_type: str):
         try:
+            self._ensure_periodic_flush_task()
             payload = await self._prepare_log_payload(kwargs, event_type)
             if payload is None:
                 return

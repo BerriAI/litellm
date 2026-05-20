@@ -157,6 +157,35 @@ class TestInitialization:
             # guarded and fall back gracefully when there is no event loop.
             handler = RubrikLogger()
             assert handler.tool_blocking_endpoint.startswith("http://localhost:8080")
+            # Without a running loop at init, the periodic flush task should be
+            # deferred so batches still get drained once a log event arrives.
+            assert handler._flush_task is None
+
+    @pytest.mark.asyncio
+    async def test_periodic_flush_task_started_lazily_on_first_log(self, mock_env):
+        """Loggers instantiated outside an event loop must still start the
+        periodic flush task on first use to drain low-traffic batches."""
+        # Simulate sync-init by hiding the running loop from the constructor.
+        with patch(
+            "litellm.integrations.rubrik.asyncio.get_running_loop",
+            side_effect=RuntimeError("no running loop"),
+        ):
+            handler = RubrikLogger()
+        assert handler._flush_task is None
+
+        kwargs = {
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "hi"}],
+                "id": "litellm-id",
+            },
+            "litellm_call_id": "litellm-id",
+            "litellm_params": {},
+        }
+        with patch.object(handler, "_log_batch_to_rubrik", AsyncMock()):
+            await handler.async_log_success_event(kwargs, None, None, None)
+
+        assert handler._flush_task is not None
+        handler._flush_task.cancel()
 
     def test_headers_with_api_key(self, handler):
         assert handler._headers["Authorization"] == "Bearer test-api-key"
