@@ -169,6 +169,30 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
+/**
+ * Header variable definition. ``value`` is required for global scope; ignored
+ * for per_user scope (each user provides their own value via /v1/mcp/server/
+ * {server_id}/user-header-variables). Variables are referenced in
+ * ``static_headers`` values as ``${NAME}``.
+ */
+export interface HeaderVariable {
+  name: string;
+  value?: string | null;
+  scope: "global" | "per_user";
+  /** Returned by the backend when a non-admin views a server: true if a global
+   * value is configured (the actual value is masked). */
+  has_value?: boolean | null;
+}
+
+/** Per-user header-variable status returned by the proxy. */
+export interface UserHeaderVariablesStatus {
+  server_id: string;
+  user_variables: string[];
+  filled_variables?: string[];
+  missing_variables: string[];
+  values?: Record<string, string>;
+}
+
 export interface MCPServer {
   server_id: string;
   server_name?: string | null;
@@ -192,6 +216,7 @@ export interface MCPServer {
   updated_by: string;
   extra_headers?: string[] | null;
   static_headers?: Record<string, string> | null;
+  header_variables?: HeaderVariable[] | null;
   status?: "healthy" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;

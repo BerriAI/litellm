@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
+import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch, Typography } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer, AUTH_TYPE } from "./types";
 const { Panel } = Collapse;
@@ -41,6 +41,16 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           value: value != null ? String(value) : "",
         }));
         form.setFieldValue("static_headers", staticHeaders);
+      }
+      if (Array.isArray(mcpServer.header_variables)) {
+        form.setFieldValue(
+          "header_variables",
+          mcpServer.header_variables.map((v) => ({
+            name: v?.name ?? "",
+            value: v?.value ?? "",
+            scope: v?.scope === "per_user" ? "per_user" : "global",
+          })),
+        );
       }
       if (typeof mcpServer.allow_all_keys === "boolean") {
         form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
@@ -219,8 +229,113 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           <Form.Item
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
+                Header Variables
+                <Tooltip
+                  title={
+                    <span>
+                      Define variables you can reference in Static Header values using <code>${"{NAME}"}</code>.
+                      Global values apply to all users. Per-user variables must be filled in by each user
+                      before they can call this MCP server.
+                    </span>
+                  }
+                >
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            required={false}
+          >
+            <Typography.Paragraph type="secondary" className="!mb-2 !text-xs">
+              Example: define <code>DB_PROTOCOL</code> (global) and <code>CORP_USERNAME</code> (per-user), then
+              reference them in a static header value as
+              <code>{" ${DB_PROTOCOL}://${CORP_USERNAME}@..."}</code>.
+            </Typography.Paragraph>
+            <Form.List name="header_variables">
+              {(fields, { add, remove }) => (
+                <div className="space-y-3">
+                  {fields.map(({ key, name, ...restField }) => (
+                    <Space key={key} className="flex w-full" align="baseline" size="middle">
+                      <Form.Item
+                        {...restField}
+                        name={[name, "name"]}
+                        className="flex-1"
+                        rules={[
+                          { required: true, message: "Variable name is required" },
+                          {
+                            pattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
+                            message: "Use letters, digits, underscores; cannot start with a digit",
+                          },
+                        ]}
+                      >
+                        <Input
+                          size="large"
+                          allowClear
+                          className="rounded-lg"
+                          placeholder="Variable name (e.g., DB_PROTOCOL)"
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        noStyle
+                        shouldUpdate={(prev, curr) =>
+                          prev?.header_variables?.[name]?.scope !==
+                          curr?.header_variables?.[name]?.scope
+                        }
+                      >
+                        {({ getFieldValue }) => {
+                          const scope = getFieldValue(["header_variables", name, "scope"]) ?? "global";
+                          return (
+                            <Form.Item {...restField} name={[name, "value"]} className="flex-1">
+                              <Input
+                                size="large"
+                                allowClear
+                                className="rounded-lg"
+                                placeholder={
+                                  scope === "per_user"
+                                    ? "Set by each user (leave blank)"
+                                    : "Global value"
+                                }
+                                disabled={scope === "per_user"}
+                              />
+                            </Form.Item>
+                          );
+                        }}
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, "scope"]}
+                        initialValue="global"
+                        className="flex-none"
+                        style={{ minWidth: 140 }}
+                      >
+                        <Select size="large">
+                          <Select.Option value="global">Global field</Select.Option>
+                          <Select.Option value="per_user">Per-user field</Select.Option>
+                        </Select>
+                      </Form.Item>
+                      <MinusCircleOutlined
+                        onClick={() => remove(name)}
+                        className="text-gray-500 hover:text-red-500 cursor-pointer"
+                      />
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    onClick={() => add({ name: "", value: "", scope: "global" })}
+                    icon={<PlusOutlined />}
+                    block
+                  >
+                    Add Header Variable
+                  </Button>
+                </div>
+              )}
+            </Form.List>
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
                 Static Headers
-                <Tooltip title="Send these key-value headers with every request to this MCP server.">
+                <Tooltip title="Send these key-value headers with every request to this MCP server. Values support ${VARIABLE_NAME} substitution from the Header Variables defined above.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>

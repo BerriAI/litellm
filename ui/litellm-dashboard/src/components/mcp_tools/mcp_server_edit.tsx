@@ -164,6 +164,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }));
   }, [mcpServer.static_headers]);
 
+  const initialHeaderVariables = React.useMemo(() => {
+    if (!Array.isArray(mcpServer.header_variables)) {
+      return [];
+    }
+    return mcpServer.header_variables.map((v) => ({
+      name: v?.name ?? "",
+      value: v?.value ?? "",
+      scope: v?.scope === "per_user" ? "per_user" : "global",
+    }));
+  }, [mcpServer.header_variables]);
+
   const initialEnvJson = React.useMemo(() => {
     const env = mcpServer.env ?? undefined;
     if (!env || Object.keys(env).length === 0) {
@@ -190,13 +201,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ...mcpServer,
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
+      header_variables: initialHeaderVariables,
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
     }),
-    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson],
+    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson, initialHeaderVariables],
   );
 
   // Initialize cost config from existing server data
@@ -377,6 +389,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // Ensure access groups is always a string array
       const {
         static_headers: staticHeadersList,
+        header_variables: headerVariablesList,
         credentials: credentialValues,
         stdio_config: rawStdioConfig,
         env_json: rawEnvJson,
@@ -403,6 +416,26 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             return acc;
           }, {})
         : ({} as Record<string, string>);
+
+      const seenVarNames = new Set<string>();
+      const headerVariables = Array.isArray(headerVariablesList)
+        ? (headerVariablesList as Array<Record<string, unknown>>).reduce(
+            (acc: Array<{ name: string; value: string | null; scope: string }>, entry) => {
+              const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+              if (!name || seenVarNames.has(name)) return acc;
+              seenVarNames.add(name);
+              const scope = entry?.scope === "per_user" ? "per_user" : "global";
+              const rawValue = typeof entry?.value === "string" ? entry.value : "";
+              acc.push({
+                name,
+                value: scope === "per_user" ? null : rawValue,
+                scope,
+              });
+              return acc;
+            },
+            [],
+          )
+        : [];
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -551,6 +584,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
+        header_variables: headerVariables,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
         // ``delegate_auth_to_upstream`` is only honored server-side for

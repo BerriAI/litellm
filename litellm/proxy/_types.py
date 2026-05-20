@@ -1249,6 +1249,46 @@ class MCPApprovalStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class MCPHeaderVariableScope(str, enum.Enum):
+    """Scope of a header variable: 'global' is shared by all users; 'per_user' must be
+    provided by each user before they can call the MCP server."""
+
+    global_ = "global"
+    per_user = "per_user"
+
+
+class MCPHeaderVariable(LiteLLMPydanticObjectBase):
+    """A single header variable definition.
+
+    ``value`` is required for ``global`` scope and ignored for ``per_user`` scope
+    (per-user values are stored separately in ``LiteLLM_MCPUserCredentials``).
+    """
+
+    name: str
+    value: Optional[str] = None
+    scope: str = "global"
+
+
+class MCPUserHeaderVariablesRequest(LiteLLMPydanticObjectBase):
+    """User submits their values for a server's per-user header variables."""
+
+    values: Dict[str, str] = Field(default_factory=dict)
+
+
+class MCPUserHeaderVariablesStatus(LiteLLMPydanticObjectBase):
+    """Describes which per-user header variables the caller has filled in vs. missing.
+
+    ``user_variables`` is the list of per-user variable names the admin defined.
+    ``missing_variables`` is the subset of those that the caller has not yet
+    provided a value for.
+    """
+
+    server_id: str
+    user_variables: List[str] = Field(default_factory=list)
+    filled_variables: List[str] = Field(default_factory=list)
+    missing_variables: List[str] = Field(default_factory=list)
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1267,6 +1307,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    header_variables: Optional[List[MCPHeaderVariable]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1351,6 +1392,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    header_variables: Optional[List[MCPHeaderVariable]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1417,6 +1459,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
+    header_variables: Optional[List[MCPHeaderVariable]] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",

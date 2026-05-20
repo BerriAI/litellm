@@ -10013,6 +10013,90 @@ export const listMCPUserCredentials = async (
   return response.json();
 };
 
+// ── MCP per-user header-variable helpers ─────────────────────────────────────
+
+export interface MCPUserHeaderVariablesStatus {
+  server_id: string;
+  user_variables: string[];
+  filled_variables?: string[];
+  missing_variables: string[];
+  values?: Record<string, string>;
+}
+
+/** Return per-user header-variable status for every MCP server the caller can see. */
+export const listMCPUserHeaderVariablesStatus = async (
+  accessToken: string,
+): Promise<MCPUserHeaderVariablesStatus[]> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/user-header-variables-status`
+    : `/v1/mcp/server/user-header-variables-status`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
+  const body = await response.json().catch(() => ({ servers: [] }));
+  if (!body || !Array.isArray(body.servers)) return [];
+  return body.servers;
+};
+
+export const getMCPUserHeaderVariables = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPUserHeaderVariablesStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-header-variables`
+    : `/v1/mcp/server/${serverId}/user-header-variables`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof (detail as Record<string, unknown>).error === "string"
+          ? ((detail as Record<string, unknown>).error as string)
+          : "Failed to load per-user header variables";
+    throw new Error(detailMsg);
+  }
+  return response.json();
+};
+
+export const putMCPUserHeaderVariables = async (
+  accessToken: string,
+  serverId: string,
+  values: Record<string, string>,
+): Promise<MCPUserHeaderVariablesStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-header-variables`
+    : `/v1/mcp/server/${serverId}/user-header-variables`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ values }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof (detail as Record<string, unknown>).error === "string"
+          ? ((detail as Record<string, unknown>).error as string)
+          : "Failed to save per-user header variables";
+    throw new Error(detailMsg);
+  }
+  return response.json();
+};
+
 // ============================================================
 // Memory management (/v1/memory)
 // ============================================================

@@ -396,6 +396,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                header_variables=server_config.get("header_variables", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
@@ -668,6 +669,18 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        header_variables_value = getattr(mcp_server, "header_variables", None)
+        header_variables_list: Optional[List[Dict[str, Any]]]
+        if isinstance(header_variables_value, str):
+            try:
+                parsed = json.loads(header_variables_value)
+            except (ValueError, TypeError):
+                parsed = None
+            header_variables_list = parsed if isinstance(parsed, list) else None
+        elif isinstance(header_variables_value, list):
+            header_variables_list = header_variables_value
+        else:
+            header_variables_list = None
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )
@@ -767,6 +780,7 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            header_variables=header_variables_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
@@ -1429,10 +1443,13 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            _resolved_static_headers = await self._resolve_static_headers_best_effort(
+                server
+            )
+            if _resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(_resolved_static_headers)
 
             # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
             # Skip entirely when the signer is not configured (avoid an unnecessary
@@ -1552,10 +1569,13 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            _resolved_static_headers = await self._resolve_static_headers_best_effort(
+                server
+            )
+            if _resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(_resolved_static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -1596,10 +1616,13 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            _resolved_static_headers = await self._resolve_static_headers_best_effort(
+                server
+            )
+            if _resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(_resolved_static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -1640,10 +1663,13 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            _resolved_static_headers = await self._resolve_static_headers_best_effort(
+                server
+            )
+            if _resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(_resolved_static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -1681,10 +1707,11 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"read_resource_from_server for {server.name}...")
 
-        if server.static_headers:
+        _resolved_static_headers = await self._resolve_static_headers_best_effort(server)
+        if _resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(server.static_headers)
+            extra_headers.update(_resolved_static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -1711,10 +1738,11 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"get_prompt_from_server for {server.name}...")
 
-        if server.static_headers:
+        _resolved_static_headers = await self._resolve_static_headers_best_effort(server)
+        if _resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(server.static_headers)
+            extra_headers.update(_resolved_static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -2622,6 +2650,89 @@ class MCPServerManager:
 
         return hook_result
 
+    async def _resolve_static_headers_best_effort(
+        self,
+        mcp_server: MCPServer,
+    ) -> Dict[str, str]:
+        """Return ``mcp_server.static_headers`` with global header variables resolved.
+
+        Lenient counterpart to ``_resolve_static_headers_for_call``: never
+        raises; per-user variable references are left as-is and a warning is
+        logged. Used in tool/prompt/resource listing paths that do not always
+        carry user context and where partial resolution beats hard-failing.
+        """
+        from litellm.proxy._experimental.mcp_server.header_variables import (
+            get_global_variable_values,
+            interpolate_static_headers,
+        )
+
+        if not mcp_server.static_headers:
+            return {}
+        if not mcp_server.header_variables:
+            return dict(mcp_server.static_headers)
+
+        context = get_global_variable_values(mcp_server)
+        resolved, missing = interpolate_static_headers(
+            mcp_server.static_headers, context
+        )
+        if missing:
+            verbose_logger.debug(
+                "MCP server %s has unresolved header variables %s during listing — "
+                "they will be sent as-is to the upstream server.",
+                mcp_server.server_id,
+                missing,
+            )
+        return resolved
+
+    async def _resolve_static_headers_for_call(
+        self,
+        mcp_server: MCPServer,
+        *,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Dict[str, str]:
+        """Return ``mcp_server.static_headers`` with header variables resolved.
+
+        Pulls global values from the server record and per-user values from
+        ``LiteLLM_MCPUserCredentials``. Raises ``HTTPException(400)`` with an
+        actionable message and dashboard link when a per-user variable is
+        referenced but not configured for the caller.
+        """
+        from litellm.proxy._experimental.mcp_server.header_variables import (
+            MissingPerUserHeaderVariablesError,
+            resolve_static_headers_for_user,
+        )
+
+        if not mcp_server.static_headers:
+            return {}
+        if not mcp_server.header_variables:
+            return dict(mcp_server.static_headers)
+
+        prisma_client = None
+        try:
+            from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
+            prisma_client = _prisma_client
+        except Exception:
+            prisma_client = None
+
+        user_id = (
+            getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        )
+
+        try:
+            return await resolve_static_headers_for_user(
+                mcp_server,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                proxy_base_url=os.environ.get("PROXY_BASE_URL"),
+            )
+        except MissingPerUserHeaderVariablesError as e:
+            # ``server.py`` converts HTTPException into a CallToolResult by
+            # stringifying ``detail`` — pass a plain human-readable message so
+            # the MCP client sees a clean error with the dashboard link, not a
+            # repr of a dict.
+            raise HTTPException(status_code=400, detail=str(e))
+
     def _create_during_hook_task(
         self,
         name: str,
@@ -2675,6 +2786,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2754,10 +2866,13 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        resolved_static_headers = await self._resolve_static_headers_for_call(
+            mcp_server, user_api_key_auth=user_api_key_auth
+        )
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -3039,6 +3154,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
@@ -3506,8 +3622,11 @@ class MCPServerManager:
 
         if not should_skip_health_check:
             extra_headers = {}
-            if server.static_headers:
-                extra_headers.update(server.static_headers)
+            _resolved_static_headers = await self._resolve_static_headers_best_effort(
+                server
+            )
+            if _resolved_static_headers:
+                extra_headers.update(_resolved_static_headers)
 
             client = await self._create_mcp_client(
                 server=server,

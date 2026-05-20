@@ -46,6 +46,30 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   }, {});
 };
 
+/**
+ * Convert the form's header_variables list into the backend payload shape.
+ * Drops blank rows, normalizes the scope, and clears the value field for
+ * per-user variables (their values are stored per-user, not on the server).
+ */
+const normalizeHeaderVariables = (list: unknown): Array<{ name: string; value: string | null; scope: string }> => {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  const out: Array<{ name: string; value: string | null; scope: string }> = [];
+  for (const entry of list as Array<Record<string, unknown>>) {
+    const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const scope = entry?.scope === "per_user" ? "per_user" : "global";
+    const rawValue = typeof entry?.value === "string" ? entry.value : "";
+    out.push({
+      name,
+      value: scope === "per_user" ? null : rawValue,
+      scope,
+    });
+  }
+  return out;
+};
+
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userRole,
   accessToken,
@@ -280,6 +304,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        header_variables: headerVariablesList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -293,6 +318,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
+      const headerVariables = normalizeHeaderVariables(headerVariablesList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -391,10 +417,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         static_headers: staticHeaders,
+        header_variables: headerVariables,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
       payload.static_headers = staticHeaders;
+      payload.header_variables = headerVariables;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 

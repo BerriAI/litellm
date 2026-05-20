@@ -42,6 +42,14 @@ class MCPServer(BaseModel):
     static_headers: Optional[Dict[str, str]] = (
         None  # static headers to forward to the MCP server
     )
+    # Header variable schema. Each entry is a dict with keys:
+    #   - name: variable name (e.g. "CORP_USERNAME")
+    #   - value: global value (only set when scope == "global")
+    #   - scope: "global" | "per_user"
+    # Per-user variables are resolved at call time from a per-user store; if any
+    # required per-user variable is missing for the caller, the call fails with
+    # an actionable error pointing the user to the dashboard.
+    header_variables: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None

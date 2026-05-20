@@ -7,7 +7,8 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer } from "../networking";
+import { deleteMCPServer, listMCPUserHeaderVariablesStatus } from "../networking";
+import UserHeaderVariablesModal from "./UserHeaderVariablesModal";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import { DataTable } from "../view_logs/table";
@@ -64,7 +65,45 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [userVarModalServer, setUserVarModalServer] = useState<MCPServer | null>(null);
+  /** server_id → number of missing per-user header variables for the calling user. */
+  const [perUserVarMissing, setPerUserVarMissing] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   const isInternalUser = userRole === "Internal User";
+
+  const refreshPerUserVarStatus = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const list = await listMCPUserHeaderVariablesStatus(accessToken);
+      const next = new Map<string, number>();
+      for (const entry of list) {
+        if (Array.isArray(entry.missing_variables) && entry.missing_variables.length > 0) {
+          next.set(entry.server_id, entry.missing_variables.length);
+        }
+      }
+      setPerUserVarMissing(next);
+    } catch (err) {
+      console.warn("Failed to load per-user header variables status", err);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    refreshPerUserVarStatus();
+  }, [refreshPerUserVarStatus]);
+
+  // Support deep links like /ui/?page=mcp-servers&fill_variables_for=<server_id>
+  // — opens the per-user setup modal for that server when the dashboard loads.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const fillFor = params.get("fill_variables_for");
+    if (!fillFor || !mcpServers || mcpServers.length === 0) return;
+    const target = mcpServers.find((s) => s.server_id === fillFor);
+    if (target) {
+      setUserVarModalServer(target);
+    }
+  }, [mcpServers]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -173,8 +212,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        perUserVarMissing,
+        (server: MCPServer) => setUserVarModalServer(server),
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, perUserVarMissing],
   );
 
   function handleDelete(server_id: string) {
@@ -459,6 +500,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             setByokModalServer(null);
           }}
           accessToken={accessToken || ""}
+        />
+      )}
+      {userVarModalServer && (
+        <UserHeaderVariablesModal
+          server={userVarModalServer}
+          open={!!userVarModalServer}
+          accessToken={accessToken}
+          onClose={() => setUserVarModalServer(null)}
+          onSaved={() => {
+            refreshPerUserVarStatus();
+          }}
         />
       )}
     </div>

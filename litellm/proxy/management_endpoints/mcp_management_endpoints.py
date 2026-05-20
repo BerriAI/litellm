@@ -146,6 +146,7 @@ if MCP_AVAILABLE:
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
+        MCPUserHeaderVariablesRequest,
         NewMCPServerRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
@@ -484,6 +485,32 @@ if MCP_AVAILABLE:
         allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
 
+    def _mask_header_variables_for_user(
+        header_variables: Any,
+    ) -> Any:
+        """Strip ``value`` from global header variables for non-admin viewers.
+
+        Per-user variable definitions are kept (users need to see which ones they
+        must fill in). Global values may be admin secrets and are masked. Returns
+        the input unchanged when it isn't a list.
+        """
+        if not isinstance(header_variables, list):
+            return header_variables
+        masked: List[Dict[str, Any]] = []
+        for entry in header_variables:
+            if not isinstance(entry, dict):
+                continue
+            scope = entry.get("scope") if entry.get("scope") in ("global", "per_user") else "global"
+            masked.append(
+                {
+                    "name": entry.get("name"),
+                    "scope": scope,
+                    "value": None,
+                    "has_value": bool(entry.get("value")) if scope == "global" else None,
+                }
+            )
+        return masked
+
     def _sanitize_mcp_server_for_non_admin(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
@@ -513,6 +540,9 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.header_variables = _mask_header_variables_for_user(
+            sanitized.header_variables
+        )
         return sanitized
 
     def _sanitize_mcp_server_list_for_non_admin(
@@ -544,6 +574,9 @@ if MCP_AVAILABLE:
         sanitized.allowed_tools = []
         sanitized.mcp_access_groups = []
         sanitized.teams = []
+        sanitized.header_variables = _mask_header_variables_for_user(
+            sanitized.header_variables
+        )
 
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -651,6 +684,7 @@ if MCP_AVAILABLE:
             extra_headers=payload.extra_headers or [],
             mcp_info=payload.mcp_info,
             static_headers=payload.static_headers,
+            header_variables=payload.header_variables,
             command=payload.command,
             args=payload.args,
             env=payload.env,
@@ -1923,6 +1957,192 @@ if MCP_AVAILABLE:
 
         _invalidate_byok_cred_cache(user_id, server_id)
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
+
+    # ── Per-user header variable endpoints ────────────────────────────────────
+
+    @router.get(
+        "/server/user-header-variables-status",
+        description=(
+            "For every MCP server the caller has access to, return the list of "
+            "per-user header variables the caller still needs to fill in before "
+            "they can use the server. Drives the red highlight on the dashboard."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_user_header_variables_status_bulk(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        from litellm.proxy._experimental.mcp_server.header_variables import (
+            find_missing_per_user_variables,
+            get_per_user_variable_names,
+            get_user_header_variables,
+        )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            # Without a user ID we can't look up per-user values.
+            return {"servers": []}
+
+        results: List[Dict[str, Any]] = []
+        for server in global_mcp_server_manager.get_registry().values():
+            per_user_names = get_per_user_variable_names(server)
+            if not per_user_names:
+                continue
+            user_values = await get_user_header_variables(
+                prisma_client, user_id, server.server_id
+            )
+            missing = find_missing_per_user_variables(server, user_values)
+            results.append(
+                {
+                    "server_id": server.server_id,
+                    "user_variables": per_user_names,
+                    "missing_variables": missing,
+                }
+            )
+        return {"servers": results}
+
+
+    @router.get(
+        "/server/{server_id}/user-header-variables",
+        description=(
+            "Get the calling user's stored values for the server's per-user header "
+            "variables, plus which ones are still missing."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_user_header_variables(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Return the user's stored per-user header-variable values for this server,
+        plus a separate ``missing_variables`` list of names the user still needs to
+        provide before the server can be called.
+        """
+        from litellm.proxy._experimental.mcp_server.header_variables import (
+            find_missing_per_user_variables,
+            get_per_user_variable_names,
+            get_user_header_variables,
+        )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        mcp_server_row = await get_mcp_server(prisma_client, server_id)
+        if mcp_server_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+
+        # Build an in-memory MCPServer view so the helper module operates on a
+        # consistent shape regardless of how the row was loaded.
+        in_memory_server = await global_mcp_server_manager.build_mcp_server_from_table(
+            mcp_server_row,
+            credentials_are_encrypted=True,
+        )
+
+        per_user_names = get_per_user_variable_names(in_memory_server)
+        user_values = await get_user_header_variables(
+            prisma_client, user_id, server_id
+        )
+        missing = find_missing_per_user_variables(in_memory_server, user_values)
+        return {
+            "server_id": server_id,
+            "user_variables": per_user_names,
+            "filled_variables": sorted(
+                [n for n in per_user_names if user_values.get(n)]
+            ),
+            "missing_variables": missing,
+            # Values are intentionally returned so the user can edit them in the UI.
+            # They are scoped to the calling user only.
+            "values": {n: user_values.get(n, "") for n in per_user_names},
+        }
+
+    @router.put(
+        "/server/{server_id}/user-header-variables",
+        description=(
+            "Set the calling user's values for the server's per-user header "
+            "variables. Only the keys present in ``values`` are updated; missing "
+            "keys retain their previous values."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def put_mcp_user_header_variables(
+        server_id: str,
+        payload: MCPUserHeaderVariablesRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        from litellm.proxy._experimental.mcp_server.header_variables import (
+            find_missing_per_user_variables,
+            get_per_user_variable_names,
+            get_user_header_variables,
+            store_user_header_variables,
+        )
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        mcp_server_row = await get_mcp_server(prisma_client, server_id)
+        if mcp_server_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+
+        in_memory_server = await global_mcp_server_manager.build_mcp_server_from_table(
+            mcp_server_row,
+            credentials_are_encrypted=True,
+        )
+
+        per_user_names = set(get_per_user_variable_names(in_memory_server))
+        # Reject keys that aren't declared per-user variables on this server —
+        # prevents the user from polluting the store with arbitrary names.
+        unknown = sorted(set(payload.values.keys()) - per_user_names)
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        "Unknown per-user header variable name(s): "
+                        f"{unknown}. Allowed: {sorted(per_user_names)}"
+                    )
+                },
+            )
+
+        existing_values = await get_user_header_variables(
+            prisma_client, user_id, server_id
+        )
+        merged = {**existing_values, **payload.values}
+        await store_user_header_variables(prisma_client, user_id, server_id, merged)
+
+        missing = find_missing_per_user_variables(in_memory_server, merged)
+        return {
+            "server_id": server_id,
+            "user_variables": sorted(per_user_names),
+            "filled_variables": sorted([n for n in per_user_names if merged.get(n)]),
+            "missing_variables": missing,
+            "values": {n: merged.get(n, "") for n in per_user_names},
+        }
 
     # ── OAuth2 user-credential endpoints ──────────────────────────────────────
 

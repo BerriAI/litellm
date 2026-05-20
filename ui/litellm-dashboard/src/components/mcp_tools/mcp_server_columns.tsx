@@ -5,7 +5,10 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined } from "@ant-design/icons";
+import { CheckOutlined, WarningOutlined } from "@ant-design/icons";
+
+/** Map of server_id → number of unfilled per-user header variables. */
+export type PerUserVarMissingMap = Map<string, number>;
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,6 +95,8 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  perUserVarMissing?: PerUserVarMissingMap,
+  onFillUserVariables?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -113,6 +118,8 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const logoUrl = row.original.mcp_info?.logo_url;
       const name = row.original.server_name;
+      const missingCount = perUserVarMissing?.get(row.original.server_id) ?? 0;
+      const hasMissing = missingCount > 0;
       return (
         <div className="flex items-center gap-2">
           {logoUrl ? (
@@ -120,10 +127,26 @@ export const mcpServerColumns = (
               src={logoUrl}
               alt={`${name ?? "MCP"} logo`}
               className="h-5 w-5 rounded object-contain flex-shrink-0"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
             />
           ) : null}
-          <span>{name}</span>
+          <span className={hasMissing ? "text-red-700 font-medium" : undefined}>{name}</span>
+          {hasMissing && (
+            <Tooltip
+              title={
+                missingCount === 1
+                  ? "1 per-user credential is missing. Click 'Set up' to fill it in."
+                  : `${missingCount} per-user credentials are missing. Click 'Set up' to fill them in.`
+              }
+            >
+              <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                <WarningOutlined style={{ fontSize: 10 }} />
+                {missingCount} missing
+              </span>
+            </Tooltip>
+          )}
         </div>
       );
     },
@@ -258,6 +281,32 @@ export const mcpServerColumns = (
         <Tooltip title={date.toLocaleString()}>
           <span className="text-xs text-gray-600">{date.toLocaleDateString()}</span>
         </Tooltip>
+      );
+    },
+  },
+  {
+    id: "user_variables_setup",
+    header: "Setup",
+    cell: ({ row }) => {
+      const missingCount = perUserVarMissing?.get(row.original.server_id) ?? 0;
+      if (missingCount === 0) {
+        return <span className="text-gray-300 text-xs">—</span>;
+      }
+      if (!onFillUserVariables) {
+        return (
+          <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+            <WarningOutlined style={{ fontSize: 10 }} />
+            {missingCount} missing
+          </span>
+        );
+      }
+      return (
+        <button
+          className="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md font-medium transition-colors shadow-sm inline-flex items-center gap-1"
+          onClick={() => onFillUserVariables(row.original)}
+        >
+          <WarningOutlined style={{ fontSize: 10 }} /> Set up ({missingCount})
+        </button>
       );
     },
   },

@@ -15,6 +15,15 @@ vi.mock("../networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  listMCPUserHeaderVariablesStatus: vi.fn().mockResolvedValue([]),
+  getMCPUserHeaderVariables: vi.fn().mockResolvedValue({
+    server_id: "",
+    user_variables: [],
+    filled_variables: [],
+    missing_variables: [],
+    values: {},
+  }),
+  putMCPUserHeaderVariables: vi.fn(),
 }));
 
 // Mock NotificationsManager
