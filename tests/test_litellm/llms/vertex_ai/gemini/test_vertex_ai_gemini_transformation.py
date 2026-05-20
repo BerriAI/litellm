@@ -563,7 +563,9 @@ def test_parallel_tool_calls_copy_thought_signature_from_thinking_block():
     assert len(contents) == 1
     model_parts = contents[0]["parts"]
     function_parts = [
-        p for p in model_parts if p.get("functionCall") is not None or p.get("function_call") is not None
+        p
+        for p in model_parts
+        if p.get("functionCall") is not None or p.get("function_call") is not None
     ]
     assert len(function_parts) == 2
     assert all(p.get("thoughtSignature") == "sig-turn-123" for p in function_parts)
@@ -613,9 +615,7 @@ def test_parallel_tool_calls_copy_thought_signature_from_text_thinking_block():
         if p.get("functionCall") is not None or p.get("function_call") is not None
     ]
     assert len(function_parts) == 2
-    assert all(
-        p.get("thoughtSignature") == "sig-text-thinking" for p in function_parts
-    )
+    assert all(p.get("thoughtSignature") == "sig-text-thinking" for p in function_parts)
 
 
 def test_thought_signature_with_function_call_mode():

@@ -393,8 +393,8 @@ def test_multiple_function_call():
                     "role": "model",
                     "parts": [
                         {"text": "test"},
-                        {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                        {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                        {"functionCall": {"name": "test", "args": {"arg": "test"}}},
+                        {"functionCall": {"name": "test2", "args": {"arg": "test2"}}},
                     ],
                 },
                 {
@@ -502,8 +502,8 @@ def test_multiple_function_call_changed_text_pos():
                 "role": "model",
                 "parts": [
                     {"text": "test"},
-                    {"function_call": {"name": "test", "args": {"arg": "test"}}},
-                    {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
+                    {"functionCall": {"name": "test", "args": {"arg": "test"}}},
+                    {"functionCall": {"name": "test2", "args": {"arg": "test2"}}},
                 ],
             },
             {
@@ -1280,7 +1280,6 @@ def test_process_gemini_media():
     print("base64_result", base64_result)
     assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
-
 
 
 def test_get_image_mime_type_from_url():

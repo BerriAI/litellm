@@ -991,9 +991,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     # copy it to parallel function calls missing thoughtSignature.
                     turn_thought_signature = None
                     for existing_part in assistant_content:
-                        if (
-                            isinstance(existing_part, dict)
-                            and existing_part.get("thoughtSignature")
+                        if isinstance(existing_part, dict) and existing_part.get(
+                            "thoughtSignature"
                         ):
                             turn_thought_signature = existing_part.get(
                                 "thoughtSignature"
