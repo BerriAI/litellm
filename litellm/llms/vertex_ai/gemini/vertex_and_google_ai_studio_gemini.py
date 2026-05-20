@@ -2625,6 +2625,7 @@ async def make_call(
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2668,6 +2669,7 @@ def make_sync_call(
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
+        response=response,
     )
 
     # LOGGING
@@ -3129,12 +3131,14 @@ class ModelResponseIterator:
         sync_stream: bool,
         logging_obj: LoggingClass,
         response_headers: Optional[Dict[str, str]] = None,
+        response: Optional[httpx.Response] = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
         )
 
         self.streaming_response = streaming_response
+        self.response: Optional[httpx.Response] = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
         self.accumulated_json = ""
         self.sent_first_chunk = False
@@ -3429,3 +3433,74 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    async def aclose(self) -> None:
+        """
+        Close the underlying async iterator and HTTP response, if present.
+
+        Invoked by CustomStreamWrapper.aclose so streaming connections are
+        released even when callers abort iteration early.
+        """
+        try:
+            streaming = self.streaming_response
+            if streaming is not None and hasattr(streaming, "aclose"):
+                await streaming.aclose()
+        except Exception as e:
+            verbose_logger.debug(
+                "ModelResponseIterator.aclose: error closing streaming_response: %s",
+                e,
+            )
+
+        try:
+            async_iter = getattr(self, "async_response_iterator", None)
+            if (
+                async_iter is not None
+                and async_iter is not self.streaming_response
+                and hasattr(async_iter, "aclose")
+            ):
+                await async_iter.aclose()
+        except Exception as e:
+            verbose_logger.debug(
+                "ModelResponseIterator.aclose: error closing async_response_iterator: %s",
+                e,
+            )
+
+        try:
+            if self.response is not None and not getattr(
+                self.response, "is_closed", False
+            ):
+                resp = self.response
+                if hasattr(resp, "aclose"):
+                    await resp.aclose()  # type: ignore[func-returns-value]
+                elif hasattr(resp, "close"):
+                    resp.close()
+        except Exception as e:
+            verbose_logger.debug(
+                "ModelResponseIterator.aclose: error closing response: %s",
+                e,
+            )
+
+    def close(self) -> None:
+        """Sync close hook for non-async streaming (iter_lines())."""
+        try:
+            iterator = getattr(self, "response_iterator", None)
+            if iterator is not None and hasattr(iterator, "close"):
+                iterator.close()
+        except Exception as e:
+            verbose_logger.debug(
+                "ModelResponseIterator.close: error closing response_iterator: %s",
+                e,
+            )
+
+        try:
+            if (
+                self.response is not None
+                and hasattr(self.response, "close")
+                and not getattr(self.response, "is_closed", False)
+            ):
+                self.response.close()
+        except Exception as e:
+            verbose_logger.debug(
+                "ModelResponseIterator.close: error closing response: %s",
+                e,
+            )
