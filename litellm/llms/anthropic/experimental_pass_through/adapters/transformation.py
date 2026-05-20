@@ -14,6 +14,7 @@ from typing import (
     cast,
 )
 
+from litellm.llms.anthropic.common_utils import _is_valid_redacted_thinking_data
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -625,7 +626,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 data = content.get("data")
-                                if not isinstance(data, str) or not data.strip():
+                                if not _is_valid_redacted_thinking_data(data):
                                     continue
                                 redacted_thinking_block = (
                                     ChatCompletionRedactedThinkingBlock(

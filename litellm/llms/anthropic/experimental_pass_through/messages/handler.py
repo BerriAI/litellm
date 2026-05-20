@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, c
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
-    strip_empty_text_blocks_from_anthropic_messages,
+    sanitize_anthropic_messages_for_upstream,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -203,7 +203,9 @@ async def anthropic_messages(
     # causes the next /v1/messages call to 400.  /v1/chat/completions
     # already handles this in anthropic_messages_pt; sanitize the native
     # Anthropic Messages path here for the same guarantee.  See #22930.
-    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    messages = sanitize_anthropic_messages_for_upstream(
+        messages=messages, api_base=api_base
+    )
 
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False
@@ -354,7 +356,9 @@ def anthropic_messages_handler(
     # Sanitize empty text blocks here too so the sync entry point
     # (litellm.messages.create -> anthropic_messages_handler) gets the same
     # protection as the async wrapper.  Idempotent when called twice.
-    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    messages = sanitize_anthropic_messages_for_upstream(
+        messages=messages, api_base=api_base
+    )
 
     metadata = validate_anthropic_api_metadata(metadata)
 

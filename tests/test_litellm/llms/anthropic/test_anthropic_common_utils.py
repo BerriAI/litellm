@@ -1315,13 +1315,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
             strip_empty_text_blocks_from_anthropic_messages,
         )
 
-        valid_data = "abc123valid"
+        valid_data = "YWJj"  # base64("abc")
         msgs = [
             {
                 "role": "assistant",
                 "content": [
                     {"type": "redacted_thinking", "data": valid_data},
                     {"type": "redacted_thinking", "data": ""},
+                    {"type": "redacted_thinking", "data": "not-valid!!!"},
                     {"type": "redacted_thinking"},
                     {"type": "text", "text": "answer"},
                 ],
@@ -1333,6 +1334,39 @@ class TestAnthropicThinkingSignatureSelfHeal:
             "text",
         ]
         assert out[0]["content"][0]["data"] == valid_data
+
+    def test_sanitize_anthropic_messages_strips_redacted_for_sophnet(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_anthropic_messages_for_upstream,
+        )
+
+        valid_data = "YWJj"
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": valid_data},
+                    {"type": "text", "text": "answer"},
+                ],
+            }
+        ]
+        out = sanitize_anthropic_messages_for_upstream(
+            msgs,
+            api_base="https://www.sophnet.com/api/open-apis/anthropic",
+        )
+        assert [b["type"] for b in out[0]["content"]] == ["text"]
+
+    def test_is_anthropic_invalid_redacted_thinking_data_error(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_redacted_thinking_data_error,
+        )
+
+        assert is_anthropic_invalid_redacted_thinking_data_error(
+            "messages.0.content.1: Invalid `data` in `redacted_thinking` block"
+        )
+        assert not is_anthropic_invalid_redacted_thinking_data_error(
+            "Invalid `signature` in `thinking` block"
+        )
 
     def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1370,6 +1404,18 @@ class TestAnthropicThinkingSignatureSelfHeal:
         resp = httpx.Response(400, request=req, text=err_text)
         err = httpx.HTTPStatusError("bad", request=req, response=resp)
         assert config.should_retry_anthropic_messages_on_http_error(err, {}) is True
+
+        redacted_err_text = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.0.content.1: Invalid `data` in `redacted_thinking` block"},'
+            '"request_id":"req_test"}'
+        )
+        resp_redacted = httpx.Response(400, request=req, text=redacted_err_text)
+        err_redacted = httpx.HTTPStatusError("bad", request=req, response=resp_redacted)
+        assert (
+            config.should_retry_anthropic_messages_on_http_error(err_redacted, {})
+            is True
+        )
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)

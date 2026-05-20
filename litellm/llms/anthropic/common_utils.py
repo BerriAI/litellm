@@ -2,6 +2,8 @@
 This file contains common utils for anthropic calls.
 """
 
+import base64
+import binascii
 import copy
 from typing import Any, Dict, List, Optional, Union
 
@@ -769,6 +771,14 @@ def strip_advisor_blocks_from_messages(
     return messages
 
 
+def is_anthropic_invalid_redacted_thinking_data_error(error_text: str) -> bool:
+    """Detect 400 when redacted_thinking ``data`` is rejected by the upstream API."""
+    if not error_text:
+        return False
+    lower = error_text.lower()
+    return "invalid" in lower and "redacted_thinking" in lower and "data" in lower
+
+
 def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     """
     Detect Anthropic 400 when encrypted thinking signatures in history do not match
@@ -786,6 +796,66 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
         and "thinking" in lower
         and "block" in lower
     )
+
+
+def strip_redacted_thinking_blocks_from_anthropic_messages(
+    messages: List[Any],
+) -> List[Any]:
+    """Remove all ``redacted_thinking`` blocks from message content lists."""
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        content = m.get("content")
+        if not isinstance(content, list):
+            out.append(m)
+            continue
+        filtered = [
+            b
+            for b in content
+            if not (isinstance(b, dict) and b.get("type") == "redacted_thinking")
+        ]
+        if not filtered:
+            continue
+        if len(filtered) == len(content):
+            out.append(m)
+        else:
+            out.append({**m, "content": filtered})
+    return out
+
+
+def strip_redacted_thinking_blocks_from_anthropic_messages_request_dict(
+    data: Dict[str, Any],
+) -> None:
+    """Mutate an Anthropic Messages request dict: drop ``redacted_thinking`` blocks."""
+    msgs = data.get("messages")
+    if isinstance(msgs, list):
+        data["messages"] = strip_redacted_thinking_blocks_from_anthropic_messages(msgs)
+
+
+def _is_official_anthropic_api_base(api_base: Optional[str]) -> bool:
+    if not api_base:
+        return True
+    lower = api_base.lower()
+    return "anthropic.com" in lower
+
+
+def sanitize_anthropic_messages_for_upstream(
+    messages: List[Any],
+    api_base: Optional[str] = None,
+) -> List[Any]:
+    """
+    Sanitize Anthropic Messages history before forwarding to an upstream API.
+
+    - Drops empty text blocks and invalid ``redacted_thinking`` blocks
+    - Drops all ``redacted_thinking`` for non-official Anthropic-compatible gateways
+      (e.g. Sophnet) that cannot round-trip encrypted thinking payloads
+    """
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    if not _is_official_anthropic_api_base(api_base):
+        messages = strip_redacted_thinking_blocks_from_anthropic_messages(messages)
+    return messages
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
@@ -883,15 +953,24 @@ def _is_empty_text_block(block: Any) -> bool:
     return not isinstance(text, str) or not text.strip()
 
 
+def _is_valid_redacted_thinking_data(data: Any) -> bool:
+    if not isinstance(data, str) or not data.strip():
+        return False
+    try:
+        base64.b64decode(data, validate=True)
+        return True
+    except (binascii.Error, ValueError):
+        return False
+
+
 def _is_invalid_redacted_thinking_block(block: Any) -> bool:
     """
     Anthropic-compatible providers reject redacted_thinking blocks with missing,
-    empty, or non-string ``data`` (e.g. Sophnet 400 on multi-turn Claude Code).
+    empty, non-string, or non-base64 ``data`` (e.g. Sophnet 400 on Claude Code).
     """
     if not isinstance(block, dict) or block.get("type") != "redacted_thinking":
         return False
-    data = block.get("data")
-    return not isinstance(data, str) or not data.strip()
+    return not _is_valid_redacted_thinking_data(block.get("data"))
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
