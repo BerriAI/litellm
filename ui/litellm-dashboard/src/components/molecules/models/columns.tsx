@@ -421,7 +421,7 @@ export const columns = (
         // clicks. Pair `loading` with `disabled` derived from the same condition
         // so a double-click during a pending PATCH cannot send a second,
         // conflicting `blocked` value.
-        const isPausing = pausingModelId === model.model_info.id;
+        const isPausing = pausingModelId === model.model_info?.id;
         return (
           <div className="flex items-center justify-end gap-2 pr-4">
             <Tooltip title={pauseTooltip}>
