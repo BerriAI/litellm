@@ -39,8 +39,6 @@ _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
-    preserve_events_added_during_flush = True
-
     def __init__(
         self,
         api_key: str | None = None,

@@ -7323,15 +7323,22 @@ class Router:
             _existing_shared_mode = (
                 cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
             ).get("mode")
-            if (
-                _existing_shared_mode is not None
-                and _shared_model_info.get("mode") != _existing_shared_mode
-            ):
-                # Keep the built-in bridge mode stable for shared backend keys.
-                # Multiple aliases can point at the same provider/model backend,
-                # but their deployment-level overrides should not downgrade the
-                # backend from responses -> chat via last-write-wins registration.
-                _deployment_mode = _shared_model_info.get("mode")
+            _deployment_mode = _shared_model_info.get("mode")
+            # Keep the built-in bridge mode stable for shared backend keys.
+            # Multiple aliases can point at the same provider/model backend,
+            # but their deployment-level overrides should not downgrade the
+            # backend from responses -> chat via last-write-wins registration.
+            # Only preserve in that specific direction so legitimate upgrades
+            # (e.g. chat -> responses) and unrelated mode changes still apply,
+            # and so a missing deployment mode does not silently clear the
+            # existing shared backend mode.
+            _is_responses_to_chat_downgrade = (
+                _existing_shared_mode == "responses" and _deployment_mode == "chat"
+            )
+            _would_clear_existing_mode = (
+                _existing_shared_mode is not None and _deployment_mode is None
+            )
+            if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
                 if _deployment_mode is not None:
                     verbose_router_logger.warning(
                         "Router: preserving existing mode=%s for shared backend "

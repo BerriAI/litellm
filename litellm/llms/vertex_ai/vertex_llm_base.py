@@ -507,10 +507,18 @@ class VertexBase:
         try:
             verbose_logger.debug("Background proactive credential refresh")
             await asyncify(self.refresh_auth)(credentials)
-            self._credentials_project_mapping[credential_cache_key] = (
-                credentials,
-                credential_project_id,
-            )
+            # Only update the cache if it still points at the credentials
+            # object we just refreshed. The per-key async lock is not held
+            # here, so a concurrent INVALID path may have already replaced
+            # this entry (e.g. via _handle_reauthentication_async, which
+            # creates a fresh credentials object). In that case our write
+            # would clobber the newer entry with a stale reference.
+            cached_creds, _ = self._unpack_cached_credentials(credential_cache_key)
+            if cached_creds is credentials:
+                self._credentials_project_mapping[credential_cache_key] = (
+                    credentials,
+                    credential_project_id,
+                )
         except Exception:
             verbose_logger.debug(
                 "Background credential refresh failed, will retry on next request",
