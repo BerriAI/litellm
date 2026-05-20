@@ -6,6 +6,8 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
+from opentelemetry.trace import Status, StatusCode
+
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -116,6 +118,7 @@ def test_chat_completions_success_path_stamps_200(
 
     otel.set_response_status_code_attribute(server_span, 200)
     otel.set_preprocessing_duration_attribute(server_span, {})
+    server_span.set_status(Status(StatusCode.OK))
     server_span.end()
 
     assert_server_span_attrs(

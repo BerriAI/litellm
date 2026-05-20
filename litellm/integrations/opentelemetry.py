@@ -2964,6 +2964,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # The management wrapper has no other hook that closes the SERVER span.
             self.set_response_status_code_attribute(parent_otel_span, 200)
+            parent_otel_span.set_status(Status(StatusCode.OK))
             parent_otel_span.end(end_time=_end_time_ns)
 
     async def async_management_endpoint_failure_hook(
@@ -3024,6 +3025,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             error_information = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=_exception,
             )
+            parent_otel_span.set_status(Status(StatusCode.ERROR))
             self._record_exception_on_span(
                 span=parent_otel_span,
                 kwargs={

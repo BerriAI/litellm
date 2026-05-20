@@ -12,6 +12,7 @@ from typing import Any, Optional
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import StatusCode
 
 from litellm.integrations.opentelemetry import (
     HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
@@ -68,6 +69,13 @@ def assert_server_span_attrs(
 
     duration_ns = (span.end_time or 0) - (span.start_time or 0)
     assert duration_ns > 0, f"{where}: duration must be > 0, got {duration_ns}ns"
+
+    expected_span_status = StatusCode.ERROR if expected_status >= 400 else StatusCode.OK
+    actual_span_status = span.status.status_code
+    assert actual_span_status == expected_span_status, (
+        f"{where}: span.status = {actual_span_status!r}, "
+        f"expected {expected_span_status!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
