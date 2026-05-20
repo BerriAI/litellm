@@ -3230,6 +3230,13 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
             )
+            # Pre-flight auth check for pass-through servers: surface upstream
+            # 401/403 as a proper challenge before the SSE session commits 200
+            # headers, so clients can refresh their OAuth token instead of
+            # being stuck with a silently empty tool list.
+            await _check_passthrough_upstream_auth(
+                scope, user_api_key_auth, mcp_servers, _sse_client_ip
+            )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
