@@ -1008,8 +1008,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tools: List,
         strict_sanitize: bool = False,
     ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
-        anthropic_tools = []
-        mcp_servers = []
+        anthropic_tools: List[AllAnthropicToolsValues] = []
+        mcp_servers: List[AnthropicMcpServerTool] = []
         for tool in tools:
             if not isinstance(tool, dict):
                 if strict_sanitize:
@@ -1026,11 +1026,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     continue
                 raise ValueError(f"Missing required tool field: type ({tool})")
             if "input_schema" in tool:  # assume in anthropic format
-                anthropic_tools.append(tool)
+                anthropic_tools.append(cast(AllAnthropicToolsValues, tool))
             else:  # assume openai tool call
+                openai_tool = cast(ChatCompletionToolParam, tool)
                 if strict_sanitize:
                     try:
-                        new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                        new_tool, mcp_server_tool = self._map_tool_helper(openai_tool)
                     except Exception:
                         litellm.verbose_logger.warning(
                             "Anthropic tool sanitize: dropping invalid tool: %r",
@@ -1039,7 +1040,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         )
                         continue
                 else:
-                    new_tool, mcp_server_tool = self._map_tool_helper(tool)
+                    new_tool, mcp_server_tool = self._map_tool_helper(openai_tool)
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)

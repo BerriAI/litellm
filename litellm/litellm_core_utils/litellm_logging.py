@@ -3427,7 +3427,12 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> Union[
+        ModelResponse,
+        ResponseCompletedEvent,
+        ResponseIncompleteEvent,
+        ResponseFailedEvent,
+    ]:
         """
         Handles logging for Anthropic messages responses.
 
