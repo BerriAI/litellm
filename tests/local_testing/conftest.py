@@ -33,7 +33,6 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
     litellm.model_cost.setdefault(_k, _v)
-del _k, _v
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
