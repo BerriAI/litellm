@@ -1115,7 +1115,7 @@ def responses(
                 stream=stream,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
-                timeout=timeout or request_timeout,
+                timeout=timeout if timeout is not None else request_timeout,
                 **kwargs,
             )
 
