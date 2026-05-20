@@ -69,6 +69,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         BedrockInvokeAnthropicMessagesRequest.__annotations__.keys()
     )
 
+    # Subkeys of ``output_config`` that Bedrock Invoke accepts on Anthropic
+    # Claude models. Bedrock currently only supports ``effort`` here; any other
+    # subkey (notably ``format``, which Anthropic added for Structured Outputs
+    # and which newer Claude Code releases send) causes Bedrock to 400 with
+    # ``output_config.<key>: Extra inputs are not permitted``. Add an entry
+    # only when AWS officially documents support for it on Bedrock Invoke.
+    BEDROCK_INVOKE_ALLOWED_OUTPUT_CONFIG_KEYS = frozenset({"effort"})
+
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
@@ -449,6 +457,59 @@ class AmazonAnthropicClaudeMessagesConfig(
         else:
             anthropic_messages_request.pop("context_management", None)
 
+    def _sanitize_output_config_for_bedrock_invoke(
+        self,
+        anthropic_messages_request: Dict,
+    ) -> None:
+        """
+        Strip ``output_config`` subkeys that Bedrock Invoke does not accept.
+
+        Bedrock Invoke on Anthropic Claude only accepts ``effort`` inside
+        ``output_config``. Other subkeys — notably ``format`` (the new Anthropic
+        Structured Outputs sub-key that some Claude Code releases send
+        automatically) — cause Bedrock to 400 with
+        ``output_config.format: Extra inputs are not permitted``.
+
+        Behavior (in-place):
+          * Non-dict ``output_config`` is removed entirely.
+          * ``output_config.format`` is converted to an inline schema in the
+            last user message (same path as the legacy top-level
+            ``output_format`` field) so structured-output intent is preserved
+            on Bedrock instead of silently dropped.
+          * Any other unsupported subkey is removed.
+          * If nothing remains after filtering, ``output_config`` is removed
+            entirely so the safety-net allowlist sees a clean request body.
+        """
+        output_config = anthropic_messages_request.get("output_config")
+        if output_config is None:
+            return
+        if not isinstance(output_config, dict):
+            anthropic_messages_request.pop("output_config", None)
+            return
+
+        output_format = output_config.get("format")
+        if isinstance(output_format, dict):
+            self._convert_output_format_to_inline_schema(
+                output_format=output_format,
+                anthropic_messages_request=anthropic_messages_request,
+            )
+
+        sanitized = {
+            k: v
+            for k, v in output_config.items()
+            if k in self.BEDROCK_INVOKE_ALLOWED_OUTPUT_CONFIG_KEYS
+        }
+        dropped = sorted(set(output_config) - set(sanitized))
+        if dropped:
+            verbose_logger.debug(
+                "Bedrock Invoke: stripping unsupported output_config subkeys: %s",
+                dropped,
+            )
+        if sanitized:
+            anthropic_messages_request["output_config"] = sanitized
+        else:
+            anthropic_messages_request.pop("output_config", None)
+
     def _convert_output_format_to_inline_schema(
         self,
         output_format: Dict,
@@ -630,6 +691,14 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        # Strip output_config subkeys that Bedrock Invoke doesn't accept
+        # (e.g. `format`, which newer Claude Code releases send for Structured
+        # Outputs). Done before the drop_params check below so the latter only
+        # has to reason about whether `effort` itself is supported.
+        self._sanitize_output_config_for_bedrock_invoke(
+            anthropic_messages_request=anthropic_messages_request,
+        )
 
         if (
             litellm.drop_params is True
