@@ -867,10 +867,12 @@ def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
 def test_bedrock_messages_strips_context_management():
     """
     Ensure context_management is stripped from the request before sending to
-    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+    Bedrock Invoke when it carries only LiteLLM-internal edits (e.g.
+    clear_thinking_20251015, which is consumed via thinking injection).
 
-    Claude Code sends context_management on every request; leaving it in the body
-    causes a 400 "context_management: Extra inputs are not permitted" from Bedrock.
+    Claude Code sends context_management on every request; leaving such edits
+    in the body causes a 400 "context_management: Extra inputs are not
+    permitted" from Bedrock.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -895,6 +897,77 @@ def test_bedrock_messages_strips_context_management():
         "context_management" not in result
     ), "context_management should be stripped — Bedrock Invoke rejects it"
     assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
+    """
+    Bedrock InvokeModel supports compaction when paired with the
+    ``compact-2026-01-12`` anthropic-beta header, even though the Converse API
+    does not. The transformation should:
+      1. Keep ``context_management`` with compact_20260112 edits in the body
+         (Bedrock rejects unknown top-level fields, but accepts this one with
+         the right beta).
+      2. Auto-inject ``compact-2026-01-12`` into ``anthropic_beta``.
+
+    Ref: https://github.com/BerriAI/litellm/issues/27532
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "compact_20260112"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-6-20250929-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("context_management") == {
+        "edits": [{"type": "compact_20260112"}]
+    }
+    assert "compact-2026-01-12" in result.get("anthropic_beta", [])
+    assert result["max_tokens"] == 4096
+
+
+def test_bedrock_messages_filters_unsupported_context_management_edits():
+    """
+    Mixed edit lists must drop the LiteLLM-internal ``clear_thinking_20251015``
+    entries while keeping ``compact_20260112`` and adding the compact beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "clear_thinking_20251015", "keep": "all"},
+                {"type": "compact_20260112"},
+            ]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-6-20250929-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("context_management") == {
+        "edits": [{"type": "compact_20260112"}]
+    }
+    assert "compact-2026-01-12" in result.get("anthropic_beta", [])
 
 
 def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
