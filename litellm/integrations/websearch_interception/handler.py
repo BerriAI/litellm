@@ -1270,8 +1270,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
                 search_provider = "perplexity"
-                search_api_key = None
-                search_api_base = None
                 verbose_logger.debug(
                     "WebSearchInterception: No search tools configured in router, "
                     f"using default provider '{search_provider}'"
