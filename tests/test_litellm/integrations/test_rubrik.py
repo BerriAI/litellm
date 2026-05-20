@@ -654,6 +654,51 @@ class TestApplyGuardrail:
         assert req["model"] == "gpt-4"
         assert req["messages"] == [{"role": "user", "content": "hi"}]
 
+    async def test_proxy_server_request_headers_stripped(self, handler):
+        tc = make_tool_call_dict("call_1", "test_tool")
+        inputs = make_inputs_with_tools([tc])
+
+        captured_payload: Dict[str, Any] = {}
+
+        async def mock_post(*_args, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            mock_resp = Mock()
+            mock_resp.json.return_value = captured_payload.get("response", {})
+            mock_resp.raise_for_status = Mock()
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        handler.tool_blocking_client = mock_client
+
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4",
+            "litellm_params": {
+                "proxy_server_request": {
+                    "url": "/chat/completions",
+                    "method": "POST",
+                    "headers": {
+                        "authorization": "Bearer sk-litellm-secret",
+                        "cookie": "session=abc",
+                        "x-api-key": "leaked-key",
+                    },
+                    "body": {"api_key": "sk-upstream-secret"},
+                },
+            },
+        }
+
+        await handler.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+
+        forwarded = captured_payload["request"]["proxy_server_request"]
+        assert forwarded == {"url": "/chat/completions", "method": "POST"}
+
 
 # -- Anthropic format ----------------------------------------------------------
 
@@ -817,6 +862,56 @@ class TestExtractBlockedTools:
     def test_empty_choices_raises(self):
         with pytest.raises(Exception, match="empty response"):
             RubrikLogger._extract_blocked_tools({"choices": []}, [])
+
+    def test_null_tool_calls_treated_as_all_blocked(self):
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tc = ChatCompletionMessageToolCall(
+            id="call_1", type="function", function=Function(name="fn", arguments="{}")
+        )
+        service_resp = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": None,
+                        "content": "blocked everything",
+                    }
+                }
+            ]
+        }
+        result = RubrikLogger._extract_blocked_tools(service_resp, [tc])
+        assert result is not None
+        assert result.allowed_tools == []
+        assert "blocked everything" in result.explanation
+
+
+# -- Sanitize proxy server request -------------------------------------------
+
+
+class TestSanitizeProxyServerRequest:
+    def test_drops_headers_and_body(self):
+        proxy_request = {
+            "url": "/chat/completions",
+            "method": "POST",
+            "headers": {
+                "authorization": "Bearer sk-litellm-secret",
+                "cookie": "session=abc",
+                "content-type": "application/json",
+            },
+            "body": {"api_key": "sk-upstream-secret", "model": "gpt-4"},
+        }
+        result = RubrikLogger._sanitize_proxy_server_request(proxy_request)
+        assert result == {"url": "/chat/completions", "method": "POST"}
+
+    def test_none_passthrough(self):
+        assert RubrikLogger._sanitize_proxy_server_request(None) is None
+
+    def test_non_dict_passthrough(self):
+        assert RubrikLogger._sanitize_proxy_server_request("not a dict") == "not a dict"
+
+    def test_partial_dict(self):
+        result = RubrikLogger._sanitize_proxy_server_request({"url": "/v1/messages"})
+        assert result == {"url": "/v1/messages"}
 
 
 # -- Resolve model -------------------------------------------------------------

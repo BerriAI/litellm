@@ -291,7 +291,23 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return {
             "messages": call_details.get("messages"),
             "model": call_details.get("model"),
-            "proxy_server_request": litellm_params.get("proxy_server_request"),
+            "proxy_server_request": RubrikLogger._sanitize_proxy_server_request(
+                litellm_params.get("proxy_server_request")
+            ),
+        }
+
+    @staticmethod
+    def _sanitize_proxy_server_request(proxy_server_request: Any) -> Any:
+        """Allowlist only routing fields (``url``, ``method``) when forwarding
+        ``proxy_server_request`` to the external Rubrik webhook, dropping
+        inbound ``headers`` (Authorization, Cookie, x-api-key, ...) and the raw
+        request ``body`` so proxy credentials are not exfiltrated."""
+        if not isinstance(proxy_server_request, dict):
+            return proxy_server_request
+        return {
+            key: proxy_server_request[key]
+            for key in ("url", "method")
+            if key in proxy_server_request
         }
 
     @staticmethod
@@ -503,7 +519,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             raise Exception("Tool blocking service returned empty response")
 
         message = choices[0].get("message", {})
-        returned_tool_calls = message.get("tool_calls", [])
+        returned_tool_calls = message.get("tool_calls") or []
         blocking_explanation = message.get("content", "")
 
         allowed_ids = {tc["id"] for tc in returned_tool_calls if tc.get("id")}
