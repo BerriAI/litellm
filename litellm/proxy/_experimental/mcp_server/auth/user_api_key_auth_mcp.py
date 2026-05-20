@@ -1128,16 +1128,21 @@ class MCPRequestHandler:
             )
             return []
 
+    # Sentinel stored in cache when an agent has no object_permission, so we
+    # don't re-query the DB on every MCP request for that agent.
+    _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
+
     @staticmethod
     async def _get_agent_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """
-        Fetch the agent's object_permission from the DB (single query).
+        Get agent object_permission, using user_api_key_cache to avoid DB hits on every request.
 
-        Returns the object_permission object or None.
+        Caches both positive results and the absence of an object_permission so that agents
+        with no MCP permissions configured do not trigger a DB query on every request.
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
@@ -1146,15 +1151,40 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return None
 
+        agent_id = user_api_key_auth.agent_id
+        cache_key = f"agent_object_permission:{agent_id}"
+
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         try:
+            cached = await user_api_key_cache.async_get_cache(key=cache_key)
+            if cached is not None:
+                if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
+                    return None
+                # Redis deserialises to a plain dict; reconstruct the Pydantic model
+                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
+                if isinstance(cached, dict):
+                    return LiteLLM_ObjectPermissionTable(**cached)
+                return cached
+
             agent_row = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": user_api_key_auth.agent_id},
+                where={"agent_id": agent_id},
                 include={"object_permission": True},
             )
             if agent_row is None or agent_row.object_permission is None:
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
+                )
                 return None
 
-            return agent_row.object_permission
+            obj_perm = LiteLLM_ObjectPermissionTable(
+                **agent_row.object_permission.dict()
+            )
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=obj_perm.dict()
+            )
+            return obj_perm
         except Exception as e:
             verbose_logger.warning(f"Failed to get agent object permission: {str(e)}")
             return None

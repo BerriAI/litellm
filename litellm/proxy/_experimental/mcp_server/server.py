@@ -3045,9 +3045,13 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            # (e.g. 401 + WWW-Authenticate challenges from OAuth pass-through).
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
+            # Try to send a graceful error response for non-HTTP exceptions
             try:
                 # Send a proper HTTP error response instead of letting the exception bubble up
                 from starlette.responses import JSONResponse

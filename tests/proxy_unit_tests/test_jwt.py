@@ -1861,7 +1861,13 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_multi_issuer_jwt_missing_mapped_claim_fails_closed(monkeypatch):
+async def test_multi_issuer_jwt_missing_mapped_claim_is_optional(monkeypatch):
+    """Configured issuer claim mappings are advisory, not mandatory.
+
+    When the token simply omits a mapped field (e.g. a service-to-service token
+    with no ``email`` claim), JWT auth still succeeds and the normalized claim
+    is just absent — matching the global ``litellm_jwtauth`` behaviour.
+    """
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
 
@@ -1886,11 +1892,10 @@ async def test_multi_issuer_jwt_missing_mapped_claim_fails_closed(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
-        await jwt_handler.auth_jwt(token=token)
+    claims = await jwt_handler.auth_jwt(token=token)
 
-    assert "missing required mapped claim: email" in str(exc.value)
-    assert "Validation fails" not in str(exc.value)
+    assert claims[JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == issuer
+    assert JWTHandler.LITELLM_USER_ID_CLAIM not in claims
 
 
 @pytest.mark.asyncio

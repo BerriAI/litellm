@@ -867,9 +867,13 @@ class JWTHandler:
         # its jwks_uri, matching JWTIssuerConfig.jwks_url's documented fallback.
         return f"{issuer_config.issuer.rstrip('/')}/.well-known/openid-configuration"
 
-    def _get_claim_value_for_issuer_mapping(
-        self, token: dict, claim_field: str, issuer: str
-    ) -> Any:
+    def _get_claim_value_for_issuer_mapping(self, token: dict, claim_field: str) -> Any:
+        """Resolve a mapped claim from ``token``.
+
+        Returns ``None`` when the field is absent or empty so that mapped claims
+        behave like the global ``litellm_jwtauth`` path — present claims override
+        the normalised value, missing ones simply leave it ``None``.
+        """
         sentinel = object()
         claim_value = get_nested_value(
             data=token,
@@ -877,9 +881,7 @@ class JWTHandler:
             default=sentinel,
         )
         if claim_value is sentinel or claim_value is None or claim_value == "":
-            raise Exception(
-                f"JWT issuer {issuer} missing required mapped claim: {claim_field}"
-            )
+            return None
         return claim_value
 
     def _apply_issuer_claim_mappings(
@@ -902,11 +904,12 @@ class JWTHandler:
         for source_claim, normalized_claim in claim_mappings:
             if source_claim is None:
                 continue
-            token[normalized_claim] = self._get_claim_value_for_issuer_mapping(
+            claim_value = self._get_claim_value_for_issuer_mapping(
                 token=source_token,
                 claim_field=source_claim,
-                issuer=issuer_config.issuer,
             )
+            if claim_value is not None:
+                token[normalized_claim] = claim_value
 
         return token
 

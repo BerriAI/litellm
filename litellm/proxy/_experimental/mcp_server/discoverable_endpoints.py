@@ -141,6 +141,17 @@ def _resolve_oauth2_server_for_root_endpoints(
     return None
 
 
+def _normalize_for_token_comparison(value: Any) -> str:
+    """Stringify ``value`` for token-rule comparison.
+
+    Booleans are lower-cased so Python's ``True`` / ``False`` line up with
+    JSON-style ``"true"`` / ``"false"`` rules from admin config.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 def _validate_token_response(
     token_response: Dict[str, Any],
     validation_rules: Dict[str, Any],
@@ -152,7 +163,9 @@ def _validate_token_response(
     ``token_response["team"]["enterprise_id"]``).  Top-level keys are tried first,
     then dot-split traversal.  All comparisons are string-coerced so that numeric
     values in the response (e.g. ``"org_id": 12345``) match string rules
-    (``"org_id": "12345"``).
+    (``"org_id": "12345"``).  Booleans are normalised to JSON-style ``"true"`` /
+    ``"false"`` so admin rules written as ``{"verified": "true"}`` match upstream
+    responses of ``{"verified": true}``.
     """
     for key, expected in validation_rules.items():
         actual: Any = token_response.get(key)
@@ -179,7 +192,9 @@ def _validate_token_response(
                     ),
                 },
             )
-        if str(actual) != str(expected):
+        if _normalize_for_token_comparison(actual) != _normalize_for_token_comparison(
+            expected
+        ):
             raise HTTPException(
                 status_code=403,
                 detail={
