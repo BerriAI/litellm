@@ -73,7 +73,7 @@ response = client.chat.completions.create(
         {"role": "user", "content": "Send an email to 555-123-4567 with my SSN 123-45-6789"}
     ],
     tools=[{"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy"}],
-    guardrails=["mcp-input-validation"]
+    extra_body={"guardrails": ["mcp-input-validation"]},
 )
 ```
 
