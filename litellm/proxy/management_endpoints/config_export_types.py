@@ -217,10 +217,8 @@ def _clean_litellm_params_record(record: Dict[str, Any]) -> Dict[str, Any]:
     return {**record, "litellm_params": cleaned}
 
 
-def _redact_mcp_sensitive_fields(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Redact MCP server fields that can carry auth values.
-
-    ``credentials`` is handled by _redact_mcp_credentials.
+def _redact_sensitive_header_fields(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
     ``static_headers`` can contain Authorization headers.
     ``env`` can contain environment variable values including secrets.
     ``url`` and ``spec_path`` are connectivity config, not credentials — kept.

@@ -23,7 +23,7 @@ from litellm.proxy.management_endpoints.config_export_types import (
     _redact_credential_values,
     _redact_litellm_params,
     _redact_mcp_credentials,
-    _redact_mcp_sensitive_fields,
+    _redact_sensitive_header_fields,
     _resolve_sections,
     _strip,
     _validate_dependencies,
@@ -297,7 +297,7 @@ async def _fetch_export_sections(
         )
         envelope["mcp_servers"] = [
             (
-                _redact_mcp_sensitive_fields(_redact_mcp_credentials(rec))
+                _redact_sensitive_header_fields(_redact_mcp_credentials(rec))
                 if redact_secrets
                 else rec
             )
@@ -312,7 +312,11 @@ async def _fetch_export_sections(
             ),
         )
         envelope["agents"] = [
-            _redact_litellm_params(rec) if redact_secrets else rec
+            (
+                _redact_sensitive_header_fields(_redact_litellm_params(rec))
+                if redact_secrets
+                else rec
+            )
             for rec in [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
         ]
 
