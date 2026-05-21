@@ -17,15 +17,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
-  getProxyBaseUrl,
   registerMcpOAuthClient,
-  serverRootPath,
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { setToken } from "@/utils/mcpTokenStore";
+import { buildCallbackUrl, clearStorage } from "./mcpOAuthUtils";
 
 export type ToolsOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -57,26 +56,6 @@ type StoredFlowState = {
   clientId?: string;
   clientSecret?: string;
   scopes?: string[];
-};
-
-const buildCallbackUrl = (): string => {
-  if (typeof window !== "undefined") {
-    const path = window.location.pathname || "";
-    const idx = path.indexOf("/ui");
-    const prefix = idx >= 0 ? path.slice(0, idx + 3).replace(/\/+$/, "") : "";
-    return `${window.location.origin}${prefix}/mcp/oauth/callback`;
-  }
-  const base = (getProxyBaseUrl() || "").replace(/\/+$/, "");
-  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath : "";
-  return `${base}${root}/ui/mcp/oauth/callback`;
-};
-
-const clearStorage = (...keys: string[]) => {
-  keys.forEach((k) => {
-    try {
-      window.sessionStorage.removeItem(k);
-    } catch (_) {}
-  });
 };
 
 export const useToolsOAuthFlow = ({
