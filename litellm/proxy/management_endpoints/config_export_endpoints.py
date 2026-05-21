@@ -39,10 +39,6 @@ from litellm.proxy.management_endpoints.config_import_helpers import (
 
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Data-driven section dispatch (dependency order: identity → keys → creds → resources)
-# ---------------------------------------------------------------------------
-
 _IDENTITY_SECTION_TABLES: List[Tuple[str, str, str]] = [
     ("budgets", "litellm_budgettable", "budget_id"),
     ("organizations", "litellm_organizationtable", "organization_id"),
@@ -108,7 +104,6 @@ async def _import_all_sections(
             dry_run,
             result,
         )
-
     if data.keys is not None:
         result.sections_attempted.append("keys")
         await _import_keys_section(
@@ -205,8 +200,6 @@ async def _import_all_sections(
 # ---------------------------------------------------------------------------
 # Export fetch helper
 # ---------------------------------------------------------------------------
-
-
 async def _fetch_export_sections(
     prisma_client: Any,
     sections: Set[str],
@@ -350,8 +343,6 @@ async def _fetch_export_sections(
 # ---------------------------------------------------------------------------
 # Auth helper
 # ---------------------------------------------------------------------------
-
-
 def _get_prisma_with_auth(user_api_key_dict: UserAPIKeyAuth, action: str = "access"):
     from litellm.proxy.proxy_server import prisma_client  # avoid circular import
 
@@ -373,8 +364,6 @@ def _get_prisma_with_auth(user_api_key_dict: UserAPIKeyAuth, action: str = "acce
 # ---------------------------------------------------------------------------
 # GET /config/export
 # ---------------------------------------------------------------------------
-
-
 @router.get(
     "/config/export",
     tags=["config.yaml"],
@@ -407,10 +396,7 @@ async def export_config(
     ),
 ) -> Response:
     """
-    Returns a versioned snapshot of all UI/API-managed proxy state.
-
-    The snapshot is re-applicable via POST /config/import and can be used
-    for multi-environment promotion (dev → staging → prod) or disaster recovery.
+    Returns a snapshot of all UI/API-managed proxy state.
 
     **Excluded from export (by design):**
     - Spend logs, audit logs, error logs (operational history)
@@ -459,22 +445,12 @@ async def import_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> ImportResult:
     """
-    Re-applies a versioned config snapshot exported by GET /config/export.
+    Re-apply a config snapshot from GET /config/export.
 
-    **Conflict modes:**
-    - `skip` (default) — leave existing records unchanged
-    - `replace` — overwrite existing records with snapshot values
-    - `merge` — deep-merge snapshot values into existing records
-
-    **dry_run=true** — simulate the full import (including DB reads) and
-    report exactly what would be created/updated/skipped without writing.
-
-    **Redacted secrets:** credentials and MCP server credentials marked with
-    `{__redacted__: true}` are skipped. Bind secrets manually after import.
-
-    **Transaction model:** each section is wrapped in its own DB transaction.
-    If a section fails, that section is rolled back; already-committed sections
-    are not affected.  The result object reports per-section outcomes.
+    - Conflict modes: `skip` (default), `replace`, `merge`
+    - `dry_run=true`: simulate import without DB writes
+    - Redacted secrets (`{__redacted__: true}`) are skipped
+    - Each section runs in its own transaction; failures roll back per section
     """
     prisma_client = _get_prisma_with_auth(user_api_key_dict, action="import")
     data = body.data
