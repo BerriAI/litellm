@@ -780,12 +780,18 @@ class TestOCICoherePreambleOverride:
             {"role": "assistant", "content": "First answer"},
             {"role": "user", "content": "Second question"},
         ]
+        optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
 
-        chat_history = adapt_messages_to_cohere_standard(messages)
+        result = config.transform_request(
+            model="cohere.command-latest",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
 
-        # Should contain user and assistant only, no system
-        # Note: adapt_messages_to_cohere_standard excludes the last message
-        roles = [msg.role for msg in chat_history]
+        chat_request = result["chatRequest"]
+        roles = [msg["role"] for msg in chat_request["chatHistory"]]
         assert "SYSTEM" not in roles
         assert roles == ["USER", "CHATBOT"]
 
