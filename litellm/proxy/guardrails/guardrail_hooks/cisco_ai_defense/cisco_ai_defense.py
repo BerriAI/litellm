@@ -1557,7 +1557,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     request_data["input"] = rewritten_input
                     return True
                 return False
+            redacted_arguments = self._clear_chat_input_tool_arguments(request_data)
             messages = request_data.get("messages")
+            redacted_content = False
             if isinstance(messages, list) and messages:
                 for message in reversed(messages):
                     if (
@@ -1566,7 +1568,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                         and isinstance(message.get("content"), str)
                     ):
                         message["content"] = sanitized_text
-                        return True
+                        redacted_content = True
+                        break
+            return redacted_content or redacted_arguments
         return False
 
     @classmethod
@@ -1619,6 +1623,20 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     @staticmethod
     def _is_instruction_role(role: Any) -> bool:
         return isinstance(role, str) and role.lower() in {"system", "developer"}
+
+    @classmethod
+    def _clear_chat_input_tool_arguments(cls, request_data: dict) -> bool:
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            return False
+        applied = False
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if cls._extract_message_tool_argument_parts(message):
+                cls._clear_tool_call_arguments(message)
+                applied = True
+        return applied
 
     def _redact_chat_output(
         self,
@@ -1700,18 +1718,25 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @classmethod
     def _clear_tool_call_arguments(cls, message: Any) -> None:
-        """Scrub tool-call / function-call arguments after redact — the
-        scanner included them in the text sent to Cisco, so they must
-        not survive alongside the sanitized content.
-        """
-        for tc in getattr(message, "tool_calls", None) or []:
+        """Clear tool-call / function-call arguments after Cisco redaction."""
+        tool_calls = (
+            message.get("tool_calls")
+            if isinstance(message, dict)
+            else getattr(message, "tool_calls", None)
+        )
+        for tc in tool_calls or []:
             fn = (
                 tc.get("function")
                 if isinstance(tc, dict)
                 else getattr(tc, "function", None)
             )
             cls._clear_arguments_field(fn)
-        cls._clear_arguments_field(getattr(message, "function_call", None))
+        function_call = (
+            message.get("function_call")
+            if isinstance(message, dict)
+            else getattr(message, "function_call", None)
+        )
+        cls._clear_arguments_field(function_call)
 
     def _redact_responses_api_output(
         self,
@@ -1954,11 +1979,17 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             role = message.get("role")
             if not role:
                 continue
+            parts: List[str] = []
             text = CiscoAIDefenseGuardrail._normalize_message_content(
                 message.get("content")
             )
             if text:
-                messages.append({"role": role, "content": text})
+                parts.append(text)
+            parts.extend(
+                CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(message)
+            )
+            if parts:
+                messages.append({"role": role, "content": " ".join(parts)})
 
         if "input" in data:
             # Responses API ``input`` can be: a plain string, a list of
@@ -2073,18 +2104,16 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(choice, Choices):
                     continue
                 parts: List[str] = []
-                content = getattr(choice.message, "content", None)
+                content = CiscoAIDefenseGuardrail._normalize_message_content(
+                    getattr(choice.message, "content", None)
+                )
                 if content:
-                    parts.append(str(content))
-                for tc in getattr(choice.message, "tool_calls", None) or []:
-                    args = CiscoAIDefenseGuardrail._extract_tool_call_arguments(tc)
-                    if args:
-                        parts.append(args)
-                fc = getattr(choice.message, "function_call", None)
-                if fc is not None:
-                    args = CiscoAIDefenseGuardrail._extract_function_call_arguments(fc)
-                    if args:
-                        parts.append(args)
+                    parts.append(content)
+                parts.extend(
+                    CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(
+                        choice.message
+                    )
+                )
                 if parts:
                     result.append({"role": "assistant", "content": " ".join(parts)})
             return result
@@ -2116,6 +2145,29 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 text_parts.append(direct)
         joined = " ".join(text_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
+
+    @classmethod
+    def _extract_message_tool_argument_parts(cls, message: Any) -> List[str]:
+        parts: List[str] = []
+        tool_calls = (
+            message.get("tool_calls")
+            if isinstance(message, dict)
+            else getattr(message, "tool_calls", None)
+        )
+        for tool_call in tool_calls or []:
+            args = cls._extract_tool_call_arguments(tool_call)
+            if args:
+                parts.append(args)
+        function_call = (
+            message.get("function_call")
+            if isinstance(message, dict)
+            else getattr(message, "function_call", None)
+        )
+        if function_call is not None:
+            args = cls._extract_function_call_arguments(function_call)
+            if args:
+                parts.append(args)
+        return parts
 
     @staticmethod
     def _extract_tool_call_arguments(tool_call: Any) -> Optional[str]:
