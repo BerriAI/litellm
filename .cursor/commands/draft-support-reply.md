@@ -1,42 +1,21 @@
-# Draft support reply
+# Draft support reply (concise, copy-paste)
 
-Draft a **public-facing LiteLLM customer support reply** for a paying customer or enterprise prospect.
+**Output only** the two sections at the end — no todos, no research narrative, no summary after INTERNAL NOTES.
 
-## Apply these project artifacts
+Apply `.cursor/rules/customer-support.mdc` and `.cursor/skills/draft-support-reply/SKILL.md`. Use **Ask mode** if available.
 
-- Rule: `.cursor/rules/customer-support.mdc` (tone, structure, Enterprise default)
-- Skill: `.cursor/skills/draft-support-reply/SKILL.md` (workflow and output format)
-- Scope: `support/AGENTS.md` (grounding and escalation)
+**CUSTOMER REPLY rules:** under **350 words**, copy-paste ready for Slack/email. No repo paths, no Python symbols, no confidence scores in the customer text. Multiple topics → `### 1.` / `### 2.` with max **4 bullets** each + doc links. One small config block max.
 
-Search **both** `litellm` and `litellm-docs` (and https://docs.litellm.ai if @Docs is available) before answering.
+**INTERNAL NOTES:** paths, confidence, open questions, follow-ups — only below `=== INTERNAL NOTES ===`.
 
-## Defaults
+Search `litellm` + `litellm-docs` (+ @Docs). Default segment: **paying** (Enterprise).
 
-- **Segment:** `paying` (LiteLLM Enterprise) unless I specify otherwise below.
-- **Deployment:** LiteLLM Proxy (LLM Gateway) unless I say SDK.
-- Do **not** compare OSS vs Enterprise unless I ask.
-
-## My input
-
-If I did not paste a customer question in this message, ask me once for:
-
-1. The customer question (required)
-2. Optional: version, provider/model, logs or config (redacted), segment (`paying` | `prospect` | `oss`), tone notes
-
-## Output (required format)
-
-Produce exactly these two sections — no PRs, no file edits:
+If no customer question is pasted, ask once for the question + optional version/logs (redacted).
 
 ```
 === CUSTOMER REPLY ===
-<reply ready to copy-paste>
+...
 
 === INTERNAL NOTES ===
-- Classification: ...
-- Sources checked: ...
-- Confidence: high | medium | low (reason)
-- Open questions for reviewer
-- Suggested follow-ups
+...
 ```
-
-Reminder: this is a **draft** for human review before sending to the customer.

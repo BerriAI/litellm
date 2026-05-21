@@ -87,20 +87,24 @@ Customer segment: {segment}
 {context}
 
 === OUTPUT REQUIREMENTS ===
-Produce exactly two sections, in this order and with these exact headers:
+Your entire final message must be ONLY these two sections (no preamble, todos,
+research narrative, or postamble like "draft is ready above"):
 
 === CUSTOMER REPLY ===
-<the reply, ready to copy-paste; assume LiteLLM Enterprise unless segment is 'oss' or the customer asks about OSS vs Enterprise>
+Short copy-paste reply for the customer: under 350 words. Plain language.
+No repo paths, no Python/function names, no confidence scores here.
+Multiple topics: use ### 1. / ### 2. with at most 4 bullets each + doc links.
+At most one small config snippet (<=15 lines). Assume LiteLLM Enterprise
+unless segment is 'oss' or they ask about OSS vs Enterprise.
 
 === INTERNAL NOTES ===
-- Classification: <how-to | config | error-triage | feature-availability | billing-or-licensing | oss-vs-enterprise | unclear>
-- Sources checked (paths or URLs)
-- Confidence: high | medium | low (one-line reason)
-- Open questions for reviewer
-- Suggested follow-ups (CSM ping, bug filing, doc gap)
+- Classification: <one line>
+- Sources: <paths/URLs>
+- Confidence: high | medium | low — <one line why>
+- Open questions: <bullets>
+- Follow-ups: <bullets>
 
-Do not send the reply anywhere. Do not open PRs. Do not modify files. Only
-produce the two sections above as your final message.
+Do not send the reply anywhere. Do not open PRs. Do not modify files.
 """
 
 

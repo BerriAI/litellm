@@ -1,44 +1,21 @@
 # Draft support reply (`/support`)
 
-Alias for the LiteLLM customer support drafting workflow. Same behavior as `/draft-support-reply`.
+Same as `/draft-support-reply` — **short, copy-paste customer draft**.
 
-Draft a **public-facing LiteLLM customer support reply** for a paying customer or enterprise prospect.
+**Output only** the two sections below. No todos, no "draft is ready above", no extra paragraphs after INTERNAL NOTES.
 
-## Apply these project artifacts
+Apply `.cursor/rules/customer-support.mdc` and `.cursor/skills/draft-support-reply/SKILL.md`. Prefer **Ask mode**.
 
-- Rule: `.cursor/rules/customer-support.mdc` (tone, structure, Enterprise default)
-- Skill: `.cursor/skills/draft-support-reply/SKILL.md` (workflow and output format)
-- Scope: `support/AGENTS.md` (grounding and escalation)
+Customer reply: **<350 words**, no file paths or `_function_names_` in customer text. Multi-topic → `### 1.` … with ≤4 bullets each. Doc links: https://docs.litellm.ai
 
-Search **both** `litellm` and `litellm-docs` (and https://docs.litellm.ai if @Docs is available) before answering.
-
-## Defaults
-
-- **Segment:** `paying` (LiteLLM Enterprise) unless I specify otherwise below.
-- **Deployment:** LiteLLM Proxy (LLM Gateway) unless I say SDK.
-- Do **not** compare OSS vs Enterprise unless I ask.
-
-## My input
-
-If I did not paste a customer question in this message, ask me once for:
-
-1. The customer question (required)
-2. Optional: version, provider/model, logs or config (redacted), segment (`paying` | `prospect` | `oss`), tone notes
-
-## Output (required format)
-
-Produce exactly these two sections — no PRs, no file edits:
+Default: **paying** / Enterprise proxy.
 
 ```
 === CUSTOMER REPLY ===
-<reply ready to copy-paste>
+...
 
 === INTERNAL NOTES ===
-- Classification: ...
-- Sources checked: ...
-- Confidence: high | medium | low (reason)
-- Open questions for reviewer
-- Suggested follow-ups
+...
 ```
 
-Reminder: this is a **draft** for human review before sending to the customer.
+Paste the customer question in this message (or the next).
