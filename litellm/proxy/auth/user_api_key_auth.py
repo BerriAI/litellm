@@ -736,6 +736,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 url_path=route,
                 http_route=get_request_route_template(request),
             )
+            request.state.parent_otel_span = parent_otel_span
 
         ### USER-DEFINED AUTH FUNCTION ###
         if enterprise_custom_auth is not None:
