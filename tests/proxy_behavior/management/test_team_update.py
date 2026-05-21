@@ -6,23 +6,12 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# The target is a raw-seeded scratch team. Two fixed shapes:
-#   alpha = ORG_A team; TEAM_ADMIN is its team admin, the other ORG_A
-#           internal users are plain members.
-#   beta  = ORG_B team; CROSS_ORG_USER is a plain member.
-#
-# /team/update is fronted by an org-contextual route-permission gate (401 on
-# denial) BEFORE the handler's own _verify_team_access (403). Every request
-# below carries organization_id = the team's own org, which is what lets a
-# non-proxy-admin reach the gate's org-scoped branch.
-#
-# Pinned behavior — SURFACED, NOT ENDORSED:
-#   - PROXY_ADMIN always passes.
-#   - The route gate admits only an ORG_ADMIN of the org named in the body;
-#     an internal_user is 401 regardless of team-admin status. So a team
-#     admin canNOT update its own team via /team/update — _verify_team_
-#     access's "team admin" branch is unreachable here because the route
-#     gate filters every internal_user first.
+# POST /team/update — actor x team-shape matrix (shapes built by _seed_target).
+# Each request carries the team's own organization_id so a non-proxy-admin can
+# reach the org-scoped branch of the route-permission gate (401 on denial),
+# which fronts the handler's _verify_team_access. Only PROXY_ADMIN and an
+# ORG_ADMIN of the team's org pass: an internal_user team admin is filtered by
+# the route gate before _verify_team_access's team-admin branch is reached.
 MARKER_ALIAS = "behavior-pin-update-marker-alias"
 
 _MATRIX = [
@@ -137,17 +126,12 @@ async def test_team_update_requires_proxy_admin_without_org_context(
     assert allowed.status_code == 200, allowed.text
 
 
-# Relocation gate: moving a team to a *different* org. The scratch team starts
-# in ORG_A; every scenario attempts to relocate it to ORG_B.
-#   - PROXY_ADMIN: bypasses every gate -> 200.
-#   - ORG_B_ADMIN: org admin of the destination, so it clears the route
-#     gate, but it is not an admin of the source team -> 403 at
-#     _verify_team_access.
-#   - ORG_ADMIN / TEAM_ADMIN / INTERNAL_USER: not org admin of the
-#     destination ORG_B -> 401 at the route gate.
-# (Gap: the relocation-ALLOWED branch for a non-proxy-admin needs a caller
-# who is org admin of both source and destination; no seeded actor is, so
-# that branch is left to a later slice — see README.)
+# Relocation gate — moving a team to a different org. The scratch team starts
+# in ORG_A; each scenario relocates it to ORG_B. PROXY_ADMIN bypasses;
+# ORG_B_ADMIN clears the route gate (dest-org admin) but fails
+# _verify_team_access on the source team (403); the rest fail the route gate
+# (401). The relocation-allowed branch needs a caller who is org admin of both
+# orgs — no seeded actor is, so it is left to a later slice.
 _RELOCATION = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200),
     ("org_b_admin", Actor.ORG_B_ADMIN, 403),

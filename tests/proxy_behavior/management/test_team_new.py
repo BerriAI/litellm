@@ -7,19 +7,10 @@ from .actors import Actor
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# (id, actor, org_target, expected_status) for POST /team/new.
-# org_target selects the request's organization_id: none / ORG_A / ORG_B.
-#
-# Pinned against the role gate that fronts /team/new (status 401 on every
-# denial):
-#   - PROXY_ADMIN bypasses everything -> always 200.
-#   - A caller who belongs to one or more orgs MUST name an organization_id;
-#     omitting it ("none") is a 401 ("please specify the organization_id").
-#   - For an org-scoped create, the caller must be ORG_ADMIN of THAT org.
-#     An internal_user, or an org admin of a *different* org, is 401
-#     ("You do not have the required role to call /team/new").
-# So the only 200s are PROXY_ADMIN (x3) and each org's own admin creating in
-# its own org.
+# POST /team/new — actor x org-target matrix (org_target picks the request's
+# organization_id: none / ORG_A / ORG_B). Pinned against the role gate, which
+# 401s every denial: PROXY_ADMIN always passes; any other caller must name an
+# organization_id AND be ORG_ADMIN of that org.
 _SCENARIOS = [
     ("none/proxy_admin", Actor.PROXY_ADMIN, "none", 200),
     ("none/org_admin", Actor.ORG_ADMIN, "none", 401),

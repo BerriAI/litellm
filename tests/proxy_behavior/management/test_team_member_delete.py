@@ -6,12 +6,9 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# Target is a raw-seeded scratch team that already contains a victim member.
-# Two fixed shapes:
-#   alpha = ORG_A team whose team admin is TEAM_ADMIN.
-#   beta  = ORG_B team with no actor as team admin.
-# /team/member_delete admits PROXY_ADMIN, the team's team admin, or an org
-# admin of the team's org; everyone else is 403.
+# POST /team/member_delete — actor x team-shape matrix. The scratch team is
+# raw-seeded with a victim member already in it; PROXY_ADMIN, the team's team
+# admin, or an org admin of the team's org may remove members; else 403.
 _MATRIX = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),

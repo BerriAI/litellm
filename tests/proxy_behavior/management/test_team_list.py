@@ -7,9 +7,8 @@ from .actors import Actor
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# /team/list is filtered by _authorize_and_filter_teams(). The behavior DB may
-# hold teams beyond the three seeded ones, so every assertion intersects the
-# returned team_ids with the known seeded set rather than comparing raw lists.
+# The behavior DB may hold teams beyond the three seeded ones, so every
+# assertion intersects the returned team_ids with the known seeded set.
 def _seeded_visible(resp_json, world) -> set:
     known = {
         world.team_alpha_id: "alpha",
@@ -23,11 +22,9 @@ def _seeded_visible(resp_json, world) -> set:
     }
 
 
-# Family 1 — bare GET /team/list (no query params).
-# (id, actor, expected_status, expected_visible). Pinned against
-# _authorize_and_filter_teams: with no user_id param, only an admin view
-# (proxy admin) or an org admin is authorized; everyone else is 401. An org
-# admin with no user_id sees every team in its org(s).
+# Family 1 — bare GET /team/list (no query params). _authorize_and_filter_teams
+# authorizes only an admin view (proxy admin) or an org admin; everyone else
+# is 401. An org admin sees every team in its org(s).
 _BARE = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200, {"alpha", "beta", "gamma"}),
     ("org_admin", Actor.ORG_ADMIN, 200, {"alpha", "gamma"}),
@@ -70,12 +67,10 @@ async def test_team_list_bare_authz(
         )
 
 
-# Family 2 — GET /team/list?user_id=<caller's own id> ("own query").
-# Pinned visibility: every actor is authorized to query its own teams (200),
-# and the result is exactly the teams the actor is a member of. Notable:
-#   - proxy admin / org admin scope to *their own membership* once a user_id
-#     filter is supplied, so they see only teams they personally belong to
-#     (none, here) — the broad admin view in family 1 does not carry over.
+# Family 2 — GET /team/list?user_id=<caller's own id> ("own query"). Every
+# actor may query its own teams (200); the result is exactly the teams it
+# belongs to. A user_id filter scopes proxy/org admins to their own
+# membership too — the broad admin view from family 1 does not carry over.
 _OWN = {
     Actor.PROXY_ADMIN: frozenset(),
     Actor.ORG_ADMIN: frozenset(),

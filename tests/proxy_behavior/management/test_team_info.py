@@ -5,25 +5,11 @@ from .actors import Actor
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# (id, actor, target, expected_status) for GET /team/info?team_id=...
-# Targets are the three seeded teams:
-#   alpha = TEAM_ALPHA (ORG_A, caller's seeded team for the ORG_A actors)
-#   gamma = TEAM_GAMMA (ORG_A, a team with no actor members)
-#   beta  = TEAM_BETA  (ORG_B, the cross-org team)
-#
-# Pinned against validate_membership() — read access is granted to:
-#   - proxy admin (unscoped), OR
-#   - a key whose own team_id == the requested team, OR
-#   - a user_id listed in the team's members_with_roles, OR
-#   - an org admin of the team's organization.
-# Everything else is 403. team_info() re-raises the gate's HTTPException as
-# a ProxyException preserving the status code.
-#
-# Notable pinned behaviors (surfaced, not endorsed):
-#   - ORG_ADMIN reads any team in its own org (TEAM_ALPHA, TEAM_GAMMA) even
-#     though it is a member of neither — org-admin is an org-wide read grant.
-#   - TEAM_GAMMA has no members, so only PROXY_ADMIN and ORG_A's org admin
-#     can see it; every TEAM_ALPHA member is denied.
+# GET /team/info — actor x team-target authz matrix, pinned against
+# validate_membership(): a team is readable by a proxy admin, a key whose
+# own team_id matches, a listed member, or an org admin of the team's org;
+# everything else is 403. TEAM_GAMMA has no members, so only PROXY_ADMIN
+# and ORG_A's org admin can read it.
 _SCENARIOS = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),

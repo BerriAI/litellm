@@ -7,14 +7,11 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# Target is a raw-seeded scratch team. Two fixed shapes:
-#   alpha = ORG_A team whose team admin is TEAM_ADMIN.
-#   beta  = ORG_B team with no actor as team admin.
-# /team/member_add gates on _validate_team_member_add_permissions: PROXY_ADMIN,
-# the team's team admin, or an org admin of the team's org may add members;
-# everyone else is 403. Unlike /team/update there is no proxy-admin-only route
-# gate in front, so the team-admin branch is reachable here (TEAM_ADMIN, an
-# internal_user, is allowed on its own team).
+# POST /team/member_add — actor x team-shape matrix, pinned against
+# _validate_team_member_add_permissions: PROXY_ADMIN, the team's team admin,
+# or an org admin of the team's org may add members; everyone else is 403.
+# Unlike /team/update there is no route gate in front, so the team-admin
+# branch is reachable (TEAM_ADMIN, an internal_user, is allowed on its team).
 _MATRIX = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),

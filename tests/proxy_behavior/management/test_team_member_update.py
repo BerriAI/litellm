@@ -6,14 +6,11 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# Target is a raw-seeded scratch team that already contains a member seeded
-# with role "user"; each scenario tries to promote that member to "admin".
-# Two fixed shapes:
-#   alpha = ORG_A team whose team admin is TEAM_ADMIN.
-#   beta  = ORG_B team with no actor as team admin.
-# /team/member_update admits PROXY_ADMIN, the team's team admin, or an org
-# admin of the team's org; everyone else is 403. (premium_user is forced True
-# by the harness, so the admin-role premium gate does not interfere.)
+# POST /team/member_update — actor x team-shape matrix. The scratch team is
+# raw-seeded with a "user"-role member; each scenario tries to promote it to
+# "admin". PROXY_ADMIN, the team's team admin, or an org admin of the team's
+# org may update members; else 403. (The harness forces premium_user, so the
+# promotion does not hit the admin-role premium gate.)
 _MATRIX = [
     ("alpha/proxy_admin", Actor.PROXY_ADMIN, "alpha", 200),
     ("alpha/org_admin", Actor.ORG_ADMIN, "alpha", 200),

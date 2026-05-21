@@ -1,13 +1,4 @@
-"""9-actor read-world seed for the authz matrix tests.
-
-PR1 (key Tier-1) seeded 8 actors + 2 teams. PR2 (team Tier-1) adds:
-  - ORG_B_ADMIN: an org-admin of ORG_B, so /team/update's org-relocation
-    gate (org-admin of the *destination* org) and cross-org team reads
-    have a positive-case actor.
-  - TEAM_GAMMA: a third team in ORG_A with no actor members, so team-
-    targeting endpoints get a clean "same-org, not-my-team" target
-    distinct from TEAM_ALPHA (own) and TEAM_BETA (cross-org).
-"""
+"""Read-world seed for the authz matrix tests: 2 orgs, 3 teams, 9 actors."""
 
 import enum
 import uuid
@@ -212,9 +203,8 @@ async def seed_world(prisma: PrismaClient) -> World:
             ),
         }
     )
-    # TEAM_GAMMA: ORG_A team with no actor members. Serves as the
-    # "same-org, not-my-team" read target — visible only to PROXY_ADMIN
-    # and ORG_A's org admin, never to TEAM_ALPHA's members.
+    # TEAM_GAMMA: ORG_A team with no actor members — the "same-org,
+    # not-my-team" read target.
     await prisma.db.litellm_teamtable.create(
         data={
             "team_id": TEAM_GAMMA,
