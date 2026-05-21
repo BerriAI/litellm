@@ -204,6 +204,27 @@ class TestInitialization:
             handler = RubrikLogger(event_hook=GuardrailEventHooks.pre_call)
             assert handler.event_hook == GuardrailEventHooks.pre_call
 
+    def test_default_on_defaults_to_true_when_none_passed(self, mock_env):
+        """`initialize_guardrail` always passes ``default_on=litellm_params.default_on``
+        (which is ``None`` when the user omits ``default_on``). The logger must
+        coerce a None ``default_on`` to True, otherwise ``should_run_guardrail``
+        (which checks ``self.default_on is True``) silently skips the guardrail."""
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(default_on=None)
+            assert handler.default_on is True
+
+    def test_explicit_default_on_false_preserved(self, mock_env):
+        """A user explicitly setting ``default_on: false`` in their guardrail
+        config must NOT be silently overridden to True."""
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(default_on=False)
+            assert handler.default_on is False
+
+    def test_explicit_default_on_true_preserved(self, mock_env):
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(default_on=True)
+            assert handler.default_on is True
+
     def test_headers_with_api_key(self, handler):
         assert handler._headers["Authorization"] == "Bearer test-api-key"
         assert handler._headers["Content-Type"] == "application/json"

@@ -48,11 +48,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     ):
         self.flush_lock = asyncio.Lock()
         kwargs.setdefault("guardrail_name", "rubrik")
-        # Use `or` rather than setdefault because callers (e.g.
-        # initialize_guardrail) always pass event_hook explicitly, possibly as
-        # None when the user omits `mode` from the guardrail config.
+        # `initialize_guardrail` always passes these kwargs explicitly, with
+        # value `None` when the user omits `mode` / `default_on` from the
+        # guardrail config. Coerce None (omitted) to the desired default
+        # while preserving any explicit value the caller did set --
+        # in particular `default_on=False` if the user wants the guardrail
+        # off by default.
         kwargs["event_hook"] = kwargs.get("event_hook") or GuardrailEventHooks.post_call
-        kwargs.setdefault("default_on", True)
+        if kwargs.get("default_on") is None:
+            kwargs["default_on"] = True
         super().__init__(
             flush_lock=self.flush_lock,
             **kwargs,
