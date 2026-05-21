@@ -171,6 +171,42 @@ Set the public URL in the Slack app config for slash command, interactivity, and
 
 The draft is posted as two clearly separated sections (`Customer reply (draft)` and `Internal notes`) with a footer showing the Cursor `agent_id` and a reminder that **human review is required before sending**.
 
+### Access control (who can call the bot)
+
+By default, **any member of your Slack workspace** can invoke the bot once it is installed: the slash command appears for everyone, and both shortcuts are visible workspace-wide. Slack itself does not gate slash commands or shortcuts by user or channel.
+
+Two env vars let you restrict access without touching code. Both are comma-separated lists of Slack IDs and are checked **before** any drafting happens:
+
+| Variable | What it allows | Where to find IDs |
+| -------- | -------------- | ----------------- |
+| `SUPPORT_AGENT_SLACK_ALLOWED_USERS` | Only these users can invoke any handler | Slack profile -> More -> Copy member ID (starts with `U`) |
+| `SUPPORT_AGENT_SLACK_ALLOWED_CHANNELS` | Only these channels can host slash commands and message shortcuts | Channel details -> About -> Channel ID (starts with `C` or `G`) |
+| `SUPPORT_AGENT_SLACK_BLOCK_GLOBAL_SHORTCUT` | Set to `1` to also block the global shortcut / DM path when channel allowlist is set | — |
+
+Behavior:
+
+- Both lists empty: **open to the workspace** (current default).
+- Only user list set: any channel is fine, but only listed users can invoke.
+- Only channel list set: any user in those channels can invoke. The global shortcut still works for anyone (set `SUPPORT_AGENT_SLACK_BLOCK_GLOBAL_SHORTCUT=1` to deny it).
+- Both lists set: requester must satisfy both.
+
+Denied callers see an ephemeral `:lock:` message (slash command), a DM (shortcut), or a modal validation error (modal submission), and the denial is logged with `user`, `channel`, and reason.
+
+Example: restrict to the internal `#litellm-support-drafts` channel and the on-call group:
+
+```bash
+export SUPPORT_AGENT_SLACK_ALLOWED_USERS=U01AAA,U01BBB,U01CCC
+export SUPPORT_AGENT_SLACK_ALLOWED_CHANNELS=C09SUPPORT
+export SUPPORT_AGENT_SLACK_BLOCK_GLOBAL_SHORTCUT=1
+```
+
+Other layers worth combining with this:
+
+- **Slack admin console** can disable a slash command for specific users or roles at the workspace level.
+- **Private channels** require the bot to be invited (`/invite @<bot>`) before it can post — that gives Slack-side control over which private channels the bot can reach.
+- The `chat:write.public` scope only lets the bot post in **public** channels without an invite; remove it if you want bot replies to stay in invited channels only.
+- For a managed allowlist tied to a Slack user group (e.g. `@litellm-support`), add the `usergroups:read` scope and resolve the group's members on startup (or every N minutes) into `SUPPORT_AGENT_SLACK_ALLOWED_USERS`. Not in v1.1 — open an issue if you want this.
+
 ### Slack-specific notes
 
 - **Async pattern.** The agent run takes tens of seconds to minutes. The slash command and modal submission both `ack` within Slack's 3-second window; the actual draft is posted via `chat.postMessage` when ready.

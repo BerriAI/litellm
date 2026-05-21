@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("litellm.support_agent.slack")
 
@@ -72,6 +72,46 @@ def get_slack_handler() -> Optional[Any]:
     return _SLACK_HANDLER
 
 
+def _parse_csv_env(name: str) -> Set[str]:
+    raw = os.getenv(name, "")
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _slack_access_check(user_id: str, channel_id: str) -> Tuple[bool, str]:
+    """Return (allowed, reason).
+
+    Two env vars control access; both are comma-separated. If both are empty,
+    access is open to any workspace member (current default).
+
+    SUPPORT_AGENT_SLACK_ALLOWED_USERS      e.g. "U01ABC,U02DEF"
+    SUPPORT_AGENT_SLACK_ALLOWED_CHANNELS   e.g. "C01XYZ,C02UVW"
+
+    When non-empty, the requester must match every populated allowlist. The
+    channel allowlist is skipped only when channel_id is empty (global
+    shortcut DM flow) — set SUPPORT_AGENT_SLACK_BLOCK_GLOBAL_SHORTCUT=1 to
+    deny that path as well.
+    """
+    allowed_users = _parse_csv_env("SUPPORT_AGENT_SLACK_ALLOWED_USERS")
+    allowed_channels = _parse_csv_env("SUPPORT_AGENT_SLACK_ALLOWED_CHANNELS")
+    block_global = os.getenv("SUPPORT_AGENT_SLACK_BLOCK_GLOBAL_SHORTCUT") == "1"
+
+    if allowed_users and user_id not in allowed_users:
+        return False, "user not in allowlist"
+    if allowed_channels:
+        if not channel_id:
+            if block_global:
+                return False, "global-shortcut / DM path is disabled"
+        elif channel_id not in allowed_channels:
+            return False, "channel not in allowlist"
+    return True, ""
+
+
+_DENY_TEXT = (
+    ":lock: You don't have access to draft support replies. "
+    "Ping the support team if you think this is a mistake."
+)
+
+
 def _register_handlers(bolt_app: Any) -> None:
     from support.customer_support_agent import DraftReplyRequest, produce_draft
 
@@ -81,6 +121,17 @@ def _register_handlers(bolt_app: Any) -> None:
         channel_id = body.get("channel_id") or ""
         user_id = body.get("user_id") or ""
         trigger_id = body.get("trigger_id") or ""
+
+        allowed, reason = _slack_access_check(user_id, channel_id)
+        if not allowed:
+            logger.info(
+                "Slack access denied (command): user=%s channel=%s reason=%s",
+                user_id,
+                channel_id,
+                reason,
+            )
+            await ack(response_type="ephemeral", text=_DENY_TEXT)
+            return
 
         if not text:
             await ack()
@@ -111,6 +162,18 @@ def _register_handlers(bolt_app: Any) -> None:
     async def handle_global_shortcut(ack, body, client):
         await ack()
         user_id = (body.get("user") or {}).get("id") or ""
+
+        allowed, reason = _slack_access_check(user_id, channel_id="")
+        if not allowed:
+            logger.info(
+                "Slack access denied (global shortcut): user=%s reason=%s",
+                user_id,
+                reason,
+            )
+            if user_id:
+                await client.chat_postMessage(channel=user_id, text=_DENY_TEXT)
+            return
+
         await client.views_open(
             trigger_id=body.get("trigger_id"),
             view=_modal_view(
@@ -126,6 +189,21 @@ def _register_handlers(bolt_app: Any) -> None:
         message = body.get("message") or {}
         channel = body.get("channel") or {}
         user = body.get("user") or {}
+        user_id = user.get("id") or ""
+        channel_id = channel.get("id") or ""
+
+        allowed, reason = _slack_access_check(user_id, channel_id)
+        if not allowed:
+            logger.info(
+                "Slack access denied (message shortcut): user=%s channel=%s reason=%s",
+                user_id,
+                channel_id,
+                reason,
+            )
+            if user_id:
+                await client.chat_postMessage(channel=user_id, text=_DENY_TEXT)
+            return
+
         await client.views_open(
             trigger_id=body.get("trigger_id"),
             view=_modal_view(
@@ -141,6 +219,29 @@ def _register_handlers(bolt_app: Any) -> None:
 
     @bolt_app.view("draft_support_reply_modal")
     async def handle_view_submission(ack, body, view, client):
+        try:
+            submitter_metadata = json.loads(view.get("private_metadata") or "{}")
+        except json.JSONDecodeError:
+            submitter_metadata = {}
+        submitter_id = submitter_metadata.get("user_id") or (
+            body.get("user") or {}
+        ).get("id", "")
+        submitter_channel = submitter_metadata.get("channel_id") or ""
+
+        allowed, reason = _slack_access_check(submitter_id, submitter_channel)
+        if not allowed:
+            logger.info(
+                "Slack access denied (modal submission): user=%s channel=%s reason=%s",
+                submitter_id,
+                submitter_channel,
+                reason,
+            )
+            await ack(
+                response_action="errors",
+                errors={"question_block": _DENY_TEXT},
+            )
+            return
+
         await ack()
         values = view["state"]["values"]
         question = values["question_block"]["question"]["value"] or ""
