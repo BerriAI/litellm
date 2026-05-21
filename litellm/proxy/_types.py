@@ -1066,6 +1066,7 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    allowed_ips: Optional[List[str]] = None
     allowed_passthrough_routes: Optional[list] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     rpm_limit_type: Optional[
@@ -2571,6 +2572,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     budget_reset_at: Optional[datetime] = None
     allowed_cache_controls: Optional[list] = []
     allowed_routes: Optional[list] = []
+    allowed_ips: Optional[List[str]] = None
     permissions: Dict = {}
     model_spend: Dict = {}
     model_max_budget: Dict = {}
