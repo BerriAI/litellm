@@ -4225,5 +4225,9 @@ def test_gemini_google_maps_tool_simple():
         assert response.choices[0].message.content is not None
     except litellm.RateLimitError:
         pass
+    except litellm.InternalServerError as e:
+        pytest.skip(
+            f"Skipping due to upstream Vertex AI / Google Maps internal server error: {e}"
+        )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
