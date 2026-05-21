@@ -4397,8 +4397,11 @@ class JWTIssuerConfig(BaseModel):
     """
     Issuer-bound JWT validation configuration.
 
-    When configured, LiteLLM selects this issuer by the token's unverified `iss`
-    claim, then validates the token only against this issuer's JWKS and audience.
+    When a token's unverified `iss` claim matches an entry in
+    ``LiteLLM_JWTAuth.issuers``, LiteLLM validates it only against that
+    issuer's JWKS and audience. Tokens whose `iss` does not match any
+    configured issuer fall back to the global JWT_AUDIENCE/JWT_ISSUER
+    validation path; `issuers` is additive routing, not an allow-list.
     """
 
     issuer: str = Field(description="Exact expected JWT issuer (`iss`) value.")
@@ -4550,7 +4553,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
         default=None,
-        description="Optional issuer-bound JWT validation rules. When set, tokens must match one configured issuer by exact `iss` claim before JWKS lookup.",
+        description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
     )
     #########################################################
 
