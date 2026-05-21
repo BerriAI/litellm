@@ -63,6 +63,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
     GuardrailStatus,
+    GuardrailTracingDetail,
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -509,6 +510,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Add guardrail information to request trace
         #########################################################
         _json_response = httpx_response.json()
+        tracing_detail = self._build_tracing_detail(_json_response)
+
         # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -522,6 +525,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             event_type=event_type,
+            tracing_detail=tracing_detail or None,
         )
         #########################################################
         if httpx_response.status_code == 200:
@@ -639,6 +643,55 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if isinstance(err, str):
                 return (status_code, err)
         return (status_code, message)
+
+    def _build_tracing_detail(
+        self, response: BedrockGuardrailResponse
+    ) -> GuardrailTracingDetail:
+        """
+        Build the tracing detail from the raw Bedrock response, before
+        redaction, so downstream loggers (OTEL, Langfuse, ...) get the
+        actual category names rather than the "[REDACTED]" sentinel that
+        replaces customWords.match later. Bedrock's top-level ``action``
+        field ("GUARDRAIL_INTERVENED" or "NONE") is also surfaced so the
+        OTEL integration can expose it as a queryable span attribute
+        without re-parsing the redacted guardrail_response blob.
+        """
+        tracing_detail: GuardrailTracingDetail = {}
+        violation_categories = self._extract_violation_category_names(response)
+        if violation_categories:
+            tracing_detail["violation_categories"] = violation_categories
+        bedrock_action = response.get("action")
+        if isinstance(bedrock_action, str):
+            tracing_detail["guardrail_action"] = bedrock_action
+        return tracing_detail
+
+    def _extract_violation_category_names(
+        self, response: BedrockGuardrailResponse
+    ) -> List[str]:
+        """
+        Flatten the BLOCKED assessments into a list of human-readable category
+        names suitable for queryable OTEL / standard-logging attributes.
+
+        SECURITY: only emits the non-sensitive policy *label* (topic name,
+        content-filter type, PII entity type, named-regex name). The raw
+        ``match`` field is intentionally NOT used — it carries the user's
+        original input that triggered the rule (e.g. a credit-card number
+        that hit a regex, or the literal custom word). Surfacing it to
+        telemetry would re-introduce the sensitive content the guardrail
+        was supposed to keep out. Entries that only have a ``match`` (bare
+        customWords, unnamed regexes) are therefore skipped — operators
+        can still see the count in ``_extract_blocked_assessments`` which
+        feeds the HTTP error detail.
+        """
+        names: List[str] = []
+        for block in self._extract_blocked_assessments(response):
+            for match in block.get("matches", []) or []:
+                # Allow-list non-sensitive labels only. Never fall back to
+                # `match.get("match")` — that's user-submitted content.
+                label = match.get("name") or match.get("type")
+                if isinstance(label, str) and label:
+                    names.append(label)
+        return names
 
     def _extract_blocked_assessments(
         self, response: BedrockGuardrailResponse
