@@ -340,14 +340,15 @@ class OrcaRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     headers=error_message["metadata"].get("headers", {}),
                 )
 
-            new_choices = []
+            new_choices: List[Any] = []
             for choice in chunk["choices"]:
                 original_delta = choice["delta"]
-                new_delta = {
+                new_delta: Any = {
                     **original_delta,
                     "reasoning_content": original_delta.get("reasoning"),
                 }
-                new_choices.append({**choice, "delta": new_delta})
+                new_choice: Any = {**choice, "delta": new_delta}
+                new_choices.append(new_choice)
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
