@@ -1105,22 +1105,21 @@ class MCPRequestHandler:
             )
             return []
 
-    # Sentinel stored in cache when an org has no object_permission, so we
-    # don't re-query the DB on every MCP request for that org.
-    _ORG_NO_PERMISSION_SENTINEL = "__org_no_mcp_permission__"
-
     @staticmethod
     async def _get_org_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """
-        Get org object_permission, using user_api_key_cache to avoid DB hits on every request.
-
-        Caches both positive results and the absence of an object_permission so that orgs
-        with no MCP permissions configured (the common default) do not trigger a DB query
-        on every request.
+        Get org object_permission via the established ``get_org_object`` /
+        ``get_object_permission`` helpers so MCP requests share the same
+        ``user_api_key_cache`` entries as the rest of the proxy.
         """
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm.proxy.auth.auth_checks import get_object_permission, get_org_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if not user_api_key_auth or not user_api_key_auth.org_id:
             return None
@@ -1129,51 +1128,28 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return None
 
-        org_id = user_api_key_auth.org_id
-        cache_key = f"org_object_permission:{org_id}"
-
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-
         try:
-            cached = await user_api_key_cache.async_get_cache(key=cache_key)
-            if cached is not None:
-                # Sentinel means the DB confirmed no object_permission for this org
-                if cached == MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL:
-                    return None
-                # Redis deserialises to a plain dict; reconstruct the Pydantic model
-                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
-                if isinstance(cached, dict):
-                    return LiteLLM_ObjectPermissionTable(**cached)
-                return cached
-
-            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
-                where={"organization_id": org_id},
-                include={"object_permission": True},
+            org_obj = await get_org_object(
+                org_id=user_api_key_auth.org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-
-            if org_row is None or org_row.object_permission is None:
-                # Cache the negative result so subsequent calls skip the DB
-                await user_api_key_cache.async_set_cache(
-                    key=cache_key,
-                    value=MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL,
-                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-                )
-                return None
-
-            # Convert raw Prisma model → Pydantic before caching.  Caching the
-            # Pydantic .dict() ensures the value survives a Redis JSON round-trip
-            # as a plain dict that we can reconstruct above (same pattern used by
-            # get_end_user_object / get_team_object in auth_checks.py).
-            obj_perm = LiteLLM_ObjectPermissionTable(**org_row.object_permission.dict())
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=obj_perm.dict(),
-                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-            )
-            return obj_perm
         except Exception as e:
             verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
             return None
+
+        if org_obj is None or not org_obj.object_permission_id:
+            return None
+
+        return await get_object_permission(
+            object_permission_id=org_obj.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_org(
