@@ -442,6 +442,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         event.__dict__["sequence_number"] = self._sequence_number
         return event
+        
 
     def create_output_item_added_event(self) -> OutputItemAddedEvent:
         if self._cached_item_id is None:
