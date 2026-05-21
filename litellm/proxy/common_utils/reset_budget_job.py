@@ -455,13 +455,29 @@ class ResetBudgetJob:
                 )
 
                 if updated_keys:
+                    key_updates = [
+                        {
+                            "token": (
+                                key["token"] if isinstance(key, dict) else key.token
+                            ),
+                            "spend": (
+                                key["spend"] if isinstance(key, dict) else key.spend
+                            ),
+                            "budget_reset_at": (
+                                key["budget_reset_at"]
+                                if isinstance(key, dict)
+                                else key.budget_reset_at
+                            ),
+                        }
+                        for key in updated_keys
+                    ]
                     await self.prisma_client.update_data(
                         query_type="update_many",
-                        data_list=updated_keys,
+                        data_list=key_updates,
                         table_name="key",
                     )
-                    for k in updated_keys:
-                        token = getattr(k, "token", None)
+                    for k in key_updates:
+                        token = k.get("token")
                         if token:
                             await self._invalidate_spend_counter(f"spend:key:{token}")
 
@@ -641,13 +657,31 @@ class ResetBudgetJob:
                     "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
                 )
                 if updated_teams:
+                    team_updates = [
+                        {
+                            "team_id": (
+                                team["team_id"]
+                                if isinstance(team, dict)
+                                else team.team_id
+                            ),
+                            "spend": (
+                                team["spend"] if isinstance(team, dict) else team.spend
+                            ),
+                            "budget_reset_at": (
+                                team["budget_reset_at"]
+                                if isinstance(team, dict)
+                                else team.budget_reset_at
+                            ),
+                        }
+                        for team in updated_teams
+                    ]
                     await self.prisma_client.update_data(
                         query_type="update_many",
-                        data_list=updated_teams,
+                        data_list=team_updates,
                         table_name="team",
                     )
-                    for t in updated_teams:
-                        team_id = getattr(t, "team_id", None)
+                    for t in team_updates:
+                        team_id = t.get("team_id")
                         if team_id:
                             await self._invalidate_spend_counter(
                                 f"spend:team:{team_id}"

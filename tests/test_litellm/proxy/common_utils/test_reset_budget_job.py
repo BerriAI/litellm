@@ -201,9 +201,12 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
         "LiteLLM_VerificationToken",
         (),
         {
+            "token": "hashed-key-token",
             "spend": 100.0,
             "budget_duration": "30d",
             "budget_reset_at": now,
+            "budget_limits": [{"budget_duration": "1d", "budget_limit": 10.0}],
+            "object_permission_id": "obj-perm-123",
             "id": "test-key-1",
         },
     )
@@ -216,8 +219,10 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     # Verify results
     assert len(mock_prisma_client.updated_data["key"]) == 1
     updated_key = mock_prisma_client.updated_data["key"][0]
-    assert updated_key.spend == 0.0
-    assert updated_key.budget_reset_at > now
+    assert updated_key["token"] == "hashed-key-token"
+    assert updated_key["spend"] == 0.0
+    assert updated_key["budget_reset_at"] > now
+    assert set(updated_key.keys()) == {"token", "spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
@@ -253,9 +258,12 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
         "LiteLLM_TeamTable",
         (),
         {
+            "team_id": "test-team-id",
             "spend": 500.0,
             "budget_duration": "1mo",
             "budget_reset_at": now,
+            "budget_limits": [{"budget_duration": "7d", "budget_limit": 50.0}],
+            "object_permission_id": "team-obj-perm-123",
             "id": "test-team-1",
         },
     )
@@ -268,8 +276,10 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     # Verify results
     assert len(mock_prisma_client.updated_data["team"]) == 1
     updated_team = mock_prisma_client.updated_data["team"][0]
-    assert updated_team.spend == 0.0
-    assert updated_team.budget_reset_at > now
+    assert updated_team["team_id"] == "test-team-id"
+    assert updated_team["spend"] == 0.0
+    assert updated_team["budget_reset_at"] > now
+    assert set(updated_team.keys()) == {"team_id", "spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
@@ -320,6 +330,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         "LiteLLM_VerificationToken",
         (),
         {
+            "token": "hashed-key-token",
             "spend": 100.0,
             "budget_duration": "30d",
             "budget_reset_at": now,
@@ -342,6 +353,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         "LiteLLM_TeamTable",
         (),
         {
+            "team_id": "test-team-id",
             "spend": 500.0,
             "budget_duration": "1mo",
             "budget_reset_at": now,
@@ -387,9 +399,9 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     assert len(mock_prisma_client.updated_data["budget"]) == 1
 
     # Check that all spends were reset to 0
-    assert mock_prisma_client.updated_data["key"][0].spend == 0.0
+    assert mock_prisma_client.updated_data["key"][0]["spend"] == 0.0
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
-    assert mock_prisma_client.updated_data["team"][0].spend == 0.0
+    assert mock_prisma_client.updated_data["team"][0]["spend"] == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
 
 
@@ -1026,6 +1038,114 @@ def test_reset_budget_for_team_members_preserves_total_spend():
     assert call_kwargs["where"]["budget_id"]["in"] == ["budget-1"]
     assert call_kwargs["data"] == {"spend": 0}
     assert "total_spend" not in call_kwargs["data"]
+
+
+class _RecordingVerificationTokenTable:
+    def __init__(self):
+        self.update_calls: List[Dict[str, Any]] = []
+
+    def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> None:
+        self.update_calls.append({"where": where, "data": data})
+
+
+class _RecordingTeamTable:
+    def __init__(self):
+        self.upsert_calls: List[Dict[str, Any]] = []
+
+    def upsert(self, where: Dict[str, Any], data: Dict[str, Any]) -> None:
+        self.upsert_calls.append({"where": where, "data": data})
+
+
+class _RecordingBatcher:
+    def __init__(self):
+        self.litellm_verificationtoken = _RecordingVerificationTokenTable()
+        self.litellm_teamtable = _RecordingTeamTable()
+        self.commit_calls = 0
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+
+class _RecordingDB:
+    def __init__(self):
+        self.batchers: List[_RecordingBatcher] = []
+
+    def batch_(self) -> _RecordingBatcher:
+        batcher = _RecordingBatcher()
+        self.batchers.append(batcher)
+        return batcher
+
+
+def _make_prisma_update_data_client():
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient.__new__(PrismaClient)
+    client.db = _RecordingDB()
+    client.proxy_logging_obj = MagicMock()
+    client.proxy_logging_obj.failure_handler = AsyncMock()
+    return client
+
+
+def test_update_data_key_update_many_accepts_minimal_dict_payloads():
+    from litellm.proxy.utils import hash_token
+
+    prisma_client = _make_prisma_update_data_client()
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        prisma_client.update_data(
+            query_type="update_many",
+            table_name="key",
+            data_list=[
+                {
+                    "token": "sk-test-key",
+                    "spend": 0.0,
+                    "budget_reset_at": now,
+                }
+            ],
+        )
+    )
+
+    batcher = prisma_client.db.batchers[0]
+    assert batcher.commit_calls == 1
+    calls = batcher.litellm_verificationtoken.update_calls
+    assert len(calls) == 1
+    assert calls[0]["where"] == {"token": hash_token("sk-test-key")}
+    assert calls[0]["data"] == {
+        "token": hash_token("sk-test-key"),
+        "spend": 0.0,
+        "budget_reset_at": now,
+    }
+
+
+def test_update_data_team_update_many_accepts_minimal_dict_payloads():
+    prisma_client = _make_prisma_update_data_client()
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        prisma_client.update_data(
+            query_type="update_many",
+            table_name="team",
+            data_list=[
+                {
+                    "team_id": "team-1",
+                    "spend": 0.0,
+                    "budget_reset_at": now,
+                }
+            ],
+        )
+    )
+
+    batcher = prisma_client.db.batchers[0]
+    assert batcher.commit_calls == 1
+    calls = batcher.litellm_teamtable.upsert_calls
+    assert len(calls) == 1
+    assert calls[0]["where"] == {"team_id": "team-1"}
+    assert calls[0]["data"]["update"] == {
+        "team_id": "team-1",
+        "spend": 0.0,
+        "budget_reset_at": now,
+    }
 
 
 # ---------------------------------------------------------------------------

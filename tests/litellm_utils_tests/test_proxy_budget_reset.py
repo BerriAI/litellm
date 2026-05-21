@@ -31,14 +31,40 @@ async def test_reset_budget_keys_partial_failure():
     # Arrange
     key1 = {
         "id": "key1",
+        "token": "token1",
         "spend": 10.0,
         "budget_duration": 60,
     }  # Will trigger simulated failure
-    key2 = {"id": "key2", "spend": 15.0, "budget_duration": 60}  # Should be updated
-    key3 = {"id": "key3", "spend": 20.0, "budget_duration": 60}  # Should be updated
-    key4 = {"id": "key4", "spend": 25.0, "budget_duration": 60}  # Should be updated
-    key5 = {"id": "key5", "spend": 30.0, "budget_duration": 60}  # Should be updated
-    key6 = {"id": "key6", "spend": 35.0, "budget_duration": 60}  # Should be updated
+    key2 = {
+        "id": "key2",
+        "token": "token2",
+        "spend": 15.0,
+        "budget_duration": 60,
+    }  # Should be updated
+    key3 = {
+        "id": "key3",
+        "token": "token3",
+        "spend": 20.0,
+        "budget_duration": 60,
+    }  # Should be updated
+    key4 = {
+        "id": "key4",
+        "token": "token4",
+        "spend": 25.0,
+        "budget_duration": 60,
+    }  # Should be updated
+    key5 = {
+        "id": "key5",
+        "token": "token5",
+        "spend": 30.0,
+        "budget_duration": 60,
+    }  # Should be updated
+    key6 = {
+        "id": "key6",
+        "token": "token6",
+        "spend": 35.0,
+        "budget_duration": 60,
+    }  # Should be updated
 
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(
@@ -86,11 +112,12 @@ async def test_reset_budget_keys_partial_failure():
     assert update_call.kwargs.get("table_name") == "key"
     updated_keys = update_call.kwargs.get("data_list", [])
     assert len(updated_keys) == 5
-    assert updated_keys[0]["id"] == "key2"
-    assert updated_keys[1]["id"] == "key3"
-    assert updated_keys[2]["id"] == "key4"
-    assert updated_keys[3]["id"] == "key5"
-    assert updated_keys[4]["id"] == "key6"
+    assert updated_keys[0]["token"] == "token2"
+    assert updated_keys[1]["token"] == "token3"
+    assert updated_keys[2]["token"] == "token4"
+    assert updated_keys[3]["token"] == "token5"
+    assert updated_keys[4]["token"] == "token6"
+    assert set(updated_keys[0].keys()) == {"token", "spend", "budget_reset_at"}
 
     # Verify that the failure logging hook was scheduled (due to the failure for key1)
     failure_hook_calls = (
@@ -300,10 +327,16 @@ async def test_reset_budget_teams_partial_failure():
     """
     team1 = {
         "id": "team1",
+        "team_id": "team1",
         "spend": 30.0,
         "budget_duration": 180,
     }  # Will trigger simulated failure
-    team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}  # Should be updated
+    team2 = {
+        "id": "team2",
+        "team_id": "team2",
+        "spend": 35.0,
+        "budget_duration": 180,
+    }  # Should be updated
 
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=[team1, team2])
@@ -338,7 +371,8 @@ async def test_reset_budget_teams_partial_failure():
     assert update_call.kwargs.get("table_name") == "team"
     updated_teams = update_call.kwargs.get("data_list", [])
     assert len(updated_teams) == 1
-    assert updated_teams[0]["id"] == "team2"
+    assert updated_teams[0]["team_id"] == "team2"
+    assert set(updated_teams[0].keys()) == {"team_id", "spend", "budget_reset_at"}
 
     failure_hook_calls = (
         proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
@@ -365,16 +399,16 @@ async def test_reset_budget_continues_other_categories_on_failure():
       - Each get_data call is made (indicating that one failing category did not abort the others).
     """
     # Arrange dummy items for each table
-    key1 = {"id": "key1", "spend": 10.0, "budget_duration": 60}
-    key2 = {"id": "key2", "spend": 15.0, "budget_duration": 60}
+    key1 = {"id": "key1", "token": "token1", "spend": 10.0, "budget_duration": 60}
+    key2 = {"id": "key2", "token": "token2", "spend": 15.0, "budget_duration": 60}
     user1 = {
         "id": "user1",
         "spend": 20.0,
         "budget_duration": 120,
     }  # Will fail in user reset
     user2 = {"id": "user2", "spend": 25.0, "budget_duration": 120}  # Succeeds
-    team1 = {"id": "team1", "spend": 30.0, "budget_duration": 180}
-    team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}
+    team1 = {"id": "team1", "team_id": "team1", "spend": 30.0, "budget_duration": 180}
+    team2 = {"id": "team2", "team_id": "team2", "spend": 35.0, "budget_duration": 180}
     enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
     budget1 = LiteLLM_BudgetTableFull(
         **{
@@ -527,8 +561,8 @@ async def test_service_logger_keys_success():
     logger success hook is called with the correct event metadata and no exception is logged.
     """
     keys = [
-        {"id": "key1", "spend": 10.0, "budget_duration": 60},
-        {"id": "key2", "spend": 15.0, "budget_duration": 60},
+        {"id": "key1", "token": "token1", "spend": 10.0, "budget_duration": 60},
+        {"id": "key2", "token": "token2", "spend": 15.0, "budget_duration": 60},
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=keys)
@@ -583,8 +617,8 @@ async def test_service_logger_keys_failure():
     logger exception is called.
     """
     keys = [
-        {"id": "key1", "spend": 10.0, "budget_duration": 60},
-        {"id": "key2", "spend": 15.0, "budget_duration": 60},
+        {"id": "key1", "token": "token1", "spend": 10.0, "budget_duration": 60},
+        {"id": "key2", "token": "token2", "spend": 15.0, "budget_duration": 60},
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=keys)
@@ -756,8 +790,8 @@ async def test_service_logger_teams_success():
     the proper metadata and nothing is logged as an exception.
     """
     teams = [
-        {"id": "team1", "spend": 30.0, "budget_duration": 180},
-        {"id": "team2", "spend": 35.0, "budget_duration": 180},
+        {"id": "team1", "team_id": "team1", "spend": 30.0, "budget_duration": 180},
+        {"id": "team2", "team_id": "team2", "spend": 35.0, "budget_duration": 180},
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=teams)
@@ -808,8 +842,8 @@ async def test_service_logger_teams_failure():
     results in an exception log and no success hook call.
     """
     teams = [
-        {"id": "team1", "spend": 30.0, "budget_duration": 180},
-        {"id": "team2", "spend": 35.0, "budget_duration": 180},
+        {"id": "team1", "team_id": "team1", "spend": 30.0, "budget_duration": 180},
+        {"id": "team2", "team_id": "team2", "spend": 35.0, "budget_duration": 180},
     ]
     prisma_client = MagicMock()
     prisma_client.get_data = AsyncMock(return_value=teams)
