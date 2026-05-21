@@ -12,6 +12,12 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
+PROMPT_CACHING_DEFAULT_TTL_SECONDS = 300
+PROMPT_CACHING_CACHE_CONTROL_TTL_SECONDS = {
+    "5m": 300,
+    "1h": 3600,
+}
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -179,6 +185,53 @@ class PromptCachingCache:
         hashed_data = hashlib.sha256(data_to_hash_str.encode()).hexdigest()
         return f"deployment:{hashed_data}:prompt_caching"
 
+    @staticmethod
+    def _get_cache_control_ttl_seconds(cache_control: Any) -> Optional[int]:
+        if (
+            not isinstance(cache_control, dict)
+            or cache_control.get("type") != "ephemeral"
+        ):
+            return None
+
+        ttl = cache_control.get("ttl")
+        if not isinstance(ttl, str):
+            return None
+
+        return PROMPT_CACHING_CACHE_CONTROL_TTL_SECONDS.get(ttl)
+
+    @staticmethod
+    def get_prompt_caching_ttl_seconds(
+        messages: Optional[List[AllMessageValues]],
+    ) -> int:
+        if messages is None:
+            return PROMPT_CACHING_DEFAULT_TTL_SECONDS
+
+        cacheable_messages = PromptCachingCache.extract_cacheable_prefix(messages)
+        ttl_seconds = PROMPT_CACHING_DEFAULT_TTL_SECONDS
+
+        for message in cacheable_messages:
+            message_ttl_seconds = PromptCachingCache._get_cache_control_ttl_seconds(
+                message.get("cache_control")
+            )
+            if message_ttl_seconds is not None:
+                ttl_seconds = max(ttl_seconds, message_ttl_seconds)
+
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+
+            for content_block in content:
+                if not isinstance(content_block, dict):
+                    continue
+
+                block_ttl_seconds = PromptCachingCache._get_cache_control_ttl_seconds(
+                    content_block.get("cache_control")
+                )
+                if block_ttl_seconds is not None:
+                    ttl_seconds = max(ttl_seconds, block_ttl_seconds)
+
+        return ttl_seconds
+
     def add_model_id(
         self,
         model_id: str,
@@ -193,8 +246,11 @@ class PromptCachingCache:
         if cache_key is None:
             return None
 
+        ttl_seconds = PromptCachingCache.get_prompt_caching_ttl_seconds(messages)
         self.cache.set_cache(
-            cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300
+            cache_key,
+            PromptCachingCacheValue(model_id=model_id),
+            ttl=ttl_seconds,
         )
         return None
 
@@ -212,10 +268,11 @@ class PromptCachingCache:
         if cache_key is None:
             return None
 
+        ttl_seconds = PromptCachingCache.get_prompt_caching_ttl_seconds(messages)
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=300,  # store for 5 minutes
+            ttl=ttl_seconds,
         )
         return None
 
