@@ -2139,7 +2139,7 @@ class Router:
         chunk_hidden_params["additional_headers"].update(response_headers)
         setattr(stream_chunk, "_hidden_params", chunk_hidden_params)
         return stream_chunk
-    
+
     async def _acompletion_streaming_iterator(
         self,
         model_response: CustomStreamWrapper,

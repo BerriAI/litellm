@@ -6739,7 +6739,7 @@ def _restamp_streaming_chunk_model(
         attempted_fallbacks = 0
     if attempted_fallbacks > 0:
         return chunk, model_mismatch_logged
-    
+
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
