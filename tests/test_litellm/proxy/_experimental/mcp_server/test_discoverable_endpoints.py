@@ -1563,7 +1563,7 @@ async def test_oauth_authorization_server_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = await _build_oauth_authorization_server_response(
+        response = _build_oauth_authorization_server_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
         )
@@ -1952,7 +1952,7 @@ async def test_discovery_root_includes_server_name_prefix():
 
     try:
         # Call with mcp_server_name=None (root discovery)
-        response = await _build_oauth_authorization_server_response(
+        response = _build_oauth_authorization_server_response(
             request=mock_request,
             mcp_server_name=None,
         )
@@ -1995,7 +1995,7 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
             return_value="198.51.100.10",
         ):
-            authorization_response = await _build_oauth_authorization_server_response(
+            authorization_response = _build_oauth_authorization_server_response(
                 request=mock_request,
                 mcp_server_name=None,
             )

@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
@@ -1155,6 +1156,7 @@ class MCPRequestHandler:
                 await user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value=MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL,
+                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
                 return None
 
@@ -1164,7 +1166,9 @@ class MCPRequestHandler:
             # get_end_user_object / get_team_object in auth_checks.py).
             obj_perm = LiteLLM_ObjectPermissionTable(**org_row.object_permission.dict())
             await user_api_key_cache.async_set_cache(
-                key=cache_key, value=obj_perm.dict()
+                key=cache_key,
+                value=obj_perm.dict(),
+                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
             )
             return obj_perm
         except Exception as e:
@@ -1334,6 +1338,7 @@ class MCPRequestHandler:
                 await user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value=MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
+                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
                 return None
 
@@ -1341,7 +1346,9 @@ class MCPRequestHandler:
                 **agent_row.object_permission.dict()
             )
             await user_api_key_cache.async_set_cache(
-                key=cache_key, value=obj_perm.dict()
+                key=cache_key,
+                value=obj_perm.dict(),
+                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
             )
             return obj_perm
         except Exception as e:

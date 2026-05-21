@@ -2361,6 +2361,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_connection_timeout: Optional[float] = Field(
         60, description="default timeout for a connection to the database"
     )
+    database_connect_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `connect_timeout` URL param (seconds). Bounds how long the "
+            "engine waits to establish a new connection before failing. Defaults "
+            "to Prisma's built-in value when unset."
+        ),
+    )
+    database_socket_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
+            "connection that has not produced data within this window is closed. "
+            "This is the main knob for capping idle DB connections from LiteLLM."
+        ),
+    )
+    database_extra_connection_params: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Escape hatch: extra key/value pairs appended verbatim to the Prisma "
+            "DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, "
+            "`statement_cache_size`). Keys here override any default LiteLLM sets."
+        ),
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
@@ -4397,8 +4421,11 @@ class JWTIssuerConfig(BaseModel):
     """
     Issuer-bound JWT validation configuration.
 
-    When configured, LiteLLM selects this issuer by the token's unverified `iss`
-    claim, then validates the token only against this issuer's JWKS and audience.
+    When a token's unverified `iss` claim matches an entry in
+    ``LiteLLM_JWTAuth.issuers``, LiteLLM validates it only against that
+    issuer's JWKS and audience. Tokens whose `iss` does not match any
+    configured issuer fall back to the global JWT_AUDIENCE/JWT_ISSUER
+    validation path; `issuers` is additive routing, not an allow-list.
     """
 
     issuer: str = Field(description="Exact expected JWT issuer (`iss`) value.")
@@ -4550,7 +4577,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
         default=None,
-        description="Optional issuer-bound JWT validation rules. When set, tokens must match one configured issuer by exact `iss` claim before JWKS lookup.",
+        description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
     )
     #########################################################
 

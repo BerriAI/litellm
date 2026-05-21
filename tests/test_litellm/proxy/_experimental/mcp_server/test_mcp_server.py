@@ -808,6 +808,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         if server.name == "working_server":
             # Working server returns tools
@@ -913,6 +914,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
@@ -1373,6 +1375,7 @@ async def test_list_tools_single_server_unprefixed_names():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
@@ -1454,6 +1457,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         # When multiple servers, add_prefix should be True -> prefixed names
@@ -1720,6 +1724,7 @@ async def test_list_tools_filters_by_key_team_permissions():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools, but only 2 should be allowed
         tool1 = MagicMock()
@@ -1829,6 +1834,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools
         tool1 = MagicMock()
@@ -1924,6 +1930,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 3 tools
         tool1 = MagicMock()
@@ -2022,6 +2029,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return tools WITH prefix (as they come from MCP server)
         tool1 = MagicMock()
