@@ -4223,7 +4223,11 @@ def test_gemini_google_maps_tool_simple():
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
-    except litellm.RateLimitError:
+    except (
+        litellm.RateLimitError,
+        litellm.InternalServerError,
+        litellm.ServiceUnavailableError,
+    ):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
