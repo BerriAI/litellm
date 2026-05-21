@@ -2481,3 +2481,237 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_custom_tool_call_converted_to_chat_completion_tool_call():
+    """
+    Test that ResponseCustomToolCall items from the Responses API are
+    correctly converted to ChatCompletions-style tool calls by the bridge.
+
+    Custom tools (type: "custom" with format.grammar) produce freeform text
+    output. The bridge should wrap the input text in {"input": "<text>"} JSON
+    and return it as a standard function tool call.
+    """
+    pytest.importorskip("openai.types.responses.response_output_item")
+
+    import json
+    from unittest.mock import Mock
+
+    from openai.types.responses.response_output_item import (
+        ResponseCustomToolCall,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Build a custom_tool_call item like the model would return
+    custom_tool_item = ResponseCustomToolCall(
+        id="ctc_001",
+        call_id="call_custom_patch",
+        name="apply_patch",
+        input="*** Begin Patch\n*** Add File: hello.txt\n+Hello, World!\n*** End Patch\n",
+        type="custom_tool_call",
+    )
+
+    # Minimal usage
+    usage = ResponseAPIUsage(
+        input_tokens=30,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=40,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=70,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_custom_tool_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.4",
+        object="response",
+        output=[custom_tool_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-custom-tool",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Create hello.txt"},
+        ],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly one choice with finish_reason="tool_calls"
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+
+    # The choice should contain one tool call for apply_patch
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 1, f"Expected 1 tool_call, got {len(tool_calls)}"
+
+    tc = tool_calls[0]
+    assert tc["id"] == "call_custom_patch"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "apply_patch"
+
+    # The input should be wrapped in {"input": "..."} JSON
+    args = json.loads(tc["function"]["arguments"])
+    assert "input" in args
+    assert "*** Begin Patch" in args["input"]
+    assert "*** Add File: hello.txt" in args["input"]
+    assert "+Hello, World!" in args["input"]
+    assert "*** End Patch" in args["input"]
+
+
+def test_custom_tool_call_streaming_output_item_done():
+    """
+    Test that custom_tool_call in streaming mode emits tool call chunks correctly.
+
+    In streaming, custom_tool_call content arrives in the response.output_item.done
+    event (not incrementally), because grammar-constrained output is validated
+    server-side before being sent.
+    """
+    import json
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    # Simulate response.output_item.added event (header only)
+    added_chunk = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+            "type": "custom_tool_call",
+            "call_id": "call_stream_patch",
+            "name": "apply_patch",
+            "input": "",  # empty at added time
+            "id": "ctc_stream001",
+            "status": "in_progress",
+        },
+    }
+
+    result_added = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        added_chunk
+    )
+
+    # Should emit a tool call header with empty arguments
+    assert result_added.choices[0].delta.tool_calls is not None
+    tc_added = result_added.choices[0].delta.tool_calls[0]
+    assert tc_added.id == "call_stream_patch"
+    assert tc_added.function.name == "apply_patch"
+    assert tc_added.function.arguments == ""
+
+    # Simulate response.output_item.done event (full content)
+    done_chunk = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "custom_tool_call",
+            "call_id": "call_stream_patch",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** Add File: test.txt\n+test content\n*** End Patch\n",
+            "id": "ctc_stream001",
+            "status": "completed",
+        },
+    }
+
+    result_done = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        done_chunk
+    )
+
+    # Should emit tool call with full arguments
+    assert result_done.choices[0].delta.tool_calls is not None
+    tc_done = result_done.choices[0].delta.tool_calls[0]
+    assert tc_done.id == "call_stream_patch"
+    assert tc_done.function.name == "apply_patch"
+
+    args = json.loads(tc_done.function.arguments)
+    assert "*** Begin Patch" in args["input"]
+    assert "+test content" in args["input"]
+
+
+def test_response_completed_with_custom_tool_calls_emits_tool_calls_finish_reason():
+    """
+    Test that response.completed event correctly sets finish_reason="tool_calls"
+    when the output contains custom_tool_call items.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    completed_chunk = {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                {"type": "reasoning", "id": "rs_001", "summary": []},
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_xyz",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\n*** End Patch\n",
+                    "id": "ctc_002",
+                },
+            ],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 10},
+            },
+        },
+    }
+
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        completed_chunk
+    )
+
+    assert result.choices[0].finish_reason == "tool_calls"
