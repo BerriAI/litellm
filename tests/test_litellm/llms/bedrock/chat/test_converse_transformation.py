@@ -3795,28 +3795,34 @@ def test_parallel_tool_calls_true_includes_type_field():
 
 
 @pytest.mark.parametrize(
+    ("parallel_tool_calls", "disable_parallel_tool_use"),
+    [(True, False), (False, True)],
+    ids=["parallel-enabled", "parallel-disabled"],
+)
+@pytest.mark.parametrize(
     ("openai_tool_choice", "expected_anthropic_tool_choice"),
     [
         (
             "auto",
-            {"type": "auto", "disable_parallel_tool_use": True},
+            {"type": "auto"},
         ),
         (
             "required",
-            {"type": "any", "disable_parallel_tool_use": True},
+            {"type": "any"},
         ),
         (
             {"type": "function", "function": {"name": "get_weather"}},
             {
                 "type": "tool",
                 "name": "get_weather",
-                "disable_parallel_tool_use": True,
             },
         ),
     ],
     ids=["auto", "required", "named-tool"],
 )
 def test_parallel_tool_calls_moves_explicit_tool_choice_into_anthropic_extension(
+    parallel_tool_calls,
+    disable_parallel_tool_use,
     openai_tool_choice,
     expected_anthropic_tool_choice,
 ):
@@ -3829,7 +3835,7 @@ def test_parallel_tool_calls_moves_explicit_tool_choice_into_anthropic_extension
         non_default_params={
             "tools": _TOOL_PARAM,
             "tool_choice": openai_tool_choice,
-            "parallel_tool_calls": False,
+            "parallel_tool_calls": parallel_tool_calls,
         },
         optional_params={},
         model=model,
@@ -3844,6 +3850,10 @@ def test_parallel_tool_calls_moves_explicit_tool_choice_into_anthropic_extension
         headers={},
     )
 
+    expected_anthropic_tool_choice = {
+        **expected_anthropic_tool_choice,
+        "disable_parallel_tool_use": disable_parallel_tool_use,
+    }
     assert (
         request_data["additionalModelRequestFields"]["tool_choice"]
         == expected_anthropic_tool_choice
