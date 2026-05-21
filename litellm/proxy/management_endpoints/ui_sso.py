@@ -154,7 +154,6 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS = frozenset(
         "private_key",
         "refresh_token",
         "secret",
-        "token",
     }
 )
 

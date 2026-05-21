@@ -2438,6 +2438,7 @@ class TestCLIKeyRegenerationFlow:
                 request=mock_request,
                 key="cli-new-session-key-456",
                 result=mock_result,
+                received_response=None,
             )
 
     def test_get_redirect_url_does_not_include_existing_key_in_url(self):
