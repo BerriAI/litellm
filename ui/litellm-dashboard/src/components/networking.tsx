@@ -7112,20 +7112,22 @@ export const listMCPTools = async (
   console.log("Fetched MCP tools response:", data);
 
   if (!response.ok) {
-    // Throw an enhanced error with status attached so callers (e.g. useQuery)
-    // can react to auth failures like 401 instead of receiving a silent
-    // success with an empty tools array.
+    // Preserve the legacy "never throws" contract so existing callers
+    // (e.g. MCPToolPermissions, MCPAppsPanel, MCPConnectPicker) can continue
+    // to inspect `result.error` / `result.message`. Attach `status` so
+    // callers that need to react to auth failures (e.g. the useQuery in
+    // mcp_tools.tsx) can still detect 401s from the returned object.
     const errorMessage =
       (data && (data.message || data.error)) || "Failed to fetch MCP tools";
-    const enhancedError = new Error(errorMessage) as Error & {
-      status?: number;
-      statusText?: string;
-      details?: any;
+    return {
+      tools: [],
+      error: (data && data.error) || `http_${response.status}`,
+      message: errorMessage,
+      status: response.status,
+      statusText: response.statusText,
+      details: data,
+      stack_trace: null,
     };
-    enhancedError.status = response.status;
-    enhancedError.statusText = response.statusText;
-    enhancedError.details = data;
-    throw enhancedError;
   }
 
   // Return the full response object which includes tools, error, message, and stack_trace

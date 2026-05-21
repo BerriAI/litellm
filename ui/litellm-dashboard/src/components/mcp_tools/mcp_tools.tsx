@@ -85,9 +85,26 @@ const MCPToolsViewer = ({
     refetch: refetchTools,
   } = useQuery({
     queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken],
-    queryFn: () => {
+    queryFn: async () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId, buildCustomHeaders());
+      const result = await listMCPTools(accessToken, serverId, buildCustomHeaders());
+      // listMCPTools never throws — surface error responses as thrown errors
+      // here so useQuery's retry/onError can react (e.g. clear the cached
+      // OAuth token on 401).
+      if (result?.error) {
+        const enhancedError = new Error(
+          result.message || result.error || "Failed to fetch MCP tools",
+        ) as Error & {
+          status?: number;
+          statusText?: string;
+          details?: any;
+        };
+        enhancedError.status = (result as any).status;
+        enhancedError.statusText = (result as any).statusText;
+        enhancedError.details = (result as any).details;
+        throw enhancedError;
+      }
+      return result;
     },
     // For OAuth servers, block the query until a session token is available
     enabled: !!accessToken && (!isOAuth || oauthToken !== null),
