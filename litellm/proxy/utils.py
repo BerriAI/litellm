@@ -3874,17 +3874,30 @@ class PrismaClient:
                 """
                 batcher = self.db.batch_()
                 for idx, t in enumerate(data_list):
-                    # check if plain text or hash
-                    if t.token.startswith("sk-"):  # type: ignore
-                        t.token = self.hash_token(token=t.token)  # type: ignore
-                    try:
+                    if isinstance(t, dict):
+                        token = t["token"]
+                        if token.startswith("sk-"):
+                            token = self.hash_token(token=token)
+                            t["token"] = token
                         data_json = self.jsonify_object(
-                            data=t.model_dump(exclude_none=True)
+                            data={k: v for k, v in t.items() if v is not None}
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(data=t.dict(exclude_none=True))
+                        data_json["token"] = token
+                    else:
+                        # check if plain text or hash
+                        if t.token.startswith("sk-"):  # type: ignore
+                            t.token = self.hash_token(token=t.token)  # type: ignore
+                        token = t.token  # type: ignore
+                        try:
+                            data_json = self.jsonify_object(
+                                data=t.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(
+                                data=t.dict(exclude_none=True)
+                            )
                     batcher.litellm_verificationtoken.update(
-                        where={"token": t.token},  # type: ignore
+                        where={"token": token},  # type: ignore
                         data={**data_json},  # type: ignore
                     )
                 await batcher.commit()
@@ -3994,16 +4007,23 @@ class PrismaClient:
                 # Batch write update queries
                 batcher = self.db.batch_()
                 for idx, team in enumerate(data_list):
-                    try:
+                    if isinstance(team, dict):
+                        team_id = team["team_id"]
                         data_json = self.jsonify_team_object(
-                            db_data=team.model_dump(exclude_none=True)
+                            db_data={k: v for k, v in team.items() if v is not None}
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(
-                            data=team.dict(exclude_none=True)
-                        )
+                    else:
+                        team_id = team.team_id  # type: ignore
+                        try:
+                            data_json = self.jsonify_team_object(
+                                db_data=team.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(
+                                data=team.dict(exclude_none=True)
+                            )
                     batcher.litellm_teamtable.upsert(
-                        where={"team_id": team.team_id},  # type: ignore
+                        where={"team_id": team_id},  # type: ignore
                         data={
                             "create": {**data_json},  # type: ignore
                             "update": {
