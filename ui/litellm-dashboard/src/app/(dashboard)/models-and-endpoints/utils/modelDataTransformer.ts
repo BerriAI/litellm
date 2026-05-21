@@ -39,9 +39,15 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
       provider = "-";
     }
 
+    const toCostPerMillion = (raw: unknown): number | null => {
+      if (raw === null || raw === undefined) return null;
+      const num = typeof raw === "number" ? raw : Number(raw);
+      return Number.isFinite(num) ? num : null;
+    };
+
     if (model_info) {
-      input_cost = model_info?.input_cost_per_token;
-      output_cost = model_info?.output_cost_per_token;
+      input_cost = toCostPerMillion(model_info?.input_cost_per_token);
+      output_cost = toCostPerMillion(model_info?.output_cost_per_token);
       max_tokens = model_info?.max_tokens;
       max_input_tokens = model_info?.max_input_tokens;
     }
@@ -59,11 +65,11 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
 
     // Convert Cost in terms of Cost per 1M tokens
     if (transformedData[i].input_cost != null) {
-      transformedData[i].input_cost = (Number(transformedData[i].input_cost) * 1000000).toFixed(2);
+      transformedData[i].input_cost = (transformedData[i].input_cost * 1000000).toFixed(2);
     }
 
     if (transformedData[i].output_cost != null) {
-      transformedData[i].output_cost = (Number(transformedData[i].output_cost) * 1000000).toFixed(2);
+      transformedData[i].output_cost = (transformedData[i].output_cost * 1000000).toFixed(2);
     }
 
     transformedData[i].max_tokens = max_tokens;

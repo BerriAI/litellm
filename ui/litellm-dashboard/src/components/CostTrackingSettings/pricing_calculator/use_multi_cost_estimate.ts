@@ -163,21 +163,37 @@ export function useMultiCostEstimate(accessToken: string | null) {
       let totalDailyMargin: number | null = null;
       let totalMonthlyMargin: number | null = null;
 
+      const toNumber = (value: unknown): number | null => {
+        if (value === null || value === undefined) return null;
+        const num = typeof value === "number" ? value : Number(value);
+        return Number.isFinite(num) ? num : null;
+      };
+
       for (const r of results) {
         if (r.result) {
-          totalCostPerRequest += r.result.cost_per_request;
-          totalMarginPerRequest += r.result.margin_cost_per_request;
-          if (r.result.daily_cost !== null) {
-            totalDailyCost = (totalDailyCost ?? 0) + r.result.daily_cost;
+          const costPerRequest = toNumber(r.result.cost_per_request);
+          const marginPerRequest = toNumber(r.result.margin_cost_per_request);
+          if (costPerRequest !== null) {
+            totalCostPerRequest += costPerRequest;
           }
-          if (r.result.daily_margin_cost !== null) {
-            totalDailyMargin = (totalDailyMargin ?? 0) + r.result.daily_margin_cost;
+          if (marginPerRequest !== null) {
+            totalMarginPerRequest += marginPerRequest;
           }
-          if (r.result.monthly_cost !== null) {
-            totalMonthlyCost = (totalMonthlyCost ?? 0) + r.result.monthly_cost;
+          const dailyCost = toNumber(r.result.daily_cost);
+          const dailyMarginCost = toNumber(r.result.daily_margin_cost);
+          const monthlyCost = toNumber(r.result.monthly_cost);
+          const monthlyMarginCost = toNumber(r.result.monthly_margin_cost);
+          if (dailyCost !== null) {
+            totalDailyCost = (totalDailyCost ?? 0) + dailyCost;
           }
-          if (r.result.monthly_margin_cost !== null) {
-            totalMonthlyMargin = (totalMonthlyMargin ?? 0) + r.result.monthly_margin_cost;
+          if (dailyMarginCost !== null) {
+            totalDailyMargin = (totalDailyMargin ?? 0) + dailyMarginCost;
+          }
+          if (monthlyCost !== null) {
+            totalMonthlyCost = (totalMonthlyCost ?? 0) + monthlyCost;
+          }
+          if (monthlyMarginCost !== null) {
+            totalMonthlyMargin = (totalMonthlyMargin ?? 0) + monthlyMarginCost;
           }
         }
       }

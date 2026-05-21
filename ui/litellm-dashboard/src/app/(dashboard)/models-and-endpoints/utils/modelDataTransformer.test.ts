@@ -119,4 +119,26 @@ describe("transformModelData", () => {
     expect(result.data[0].input_cost).toBeNull();
     expect(result.data[0].output_cost).toBeNull();
   });
+
+  it("should ignore non-numeric cost fields in model_info", () => {
+    const rawData = {
+      data: [
+        {
+          model_name: "ai-security-review-demo",
+          litellm_params: {
+            model: "antsearch/ai-security-review-demo",
+          },
+          model_info: {
+            input_cost_per_token: "antsearch/ai-security-review-demo",
+            output_cost_per_token: "not-a-number",
+          },
+        },
+      ],
+    };
+
+    const result = transformModelData(rawData, mockGetProviderFromModel);
+
+    expect(result.data[0].input_cost).toBeNull();
+    expect(result.data[0].output_cost).toBeNull();
+  });
 });

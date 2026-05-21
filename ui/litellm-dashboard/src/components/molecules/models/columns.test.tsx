@@ -459,6 +459,31 @@ describe("columns", () => {
     expect(costCells.length).toBeGreaterThan(0);
   });
 
+  it("should display '-' when costs contain non-numeric values", () => {
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      defaultProps.setSelectedModelId,
+      defaultProps.setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel({
+      input_cost: "antsearch/ai-security-review-demo" as any,
+      output_cost: "antsearch/ai-security-review-demo" as any,
+    });
+    render(<TestTable data={[model]} columns={cols} />);
+
+    expect(screen.queryByText(/In: \$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Out: \$/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("-").length).toBeGreaterThan(0);
+  });
+
   it("should display '-' when team ID is missing", () => {
     const cols = columns(
       defaultProps.userRole,

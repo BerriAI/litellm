@@ -188,6 +188,27 @@ describe("MultiCostResults", () => {
       expect(screen.getByText("Total Monthly")).toBeInTheDocument();
     });
 
+    it("should render '-' for non-numeric total costs", () => {
+      renderWithProviders(
+        <MultiCostResults
+          multiResult={makeMultiResult({
+            totals: {
+              cost_per_request: "antsearch/ai-security-review-demo" as unknown as number,
+              daily_cost: "antsearch/ai-security-review-demo" as unknown as number,
+              monthly_cost: null,
+              margin_per_request: 0,
+              daily_margin: null,
+              monthly_margin: null,
+            },
+          })}
+          timePeriod="day"
+        />
+      );
+
+      expect(screen.getByText("Total Per Request")).toBeInTheDocument();
+      expect(screen.getAllByText("-").length).toBeGreaterThan(0);
+    });
+
     it("should show the model name in the summary table", () => {
       renderWithProviders(
         <MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Text, Button } from "@tremor/react";
-import { Card, Statistic, Row, Col, Divider, Spin, Table, Tag } from "antd";
+import { Card, Row, Col, Divider, Spin, Table, Tag } from "antd";
 import { LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
 import { CostEstimateResponse } from "../types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -12,12 +12,19 @@ interface MultiCostResultsProps {
   timePeriod: "day" | "month";
 }
 
+const toFiniteNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) return null;
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
 const formatCost = (value: number | null | undefined): string => {
-  if (value === null || value === undefined) return "-";
-  if (value === 0) return "$0";
-  if (value < 0.0001) return `$${value.toExponential(2)}`;
-  if (value < 1) return `$${value.toFixed(4)}`;
-  return `$${formatNumberWithCommas(value, 2, true)}`;
+  const num = toFiniteNumber(value);
+  if (num === null) return "-";
+  if (num === 0) return "$0";
+  if (num < 0.0001) return `$${num.toExponential(2)}`;
+  if (num < 1) return `$${num.toFixed(4)}`;
+  return `$${formatNumberWithCommas(num, 2, true)}`;
 };
 
 const formatRequests = (value: number | null | undefined): string => {
@@ -289,18 +296,18 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       <Card size="small" className="bg-gradient-to-r from-slate-50 to-blue-50 border-slate-200">
         <Row gutter={[16, 8]}>
           <Col xs={24} sm={12}>
-            <Statistic
-              title={<span className="text-xs">Total Per Request</span>}
-              value={formatCost(multiResult.totals.cost_per_request)}
-              valueStyle={{ color: "#1890ff", fontSize: "18px", fontFamily: "monospace" }}
-            />
+            <div className="text-xs text-gray-500">Total Per Request</div>
+            <div className="text-lg font-mono text-blue-600">
+              {formatCost(multiResult.totals.cost_per_request)}
+            </div>
           </Col>
           <Col xs={24} sm={12}>
-            <Statistic
-              title={<span className="text-xs">Total {periodLabel}</span>}
-              value={formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
-              valueStyle={{ color: timePeriod === "day" ? "#52c41a" : "#722ed1", fontSize: "18px", fontFamily: "monospace" }}
-            />
+            <div className="text-xs text-gray-500">Total {periodLabel}</div>
+            <div
+              className={`text-lg font-mono ${timePeriod === "day" ? "text-green-600" : "text-purple-600"}`}
+            >
+              {formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
+            </div>
           </Col>
         </Row>
         {hasMargin && (

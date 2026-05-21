@@ -264,8 +264,13 @@ export const columns = (
       minSize: 80,
       cell: ({ row }) => {
         const model = row.original;
-        const inputCost = model.input_cost;
-        const outputCost = model.output_cost;
+        const parseCost = (cost: unknown): number | null => {
+          if (cost == null) return null;
+          const num = typeof cost === "number" ? cost : Number(cost);
+          return Number.isFinite(num) ? num : null;
+        };
+        const inputCost = parseCost(model.input_cost);
+        const outputCost = parseCost(model.output_cost);
 
         // If both costs are missing or undefined, show "-"
         if (inputCost == null && outputCost == null) {
