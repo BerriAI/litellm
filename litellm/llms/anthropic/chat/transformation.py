@@ -1506,9 +1506,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["metadata"] = {"user_id": value}
             elif param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
+            elif param == "reasoning_effort":
+                # Accept both string ("low") and dict ({"effort": "low",
+                # "summary": "concise"}). The Responses->Chat parser keeps the
+                # full dict when `summary` is set (see #25359), so a dict here
+                # is the standard shape Otto/OpenAI-Responses-Bridge callers
+                # send. Coerce to the effort string before mapping — same
+                # shape-tolerance the GPT-5 path already implements in
+                # `_normalize_reasoning_effort_for_chat_completion`.
+                effort_value = value
+                if isinstance(effort_value, dict):
+                    effort_value = effort_value.get("effort")
+                if not isinstance(effort_value, str):
+                    continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value,
+                    reasoning_effort=effort_value,
                     model=model,
                     llm_provider=self.custom_llm_provider or "anthropic",
                 )
@@ -1519,12 +1531,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params["thinking"] = mapped_thinking
                     if AnthropicConfig._is_adaptive_thinking_model(model):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                            value
+                            effort_value
                         )
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
                                 model=model,
-                                value=value,
+                                value=effort_value,
                                 llm_provider=self.custom_llm_provider or "anthropic",
                             )
                         optional_params["output_config"] = {"effort": mapped_effort}

@@ -29,24 +29,54 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 # subdomain. HTTPS only.
 _TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
+# Comma-separated private-use URI allowlist for native MCP clients.
+# A trailing ``*`` is a prefix match; end the prefix with ``/`` (e.g.
+# ``myapp://host/oauth/*``) so ``.../oauth/callback*`` does not also
+# match ``.../oauth/callback-2``.
+_TRUSTED_NATIVE_REDIRECT_URIS_ENV = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
+
+# Default allowlist for trusted native redirect URIs.
+_DEFAULT_NATIVE_REDIRECT_URIS: List[str] = [
+    "cursor://anysphere.cursor-mcp/oauth/callback",
+]
+
+_warned_invalid_proxy_base_url: Optional[str] = None
+
+
+def _resolve_proxy_base_url_env() -> Optional[str]:
+    global _warned_invalid_proxy_base_url
+    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    if not configured:
+        return None
+    parsed = urlparse(configured)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        return normalized.rstrip("/")
+    if _warned_invalid_proxy_base_url != configured:
+        verbose_logger.warning(
+            "PROXY_BASE_URL=%r is not a valid http(s) URL (missing scheme "
+            "or host) and will be ignored for MCP OAuth origin resolution. "
+            "Set it to a full URL like https://litellm.example.com.",
+            configured,
+        )
+        _warned_invalid_proxy_base_url = configured
+    return None
+
 
 def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
-
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
+    Resolution order: ``PROXY_BASE_URL`` env var, then X-Forwarded-* when
+    the caller is a trusted proxy (``use_x_forwarded_for`` enabled AND
+    caller in ``mcp_trusted_proxy_ranges``), otherwise the request's
+    literal ``base_url``. Untrusted callers cannot poison OAuth-discovery
+    / redirect_uri values by injecting headers.
     """
+    configured = _resolve_proxy_base_url_env()
+    if configured:
+        return configured
+
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
 
@@ -192,10 +222,82 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
     return netloc == entry
 
 
+def _normalize_native_redirect_uri(
+    parsed,
+) -> str:
+    """Lowercase scheme, netloc, and path for allowlist comparison."""
+    return urlunparse(
+        (
+            (parsed.scheme or "").lower(),
+            (parsed.netloc or "").lower(),
+            (parsed.path or "").lower(),
+            "",
+            "",
+            "",
+        )
+    )
+
+
+def _parse_trusted_native_redirect_uris() -> List[str]:
+    """Built-in native MCP callbacks plus ``MCP_TRUSTED_NATIVE_REDIRECT_URIS``."""
+    entries: List[str] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
+    raw = os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV, "").strip()
+    if not raw:
+        return entries
+    for token in raw.split(","):
+        entry = token.strip().lower()
+        if entry and entry not in entries:
+            entries.append(entry)
+    return entries
+
+
+def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
+    """Prefix match for ``entry*`` allowlist rows.
+
+    When the prefix does not end with ``/``, only exact matches or
+    deeper path segments (``prefix/...``) are accepted — not siblings
+    like ``prefix-2``.
+    """
+    if not normalized.startswith(prefix):
+        return False
+    suffix = normalized[len(prefix) :]
+    if not suffix:
+        return True
+    if prefix.endswith("/"):
+        return True
+    return suffix[0] == "/"
+
+
+def _matches_trusted_native_redirect_uri(parsed) -> bool:
+    """Allowlisted private-use / custom-scheme OAuth callbacks for native MCP clients."""
+    if parsed.fragment:
+        return False
+    # Query strings are not part of registered redirect_uris (RFC 6749 §3.1.2).
+    # Rejecting them prevents allowlist bypass via ``.../callback?injected=...``.
+    if parsed.query:
+        return False
+    if not parsed.netloc:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if "\\" in parsed.netloc:
+        return False
+
+    normalized = _normalize_native_redirect_uri(parsed)
+    for entry in _parse_trusted_native_redirect_uris():
+        if entry.endswith("*"):
+            if _native_wildcard_prefix_matches(normalized, entry[:-1]):
+                return True
+        elif normalized == entry:
+            return True
+    return False
+
+
 def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     """Accept ``redirect_uri`` when it is (a) same-origin with the
-    proxy's own request origin, (b) loopback, or (c) listed in the
-    ``MCP_TRUSTED_REDIRECT_ORIGINS`` ops allowlist.
+    proxy's own request origin, (b) loopback, (c) listed in the
+    ``MCP_TRUSTED_REDIRECT_ORIGINS`` ops allowlist, or (d) a built-in /
+    env-configured native MCP client callback (e.g. ``cursor://``).
 
     Same-origin is VERIA-57's threat-model-safe equivalent of loopback:
     an attacker who can host content on the proxy's own HTTPS origin
@@ -219,6 +321,8 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid_request")
     if parsed.scheme not in ("http", "https"):
+        if _matches_trusted_native_redirect_uri(parsed):
+            return
         raise HTTPException(status_code=400, detail="invalid_request")
     if parsed.fragment:
         raise HTTPException(status_code=400, detail="invalid_request")
@@ -284,4 +388,26 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             if _matches_trusted_origin_entry(redirect_netloc, entry):
                 return
 
+    verbose_logger.warning(
+        "MCP OAuth: rejecting redirect_uri %r as invalid_request. "
+        "Computed proxy base=%r (PROXY_BASE_URL=%r). "
+        "Inbound headers: X-Forwarded-Proto=%r X-Forwarded-Host=%r "
+        "X-Forwarded-Port=%r Host=%r. "
+        "Trusted-redirect-origins env=%r. "
+        "Trusted-native-redirect-uris env=%r. "
+        "If this should be accepted, either align ingress X-Forwarded-* "
+        "with the browser URL, set PROXY_BASE_URL to your public origin, "
+        "add the redirect_uri host to MCP_TRUSTED_REDIRECT_ORIGINS, or "
+        "for native MCP clients (cursor://, etc.) add the full redirect_uri "
+        "to MCP_TRUSTED_NATIVE_REDIRECT_URIS.",
+        redirect_uri,
+        proxy_base,
+        os.environ.get("PROXY_BASE_URL"),
+        request.headers.get("X-Forwarded-Proto"),
+        request.headers.get("X-Forwarded-Host"),
+        request.headers.get("X-Forwarded-Port"),
+        request.headers.get("Host"),
+        os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV),
+        os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV),
+    )
     raise HTTPException(status_code=400, detail="invalid_request")

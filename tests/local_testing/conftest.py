@@ -22,14 +22,29 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-from tests._vcr_conftest_common import (  # noqa: E402
+# ``litellm.model_cost`` is loaded at import time from the URL pinned to
+# ``main`` (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with
+# this branch and can include pricing entries that main has not yet picked
+# up (e.g. an upstream provider rotates a model id and the test cassette
+# records the new name).  Backfill any entries that are missing from the
+# remote-fetched map so cost-calculator lookups in tests succeed against
+# the cassette state the branch is being tested with.
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
+    litellm.model_cost.setdefault(_k, _v)
+
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
     install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
+    reset_vcr_diag_dir,
     vcr_config_dict,
 )
 
@@ -84,6 +99,7 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
 
 
 def pytest_runtest_logreport(report):
@@ -93,6 +109,7 @@ def pytest_runtest_logreport(report):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     emit_cassette_cache_session_banner(terminalreporter)
     emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)
 
 
 # ---------------------------------------------------------------------------
