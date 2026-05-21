@@ -502,6 +502,15 @@ def _get_custom_provider_map_fingerprint() -> Tuple[str, ...]:
     return tuple(custom_llm["provider"] for custom_llm in litellm.custom_provider_map)
 
 
+def _add_provider_to_provider_list_set(provider: str) -> None:
+    """Keep provider_list_set in sync when provider_list is mutated."""
+    from litellm._lazy_imports import _get_litellm_globals
+
+    _globals = _get_litellm_globals()
+    if "provider_list_set" in _globals:
+        _globals["provider_list_set"].add(provider)
+
+
 def custom_llm_setup():
     """
     Add custom_llm provider to provider list
@@ -516,11 +525,13 @@ def custom_llm_setup():
         return
 
     for custom_llm in litellm.custom_provider_map:
-        if custom_llm["provider"] not in litellm.provider_list:
-            litellm.provider_list.append(custom_llm["provider"])
+        provider = custom_llm["provider"]
+        if provider not in litellm.provider_list:
+            litellm.provider_list.append(provider)
+            _add_provider_to_provider_list_set(provider)
 
-        if custom_llm["provider"] not in litellm._custom_providers:
-            litellm._custom_providers.append(custom_llm["provider"])
+        if provider not in litellm._custom_providers:
+            litellm._custom_providers.append(provider)
 
     _custom_provider_map_fingerprint = current_fingerprint
 

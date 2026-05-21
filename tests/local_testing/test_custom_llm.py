@@ -665,3 +665,25 @@ def test_custom_llm_setup_should_rerun_when_provider_map_changes():
     ]
     custom_llm_setup()
     assert "custom_provider_b" in litellm._custom_providers
+
+
+def test_custom_llm_setup_should_sync_provider_list_set():
+    import litellm.utils as utils
+    from litellm.utils import custom_llm_setup
+
+    _ = litellm.provider_list_set
+    assert "custom_provider_sync_test" not in litellm.provider_list_set
+
+    utils._custom_provider_map_fingerprint = None
+    handler = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_sync_test", "custom_handler": handler}
+    ]
+    custom_llm_setup()
+
+    assert "custom_provider_sync_test" in litellm.provider_list_set
+    model, provider, _, _ = get_llm_provider(
+        model="custom_provider_sync_test/my-fake-model"
+    )
+    assert provider == "custom_provider_sync_test"
+    assert model == "my-fake-model"
