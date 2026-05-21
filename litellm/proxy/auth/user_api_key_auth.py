@@ -620,7 +620,10 @@ async def _auto_register_jwt_mapping(
             "jwt_claim_value": claim_value,
         },
     )
-    token_hash = key_data["token"]
+    # generate_key_helper_fn returns the plaintext key in "token"; the persisted
+    # row in LiteLLM_VerificationToken uses its hash, so hash here to get the FK
+    # value referenced by LiteLLM_JWTKeyMapping.token.
+    token_hash = hash_token(key_data["token"])
 
     try:
         await prisma_client.db.litellm_jwtkeymapping.create(
@@ -635,15 +638,28 @@ async def _auto_register_jwt_mapping(
     except Exception as e:
         error_str = str(e).lower()
         if "unique" in error_str or "p2002" in error_str:
-            # A concurrent request won the race — fetch the winning mapping and
-            # use its token. The key we just generated is orphaned but harmless;
-            # it will be excluded from spend tracking since nothing maps to it.
+            # A concurrent request won the race. The key generate_key_helper_fn
+            # just persisted to LiteLLM_VerificationToken is orphaned — nothing
+            # maps to it, but it's a fully valid unrestricted API key sitting in
+            # the DB and the cleartext is in memory on this request. Delete it
+            # so orphans don't accumulate under sustained concurrency.
             verbose_proxy_logger.debug(
                 "JWT Key Mapping (auto_register): unique conflict on create — "
-                "fetching winner's mapping for %s='%s'.",
+                "deleting orphaned virtual key and fetching winner's mapping for %s='%s'.",
                 virtual_key_claim_field,
                 claim_value,
             )
+            try:
+                await prisma_client.db.litellm_verificationtoken.delete(
+                    where={"token": token_hash}
+                )
+            except Exception as delete_err:
+                # Don't fail the request if cleanup fails — the orphan is
+                # unmapped and inert. Log so an operator can prune it later.
+                verbose_proxy_logger.warning(
+                    "JWT Key Mapping (auto_register): failed to delete orphaned key after race: %s",
+                    delete_err,
+                )
             token_hash = await get_jwt_key_mapping_object(
                 jwt_claim_name=virtual_key_claim_field,
                 jwt_claim_value=claim_value,
@@ -710,9 +726,20 @@ async def _resolve_jwt_to_virtual_key(
                 status_code=403,
                 detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",
             )
-        if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER and prisma_client is not None:
+        if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
             # Stale sentinel written under a prior fallback_team_mapping config —
-            # evict it and auto-register now that the policy has changed.
+            # evict it and auto-register now that the policy has changed. Raise
+            # the same 500 as the fresh-path AUTO_REGISTER branch when there is
+            # no DB, so behavior is consistent regardless of whether the cache
+            # happens to hold the sentinel.
+            if prisma_client is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "JWT Key Mapping: AUTO_REGISTER requires a database connection. "
+                        "Configure a database or change unregistered_jwt_client_behavior."
+                    ),
+                )
             await user_api_key_cache.async_delete_cache(cache_key)
             return await _auto_register_jwt_mapping(
                 virtual_key_claim_field=virtual_key_claim_field,
