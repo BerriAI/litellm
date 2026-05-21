@@ -137,6 +137,54 @@ async def _aiter_sse_events(stream: AsyncIterator[str]) -> AsyncIterator[str]:
         yield stripped
 
 
+def _normalize_tool_choice(selected_params: Dict) -> None:
+    tc = selected_params.get("toolChoice")
+    if tc is None:
+        return
+    if isinstance(tc, str):
+        tc_map = {
+            "auto": {"type": "AUTO"},
+            "none": {"type": "NONE"},
+            "required": {"type": "REQUIRED"},
+            "any": {"type": "REQUIRED"},
+        }
+        selected_params["toolChoice"] = tc_map.get(
+            tc.lower(), {"type": "FUNCTION", "name": tc}
+        )
+        return
+    if isinstance(tc, dict):
+        raw_type = tc.get("type")
+        if not isinstance(raw_type, str):
+            return
+        upper = raw_type.upper()
+        if upper == "FUNCTION":
+            fn = tc.get("function")
+            name = fn.get("name") if isinstance(fn, dict) else tc.get("name")
+            if isinstance(name, str) and name:
+                selected_params["toolChoice"] = {"type": "FUNCTION", "name": name}
+        elif upper in {"AUTO", "NONE", "REQUIRED"}:
+            selected_params["toolChoice"] = {"type": upper}
+
+
+def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> None:
+    rf = selected_params.get("responseFormat")
+    if not isinstance(rf, dict) or "type" not in rf:
+        return
+    rf_payload = dict(rf)
+    selected_params["responseFormat"] = rf_payload
+    response_type = rf_payload["type"]
+    if "json_schema" in rf_payload:
+        raw_schema = rf_payload.pop("json_schema")
+        rf_payload["jsonSchema"] = (
+            dict(raw_schema) if isinstance(raw_schema, dict) else raw_schema
+        )
+    if vendor == OCIVendors.COHERE:
+        rf_payload["type"] = response_type
+    else:
+        fmt = response_type.upper()
+        rf_payload["type"] = "JSON_OBJECT" if fmt == "JSON" else fmt
+
+
 def get_vendor_from_model(model: str) -> OCIVendors:
     """Return the OCI vendor enum for a model name.
 
@@ -408,54 +456,9 @@ class OCIChatConfig(BaseConfig):
         # Normalise tool_choice to OCI's flat uppercase dict form
         # ({"type": "AUTO"|"NONE"|"REQUIRED"} or {"type": "FUNCTION", "name": "<fn>"}).
         # OCI rejects both the OpenAI string and the nested OpenAI dict shape.
-        if "toolChoice" in selected_params:
-            tc = selected_params["toolChoice"]
-            if isinstance(tc, str):
-                tc_map = {
-                    "auto": {"type": "AUTO"},
-                    "none": {"type": "NONE"},
-                    "required": {"type": "REQUIRED"},
-                    "any": {"type": "REQUIRED"},
-                }
-                selected_params["toolChoice"] = tc_map.get(
-                    tc.lower(), {"type": "FUNCTION", "name": tc}
-                )
-            elif isinstance(tc, dict):
-                raw_type = tc.get("type")
-                if isinstance(raw_type, str):
-                    upper = raw_type.upper()
-                    if upper == "FUNCTION":
-                        fn = tc.get("function")
-                        name = (
-                            fn.get("name") if isinstance(fn, dict) else tc.get("name")
-                        )
-                        if isinstance(name, str) and name:
-                            selected_params["toolChoice"] = {
-                                "type": "FUNCTION",
-                                "name": name,
-                            }
-                    elif upper in {"AUTO", "NONE", "REQUIRED"}:
-                        selected_params["toolChoice"] = {"type": upper}
+        _normalize_tool_choice(selected_params)
 
-        if "responseFormat" in selected_params:
-            rf = selected_params["responseFormat"]
-            if isinstance(rf, dict) and "type" in rf:
-                rf_payload = dict(rf)
-                selected_params["responseFormat"] = rf_payload
-                response_type = rf_payload["type"]
-                schema_payload: Optional[Any] = None
-                if "json_schema" in rf_payload:
-                    raw_schema = rf_payload.pop("json_schema")
-                    schema_payload = (
-                        dict(raw_schema) if isinstance(raw_schema, dict) else raw_schema
-                    )
-                if schema_payload is not None:
-                    rf_payload["jsonSchema"] = schema_payload
-                if vendor == OCIVendors.COHERE:
-                    rf_payload["type"] = response_type
-                else:
-                    fmt = response_type.upper()
-                    rf_payload["type"] = "JSON_OBJECT" if fmt == "JSON" else fmt
+        _normalize_response_format(selected_params, vendor)
 
         return selected_params
 
