@@ -1086,6 +1086,54 @@ def _make_prisma_update_data_client():
     return client
 
 
+class _UpdateDataKeyObject:
+    def __init__(self, token: str, budget_reset_at: datetime, fail_model_dump=False):
+        self.token = token
+        self.spend = 0.0
+        self.budget_reset_at = budget_reset_at
+        self.fail_model_dump = fail_model_dump
+
+    def model_dump(self, exclude_none=True):
+        if self.fail_model_dump:
+            raise RuntimeError("model_dump unavailable")
+        return {
+            "token": self.token,
+            "spend": self.spend,
+            "budget_reset_at": self.budget_reset_at,
+        }
+
+    def dict(self, exclude_none=True):
+        return {
+            "token": self.token,
+            "spend": self.spend,
+            "budget_reset_at": self.budget_reset_at,
+        }
+
+
+class _UpdateDataTeamObject:
+    def __init__(self, team_id: str, budget_reset_at: datetime, fail_model_dump=False):
+        self.team_id = team_id
+        self.spend = 0.0
+        self.budget_reset_at = budget_reset_at
+        self.fail_model_dump = fail_model_dump
+
+    def model_dump(self, exclude_none=True):
+        if self.fail_model_dump:
+            raise RuntimeError("model_dump unavailable")
+        return {
+            "team_id": self.team_id,
+            "spend": self.spend,
+            "budget_reset_at": self.budget_reset_at,
+        }
+
+    def dict(self, exclude_none=True):
+        return {
+            "team_id": self.team_id,
+            "spend": self.spend,
+            "budget_reset_at": self.budget_reset_at,
+        }
+
+
 def test_update_data_key_update_many_accepts_minimal_dict_payloads():
     from litellm.proxy.utils import hash_token
 
@@ -1118,6 +1166,34 @@ def test_update_data_key_update_many_accepts_minimal_dict_payloads():
     }
 
 
+def test_update_data_key_update_many_preserves_object_payloads():
+    from litellm.proxy.utils import hash_token
+
+    prisma_client = _make_prisma_update_data_client()
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        prisma_client.update_data(
+            query_type="update_many",
+            table_name="key",
+            data_list=[
+                _UpdateDataKeyObject("sk-object-key", now),
+                _UpdateDataKeyObject("sk-fallback-key", now, fail_model_dump=True),
+            ],
+        )
+    )
+
+    batcher = prisma_client.db.batchers[0]
+    assert batcher.commit_calls == 1
+    calls = batcher.litellm_verificationtoken.update_calls
+    assert [call["where"] for call in calls] == [
+        {"token": hash_token("sk-object-key")},
+        {"token": hash_token("sk-fallback-key")},
+    ]
+    assert calls[0]["data"]["spend"] == 0.0
+    assert calls[1]["data"]["budget_reset_at"] == now
+
+
 def test_update_data_team_update_many_accepts_minimal_dict_payloads():
     prisma_client = _make_prisma_update_data_client()
     now = datetime.now(timezone.utc)
@@ -1146,6 +1222,32 @@ def test_update_data_team_update_many_accepts_minimal_dict_payloads():
         "spend": 0.0,
         "budget_reset_at": now,
     }
+
+
+def test_update_data_team_update_many_preserves_object_payloads():
+    prisma_client = _make_prisma_update_data_client()
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        prisma_client.update_data(
+            query_type="update_many",
+            table_name="team",
+            data_list=[
+                _UpdateDataTeamObject("team-object", now),
+                _UpdateDataTeamObject("team-fallback", now, fail_model_dump=True),
+            ],
+        )
+    )
+
+    batcher = prisma_client.db.batchers[0]
+    assert batcher.commit_calls == 1
+    calls = batcher.litellm_teamtable.upsert_calls
+    assert [call["where"] for call in calls] == [
+        {"team_id": "team-object"},
+        {"team_id": "team-fallback"},
+    ]
+    assert calls[0]["data"]["update"]["spend"] == 0.0
+    assert calls[1]["data"]["update"]["budget_reset_at"] == now
 
 
 # ---------------------------------------------------------------------------
