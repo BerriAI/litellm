@@ -1770,6 +1770,26 @@ def test_get_server_auth_header_fallback_to_default():
     assert result == "Bearer default_token"
 
 
+def test_get_server_auth_header_hyphenated_alias_sanitized_header_key():
+    """Header keys use sanitized alias; lookup must match legacy hyphenated aliases."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_server_auth_header,
+    )
+
+    mock_server = MagicMock()
+    mock_server.alias = "GitHub-MCP"
+    mock_server.server_name = "github_mcp_server"
+
+    mcp_server_auth_headers = {
+        "github_mcp": {"Authorization": "Bearer github-mcp-token"},
+    }
+
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, "Bearer default_token"
+    )
+    assert result == {"Authorization": "Bearer github-mcp-token"}
+
+
 def test_get_server_auth_header_no_auth_headers():
     """Test _get_server_auth_header function with no auth headers."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (

@@ -37,6 +37,19 @@ const MCPToolsViewer = ({
       : null
   );
 
+  // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
+  useEffect(() => {
+    if (!isOAuth) {
+      setOauthToken(null);
+      return;
+    }
+    setOauthToken(
+      isTokenValid(serverId, userID)
+        ? (getToken(serverId, userID)?.access_token ?? null)
+        : null
+    );
+  }, [serverId, userID, isOAuth]);
+
   const { startOAuthFlow, status: oauthStatus, error: oauthError } = useToolsOAuthFlow({
     accessToken: accessToken ?? "",
     serverId,
