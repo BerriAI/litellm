@@ -1136,20 +1136,20 @@ class MCPRequestHandler:
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
+
+            if org_obj is None or not org_obj.object_permission_id:
+                return None
+
+            return await get_object_permission(
+                object_permission_id=org_obj.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
         except Exception as e:
             verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
             return None
-
-        if org_obj is None or not org_obj.object_permission_id:
-            return None
-
-        return await get_object_permission(
-            object_permission_id=org_obj.object_permission_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_auth.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_org(
