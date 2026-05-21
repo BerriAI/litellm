@@ -67,34 +67,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
 
 def _get_optional_value(litellm_params, optional_params, attribute_name):
-    """Resolve a Cisco-specific field with two-tier precedence.
-
-    Lookup order:
-
-    1. ``optional_params`` (nested, canonical Cisco location). Supports both
-       the typed ``CiscoAIDefenseGuardrailConfigModelOptionalParams`` model
-       and a plain ``dict``.
-    2. Top-level ``litellm_params`` — but **only** when the field is in
-       ``litellm_params.model_fields_set``, i.e. the user explicitly passed
-       it at the flattened root (e.g. via the Admin UI / management API,
-       which currently flattens Cisco fields onto ``LitellmParams``).
-
-    The ``model_fields_set`` check is critical. Several shared field names
-    (``on_flagged_action``, ``fallback_on_error``, ``timeout``) are also
-    declared on sibling guardrail config models with their own defaults
-    (e.g. GraySwan defaults ``on_flagged_action`` to ``"passthrough"``).
-    Because all guardrail configs are mixed into ``LitellmParams`` via
-    multiple inheritance, a bare ``getattr(litellm_params, attr)`` would
-    silently inherit those sibling defaults even when the user never set
-    the field. ``model_fields_set`` is the Pydantic v2-supplied set of
-    fields that were actually passed at construction time, so it gives us
-    a precise "user really set this" signal without false positives from
-    MRO-inherited defaults.
-
-    ``api_key`` / ``api_base`` / ``mode`` / ``default_on`` are read from
-    ``litellm_params`` directly outside this helper because they ARE
-    intentional top-level fields with no sibling-default ambiguity.
-    """
+    """Resolve Cisco optional params without inheriting sibling defaults."""
     if optional_params is not None:
         if isinstance(optional_params, dict):
             if attribute_name in optional_params:
@@ -108,6 +81,7 @@ def _get_optional_value(litellm_params, optional_params, attribute_name):
 
     if litellm_params is None:
         return None
+    # Only accept flattened values the caller explicitly set.
     fields_set = getattr(litellm_params, "model_fields_set", None)
     if fields_set is None or attribute_name not in fields_set:
         return None
