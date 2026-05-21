@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.config_export_types import (
     ImportSectionResult,
     LiteLLMExportEnvelope,
     _redact_litellm_params,
+    _resolve_sections,
     _validate_dependencies,
     _validate_envelope,
 )
@@ -26,11 +27,6 @@ from litellm.proxy.management_endpoints.config_import_helpers import (
     _import_section,
     _upsert,
 )
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers and stubs
-# ---------------------------------------------------------------------------
 
 
 def make_admin_key() -> UserAPIKeyAuth:
@@ -130,11 +126,6 @@ class _TxTable(_NoTxTable):
         return self
 
 
-# ---------------------------------------------------------------------------
-# Export tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_export_models_redacts_litellm_params_secrets():
     model_row = {
@@ -198,11 +189,6 @@ async def test_export_raises_500_when_db_not_connected():
             )
     assert exc_info.value.status_code == 500
     assert "Database not connected" in exc_info.value.detail
-
-
-# ---------------------------------------------------------------------------
-# Import tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -303,8 +289,6 @@ async def test_import_handles_exception(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_import_config_per_section_errors_are_isolated(monkeypatch):
-    """A record-level error in models does not affect teams result."""
-
     class _FailCreateTable:
         async def create(self, data):
             raise Exception("models db error")
@@ -339,11 +323,6 @@ async def test_import_config_per_section_errors_are_isolated(monkeypatch):
     assert result.models.created == 0
 
 
-# ---------------------------------------------------------------------------
-# _upsert / _import_section unit tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_upsert_exception_counted_as_error():
     table = MagicMock()
@@ -366,7 +345,6 @@ async def test_upsert_exception_counted_as_error():
 
 @pytest.mark.asyncio
 async def test_import_section_transaction_rollback_does_not_double_count():
-    """Commit failure must zero out per-record increments before counting errors."""
     sr = ImportSectionResult()
     await _import_section(
         table=_TxTable(),
@@ -409,19 +387,8 @@ async def test_import_section_logs_error_on_transaction_failure():
     assert sr.errors == 1
 
 
-# ---------------------------------------------------------------------------
-# Import — redacted placeholder values must not reach the DB
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_import_does_not_write_redacted_placeholders_to_db(monkeypatch):
-    """
-    Covers two distinct redaction formats that must be stripped on import:
-    - litellm_params sub-keys use the string sentinel "__redacted__"
-    - MCP sensitive fields (credentials/static_headers/env) use {"__redacted__": True}
-    Neither should survive to the Prisma write.
-    """
     captured: list = []
 
     async def fake_import_section(**kwargs):
@@ -487,3 +454,36 @@ async def test_import_does_not_write_redacted_placeholders_to_db(monkeypatch):
     assert any("credentials" in w for w in warns)
     assert any("static_headers" in w for w in warns)
     assert any("env" in w for w in warns)
+
+
+@pytest.mark.asyncio
+async def test_upsert_replace_merge_and_edge_cases():
+    t = MagicMock()
+    t.update = AsyncMock()
+    sr = ImportSectionResult()
+    await _upsert(t, {"team_id": "t1", "x": 1}, "team_id", "replace", False, sr, {"t1": {}})
+    assert sr.updated == 1 and t.update.called
+    sr2 = ImportSectionResult()
+    await _upsert(t, {"team_id": "t2", "x": 2}, "team_id", "merge", False, sr2, {"t2": {"team_id": "t2", "x": 0}})
+    assert sr2.updated == 1
+    sr3 = ImportSectionResult()
+    await _upsert(t, {"team_id": "t3"}, "team_id", "skip", True, sr3, {"t3": {}})
+    assert sr3.skipped == 1
+    sr4 = ImportSectionResult()
+    await _upsert(t, {}, "team_id", "skip", False, sr4, {})
+    assert sr4.skipped == 1 and sr4.warnings
+
+
+def test_resolve_sections_rejects_unknown_section():
+    with pytest.raises(HTTPException) as exc:
+        _resolve_sections("not_a_real_section")
+    assert exc.value.status_code == 400
+
+
+def test_validate_envelope_rejects_duplicate_ids():
+    with pytest.raises(HTTPException) as exc:
+        _validate_envelope(LiteLLMExportEnvelope(
+            exported_at="2024-01-01T00:00:00Z", source_instance="http://dev",
+            include_filters=[], teams=[{"team_id": "t1"}, {"team_id": "t1"}],
+        ))
+    assert exc.value.status_code == 400
