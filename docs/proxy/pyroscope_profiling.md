@@ -24,6 +24,8 @@ LiteLLM proxy can send continuous CPU profiles to [Grafana Pyroscope](https://gr
    | `PYROSCOPE_APP_NAME` | Yes (when enabled) | Application name shown in the Pyroscope UI. |
    | `PYROSCOPE_SERVER_ADDRESS` | Yes (when enabled) | Pyroscope server URL (e.g. `http://localhost:4040`). |
    | `PYROSCOPE_SAMPLE_RATE` | No | Sample rate (integer). If unset, the pyroscope-io library default is used. |
+   | `PYROSCOPE_GRAFANA_USER` | No | Grafana Cloud Pyroscope user/tenant ID. Required when `PYROSCOPE_GRAFANA_API_TOKEN` is set. |
+   | `PYROSCOPE_GRAFANA_API_TOKEN` | No | Grafana Cloud API/access policy token. Used as the Pyroscope basic auth password. |
 
 3. **Start the proxy**; profiling will begin automatically when the proxy starts.
 
@@ -31,6 +33,18 @@ LiteLLM proxy can send continuous CPU profiles to [Grafana Pyroscope](https://gr
    export LITELLM_ENABLE_PYROSCOPE=true
    export PYROSCOPE_APP_NAME=litellm-proxy
    export PYROSCOPE_SERVER_ADDRESS=http://localhost:4040
+   litellm --config config.yaml
+   ```
+
+   For Grafana Cloud Pyroscope, use the Profiles endpoint as `PYROSCOPE_SERVER_ADDRESS`
+   and set the Grafana Cloud credentials:
+
+   ```bash
+   export LITELLM_ENABLE_PYROSCOPE=true
+   export PYROSCOPE_APP_NAME=litellm-proxy
+   export PYROSCOPE_SERVER_ADDRESS=https://profiles-prod-<region>.grafana.net
+   export PYROSCOPE_GRAFANA_USER=<grafana-cloud-pyroscope-user>
+   export PYROSCOPE_GRAFANA_API_TOKEN=<grafana-cloud-api-or-access-policy-token>
    litellm --config config.yaml
    ```
 
