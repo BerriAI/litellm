@@ -405,8 +405,9 @@ class OCIChatConfig(BaseConfig):
                     selected_params["tools"], vendor  # type: ignore[arg-type]
                 )
 
-        # Convert toolChoice from OpenAI string ("auto", "none", "required") to the
-        # OCI dict form ({"type": "AUTO"} etc.) — the API rejects plain strings.
+        # Normalise tool_choice to OCI's flat uppercase dict form
+        # ({"type": "AUTO"|"NONE"|"REQUIRED"} or {"type": "FUNCTION", "name": "<fn>"}).
+        # OCI rejects both the OpenAI string and the nested OpenAI dict shape.
         if "toolChoice" in selected_params:
             tc = selected_params["toolChoice"]
             if isinstance(tc, str):
@@ -419,6 +420,22 @@ class OCIChatConfig(BaseConfig):
                 selected_params["toolChoice"] = tc_map.get(
                     tc.lower(), {"type": "FUNCTION", "name": tc}
                 )
+            elif isinstance(tc, dict):
+                raw_type = tc.get("type")
+                if isinstance(raw_type, str):
+                    upper = raw_type.upper()
+                    if upper == "FUNCTION":
+                        fn = tc.get("function")
+                        name = (
+                            fn.get("name") if isinstance(fn, dict) else tc.get("name")
+                        )
+                        if isinstance(name, str) and name:
+                            selected_params["toolChoice"] = {
+                                "type": "FUNCTION",
+                                "name": name,
+                            }
+                    elif upper in {"AUTO", "NONE", "REQUIRED"}:
+                        selected_params["toolChoice"] = {"type": upper}
 
         if "responseFormat" in selected_params:
             rf = selected_params["responseFormat"]

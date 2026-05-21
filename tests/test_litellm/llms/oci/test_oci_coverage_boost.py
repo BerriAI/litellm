@@ -883,6 +883,34 @@ class TestOCIChatConfigGetOptionalParams:
         )
         assert result["toolChoice"] == {"type": "REQUIRED"}
 
+    def test_tool_choice_openai_function_dict_converted_to_oci_form(self):
+        config = self._config()
+        result = config._get_optional_params(
+            OCIVendors.GENERIC,
+            {
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "my_func"},
+                }
+            },
+        )
+        assert result["toolChoice"] == {"type": "FUNCTION", "name": "my_func"}
+
+    def test_tool_choice_flat_function_dict_uppercased(self):
+        config = self._config()
+        result = config._get_optional_params(
+            OCIVendors.GENERIC,
+            {"tool_choice": {"type": "function", "name": "my_func"}},
+        )
+        assert result["toolChoice"] == {"type": "FUNCTION", "name": "my_func"}
+
+    def test_tool_choice_dict_auto_uppercased(self):
+        config = self._config()
+        result = config._get_optional_params(
+            OCIVendors.GENERIC, {"tool_choice": {"type": "auto"}}
+        )
+        assert result["toolChoice"] == {"type": "AUTO"}
+
     def test_response_format_json_generic(self):
         config = self._config()
         result = config._get_optional_params(
