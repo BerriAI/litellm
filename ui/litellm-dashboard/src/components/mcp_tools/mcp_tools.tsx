@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
@@ -98,6 +98,19 @@ const MCPToolsViewer = ({
       return failureCount < 2;
     },
   });
+
+  // If the tools query fails with 401, the cached OAuth token is invalid —
+  // clear it so the auth gate is shown again and the user can re-authenticate.
+  useEffect(() => {
+    const err = mcpToolsError as
+      | (Error & { status?: number; response?: { status?: number } })
+      | null;
+    const status = err?.status ?? err?.response?.status;
+    if (status === 401) {
+      removeToken(serverId);
+      setOauthToken(null);
+    }
+  }, [mcpToolsError, serverId]);
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
@@ -289,14 +302,16 @@ const MCPToolsViewer = ({
                 )}
 
                 {/* Error State */}
-                {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
+                {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
                   <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
-                    <p className="font-medium">Error: {mcpToolsResponse.message}</p>
+                    <p className="font-medium">
+                      Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
+                    </p>
                   </div>
                 )}
 
                 {/* No Tools State */}
-                {!isLoadingTools && !mcpToolsResponse?.error && (!toolsData || toolsData.length === 0) && (
+                {!isLoadingTools && !mcpToolsResponse?.error && !mcpToolsError && (!toolsData || toolsData.length === 0) && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

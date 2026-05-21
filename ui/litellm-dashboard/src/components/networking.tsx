@@ -7068,46 +7068,33 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
 };
 
 export const listMCPTools = async (
-  accessToken: string, 
+  accessToken: string,
   serverId: string,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
 ) => {
+  // Construct base URL
+  let url = proxyBaseUrl
+    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+    : `/mcp-rest/tools/list?server_id=${serverId}`;
+
+  console.log("Fetching MCP tools from:", url);
+
+  const headers: Record<string, string> = {
+    [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    ...customHeaders, // Merge custom headers for passthrough auth
+  };
+
+  let response: Response;
   try {
-    // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-      : `/mcp-rest/tools/list?server_id=${serverId}`;
-
-    console.log("Fetching MCP tools from:", url);
-
-    const headers: Record<string, string> = {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      ...customHeaders, // Merge custom headers for passthrough auth
-    };
-
-    const response = await fetch(url, {
+    response = await fetch(url, {
       method: "GET",
       headers,
     });
-
-    const data = await response.json();
-    console.log("Fetched MCP tools response:", data);
-
-    if (!response.ok) {
-      // If the server returned an error response, use it
-      if (data.error && data.message) {
-        throw new Error(data.message);
-      }
-      // Otherwise use a generic error
-      throw new Error("Failed to fetch MCP tools");
-    }
-
-    // Return the full response object which includes tools, error, message, and stack_trace
-    return data;
   } catch (error) {
-    console.error("Failed to fetch MCP tools:", error);
-    // Return an error response in the same format as the API
+    // Network-level failure (no HTTP response). Preserve legacy shape so the
+    // caller can render a generic error message without crashing.
+    console.error("Failed to fetch MCP tools (network error):", error);
     return {
       tools: [],
       error: "network_error",
@@ -7115,6 +7102,34 @@ export const listMCPTools = async (
       stack_trace: null,
     };
   }
+
+  let data: any = null;
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    console.error("Failed to parse MCP tools response:", parseError);
+  }
+  console.log("Fetched MCP tools response:", data);
+
+  if (!response.ok) {
+    // Throw an enhanced error with status attached so callers (e.g. useQuery)
+    // can react to auth failures like 401 instead of receiving a silent
+    // success with an empty tools array.
+    const errorMessage =
+      (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    const enhancedError = new Error(errorMessage) as Error & {
+      status?: number;
+      statusText?: string;
+      details?: any;
+    };
+    enhancedError.status = response.status;
+    enhancedError.statusText = response.statusText;
+    enhancedError.details = data;
+    throw enhancedError;
+  }
+
+  // Return the full response object which includes tools, error, message, and stack_trace
+  return data;
 };
 
 interface CallMCPToolOptions {
