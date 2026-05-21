@@ -23,7 +23,9 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     openai_messages_without_system,
+    openai_messages_without_tool,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -108,6 +110,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             return data
 
         skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        skip_tool = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
         chat_completion_compatible_request = self._translate_to_openai(data)
 
@@ -117,6 +120,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         if skip_system:
             structured_messages = openai_messages_without_system(structured_messages)
+        if skip_tool:
+            structured_messages = openai_messages_without_tool(structured_messages)
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
@@ -134,6 +139,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 images_to_check=images_to_check,
                 task_mappings=task_mappings,
                 skip_system_message=skip_system,
+                skip_tool_message=skip_tool,
             )
 
         # Step 2: Apply guardrail to all texts in batch
@@ -198,13 +204,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
         skip_system_message: bool = False,
+        skip_tool_message: bool = False,
     ) -> None:
         """
         Extract text content and images from a message.
 
         Override this method to customize text/image extraction logic.
         """
-        if skip_system_message and str(message.get("role") or "").lower() == "system":
+        role = str(message.get("role") or "").lower()
+        if skip_system_message and role == "system":
+            return
+        if skip_tool_message and role == "tool":
             return
 
         content = message.get("content", None)

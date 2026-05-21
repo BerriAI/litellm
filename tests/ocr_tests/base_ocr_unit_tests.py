@@ -12,7 +12,15 @@ from abc import ABC, abstractmethod
 
 # Test resources
 TEST_IMAGE_PATH = "test_image_edit.png"
-TEST_PDF_URL = "https://arxiv.org/pdf/2201.04234"
+# Tiny in-repo PDF served via jsdelivr (sha-pinned, immutable). The arxiv
+# PDF previously used here was several MB — once base64-encoded into the
+# Vertex OCR request it ballooned cassettes past 100 MB per test. Keep
+# the URL stable across runs so cassettes don't churn.
+TEST_PDF_URL = (
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
+    "@d769e81c90d453240c61fc572cdb27fae06a89d0"
+    "/tests/llm_translation/fixtures/dummy.pdf"
+)
 
 
 class BaseOCRTest(ABC):
