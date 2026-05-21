@@ -1,7 +1,5 @@
-import json
 from typing import Any, Dict, Optional
 
-from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -10,6 +8,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.sse_output_recovery import (
+    parse_sse_json_chunk,
     record_output_item_chunk,
     record_output_text_chunk,
 )
@@ -19,7 +18,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import CustomStreamWrapper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -164,7 +162,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         streamed_output_items: Dict[int, dict] = {}
         text_only_output_items: Dict[int, dict] = {}
         for chunk in body_text.splitlines():
-            parsed_chunk = self._parse_sse_json_chunk(chunk)
+            parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue
 
@@ -206,25 +204,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     error_message = extracted_error
 
         return completed_response, error_message
-
-    def _parse_sse_json_chunk(self, chunk: str) -> Optional[Dict[str, Any]]:
-        # Strip outer whitespace before removing the SSE `data:` prefix.
-        # `_strip_sse_data_from_chunk` only matches the prefix at position 0,
-        # so chunks with leading whitespace (e.g. `  data: {...}`) would
-        # otherwise be returned unchanged and fail JSON parsing silently.
-        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip())
-        if not stripped_chunk:
-            return None
-        stripped_chunk = stripped_chunk.strip()
-        if not stripped_chunk or stripped_chunk == STREAM_SSE_DONE_STRING:
-            return None
-        try:
-            parsed_chunk = json.loads(stripped_chunk)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(parsed_chunk, dict):
-            return None
-        return parsed_chunk
 
     def _build_completed_response_from_chunk(
         self, parsed_chunk: Dict[str, Any], streamed_output_items: Dict[int, dict]

@@ -26,12 +26,12 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.responses.sse_output_recovery import (
+    parse_sse_json_chunk,
     record_output_item_chunk,
     record_output_text_chunk,
 )
@@ -607,25 +607,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return choices
 
     @classmethod
-    def _parse_raw_sse_chunk(cls, chunk: str) -> Optional[Dict[str, Any]]:
-        stripped_chunk = (
-            CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or ""
-        ).strip()
-        if (
-            not stripped_chunk
-            or stripped_chunk == "[DONE]"
-            or stripped_chunk.startswith("event:")
-        ):
-            return None
-        try:
-            parsed_chunk = json.loads(stripped_chunk)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(parsed_chunk, dict):
-            return None
-        return parsed_chunk
-
-    @classmethod
     def _extract_output_from_completed_event(
         cls, parsed_chunk: Dict[str, Any]
     ) -> Optional[List[Dict[str, Any]]]:
@@ -648,7 +629,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         recovered_text_only_items: Dict[int, Dict[str, Any]] = {}
 
         for chunk in raw_sse.splitlines():
-            parsed_chunk = cls._parse_raw_sse_chunk(chunk)
+            parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue
 

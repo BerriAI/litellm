@@ -4,6 +4,7 @@ from typing import Any, List, Literal, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -114,6 +115,18 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
             supported_params.append("parallel_tool_calls")
+        else:
+            # Historically every Fireworks model advertised tool support, so a
+            # JSON entry that flips `supports_function_calling` to false will
+            # silently drop `tools` from requests. Surface this so users can
+            # tell why their tool calls suddenly stop working.
+            verbose_logger.warning(
+                "fireworks_ai model %r is marked as not supporting "
+                "function calling in model_prices_and_context_window.json; "
+                "`tools` and `parallel_tool_calls` will be dropped from the "
+                "request.",
+                model,
+            )
 
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
