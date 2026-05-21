@@ -211,19 +211,44 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
             </button>
           </Tooltip>
         )}
-        <div
-          style={{
-            backgroundColor: "#f0f2f5",
-            borderRadius: 16,
-            padding: "10px 14px",
-            fontSize: 14,
-            lineHeight: "1.6",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            color: "#111827",
-          }}
-        >
-          {message.content}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          {/* Attached image preview */}
+          {message.imagePreviewUrl && (
+            message.content.includes("[PDF attached]") ? (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 6,
+                background: "#f3f4f6", borderRadius: 10, padding: "7px 12px",
+                fontSize: 13, color: "#374151", border: "1px solid #e5e7eb",
+              }}>
+                <span>📄</span>
+                <span>PDF attached</span>
+              </div>
+            ) : (
+              <img
+                src={message.imagePreviewUrl}
+                alt="Attached"
+                style={{
+                  maxWidth: 240, maxHeight: 180, borderRadius: 12,
+                  objectFit: "contain", border: "1px solid #e5e7eb",
+                  background: "#f9fafb",
+                }}
+              />
+            )
+          )}
+          <div
+            style={{
+              backgroundColor: "#f0f2f5",
+              borderRadius: 16,
+              padding: "10px 14px",
+              fontSize: 14,
+              lineHeight: "1.6",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              color: "#111827",
+            }}
+          >
+            {message.content}
+          </div>
         </div>
       </div>
       <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>

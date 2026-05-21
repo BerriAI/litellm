@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
 import { Tooltip, Skeleton, Popover } from "antd";
+import { convertImageToBase64 } from "../playground/chat_ui/ChatImageUtils";
 import MessageManager from "@/components/molecules/message_manager";
 import {
   SettingOutlined,
@@ -143,6 +144,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
+  const [pendingImage, setPendingImage] = useState<File | null>(null);
+  const [pendingImagePreviewUrl, setPendingImagePreviewUrl] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const _oauthReturn = searchParams?.get("mcpOauthReturn");
@@ -250,7 +254,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       const trimmed = text.trim();
       if (!trimmed || selectedModels.length === 0 || isStreaming) return;
       const model = selectedModels[0];
+
+      // Capture & clear pending image before any awaits
+      const imageFile = pendingImage;
+      const imagePreview = pendingImagePreviewUrl;
       setInputText("");
+      setPendingImage(null);
+      setPendingImagePreviewUrl(null);
 
       let convId = activeConversationId;
       if (!convId) {
@@ -259,7 +269,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         router.push(getChatUrl(uiRoot, convId));
       }
 
-      appendMessage(convId, { role: "user", content: trimmed });
+      appendMessage(convId, { role: "user", content: trimmed, imagePreviewUrl: imagePreview ?? undefined });
       appendMessage(convId, { role: "assistant", content: "" });
 
       setIsStreaming(true);
@@ -281,11 +291,33 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       // On the very first turn (no session yet), we send the full history.
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> =
+      // Convert image to base64 if one was attached (only for the current turn)
+      let imageBase64: string | null = null;
+      if (imageFile && !historyOverride) {
+        try {
+          imageBase64 = await convertImageToBase64(imageFile);
+        } catch {
+          // If conversion fails, send text-only
+        }
+      }
+
+      type MultimodalPart =
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } };
+      type MessageContent = string | MultimodalPart[];
+
+      const currentUserContent: MessageContent = imageBase64
+        ? [
+            { type: "text" as const, text: trimmed },
+            { type: "image_url" as const, image_url: { url: imageBase64 } },
+          ]
+        : trimmed;
+
+      const history: Array<{ role: "user" | "assistant"; content: MessageContent }> =
         historyOverride
-          ? [...historyOverride, { role: "user" as const, content: trimmed }]
+          ? [...historyOverride, { role: "user" as const, content: currentUserContent }]
           : previousResponseId
-          ? [{ role: "user" as const, content: trimmed }]
+          ? [{ role: "user" as const, content: currentUserContent }]
           : [
               // Explicitly filter to only user/assistant roles — tool messages
               // lack a required tool_call_id and would cause API errors.
@@ -293,8 +325,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 .filter((m): m is typeof m & { role: "user" | "assistant" } =>
                   m.role === "user" || m.role === "assistant"
                 )
-                .map((m) => ({ role: m.role, content: m.content })),
-              { role: "user" as const, content: trimmed },
+                .map((m) => ({ role: m.role, content: m.content as MessageContent })),
+              { role: "user" as const, content: currentUserContent },
             ];
 
       let accumulatedContent = "";
@@ -352,7 +384,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       }
     },
     [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
-      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming, responsesSessionId],
+      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming, responsesSessionId,
+      pendingImage, pendingImagePreviewUrl],
   );
 
   const handleSendComparison = useCallback(
@@ -360,6 +393,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       const trimmed = text.trim();
       if (!trimmed || selectedModels.length === 0 || isAnyStreaming) return;
       setInputText("");
+      setPendingImage(null);
+      setPendingImagePreviewUrl(null);
 
       // Append a new exchange with empty responses
       const newExchange: ComparisonExchange = { userMessage: trimmed, responses: {} };
@@ -700,21 +735,119 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     </Popover>
   );
 
+  // ---- Drag-and-drop handlers ----
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/") && file.type !== "application/pdf") return;
+    const previewUrl = URL.createObjectURL(file);
+    setPendingImage(file);
+    setPendingImagePreviewUrl(previewUrl);
+  }, []);
+
+  const handleRemovePendingImage = useCallback(() => {
+    if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+    setPendingImage(null);
+    setPendingImagePreviewUrl(null);
+  }, [pendingImagePreviewUrl]);
+
   // ---- Shared input bar ----
   const inputBar = (inConversation: boolean) => (
-    <div style={{
-      background: "#fff",
-      borderRadius: 12,
-      border: "1px solid #e5e7eb",
-      boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
-      overflow: "hidden",
-    }}>
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        background: isDragOver ? "#eff6ff" : "#fff",
+        borderRadius: 12,
+        border: isDragOver ? "2px dashed #1677ff" : "1px solid #e5e7eb",
+        boxShadow: isDragOver ? "0 0 0 3px rgba(22,119,255,0.1)" : "0 1px 6px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+        transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
+        position: "relative",
+      }}
+    >
+      {/* Drag-over overlay hint */}
+      {isDragOver && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 10,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "rgba(239,246,255,0.85)", pointerEvents: "none",
+          borderRadius: 12,
+        }}>
+          <span style={{ fontSize: 15, color: "#1677ff", fontWeight: 500 }}>
+            Drop image here
+          </span>
+        </div>
+      )}
+
+      {/* Image preview strip */}
+      {pendingImagePreviewUrl && (
+        <div style={{
+          padding: "10px 14px 4px",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          {pendingImage?.type === "application/pdf" ? (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6,
+              background: "#f3f4f6", borderRadius: 8, padding: "6px 10px",
+              fontSize: 13, color: "#374151",
+            }}>
+              <span>📄</span>
+              <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {pendingImage.name}
+              </span>
+            </div>
+          ) : (
+            <img
+              src={pendingImagePreviewUrl}
+              alt="Attached"
+              style={{
+                height: 56, width: "auto", maxWidth: 120,
+                objectFit: "cover", borderRadius: 8,
+                border: "1px solid #e5e7eb",
+              }}
+            />
+          )}
+          <button
+            type="button"
+            onClick={handleRemovePendingImage}
+            style={{
+              background: "#f3f4f6", border: "none", borderRadius: "50%",
+              width: 22, height: 22, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 12, color: "#6b7280", flexShrink: 0,
+            }}
+            title="Remove attachment"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <textarea
         ref={textareaRef}
         value={inputText}
         onChange={(e) => setInputText(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={inConversation ? "Send a message..." : "How can I help you today?"}
+        placeholder={isDragOver ? "" : (inConversation ? "Send a message..." : "How can I help you today?")}
         style={{
           width: "100%",
           minHeight: inConversation ? 52 : 80,

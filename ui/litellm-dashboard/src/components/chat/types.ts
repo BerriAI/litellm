@@ -12,6 +12,8 @@ export interface ChatMessage {
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
   timestamp: number;
+  /** Base64 data URL of an image attached to this user message (for display only). */
+  imagePreviewUrl?: string;
 }
 
 export interface Conversation {
