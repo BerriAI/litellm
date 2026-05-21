@@ -381,3 +381,47 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         f"got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+
+
+@pytest.mark.asyncio
+async def test_async_stream_handles_empty_choices_usage_only_chunk():
+    """Trailing usage chunks with choices=[] must not crash the adapter."""
+
+    async def _stream():
+        yield _make_chunk(Delta(content="Hello", role="assistant", tool_calls=None))
+        yield _make_chunk(
+            Delta(content=None, role="assistant", tool_calls=None), "stop"
+        )
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=5,
+            prompt_tokens_details=None,
+            _cache_creation_input_tokens=0,
+            _cache_read_input_tokens=0,
+        )
+        usage_chunk._hidden_params = {}
+        yield usage_chunk
+
+    wrapper = AnthropicStreamWrapper(completion_stream=_stream(), model="test-model")
+    events = await _collect_events_async(wrapper)
+
+    message_deltas = [
+        e
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "message_delta"
+        and isinstance(e.get("usage"), dict)
+    ]
+    assert len(message_deltas) == 1
+    assert message_deltas[0]["usage"]["input_tokens"] == 10
+    assert message_deltas[0]["usage"]["output_tokens"] == 5
+    assert any(isinstance(e, dict) and e.get("type") == "message_stop" for e in events)
+
+
+def test_should_start_new_content_block_with_empty_choices():
+    wrapper = AnthropicStreamWrapper(completion_stream=iter([]), model="test-model")
+    empty_chunk = MagicMock()
+    empty_chunk.choices = []
+    assert wrapper._should_start_new_content_block(empty_chunk) is False

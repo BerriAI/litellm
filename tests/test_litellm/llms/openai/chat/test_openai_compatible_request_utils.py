@@ -180,6 +180,53 @@ def test_json_hint_skips_when_prompt_already_contains_json():
     assert result == messages
 
 
+def test_json_hint_injects_for_json_schema_with_router_model_alias():
+    messages = [{"role": "user", "content": "Say hello"}]
+    result = maybe_inject_json_keyword_hint_for_json_object(
+        model="sophnet-glm-5.1",
+        messages=messages,
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"greeting": {"type": "string"}},
+                        "required": ["greeting"],
+                    },
+                },
+            }
+        },
+        upstream_model="custom_openai/GLM-5.1",
+    )
+    assert result[0]["role"] == "system"
+    assert "json" in str(result[0]["content"]).lower()
+
+
+def test_json_hint_uses_local_backup_when_remote_model_cost_missing():
+    messages = [{"role": "user", "content": "Say hello"}]
+    result = maybe_inject_json_keyword_hint_for_json_object(
+        model="sophnet-glm-5.1",
+        messages=messages,
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"greeting": {"type": "string"}},
+                    },
+                },
+            }
+        },
+        upstream_model="custom_openai/GLM-5.1",
+    )
+    assert result[0]["role"] == "system"
+    assert "json" in str(result[0]["content"]).lower()
+
+
 def test_openai_config_delegates_to_shared_normalize_flat_function_tools():
     config = OpenAIConfig()
     tools = [{"type": "shell", "environment": {"type": "local"}}]

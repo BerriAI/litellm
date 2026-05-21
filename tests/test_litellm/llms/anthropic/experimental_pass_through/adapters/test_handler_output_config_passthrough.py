@@ -230,3 +230,43 @@ class TestEmptyExtraKwargsPath:
         # dict-like result.
         completion_kwargs = result[0] if isinstance(result, tuple) else result
         assert isinstance(completion_kwargs, dict)
+
+
+class TestJsonKeywordInjectionForStructuredOutput:
+    def test_injects_json_hint_for_json_schema_with_router_alias(self):
+        schema = {
+            "type": "object",
+            "properties": {"greeting": {"type": "string"}},
+            "required": ["greeting"],
+        }
+        result = _call_prepare(
+            extra_kwargs={
+                "custom_llm_provider": "custom_openai",
+                "litellm_params": {"model": "custom_openai/GLM-5.1"},
+            },
+            model="sophnet-glm-5.1",
+            output_format={"type": "json_schema", "schema": schema},
+            messages=[{"role": "user", "content": "Say hello"}],
+        )
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert "response_format" in completion_kwargs
+        assert completion_kwargs["messages"][0]["role"] == "system"
+        assert "json" in str(completion_kwargs["messages"][0]["content"]).lower()
+
+    def test_skips_injection_when_prompt_already_contains_json(self):
+        schema = {
+            "type": "object",
+            "properties": {"greeting": {"type": "string"}},
+        }
+        result = _call_prepare(
+            extra_kwargs={"custom_llm_provider": "custom_openai"},
+            model="custom_openai/GLM-5.1",
+            output_format={"type": "json_schema", "schema": schema},
+            messages=[{"role": "user", "content": "Return JSON only."}],
+        )
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+
+        assert completion_kwargs["messages"] == [
+            {"role": "user", "content": "Return JSON only."}
+        ]

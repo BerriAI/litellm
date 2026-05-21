@@ -2265,6 +2265,40 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         )
 
 
+class TestMaybeDowngradeJsonSchemaResponseFormat:
+    def test_downgrades_json_schema_when_model_lacks_support(self):
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "structured_output", "schema": {"type": "object"}},
+        }
+        result = LiteLLMAnthropicMessagesAdapter._maybe_downgrade_json_schema_response_format(
+            model="unknown-model-without-schema-support",
+            response_format=response_format,
+            custom_llm_provider="custom_openai",
+        )
+        assert result == {"type": "json_object"}
+
+    def test_keeps_json_schema_when_model_supports_it(self):
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "structured_output", "schema": {"type": "object"}},
+        }
+        result = LiteLLMAnthropicMessagesAdapter._maybe_downgrade_json_schema_response_format(
+            model="gpt-4o",
+            response_format=response_format,
+            custom_llm_provider="openai",
+        )
+        assert result["type"] == "json_schema"
+
+
 class TestAnthropicStreamWrapperToolArgs:
     """
     Regression test for https://github.com/BerriAI/litellm/issues/24134

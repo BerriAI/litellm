@@ -1111,7 +1111,31 @@ class LiteLLMAnthropicMessagesAdapter:
             output_format=output_format
         )
         if response_format:
+            model = anthropic_message_request.get("model") or new_kwargs.get("model")
+            response_format = self._maybe_downgrade_json_schema_response_format(
+                model=str(model or ""),
+                response_format=response_format,
+                custom_llm_provider=new_kwargs.get("custom_llm_provider"),
+            )
             new_kwargs["response_format"] = response_format
+
+    @staticmethod
+    def _maybe_downgrade_json_schema_response_format(
+        model: str,
+        response_format: Dict[str, Any],
+        custom_llm_provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Downgrade json_schema to json_object when the target model lacks schema support."""
+        if response_format.get("type") != "json_schema":
+            return response_format
+
+        from litellm.utils import supports_response_schema
+
+        if supports_response_schema(
+            model=model, custom_llm_provider=custom_llm_provider
+        ):
+            return response_format
+        return {"type": "json_object"}
 
     def _copy_untranslated_anthropic_params(
         self,
@@ -1535,6 +1559,15 @@ class LiteLLMAnthropicMessagesAdapter:
         self, response: ModelResponse, current_content_block_index: int
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
+        if not response.choices:
+            from litellm.types.llms.anthropic import ContentTextBlockDelta
+
+            return ContentBlockDelta(
+                type="content_block_delta",
+                index=current_content_block_index,
+                delta=ContentTextBlockDelta(type="text_delta", text=""),
+            )
+
         if response.choices[0].finish_reason is not None:
             delta = MessageDelta(
                 stop_reason=self._translate_openai_finish_reason_to_anthropic(

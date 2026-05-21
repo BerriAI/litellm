@@ -460,6 +460,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=litellm_params.get("custom_llm_provider"),
+            upstream_model=litellm_params.get("model"),
         )
 
         return {
@@ -496,6 +497,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 messages=transformed_messages,
                 optional_params=optional_params,
                 custom_llm_provider=litellm_params.get("custom_llm_provider"),
+                upstream_model=litellm_params.get("model"),
             )
             return {
                 "model": model,
@@ -522,12 +524,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         custom_llm_provider: Optional[str] = None,
+        upstream_model: Optional[str] = None,
     ) -> List[AllMessageValues]:
         return maybe_inject_json_keyword_hint_for_json_object(
             model=model,
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
+            upstream_model=upstream_model,
         )
 
     def _passed_in_tools(self, optional_params: dict) -> bool:

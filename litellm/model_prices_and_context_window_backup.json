@@ -4971,7 +4971,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -5013,7 +5014,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -13022,6 +13024,58 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "DeepSeek-V4-Pro": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
+    "DeepSeek-V4-Flash": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
+    "deepseek-v4-pro": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
+    "deepseek-v4-flash": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "requires_json_keyword_for_json_object": true,
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
     "glm_5_1": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "openai",
@@ -20884,7 +20938,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -20928,7 +20982,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,

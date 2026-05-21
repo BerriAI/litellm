@@ -7,10 +7,12 @@ fixes stay in one place.
 
 from typing import Any, Dict, List, Optional, cast
 
+import litellm
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import requires_json_keyword_for_json_object
 
 _JSON_OBJECT_HINT = "Return valid JSON only."
+_LOCAL_BACKUP_MODEL_COST: Optional[Dict[str, Any]] = None
 
 # Codex/Responses built-in tools that are not valid Chat Completions tools.
 _CODEX_UNSUPPORTED_CHAT_TOOL_TYPES = frozenset(
@@ -123,6 +125,82 @@ def response_format_is_json_object(optional_params: dict) -> bool:
     )
 
 
+def response_format_requires_json_keyword_in_prompt(optional_params: dict) -> bool:
+    """
+    Return True when structured output may require the word "json" in messages.
+
+    Some OpenAI-compatible providers (e.g. GLM) enforce this for json_object and
+    also reject json_schema requests unless the prompt mentions json.
+    """
+    response_format = optional_params.get("response_format")
+    if not isinstance(response_format, dict):
+        return False
+    return response_format.get("type") in ("json_object", "json_schema")
+
+
+def _get_local_backup_model_cost() -> Dict[str, Any]:
+    global _LOCAL_BACKUP_MODEL_COST
+    if _LOCAL_BACKUP_MODEL_COST is None:
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        _LOCAL_BACKUP_MODEL_COST = GetModelCostMap.load_local_model_cost_map()
+    return _LOCAL_BACKUP_MODEL_COST
+
+
+def _candidate_models_for_json_keyword_lookup(
+    model: str,
+    upstream_model: Optional[str] = None,
+    custom_llm_provider: Optional[str] = None,
+) -> List[str]:
+    candidates: List[str] = []
+    seen: set[str] = set()
+    for name in (model, upstream_model):
+        if not isinstance(name, str) or not name:
+            continue
+        for candidate in (name,):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(candidate)
+            try:
+                stripped_model, _, _, _ = litellm.get_llm_provider(
+                    model=name, custom_llm_provider=custom_llm_provider
+                )
+                if stripped_model not in seen:
+                    seen.add(stripped_model)
+                    candidates.append(stripped_model)
+            except Exception:
+                bare_model = name.split("/")[-1]
+                if bare_model not in seen:
+                    seen.add(bare_model)
+                    candidates.append(bare_model)
+    return candidates
+
+
+def _local_backup_requires_json_keyword(model_name: str) -> bool:
+    backup_entry = _get_local_backup_model_cost().get(model_name) or {}
+    return backup_entry.get("requires_json_keyword_for_json_object") is True
+
+
+def _model_requires_json_keyword_for_json_object(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    upstream_model: Optional[str] = None,
+) -> bool:
+    for candidate in _candidate_models_for_json_keyword_lookup(
+        model=model,
+        upstream_model=upstream_model,
+        custom_llm_provider=custom_llm_provider,
+    ):
+        if requires_json_keyword_for_json_object(
+            model=candidate, custom_llm_provider=custom_llm_provider
+        ):
+            return True
+        if _local_backup_requires_json_keyword(candidate):
+            return True
+    return False
+
+
 def messages_contain_json_keyword(messages: List[AllMessageValues]) -> bool:
     stack: list[Any] = list(messages)
     while stack:
@@ -159,16 +237,19 @@ def maybe_inject_json_keyword_hint_for_json_object(
     messages: List[AllMessageValues],
     optional_params: dict,
     custom_llm_provider: Optional[str] = None,
+    upstream_model: Optional[str] = None,
 ) -> List[AllMessageValues]:
     """
     Some OpenAI-compatible models require the prompt to include the word "json"
     when response_format={"type":"json_object"} is requested.
     """
-    if not requires_json_keyword_for_json_object(
-        model=model, custom_llm_provider=custom_llm_provider
+    if not _model_requires_json_keyword_for_json_object(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        upstream_model=upstream_model,
     ):
         return messages
-    if not response_format_is_json_object(optional_params):
+    if not response_format_requires_json_keyword_in_prompt(optional_params):
         return messages
     if messages_contain_json_keyword(messages):
         return messages

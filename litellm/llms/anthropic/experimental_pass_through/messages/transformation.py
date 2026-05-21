@@ -253,6 +253,69 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         existing_output_config.setdefault("effort", effort)
         optional_params["output_config"] = existing_output_config
 
+    @staticmethod
+    def _is_official_anthropic_api_base(api_base: Optional[str]) -> bool:
+        if not api_base:
+            return True
+        return "api.anthropic.com" in api_base.lower()
+
+    @classmethod
+    def _fallback_output_format_for_unofficial_anthropic_api(
+        cls,
+        *,
+        model: str,
+        optional_params: Dict,
+        api_base: Optional[str],
+    ) -> None:
+        """Use tool-based JSON mode when a proxy Anthropic API rejects output_format."""
+        output_format = optional_params.get("output_format")
+        if not isinstance(output_format, dict):
+            return
+        if cls._is_official_anthropic_api_base(api_base):
+            return
+
+        optional_params.pop("output_format", None)
+        if output_format.get("type") != "json_schema":
+            return
+
+        schema = output_format.get("schema")
+        if not isinstance(schema, dict):
+            return
+
+        from litellm.llms.anthropic.chat.transformation import (
+            RESPONSE_FORMAT_TOOL_NAME,
+            AnthropicConfig,
+        )
+
+        anthropic_config = AnthropicConfig()
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"schema": schema},
+        }
+        thinking = optional_params.get("thinking")
+        is_thinking_enabled = isinstance(thinking, dict) and thinking.get("type") in {
+            "enabled",
+            "adaptive",
+        }
+        tool = anthropic_config.map_response_format_to_anthropic_tool(
+            response_format,
+            optional_params,
+            is_thinking_enabled=is_thinking_enabled,
+        )
+        if tool is None:
+            return
+
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+        tools.append(tool)
+        optional_params["tools"] = tools
+        if not is_thinking_enabled:
+            optional_params["tool_choice"] = {
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "type": "tool",
+            }
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -282,6 +345,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+        )
+
+        api_base = getattr(litellm_params, "api_base", None)
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+
+        self._fallback_output_format_for_unofficial_anthropic_api(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            api_base=api_base,
         )
 
         # Filter out x-anthropic-billing-header from system messages

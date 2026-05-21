@@ -281,6 +281,7 @@ class OpenAIConfig(BaseConfig):
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=litellm_params.get("custom_llm_provider"),
+            upstream_model=litellm_params.get("model"),
         )
         return {"model": model, "messages": messages, **optional_params}
 
@@ -301,12 +302,14 @@ class OpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         custom_llm_provider: Optional[str] = None,
+        upstream_model: Optional[str] = None,
     ) -> List[AllMessageValues]:
         return maybe_inject_json_keyword_hint_for_json_object(
             model=model,
             messages=messages,
             optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
+            upstream_model=upstream_model,
         )
 
     def transform_response(

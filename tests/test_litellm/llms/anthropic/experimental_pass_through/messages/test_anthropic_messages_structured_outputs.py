@@ -78,3 +78,28 @@ def test_output_format_works_with_bedrock_and_azure():
         headers={},
     )
     assert "output_format" in azure_result
+
+
+def test_output_format_falls_back_to_tool_json_on_unofficial_anthropic_api_base():
+    config = AnthropicMessagesConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {"greeting": {"type": "string"}},
+            "required": ["greeting"],
+        },
+    }
+    optional_params = {"max_tokens": 1024, "output_format": output_format}
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Say hello"}],
+        anthropic_messages_optional_request_params=optional_params.copy(),
+        litellm_params={"api_base": "https://www.sophnet.com/api/open-apis/anthropic"},
+        headers={},
+    )
+
+    assert "output_format" not in result
+    assert "tools" in result
+    assert result["tool_choice"]["type"] == "tool"

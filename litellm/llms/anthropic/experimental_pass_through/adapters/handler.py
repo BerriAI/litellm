@@ -18,6 +18,9 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
+from litellm.llms.openai.chat.openai_compatible_request_utils import (
+    maybe_inject_json_keyword_hint_for_json_object,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -288,7 +291,46 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             thinking=thinking,
         )
 
+        upstream_model = (
+            LiteLLMMessagesToCompletionTransformationHandler._resolve_upstream_model(
+                extra_kwargs=extra_kwargs,
+                completion_kwargs=completion_kwargs,
+            )
+        )
+        completion_kwargs["messages"] = maybe_inject_json_keyword_hint_for_json_object(
+            model=cast(str, completion_kwargs.get("model", model)),
+            messages=completion_kwargs.get("messages", []),
+            optional_params=completion_kwargs,
+            custom_llm_provider=completion_kwargs.get("custom_llm_provider"),
+            upstream_model=upstream_model,
+        )
+
         return completion_kwargs, tool_name_mapping
+
+    @staticmethod
+    def _resolve_upstream_model(
+        *,
+        extra_kwargs: Dict[str, Any],
+        completion_kwargs: Dict[str, Any],
+    ) -> Optional[str]:
+        """Resolve deployment/upstream model for registry capability lookups."""
+        litellm_params = extra_kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            upstream_model = litellm_params.get("model")
+            if isinstance(upstream_model, str) and upstream_model:
+                return upstream_model
+        elif litellm_params is not None:
+            upstream_model = getattr(litellm_params, "model", None)
+            if isinstance(upstream_model, str) and upstream_model:
+                return upstream_model
+
+        for candidate in (
+            extra_kwargs.get("model"),
+            completion_kwargs.get("model"),
+        ):
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return None
 
     @staticmethod
     async def async_anthropic_messages_handler(

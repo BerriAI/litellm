@@ -118,6 +118,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                if not self._chunk_has_choices(chunk):
+                    if self._try_merge_usage_into_held_stop_reason(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
                     self._increment_content_block_index()
@@ -258,6 +263,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                if not self._chunk_has_choices(chunk):
+                    if self._try_merge_usage_into_held_stop_reason(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
@@ -268,56 +278,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                 )
 
-                # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
                     self.holding_stop_reason_chunk is not None
                     and getattr(chunk, "usage", None) is not None
                 ):
-                    # Merge usage into the held stop_reason chunk
-                    merged_chunk = self.holding_stop_reason_chunk.copy()
-                    if "delta" not in merged_chunk:
-                        merged_chunk["delta"] = {}
-
-                    # Add usage to the held chunk
-                    uncached_input_tokens = chunk.usage.prompt_tokens or 0
-                    if (
-                        hasattr(chunk.usage, "prompt_tokens_details")
-                        and chunk.usage.prompt_tokens_details
-                    ):
-                        cached_tokens = (
-                            getattr(
-                                chunk.usage.prompt_tokens_details, "cached_tokens", 0
-                            )
-                            or 0
-                        )
-                        uncached_input_tokens -= cached_tokens
-
-                    usage_dict: UsageDelta = {
-                        "input_tokens": uncached_input_tokens,
-                        "output_tokens": chunk.usage.completion_tokens or 0,
-                    }
-                    # Add cache tokens if available (for prompt caching support)
-                    if (
-                        hasattr(chunk.usage, "_cache_creation_input_tokens")
-                        and chunk.usage._cache_creation_input_tokens > 0
-                    ):
-                        usage_dict["cache_creation_input_tokens"] = (
-                            chunk.usage._cache_creation_input_tokens
-                        )
-                    if (
-                        hasattr(chunk.usage, "_cache_read_input_tokens")
-                        and chunk.usage._cache_read_input_tokens > 0
-                    ):
-                        usage_dict["cache_read_input_tokens"] = (
-                            chunk.usage._cache_read_input_tokens
-                        )
-                    merged_chunk["usage"] = usage_dict
-
-                    # Queue the merged chunk and reset
-                    self.chunk_queue.append(merged_chunk)
-                    self.queued_usage_chunk = True
-                    self.holding_stop_reason_chunk = None
-                    return self.chunk_queue.popleft()
+                    if self._try_merge_usage_into_held_stop_reason(chunk):
+                        return self.chunk_queue.popleft()
 
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
@@ -454,6 +420,57 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
 
+    def _chunk_has_choices(self, chunk: "ModelResponseStream") -> bool:
+        choices = getattr(chunk, "choices", None)
+        return isinstance(choices, list) and len(choices) > 0
+
+    def _try_merge_usage_into_held_stop_reason(
+        self, chunk: "ModelResponseStream"
+    ) -> bool:
+        """Merge a trailing usage-only chunk into a held stop_reason message_delta."""
+        if (
+            self.holding_stop_reason_chunk is None
+            or getattr(chunk, "usage", None) is None
+        ):
+            return False
+
+        merged_chunk = self.holding_stop_reason_chunk.copy()
+        if "delta" not in merged_chunk:
+            merged_chunk["delta"] = {}
+
+        uncached_input_tokens = chunk.usage.prompt_tokens or 0
+        if (
+            hasattr(chunk.usage, "prompt_tokens_details")
+            and chunk.usage.prompt_tokens_details
+        ):
+            cached_tokens = (
+                getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            )
+            uncached_input_tokens -= cached_tokens
+
+        usage_dict: UsageDelta = {
+            "input_tokens": uncached_input_tokens,
+            "output_tokens": chunk.usage.completion_tokens or 0,
+        }
+        if (
+            hasattr(chunk.usage, "_cache_creation_input_tokens")
+            and chunk.usage._cache_creation_input_tokens > 0
+        ):
+            usage_dict["cache_creation_input_tokens"] = (
+                chunk.usage._cache_creation_input_tokens
+            )
+        if (
+            hasattr(chunk.usage, "_cache_read_input_tokens")
+            and chunk.usage._cache_read_input_tokens > 0
+        ):
+            usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+
+        merged_chunk["usage"] = usage_dict
+        self.chunk_queue.append(merged_chunk)
+        self.queued_usage_chunk = True
+        self.holding_stop_reason_chunk = None
+        return True
+
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
@@ -468,6 +485,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         - Specific markers in the content
         """
         from .transformation import LiteLLMAnthropicMessagesAdapter
+
+        if not self._chunk_has_choices(chunk):
+            return False
 
         # Example logic - customize based on your needs:
         # If chunk indicates a tool call
