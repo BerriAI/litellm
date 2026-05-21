@@ -4470,6 +4470,14 @@ class JWTIssuerConfig(BaseModel):
         "extra": "forbid",
     }
 
+    @model_validator(mode="after")
+    def validate_audience_configured(self) -> "JWTIssuerConfig":
+        if self.audience is None and not self.disable_audience_validation:
+            raise ValueError(
+                f"JWT issuer {self.issuer} must configure audience or set disable_audience_validation=True"
+            )
+        return self
+
 
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """

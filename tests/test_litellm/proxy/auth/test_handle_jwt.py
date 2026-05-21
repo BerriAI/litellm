@@ -2892,7 +2892,12 @@ async def test_get_public_key_tries_next_jwks_url_when_kid_missing(monkeypatch):
 def test_get_jwks_url_for_issuer_falls_back_to_discovery_document():
     jwt_handler = JWTHandler()
     issuer_config = LiteLLM_JWTAuth(
-        issuers=[{"issuer": "https://issuer.example.com/tenant/"}]
+        issuers=[
+            {
+                "issuer": "https://issuer.example.com/tenant/",
+                "disable_audience_validation": True,
+            }
+        ]
     ).issuers[0]
 
     jwks_url = jwt_handler._get_jwks_url_for_issuer(issuer_config=issuer_config)
@@ -3146,8 +3151,7 @@ async def test_multi_issuer_jwt_missing_mapped_claim_leaves_user_id_unset(
     assert jwt_handler.LITELLM_USER_ID_CLAIM not in claims
 
 
-@pytest.mark.asyncio
-async def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
+def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     monkeypatch,
 ):
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
@@ -3155,25 +3159,16 @@ async def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
 
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
-    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
-    jwt_handler = _get_jwt_handler_with_issuer_keys(
-        issuers=[
-            {
-                "issuer": issuer,
-                "jwks_url": jwks_url,
-            }
-        ],
-        keys_by_url={jwks_url: [jwk]},
-    )
-    token = _encode_rsa_jwt(
-        private_key=private_key,
-        issuer=issuer,
-        audience="some-other-client",
-        kid="issuer-key",
-    )
 
     with pytest.raises(Exception) as exc:
-        await jwt_handler.auth_jwt(token=token)
+        LiteLLM_JWTAuth(
+            issuers=[
+                {
+                    "issuer": issuer,
+                    "jwks_url": jwks_url,
+                }
+            ]
+        )
 
     assert "must configure audience" in str(exc.value)
 

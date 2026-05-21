@@ -67,6 +67,10 @@ from .auth_checks import (
 )
 
 
+class NoMatchingJWTPublicKeyError(Exception):
+    """Raised when a JWKS endpoint returns no key matching the requested ``kid``."""
+
+
 class JWTHandler:
     """
     - treat the sub id passed in as the user id
@@ -704,7 +708,7 @@ class JWTHandler:
         if public_key is not None:
             return cast(dict, public_key)
 
-        raise Exception(
+        raise NoMatchingJWTPublicKeyError(
             f"No matching public key found. keys={resolved_jwks_url}, kid={kid}"
         )
 
@@ -721,14 +725,12 @@ class JWTHandler:
                 return await self._get_public_key_from_jwks_url(
                     jwks_url=key_url, kid=kid
                 )
-            except Exception as e:
-                if "No matching public key found" not in str(e):
-                    raise
+            except NoMatchingJWTPublicKeyError as e:
                 verbose_proxy_logger.debug(
                     "JWT Auth: No matching public key found at %s: %s", key_url, e
                 )
 
-        raise Exception(
+        raise NoMatchingJWTPublicKeyError(
             f"No matching public key found. keys={keys_url_list}, kid={kid}"
         )
 
@@ -1013,14 +1015,6 @@ class JWTHandler:
     async def _auth_jwt_with_issuer(
         self, token: str, issuer_config: JWTIssuerConfig, kid: Optional[str]
     ) -> dict:
-        if (
-            issuer_config.audience is None
-            and not issuer_config.disable_audience_validation
-        ):
-            raise Exception(
-                f"JWT issuer {issuer_config.issuer} must configure audience or set disable_audience_validation=True"
-            )
-
         public_key = await self._get_public_key_from_jwks_url(
             jwks_url=self._get_jwks_url_for_issuer(issuer_config=issuer_config),
             kid=kid,
