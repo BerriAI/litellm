@@ -89,10 +89,12 @@ test.py
 
 litellm_config.yaml
 !.github/observatory/litellm_config.yaml
-# Cursor: ignore local state; commit shared rules and setup docs
+# Cursor: ignore local state; commit shared rules, skills, and setup docs
 .cursor/*
 !.cursor/rules/
 !.cursor/rules/**
+!.cursor/skills/
+!.cursor/skills/**
 !.cursor/README.md
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
