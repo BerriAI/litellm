@@ -1894,14 +1894,16 @@ async def get_user_key_counts(
     user_ids: list[str] | None = None,
 ) -> Mapping[str, int]:
     """
-    Helper function to get the count of keys for each user using Prisma's group_by method.
+    Get the count of (non-UI-session) keys for each user via a single
+    Prisma ``group_by`` query, avoiding an N+1 per-user ``count`` loop.
 
     Args:
         prisma_client: The Prisma client instance
         user_ids: List of user IDs to get key counts for
 
     Returns:
-        Dictionary mapping user_id to key count
+        Dictionary mapping user_id to key count. Users in ``user_ids`` with no
+        keys are present with a value of ``0``.
     """
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 
