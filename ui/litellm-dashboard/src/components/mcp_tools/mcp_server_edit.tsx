@@ -9,6 +9,13 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./mock/EnvVarsSection";
+import {
+  getEnvVarDefinitions,
+  setEnvVarDefinitions,
+  notifyEnvVarsChanged,
+  EnvVarDefinition,
+} from "./mock/mockMcpEnvVars";
 import {
   validateMCPServerUrl,
   validateMCPServerName,
@@ -200,6 +207,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     return mcpServer.transport;
   }, [mcpServer]);
 
+  // PROTOTYPE: existing env-var definitions for this server, loaded from
+  // localStorage by alias and folded into the form's initialValues below so
+  // antd's Form.List picks them up at mount time.
+  const initialEnvVars = React.useMemo(() => {
+    const aliasKey = mcpServer.alias || mcpServer.server_name || "";
+    return aliasKey ? getEnvVarDefinitions(aliasKey) : [];
+  }, [mcpServer.alias, mcpServer.server_name]);
+
   const initialValues = React.useMemo(
     () => ({
       ...mcpServer,
@@ -210,8 +225,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
+      mock_env_vars: initialEnvVars,
     }),
-    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson],
+    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson, initialEnvVars],
   );
 
   // Initialize cost config from existing server data
@@ -401,8 +417,30 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         token_validation_json: rawTokenValidationJson,
+        mock_env_vars: mockEnvVarsRaw,
         ...restValues
       } = values;
+
+      // PROTOTYPE: persist updated env-var definitions to localStorage under
+      // the current alias. If the alias was renamed in this edit, we also
+      // copy the previously-saved defs to the new alias so the link survives.
+      const cleanedEnvVars: EnvVarDefinition[] = Array.isArray(mockEnvVarsRaw)
+        ? mockEnvVarsRaw
+            .filter((row: any) => row && row.name && String(row.name).trim() !== "")
+            .map((row: any) => ({
+              name: String(row.name).trim(),
+              value: row.scope === "per_user" ? "" : (row.value ?? ""),
+              scope: row.scope === "per_user" ? "per_user" : "global",
+            }))
+        : [];
+      const newAlias =
+        (restValues.alias && String(restValues.alias).trim()) ||
+        (restValues.server_name && String(restValues.server_name).trim()) ||
+        "";
+      if (newAlias) {
+        setEnvVarDefinitions(newAlias, cleanedEnvVars);
+        notifyEnvVarsChanged();
+      }
 
       const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
@@ -1088,6 +1126,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </Form.Item>
               </>
             )}
+
+            {/* PROTOTYPE: Environment variables (global vs per-user) */}
+            <div className="mt-6">
+              <EnvVarsSection />
+            </div>
 
             {/* Permission Management / Access Control Section */}
             <div className="mt-6">
