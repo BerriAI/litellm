@@ -208,6 +208,23 @@ def _redact_litellm_params(record: Dict[str, Any]) -> Dict[str, Any]:
     return {**record, "litellm_params": redacted_params}
 
 
+def _clean_litellm_params_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip string-sentinel sub-fields from litellm_params before a DB write.
+
+    _redact_litellm_params marks secret sub-fields with the plain string
+    ``"__redacted__"``.  If a redacted snapshot is imported those strings would
+    be written into the target DB, making models/agents non-functional and
+    silently overwriting working values in replace/merge mode.  This helper
+    removes any sub-field whose value is the sentinel so only non-secret config
+    fields (api_base, model, region_name, …) reach Prisma.
+    """
+    params = record.get("litellm_params")
+    if not isinstance(params, dict):
+        return record
+    cleaned = {k: v for k, v in params.items() if v != "__redacted__"}
+    return {**record, "litellm_params": cleaned}
+
+
 def _redact_mcp_sensitive_fields(record: Dict[str, Any]) -> Dict[str, Any]:
     """Redact MCP server fields that can carry auth values.
 

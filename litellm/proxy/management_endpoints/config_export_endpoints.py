@@ -1,7 +1,4 @@
-"""
-GET /config/export  — export all UI/API-managed state as a versioned, re-applicable artifact
-POST /config/import — idempotent re-apply of an exported snapshot
-"""
+"""GET /config/export and POST /config/import endpoints."""
 
 import datetime
 import json
@@ -20,6 +17,7 @@ from litellm.proxy.management_endpoints.config_export_types import (
     ImportResult,
     LiteLLMExportEnvelope,
     _STRIP_FIELDS,
+    _clean_litellm_params_record,
     _is_redacted,
     _load_existing,
     _redact_credential_values,
@@ -68,6 +66,8 @@ async def _import_standard_section(
     records = getattr(data, section_name, None)
     if records is None:
         return
+    # Drop "__redacted__" string sentinels from litellm_params before writing.
+    records = [_clean_litellm_params_record(r) for r in records]
     result.sections_attempted.append(section_name)
     table = getattr(prisma_client.db, table_name)
     em = await _load_existing(
@@ -161,15 +161,18 @@ async def _import_all_sections(
 
     if data.mcp_servers is not None:
         result.sections_attempted.append("mcp_servers")
+        # Strip dict-form redaction markers; don't write placeholders to the DB.
+        _MCP_REDACTED_FIELDS = ("credentials", "static_headers", "env")
         cleaned_servers: List[Dict[str, Any]] = []
         for rec in data.mcp_servers:
-            if _is_redacted(rec.get("credentials")):
+            to_strip = [f for f in _MCP_REDACTED_FIELDS if _is_redacted(rec.get(f))]
+            for f in to_strip:
                 result.mcp_servers.warnings.append(
-                    f"MCP server '{rec.get('server_name')}' imported without credentials — "
-                    "credentials are redacted. Bind manually."
+                    f"MCP server '{rec.get('server_name')}' — '{f}' is redacted; bind manually."
                 )
-                rec = {k: v for k, v in rec.items() if k != "credentials"}
-            cleaned_servers.append(rec)
+            cleaned_servers.append(
+                {k: v for k, v in rec.items() if k not in to_strip} if to_strip else rec
+            )
         em = await _load_existing(
             prisma_client.db.litellm_mcpservertable,
             "server_id",
