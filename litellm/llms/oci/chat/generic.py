@@ -393,11 +393,15 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     if typed_chunk.index is None:
         typed_chunk.index = 0
 
-    text = ""
+    # Emit ``content=None`` rather than ``content=""`` on chunks with no text
+    # parts (e.g. tool-call-only or keep-alive chunks) so downstream
+    # stream-mergers that distinguish "no text in this delta" from "an
+    # explicitly empty text delta" behave correctly.
+    text: Optional[str] = None
     if typed_chunk.message and typed_chunk.message.content:
         for item in typed_chunk.message.content:
             if isinstance(item, OCITextContentPart):
-                text += item.text
+                text = (text or "") + item.text
             elif isinstance(item, OCIImageContentPart):
                 raise OCIError(
                     status_code=500,
