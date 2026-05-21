@@ -177,16 +177,33 @@ class SpendCounterReseed:
             db_spend = await SpendCounterReseed.from_db(prisma_client, counter_key)
             if db_spend is None:
                 return None
-            # Warm even when 0 so subsequent reads hit cache, not DB.
+            # Warm even when 0 so subsequent reads hit cache, not DB. Use SET
+            # NX for Redis so concurrent cold pods do not each add db_spend.
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    current_value = (
-                        await spend_counter_cache.redis_cache.async_increment(
-                            key=counter_key,
-                            value=db_spend,
-                            refresh_ttl=True,
-                        )
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=db_spend,
+                        nx=True,
                     )
+                    if seeded:
+                        current_value = db_spend
+                    else:
+                        current_cached_value = (
+                            await spend_counter_cache.redis_cache.async_get_cache(
+                                key=counter_key
+                            )
+                        )
+                        if current_cached_value is None:
+                            current_value = (
+                                await spend_counter_cache.redis_cache.async_increment(
+                                    key=counter_key,
+                                    value=db_spend,
+                                    refresh_ttl=True,
+                                )
+                            )
+                        else:
+                            current_value = float(current_cached_value)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,

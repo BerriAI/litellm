@@ -2214,11 +2214,9 @@ async def _init_and_increment_spend_counter(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. Seed Redis via atomic SET NX so simultaneous cold pods do not each add
+       the DB spend. Fall back to the cached winner before incrementing the
+       request cost.
     4. Increment atomically (both in-memory + Redis)
     """
     await _ensure_spend_counter_initialized(
