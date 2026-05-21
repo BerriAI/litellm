@@ -237,6 +237,7 @@ class MCPRequestHandler:
                 # rewrite the auth error as a 500).
                 status = e.status_code if isinstance(e, HTTPException) else e.code
                 is_auth_error = status in (401, 403, "401", "403")
+                is_unauthenticated = status in (401, "401")
                 client_ip = IPAddressUtils.get_mcp_client_ip(request)
                 if is_auth_error and MCPRequestHandler._target_servers_use_oauth2(
                     path=request.url.path,
@@ -248,7 +249,7 @@ class MCPRequestHandler:
                         "Authorization as upstream OAuth2 token passthrough"
                     )
                     validated_user_api_key_auth = UserAPIKeyAuth()
-                elif is_auth_error:
+                elif is_unauthenticated:
                     # Pass-through cold-start return: per RFC 9728 / MCP
                     # Authorization spec the client completes upstream OAuth
                     # discovery and returns with ``Authorization: Bearer
@@ -258,6 +259,10 @@ class MCPRequestHandler:
                     # unchanged. Fall back to anonymous admission so the
                     # caller is not rejected for following the discovery
                     # flow without also setting ``x-litellm-api-key``.
+                    # Only trigger on 401 (token unrecognized); a 403 means
+                    # the key WAS recognized but is forbidden (e.g. over
+                    # budget / rate limited) and must propagate so those
+                    # controls are not bypassed via anonymous admission.
                     mcp_servers_from_path = _parse_mcp_server_names_from_path(
                         request.url.path
                     )
