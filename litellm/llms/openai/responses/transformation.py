@@ -126,9 +126,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        """No transform applied since inputs are in OpenAI spec already"""
+        """Strip Anthropic-only `cache_control` markers before sending to OpenAI.
+
+        OpenAI's Responses API rejects unknown fields on input content blocks
+        with HTTP 400 ("Unknown parameter: 'input[0].content[0].cache_control'").
+        Chat Completions strips these in
+        `remove_cache_control_flag_from_messages_and_tools`; mirror that here.
+        """
 
         input = self._validate_input_param(input)
+        input, response_api_optional_request_params = (
+            self._strip_cache_control_flag(input, response_api_optional_request_params)
+        )
         final_request_params = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
@@ -136,6 +145,28 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
 
         return final_request_params
+
+    @staticmethod
+    def _strip_cache_control_flag(
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+    ) -> tuple:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+        )
+
+        if isinstance(input, list):
+            for item in input:
+                if isinstance(item, dict):
+                    filter_value_from_dict(cast(dict, item), "cache_control")
+
+        tools = response_api_optional_request_params.get("tools")
+        if isinstance(tools, list):
+            for tool in tools:
+                if isinstance(tool, dict):
+                    filter_value_from_dict(cast(dict, tool), "cache_control")
+
+        return input, response_api_optional_request_params
 
     def _validate_input_param(
         self, input: Union[str, ResponseInputParam]
