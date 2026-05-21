@@ -31,10 +31,8 @@ import litellm
 # the cassette state the branch is being tested with.
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
-_local_cost_map = GetModelCostMap.load_local_model_cost_map()
-for _k, _v in _local_cost_map.items():
+for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
     litellm.model_cost.setdefault(_k, _v)
-del _local_cost_map
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
