@@ -609,8 +609,6 @@ class OCIChatConfig(BaseConfig):
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
     ) -> "OCIStreamWrapper":
-        if "stream" in data:
-            del data["stream"]
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
 
@@ -654,8 +652,6 @@ class OCIChatConfig(BaseConfig):
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
     ) -> "OCIStreamWrapper":
-        if "stream" in data:
-            del data["stream"]
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
 
