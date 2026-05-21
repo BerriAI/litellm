@@ -166,8 +166,9 @@ export const useToolsOAuthFlow = ({
     const rawFlowState = getSecureItem(FLOW_STATE_KEY);
     if (!rawFlowState) return;
 
+    let peeked: StoredFlowState | null = null;
     try {
-      const peeked = JSON.parse(rawFlowState) as StoredFlowState;
+      peeked = JSON.parse(rawFlowState) as StoredFlowState;
       if (peeked.serverId && peeked.serverId !== serverId) return;
     } catch (_) {}
 
@@ -179,8 +180,7 @@ export const useToolsOAuthFlow = ({
 
     try {
       payload = JSON.parse(storedResult);
-      const raw = getSecureItem(FLOW_STATE_KEY);
-      flowState = raw ? JSON.parse(raw) : null;
+      flowState = peeked;
     } catch (_) {
       setError("Failed to resume OAuth flow. Please retry.");
       setStatus("error");

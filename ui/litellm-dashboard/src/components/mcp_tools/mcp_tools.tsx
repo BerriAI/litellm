@@ -40,7 +40,7 @@ const MCPToolsViewer = ({
     accessToken: accessToken ?? "",
     serverId,
     serverAlias,
-    onSuccess: (token) => setOauthToken(token),
+    onSuccess: setOauthToken,
   });
 
   // Check if this server has extra headers configured
