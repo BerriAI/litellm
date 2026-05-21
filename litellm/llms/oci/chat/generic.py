@@ -347,7 +347,7 @@ def handle_generic_response(
         model_response.choices[0].finish_reason = "stop"  # type: ignore[union-attr]
     elif oci_finish_reason == "MAX_TOKENS":
         model_response.choices[0].finish_reason = "length"  # type: ignore[union-attr]
-    elif oci_finish_reason == "TOOL_CALLS":
+    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
         model_response.choices[0].finish_reason = "tool_calls"  # type: ignore[union-attr]
     elif oci_finish_reason is not None:
         # OCI GENERIC can emit non-OpenAI finish reasons (e.g. ``ERROR``,
@@ -418,7 +418,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
         finish_reason: Optional[str] = "stop"
     elif oci_finish_reason == "MAX_TOKENS":
         finish_reason = "length"
-    elif oci_finish_reason == "TOOL_CALLS":
+    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
         finish_reason = "tool_calls"
     elif oci_finish_reason is not None:
         # OCI can emit error/cancel finish reasons (e.g. ``ERROR``,

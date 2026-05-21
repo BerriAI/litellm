@@ -355,8 +355,21 @@ class OCIChatConfig(BaseConfig):
             else "maxTokens"
         )
 
+        # Both ``max_tokens`` and ``max_completion_tokens`` map to OCI's
+        # ``maxTokens`` (or ``maxCompletionTokens`` for reasoning models), so
+        # if both are provided explicitly prefer ``max_completion_tokens``
+        # rather than relying on dict iteration order to pick a winner.
+        prefer_max_completion = (
+            "max_tokens" in optional_params
+            and "max_completion_tokens" in optional_params
+            and param_map.get("max_tokens") == "maxTokens"
+            and param_map.get("max_completion_tokens") == "maxTokens"
+        )
+
         for openai_key, oci_key in param_map.items():
             if oci_key and openai_key in optional_params:
+                if prefer_max_completion and openai_key == "max_tokens":
+                    continue
                 target = max_tokens_key if oci_key == "maxTokens" else oci_key
                 selected_params[target] = optional_params[openai_key]  # type: ignore[index]
 
@@ -654,6 +667,11 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
+        # Tracks whether any prior Cohere chunk in this stream has emitted
+        # tool calls. The Cohere handler uses this to decide whether the
+        # terminal consolidation chunk's tool calls are duplicates (suppress)
+        # or the only copy of the tool calls (pass through).
+        self._cohere_tool_calls_emitted = False
 
     def chunk_creator(self, chunk: Any) -> ModelResponseStream:
         if not isinstance(chunk, str):
@@ -663,7 +681,16 @@ class OCIStreamWrapper(CustomStreamWrapper):
         dict_chunk = json.loads(chunk[5:])
 
         if dict_chunk.get("apiFormat") == "COHERE":
-            return handle_cohere_stream_chunk(dict_chunk)
+            result = handle_cohere_stream_chunk(
+                dict_chunk,
+                prior_tool_calls_emitted=self._cohere_tool_calls_emitted,
+            )
+            if not self._cohere_tool_calls_emitted:
+                for choice in result.choices:
+                    if getattr(choice.delta, "tool_calls", None):
+                        self._cohere_tool_calls_emitted = True
+                        break
+            return result
         return handle_generic_stream_chunk(dict_chunk)
 
 

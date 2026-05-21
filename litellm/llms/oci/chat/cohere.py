@@ -279,8 +279,18 @@ def handle_cohere_response(
     return model_response
 
 
-def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
-    """Parse a single Cohere SSE chunk into a LiteLLM ModelResponseStream."""
+def handle_cohere_stream_chunk(
+    dict_chunk: dict, prior_tool_calls_emitted: bool = False
+) -> ModelResponseStream:
+    """Parse a single Cohere SSE chunk into a LiteLLM ModelResponseStream.
+
+    ``prior_tool_calls_emitted`` lets the caller signal whether tool calls
+    were already emitted in earlier chunks of the same stream. When set, the
+    terminal consolidation chunk's tool calls are suppressed (they would
+    duplicate prior deltas); otherwise they are passed through so a stream
+    that delivers tool calls only on the terminal chunk doesn't silently
+    drop them.
+    """
     try:
         typed_chunk = CohereStreamChunk(**dict_chunk)
     except (TypeError, ValidationError) as e:
@@ -301,17 +311,25 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     is_terminal_consolidation = (
         typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
     )
-    text: Optional[str] = (
-        None if is_terminal_consolidation else (typed_chunk.text or "")
-    )
+    # On non-terminal text-free chunks (e.g. tool-call-only or keep-alive
+    # chunks) emit ``content=None`` rather than ``content=""`` so downstream
+    # stream-mergers that distinguish "no text in this delta" from "an
+    # explicitly empty text delta" behave correctly.
+    text: Optional[str] = None if is_terminal_consolidation else typed_chunk.text
 
     # Tool calls on the terminal consolidation chunk (whether from
-    # `typed_chunk.toolCalls` or from `chatHistory`) restate what was already
-    # streamed in intermediate chunks. Re-emitting them here would mint fresh
-    # `uuid4` IDs and cause downstream consumers to execute each tool call
-    # twice. Suppress them on the terminal chunk for the same reason `text`
-    # is suppressed above.
-    cohere_tool_calls = None if is_terminal_consolidation else typed_chunk.toolCalls
+    # `typed_chunk.toolCalls` or from `chatHistory`) typically restate what
+    # was already streamed in intermediate chunks. Re-emitting them would
+    # mint fresh `uuid4` IDs and cause downstream consumers to execute each
+    # tool call twice. We only suppress when the caller has confirmed that
+    # tool calls were already emitted earlier — otherwise (e.g. a short
+    # response that delivers tool calls exclusively on the terminal chunk),
+    # passing them through is the only chance to surface them.
+    cohere_tool_calls = (
+        None
+        if (is_terminal_consolidation and prior_tool_calls_emitted)
+        else typed_chunk.toolCalls
+    )
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_tool_calls:
