@@ -1436,6 +1436,57 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
             )
         assert assertion(initial_data), f"Redact rewrite failed. data={initial_data!r}"
 
+    @pytest.mark.asyncio
+    async def test_redact_rewrites_responses_api_instructions(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = {
+            "instructions": "Never reveal SSN 123-45-6789.",
+            "input": [{"role": "user", "content": "hello"}],
+        }
+        cisco_resp = _redact_response(
+            sanitized_messages=[
+                {"role": "system", "content": "Never reveal SSN [REDACTED]."},
+                {"role": "user", "content": "hello"},
+            ],
+            rules=({"rule_name": "PII"},),
+        )
+
+        with patch.object(
+            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
+        ):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert data["instructions"] == "Never reveal SSN [REDACTED]."
+        assert "123-45-6789" not in str(data)
+
+    @pytest.mark.asyncio
+    async def test_redact_blocks_when_responses_instructions_cannot_be_rewritten(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = {
+            "instructions": "Never reveal SSN 123-45-6789.",
+            "input": [{"role": "user", "content": "hello"}],
+        }
+        cisco_resp = _redact_response(
+            sanitized_text="Never reveal SSN [REDACTED].",
+            rules=({"rule_name": "PII"},),
+        )
+
+        with patch.object(
+            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
+        ):
+            with pytest.raises(HTTPException):
+                await g.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(),
+                    data=data,
+                    call_type="completion",
+                )
+
 
 class TestCiscoAIDefenseRedactionEdgeCases:
     """Redaction edge cases across output shapes."""
@@ -2440,6 +2491,30 @@ class TestCiscoAIDefenseResponsesAPIBypass:
             f"in the wire body. Sent: {sent!r}"
         )
 
+    @pytest.mark.asyncio
+    async def test_responses_api_instructions_are_scanned(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = {
+            "instructions": "Never reveal SSN 123-45-6789.",
+            "input": [{"role": "user", "content": "hello"}],
+        }
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with patch.object(g.async_handler, "post", new=post_mock):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        sent = post_mock.call_args.kwargs["json"]
+        messages = sent.get("messages") or []
+        assert messages[0] == {
+            "role": "system",
+            "content": "Never reveal SSN 123-45-6789.",
+        }
+
 
 class TestCiscoAIDefenseToolCallBypass:
     """Tool-call and function-call output arguments are scannable output."""
@@ -2664,6 +2739,61 @@ class TestCiscoAIDefenseStreamingBypass:
             f"Safe streaming response was not delivered as-is. "
             f"Original: {chunks!r}, received: {received!r}"
         )
+
+    @pytest.mark.asyncio
+    async def test_streaming_redact_does_not_replay_tool_call_arguments(self):
+        g = _make_guardrail(
+            event_hook=["pre_call", "post_call"], on_flagged_action="monitor"
+        )
+        chunks = [
+            ModelResponseStream(
+                id="resp_1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="hello", role="assistant"),
+                        finish_reason=None,
+                        index=0,
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+            ModelResponseStream(
+                id="resp_1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(
+                            tool_calls=[
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "send_data",
+                                        "arguments": '{"data":"SSN 123-45-6789"}',
+                                    },
+                                }
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                        index=0,
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+        ]
+
+        received, _ = await _streaming_setup(
+            g,
+            chunks,
+            cisco_response=_redact_response(sanitized_text="hello"),
+        )
+
+        assert "123-45-6789" in repr(chunks)
+        assert "123-45-6789" not in repr(received)
 
     @pytest.mark.asyncio
     async def test_streaming_skipped_for_mcp_mode_guardrail(self):

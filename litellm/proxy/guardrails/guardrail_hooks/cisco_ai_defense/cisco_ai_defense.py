@@ -614,19 +614,22 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         error_obj.setdefault("guardrail", self.guardrail_name)
         return error_obj
 
-    @staticmethod
+    @classmethod
     def _streaming_content_was_modified(
-        original_chunks: List[Any], assembled: ModelResponse
+        cls, original_chunks: List[Any], assembled: ModelResponse
     ) -> bool:
-        """Decide whether redact rewrote the assembled assistant content.
+        """Decide whether redact changed content or tool/function arguments."""
+        original_text = cls._extract_streaming_chunk_scan_text(original_chunks)
+        assembled_text = " ".join(
+            m.get("content", "") for m in cls._extract_response_messages(assembled)
+        )
+        return original_text != assembled_text
 
-        We rebuild the original assistant text from the chunk stream and
-        compare against the assembled response's content. Any drift means
-        ``_inspect_chat`` applied a sanitized rewrite — we must yield the
-        modified content instead of the original chunks.
-        """
+    @classmethod
+    def _extract_streaming_chunk_scan_text(cls, chunks: List[Any]) -> str:
         original_text = ""
-        for chunk in original_chunks:
+        argument_text = ""
+        for chunk in chunks:
             choices = getattr(chunk, "choices", None) or []
             for c in choices:
                 delta = getattr(c, "delta", None)
@@ -635,18 +638,16 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 text = getattr(delta, "content", None)
                 if isinstance(text, str):
                     original_text += text
-
-        assembled_choices = getattr(assembled, "choices", None) or []
-        assembled_text = ""
-        for c in assembled_choices:
-            message = getattr(c, "message", None)
-            if message is None:
-                continue
-            text = getattr(message, "content", None)
-            if isinstance(text, str):
-                assembled_text += text
-
-        return original_text != assembled_text
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    args = cls._extract_tool_call_arguments(tc)
+                    if args:
+                        argument_text += args
+                fc = getattr(delta, "function_call", None)
+                if fc is not None:
+                    args = cls._extract_function_call_arguments(fc)
+                    if args:
+                        argument_text += args
+        return " ".join(part for part in (original_text, argument_text) if part)
 
     # ------------------------------------------------------------------
     # MCP post-tool-call hook lives on ``_CiscoAIDefenseMcpMixin`` in
@@ -1527,6 +1528,15 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     ) -> bool:
         """Rewrite chat request input (``messages`` or ``input``)."""
         uses_input = "input" in request_data and "messages" not in request_data
+        has_instructions = request_data.get("instructions") is not None
+        if has_instructions:
+            if not self._redact_responses_instructions(
+                request_data, sanitized_text, sanitized_messages
+            ):
+                return False
+            sanitized_messages = self._non_instruction_messages(sanitized_messages)
+            if sanitized_messages == []:
+                return True
         if sanitized_messages:
             if uses_input:
                 rewritten = self._sanitized_messages_to_responses_input(
@@ -1558,6 +1568,57 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                         message["content"] = sanitized_text
                         return True
         return False
+
+    @classmethod
+    def _redact_responses_instructions(
+        cls,
+        request_data: dict,
+        sanitized_text: Optional[str],
+        sanitized_messages: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        if sanitized_messages:
+            instruction_text = cls._instruction_text_from_messages(sanitized_messages)
+            if instruction_text:
+                request_data["instructions"] = instruction_text
+                return True
+        if sanitized_text and not any(
+            key in request_data for key in ("input", "messages", "prompt")
+        ):
+            request_data["instructions"] = sanitized_text
+            return True
+        return False
+
+    @classmethod
+    def _instruction_text_from_messages(
+        cls, messages: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if cls._is_instruction_role(message.get("role")):
+                text = cls._normalize_message_content(message.get("content"))
+                if text:
+                    return text
+        return None
+
+    @classmethod
+    def _non_instruction_messages(
+        cls, messages: Optional[List[Dict[str, Any]]]
+    ) -> Optional[List[Dict[str, Any]]]:
+        if messages is None:
+            return None
+        return [
+            message
+            for message in messages
+            if not (
+                isinstance(message, dict)
+                and cls._is_instruction_role(message.get("role"))
+            )
+        ]
+
+    @staticmethod
+    def _is_instruction_role(role: Any) -> bool:
+        return isinstance(role, str) and role.lower() in {"system", "developer"}
 
     def _redact_chat_output(
         self,
@@ -1879,6 +1940,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     ) -> List[Dict[str, str]]:
         """Build {role, content} messages for the Cisco AI Defense chat API."""
         messages: List[Dict[str, str]] = []
+
+        instructions_text = CiscoAIDefenseGuardrail._normalize_message_content(
+            data.get("instructions")
+        )
+        if instructions_text:
+            messages.append({"role": "system", "content": instructions_text})
 
         raw_messages = data.get("messages") or []
         for message in raw_messages:
