@@ -968,11 +968,16 @@ class JWTHandler:
         return jwk
 
     def _get_decode_options(
-        self, audience: Optional[Union[str, List[str]]]
+        self,
+        audience: Optional[Union[str, List[str]]],
+        issuer: Optional[str] = None,
     ) -> Optional[dict]:
+        options: dict = {}
         if audience is None:
-            return {"verify_aud": False}
-        return None
+            options["verify_aud"] = False
+        if issuer is None:
+            options["verify_iss"] = False
+        return options or None
 
     def _decode_jwt_with_public_key(
         self,
@@ -985,7 +990,7 @@ class JWTHandler:
         decode_options = (
             options
             if options is not None
-            else self._get_decode_options(audience=audience)
+            else self._get_decode_options(audience=audience, issuer=issuer)
         )
 
         if isinstance(public_key, dict):
