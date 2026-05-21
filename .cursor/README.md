@@ -32,11 +32,25 @@ See [AGENTS.md](../AGENTS.md) → **Cursor Cloud specific instructions** for ins
 Add root `AGENTS.md` in **litellm-docs** using the template in [contrib/litellm-docs-AGENTS.md](../contrib/litellm-docs-AGENTS.md) (separate PR to BerriAI/litellm-docs).
 
 
-## Slash command (Cursor UI)
+## Slash commands (Cursor UI)
 
-Type **`/draft-support-reply`** in chat or Agent input. Source: [commands/draft-support-reply.md](commands/draft-support-reply.md).
+Project commands live in [`.cursor/commands/`](commands/). Type **`/`** in chat or Agent input and pick one:
 
-No need to paste paths to the rule or skill manually — the command embeds those instructions.
+| Command | File |
+| ------- | ---- |
+| `/support` | [commands/support.md](commands/support.md) |
+| `/support-draft` | [commands/support-draft.md](commands/support-draft.md) |
+| `/draft-support-reply` | [commands/draft-support-reply.md](commands/draft-support-reply.md) |
+
+All three run the same workflow. No need to paste rule/skill paths manually.
+
+**If a command does not appear:**
+
+1. Confirm `.cursor/commands/*.md` exists on your branch (`git pull`).
+2. Open the workspace from the **litellm** repo root (the folder that contains `.cursor/`), e.g. `litellm-full.local.code-workspace`.
+3. **Reload the window** (Cmd+Shift+P → Developer: Reload Window).
+4. Type **`/`** (slash only) and scroll the menu — partial names like `/support` may not autocomplete until the file `support.md` exists.
+5. Custom slash commands apply to **Local** chat/Agent in the IDE. Starting **Run in Cloud** uses the Cloud Agents API; use Slack `/support-draft` or `POST /draft-reply` for that path, or paste the prompt from [exports/customer-support-bundle.md](../support/exports/customer-support-bundle.md).
 
 ## Published docs (@Docs)
 

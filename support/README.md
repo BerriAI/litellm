@@ -6,15 +6,15 @@ See [`AGENTS.md`](AGENTS.md) for tone, structure, and escalation policy.
 
 ## Invoke in Cursor (slash command)
 
-In the Cursor chat or Agent panel, type:
+In the Cursor chat or Agent panel, type **`/`** and choose:
 
-```
-/draft-support-reply
-```
+- `/support` (shortest)
+- `/support-draft` (matches Slack)
+- `/draft-support-reply`
 
-Then paste the customer question (and optional context). The command loads the support rule and skill automatically — you do not need to reference `.md` paths by hand.
+Then paste the customer question (and optional context). The command loads the support rule and skill automatically.
 
-Source: [`.cursor/commands/draft-support-reply.md`](../.cursor/commands/draft-support-reply.md)
+Sources: [`.cursor/commands/`](../.cursor/commands/) — reload the window after `git pull` if commands do not appear.
 
 ## Shareable bundle
 
