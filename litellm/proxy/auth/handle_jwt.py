@@ -284,12 +284,18 @@ class JWTHandler:
         default-team behavior should still go through ``get_team_id``.
         """
         team_ids: List[str] = list(self.get_team_ids_from_jwt(token))
-        if self.litellm_jwtauth.team_id_jwt_field is not None:
+        singular: Any = None
+        if self._has_trusted_issuer_normalized_claim(
+            token=token, claim=self.LITELLM_TEAM_ID_CLAIM
+        ):
+            singular = token.get(self.LITELLM_TEAM_ID_CLAIM)
+        elif self.litellm_jwtauth.team_id_jwt_field is not None:
             singular = get_nested_value(
                 data=token,
                 key_path=self.litellm_jwtauth.team_id_jwt_field,
                 default=None,
             )
+        if singular is not None:
             if isinstance(singular, list):
                 for item in singular:
                     if item is None:
