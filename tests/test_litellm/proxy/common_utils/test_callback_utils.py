@@ -7,9 +7,11 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    add_policy_to_applied_policies_header,
     initialize_callbacks_on_proxy,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
+    sanitize_openai_provider_metadata,
 )
 import litellm
 
@@ -87,6 +89,33 @@ def test_normalize_callback_names_lowercases_strings():
         "s3",
         "custom_callback",
     ]
+
+
+def test_add_policy_to_applied_policies_header_uses_litellm_metadata_bucket():
+    request_data = {
+        "input_file_id": "file-abc123",
+        "litellm_metadata": {},
+    }
+
+    add_policy_to_applied_policies_header(
+        request_data=request_data, policy_name="global-baseline"
+    )
+
+    assert request_data["litellm_metadata"]["applied_policies"] == ["global-baseline"]
+    assert "applied_policies" not in request_data.get("metadata", {})
+
+
+def test_sanitize_openai_provider_metadata_strips_internal_tracking_fields():
+    metadata = {
+        "customer_id": "cust-123",
+        "applied_policies": ["global-baseline"],
+        "applied_guardrails": ["pii_blocker"],
+        "note": 42,
+    }
+
+    sanitized = sanitize_openai_provider_metadata(metadata)
+
+    assert sanitized == {"customer_id": "cust-123"}
 
 
 def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
