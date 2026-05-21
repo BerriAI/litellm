@@ -7920,7 +7920,10 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         elif litellm.LlmProviders.JINA_AI == provider:
             return litellm.JinaAIRerankConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+        elif provider in (
+            litellm.LlmProviders.HOSTED_VLLM,
+            litellm.LlmProviders.NEARAI,
+        ):
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()

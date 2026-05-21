@@ -31,7 +31,7 @@ async def arerank(
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: (
-        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
+        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "nearai", "voyage", "watsonx"] | None
     ) = None,
     top_n: int | None = None,
     rank_fields: List[str] | None = None,
@@ -84,6 +84,7 @@ def rerank(
             "azure_ai",
             "infinity",
             "litellm_proxy",
+            "nearai",
             "hosted_vllm",
             "deepinfra",
             "fireworks_ai",
