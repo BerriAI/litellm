@@ -1644,6 +1644,38 @@ class LiteLLMCompletionResponsesConfig:
         return tool_call_dict
 
     @staticmethod
+    def convert_custom_tool_call_to_chat_completion_tool_call(
+        tool_call_item: Any,
+        index: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Convert ResponseCustomToolCall to ChatCompletionToolCallChunk format.
+
+        Custom tool calls have freeform `input` text (not JSON). We wrap
+        it in a JSON object `{"input": "<text>"}` so it fits the
+        Chat Completions `function.arguments` field.
+
+        Args:
+            tool_call_item: ResponseCustomToolCall object with call_id, name, and input
+            index: The index of this tool call
+
+        Returns:
+            Dictionary in ChatCompletionToolCallChunk format
+        """
+        import json
+
+        tool_call_dict: Dict[str, Any] = {
+            "id": tool_call_item.call_id,
+            "function": {
+                "name": tool_call_item.name,
+                "arguments": json.dumps({"input": tool_call_item.input}),
+            },
+            "type": "function",
+            "index": index,
+        }
+        return tool_call_dict
+
+    @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
