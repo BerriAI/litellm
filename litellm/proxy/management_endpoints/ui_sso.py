@@ -1917,7 +1917,12 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         key_id = state_parts[1] if len(state_parts) > 1 else None
 
         verbose_proxy_logger.info("CLI SSO callback detected")
-        return await cli_sso_callback(request=request, key=key_id, result=result)
+        return await cli_sso_callback(
+            request=request,
+            key=key_id,
+            result=result,
+            received_response=received_response,
+        )
 
     # Control-plane cross-origin: read return_to from cookie.
     # Starlette's cookie_parser already handles RFC 2109 unquoting.
@@ -2062,11 +2067,13 @@ async def cli_sso_callback(
     request: Request,
     key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
+    received_response: Optional[dict] = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
     verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
+        general_settings,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -2101,6 +2108,12 @@ async def cli_sso_callback(
             parsed_openid_result=parsed_openid_result,
         )
 
+        SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings=general_settings,
+            result=result_non_none,
+            received_response=received_response,
+        )
+
         return await _complete_cli_sso_callback_session(
             request=request,
             key=cast(str, key),
@@ -2112,6 +2125,8 @@ async def cli_sso_callback(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+    except ProxyException:
+        raise
     except HTTPException:
         raise
     except Exception as e:

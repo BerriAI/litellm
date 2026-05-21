@@ -5668,6 +5668,59 @@ class TestCliSsoAttributionMetadata:
         )
 
     @pytest.mark.asyncio
+    async def test_cli_sso_callback_rejects_restricted_sso_group(self):
+        """CLI SSO must enforce restricted_sso_group before upserting the user."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints import ui_sso
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        mock_sso_result = CustomOpenID(
+            id="cli-test-user",
+            email="cli-test@example.com",
+            display_name="cli-test-user",
+            provider="generic",
+            team_ids=["other-group"],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                new=AsyncMock(),
+            ) as get_user_info_mock,
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {
+                    "ui_access_mode": {
+                        "type": "restricted_sso_group",
+                        "restricted_sso_group": "required-group",
+                    }
+                },
+            ),
+        ):
+            with pytest.raises(ProxyException):
+                await ui_sso.cli_sso_callback(
+                    request=mock_request,
+                    key="cli-session-restricted",
+                    result=mock_sso_result,
+                    received_response={"groups": ["other-group"]},
+                )
+
+        get_user_info_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_cli_sso_callback_persists_attribution_metadata(self, monkeypatch):
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints import ui_sso
