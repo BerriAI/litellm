@@ -502,6 +502,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             (n) => !(values.guardrails || []).includes(n),
           );
 
+      // Non-proxy-admins can't set allowed_passthrough_routes; preserve the
+      // stored value so an unrelated save can't wipe it.
+      const passthroughRoutesMetadata = is_proxy_admin
+        ? { allowed_passthrough_routes: values.allowed_passthrough_routes || [] }
+        : info.metadata?.allowed_passthrough_routes
+          ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
+          : {};
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -515,6 +523,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
+          ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
@@ -961,7 +970,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
+                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, allowed_passthrough_routes, ...rest }) => rest)(info.metadata),
                           null,
                           2,
                         )
@@ -986,6 +995,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       },
                       access_group_ids: info.access_group_ids || [],
                       default_team_member_models: info.default_team_member_models || [],
+                      allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
                     }}
                     layout="vertical"
                   >
@@ -1338,12 +1348,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <PassThroughRoutesSelector
-                        onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                        value={form.getFieldValue("allowed_passthrough_routes")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select pass through routes"
-                      />
+                      <Tooltip
+                        title={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set allowed pass through routes"
+                            : !is_proxy_admin
+                              ? "Only proxy admins can set allowed pass through routes"
+                              : ""
+                        }
+                        placement="top"
+                      >
+                        <PassThroughRoutesSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                          value={form.getFieldValue("allowed_passthrough_routes")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select pass through routes"
+                          disabled={!premiumUser || !is_proxy_admin}
+                        />
+                      </Tooltip>
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">

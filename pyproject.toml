@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.86.0"
+version = "1.87.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -33,8 +33,9 @@ Homepage = "https://litellm.ai"
 Repository = "https://github.com/BerriAI/litellm"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from the published `litellm[proxy]==1.83.0` resolution.
-# Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
+# Optional extras retain exact pins because they are consumed by Docker images
+# where exact reproducibility matters. The core SDK uses ranges so downstream
+# consumers can coexist with other packages without forced downgrades.
 [project.optional-dependencies]
 proxy = [
     "gunicorn==23.0.0",
@@ -56,7 +57,7 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.72",
+    "litellm-proxy-extras==0.4.73",
     "litellm-enterprise==0.1.41",
     "RestrictedPython==8.1",
     "rich==13.9.4",
@@ -251,7 +252,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.86.0"
+version = "1.87.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -287,6 +288,12 @@ paths_to_mutate = [
 ]
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
+    # PR1 (key Tier-1) behavior-pinning suite. Manual mutmut runs
+    # (.github/workflows/mutation-test.yml) include this directory so the
+    # behavior matrix contributes to mutation-score signal alongside the
+    # legacy mock suite. See tests/proxy_behavior/management/README.md
+    # for the G5 triage protocol.
+    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
@@ -312,3 +319,4 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+

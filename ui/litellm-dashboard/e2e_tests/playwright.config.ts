@@ -28,6 +28,11 @@ export default defineConfig({
     /* Action timeout for clicks, fills, waitForSelector, etc. */
     actionTimeout: 15 * 1000,
     navigationTimeout: 30 * 1000,
+
+    /* Slow down actions when SLOWMO=<ms> is set, useful for headed local debugging */
+    launchOptions: {
+      slowMo: process.env.SLOWMO ? (parseInt(process.env.SLOWMO, 10) || 0) : 0,
+    },
   },
 
   /* Configure projects for major browsers */

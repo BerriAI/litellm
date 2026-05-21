@@ -1125,7 +1125,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
     ) as mock_client:
         try:
             response = litellm.completion(
-                model="gpt-4o-audio-preview",
+                model="gpt-audio-1.5",
                 modalities=["text", "audio"],
                 audio={"voice": "alloy", "format": "pcm16"},
                 messages=[
@@ -1134,11 +1134,13 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 stream=stream,
             )
         except Exception as e:
-            err = str(e)
-            if "openai-internal" in err:
-                pytest.skip("Skipping test due to openai-internal error")
-            if "model_not_found" in err or "does not exist" in err:
-                pytest.skip(f"Skipping test - upstream model unavailable: {err}")
+            err = str(e).lower()
+            if (
+                "model_not_found" in err
+                or "does not exist" in err
+                or "openai-internal" in err
+            ):
+                pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
             raise
 
         if stream:

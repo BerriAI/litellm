@@ -915,6 +915,36 @@ async def test_user_api_key_auth_websocket():
         )
 
 
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_carries_asgi_path():
+    """
+    The synthetic Request must carry the ASGI scope's ``path`` so
+    ``get_request_route`` returns the real WebSocket path, not a value
+    reconstructed from the (Host-poisonable) ``websocket.url``.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+    mock_websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/realtime",
+        "root_path": "",
+        "headers": [(b"authorization", b"Bearer some_api_key")],
+    }
+    mock_websocket.url = URL(url="/v1/realtime")
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+        await user_api_key_auth_websocket(mock_websocket)
+
+        request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+        assert request_arg.scope.get("path") == "/v1/realtime"
+        assert request_arg.scope.get("root_path") == ""
+
+
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
 async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
