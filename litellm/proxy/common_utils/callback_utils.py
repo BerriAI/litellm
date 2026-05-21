@@ -303,7 +303,12 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 )
 
                 init_params = {}
-                if "datadog_cost_management" in callback_specific_params:
+                if (
+                    "datadog_cost_management" in callback_specific_params
+                    and isinstance(
+                        callback_specific_params["datadog_cost_management"], dict
+                    )
+                ):
                     init_params = callback_specific_params["datadog_cost_management"]
                 datadog_cost_management_obj = DatadogCostManagementLogger(**init_params)
                 imported_list.append(datadog_cost_management_obj)

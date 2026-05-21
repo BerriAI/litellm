@@ -82,6 +82,11 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         try:
             aggregated_entries = self._aggregate_costs(batch_to_send)
             if not aggregated_entries:
+                verbose_logger.debug(
+                    "Datadog Cost Management: batch produced no aggregable entries; "
+                    "dropping %d log(s) from queue.",
+                    len(batch_to_send),
+                )
                 return
             await self._upload_to_datadog(aggregated_entries)
         except Exception as e:
