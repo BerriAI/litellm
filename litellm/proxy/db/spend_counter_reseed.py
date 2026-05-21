@@ -177,20 +177,39 @@ class SpendCounterReseed:
             db_spend = await SpendCounterReseed.from_db(prisma_client, counter_key)
             if db_spend is None:
                 return None
-            # Warm even when 0 so subsequent reads hit cache, not DB.
+            # Warm even when 0 so subsequent reads hit cache, not DB. Use SET
+            # NX for Redis so concurrent cold pods do not each add db_spend.
+            reseeded_value = db_spend
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    current_value = (
-                        await spend_counter_cache.redis_cache.async_increment(
-                            key=counter_key,
-                            value=db_spend,
-                            refresh_ttl=True,
-                        )
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=db_spend,
+                        nx=True,
                     )
+                    if seeded:
+                        current_value = db_spend
+                    else:
+                        current_cached_value = (
+                            await spend_counter_cache.redis_cache.async_get_cache(
+                                key=counter_key
+                            )
+                        )
+                        if current_cached_value is None:
+                            current_value = (
+                                await spend_counter_cache.redis_cache.async_increment(
+                                    key=counter_key,
+                                    value=db_spend,
+                                    refresh_ttl=True,
+                                )
+                            )
+                        else:
+                            current_value = float(current_cached_value)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,
                     )
+                    reseeded_value = current_value
                 else:
                     await spend_counter_cache.async_increment_cache(
                         key=counter_key, value=db_spend, refresh_ttl=True
@@ -202,7 +221,7 @@ class SpendCounterReseed:
                 )
                 if require_cache_warm:
                     raise
-            return db_spend
+            return reseeded_value
 
     @staticmethod
     async def window_from_spend_logs(
@@ -293,6 +312,7 @@ class SpendCounterReseed:
             )
             if window_spend is None:
                 return None
+            reseeded_value = window_spend
             try:
                 if spend_counter_cache.redis_cache is not None:
                     seeded = await spend_counter_cache.redis_cache.async_set_cache(
@@ -321,6 +341,7 @@ class SpendCounterReseed:
                         key=counter_key,
                         value=current_value,
                     )
+                    reseeded_value = current_value
                 else:
                     await spend_counter_cache.async_increment_cache(
                         key=counter_key, value=window_spend
@@ -331,4 +352,4 @@ class SpendCounterReseed:
                     counter_key,
                 )
                 raise
-            return window_spend
+            return reseeded_value
