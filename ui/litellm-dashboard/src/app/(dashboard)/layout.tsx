@@ -7,6 +7,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { UserBanner } from "@/components/UserBanner";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -80,6 +81,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           isDarkMode={false}
           toggleDarkMode={() => { }}
         />
+        <UserBanner />
         <DebugWarningBanner accessToken={accessToken} />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
