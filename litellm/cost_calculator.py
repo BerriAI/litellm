@@ -241,12 +241,17 @@ _TOKEN_BASED_CUSTOM_PRICING_KEYS = frozenset(
 )
 
 
-def _has_token_based_custom_pricing(model_info: Optional[dict]) -> bool:
+def _has_token_based_custom_pricing(model_info: Optional[ModelInfo]) -> bool:
+    """Return True if ``model_info`` declares any explicit token-based price.
+
+    Uses ``is not None`` (not truthiness) so an explicit ``0.0`` — for example
+    a fully-prepaid Anthropic model registered with zero token cost — counts as
+    custom pricing instead of being silently treated as "unset" and falling
+    through to provider-specific dispatch (#25204).
+    """
     if not model_info:
         return False
-    return any(
-        model_info.get(key) is not None for key in _TOKEN_BASED_CUSTOM_PRICING_KEYS
-    )
+    return any(model_info.get(key) is not None for key in _TOKEN_BASED_CUSTOM_PRICING_KEYS)
 
 
 def _get_additional_costs(
@@ -606,15 +611,14 @@ def cost_per_token(
         )
 
     # Prefer explicit custom pricing before provider-specific dispatch (#25204).
-    if custom_pricing and _has_token_based_custom_pricing(model_cost_ref.get(model)):
+    elif custom_pricing and _has_token_based_custom_pricing(model_cost_ref.get(model)):
         return generic_cost_per_token(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider,
             service_tier=service_tier,
         )
-
-    if custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
