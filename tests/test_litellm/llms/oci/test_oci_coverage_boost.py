@@ -620,7 +620,9 @@ def test_handle_cohere_stream_chunk_text():
 
 def test_handle_cohere_stream_chunk_complete():
     # Real OCI Cohere terminal events carry the full response in `text` plus a
-    # populated `chatHistory`; the parser must drop that text to avoid doubling.
+    # populated `chatHistory`; the parser must drop that text to avoid doubling
+    # — but only when prior chunks already emitted the text as incremental
+    # deltas (signalled by ``prior_text_emitted=True``).
     chunk = {
         "apiFormat": "COHERE",
         "text": "How can I help you today?",
@@ -630,7 +632,7 @@ def test_handle_cohere_stream_chunk_complete():
             {"role": "CHATBOT", "message": "How can I help you today?"},
         ],
     }
-    result = handle_cohere_stream_chunk(chunk)
+    result = handle_cohere_stream_chunk(chunk, prior_text_emitted=True)
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[0].delta.content is None
 
@@ -642,7 +644,7 @@ def test_handle_cohere_stream_chunk_max_tokens():
         "finishReason": "MAX_TOKENS",
         "chatHistory": [{"role": "CHATBOT", "message": "truncated full response"}],
     }
-    result = handle_cohere_stream_chunk(chunk)
+    result = handle_cohere_stream_chunk(chunk, prior_text_emitted=True)
     assert result.choices[0].finish_reason == "length"
     assert result.choices[0].delta.content is None
 
@@ -656,7 +658,7 @@ def test_handle_cohere_stream_chunk_tool_call():
     }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "tool_calls"
-    assert result.choices[0].delta.content is None
+    assert not result.choices[0].delta.content
 
 
 def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
@@ -664,7 +666,9 @@ def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
 
     OCI's terminal SSE event re-sends the full assembled response in `text`
     alongside a populated `chatHistory`. That text must be dropped — otherwise
-    it gets concatenated onto the already-streamed incremental deltas.
+    it gets concatenated onto the already-streamed incremental deltas. The
+    caller signals "prior deltas already emitted text" via
+    ``prior_text_emitted=True``.
     """
     chunk = {
         "apiFormat": "COHERE",
@@ -675,8 +679,23 @@ def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
             {"role": "CHATBOT", "message": "How can I help you today?"},
         ],
     }
-    result = handle_cohere_stream_chunk(chunk)
+    result = handle_cohere_stream_chunk(chunk, prior_text_emitted=True)
     assert result.choices[0].delta.content is None
+
+
+def test_handle_cohere_stream_chunk_single_event_stream_preserves_text():
+    """Degenerate single-event stream: the terminal chunk carries the only copy
+    of the response text. Without prior text deltas, suppressing here would
+    discard the response entirely — so the text must pass through."""
+    chunk = {
+        "apiFormat": "COHERE",
+        "text": "Short answer.",
+        "finishReason": "COMPLETE",
+        "chatHistory": [{"role": "CHATBOT", "message": "Short answer."}],
+    }
+    result = handle_cohere_stream_chunk(chunk, prior_text_emitted=False)
+    assert result.choices[0].delta.content == "Short answer."
+    assert result.choices[0].finish_reason == "stop"
 
 
 def test_handle_cohere_stream_chunk_incremental_passes_text_through():

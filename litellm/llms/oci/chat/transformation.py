@@ -356,21 +356,14 @@ class OCIChatConfig(BaseConfig):
             else "maxTokens"
         )
 
-        # Both ``max_tokens`` and ``max_completion_tokens`` map to OCI's
-        # ``maxTokens`` (or ``maxCompletionTokens`` for reasoning models), so
-        # if both are provided explicitly prefer ``max_completion_tokens``
-        # rather than relying on dict iteration order to pick a winner.
-        prefer_max_completion = (
-            "max_tokens" in optional_params
-            and "max_completion_tokens" in optional_params
-            and param_map.get("max_tokens") == "maxTokens"
-            and param_map.get("max_completion_tokens") == "maxTokens"
-        )
-
+        # ``map_openai_params`` runs before ``transform_request`` (and thus
+        # before this helper), so by the time we see ``optional_params`` both
+        # ``max_tokens`` and ``max_completion_tokens`` have already been
+        # collapsed onto the OCI alias (``maxTokens`` or ``maxCompletionTokens``).
+        # Conflict resolution between the two OpenAI keys happens there; we
+        # only need to translate whatever alias is now present.
         for openai_key, oci_key in param_map.items():
             if oci_key and openai_key in optional_params:
-                if prefer_max_completion and openai_key == "max_tokens":
-                    continue
                 target = max_tokens_key if oci_key == "maxTokens" else oci_key
                 selected_params[target] = optional_params[openai_key]  # type: ignore[index]
 
@@ -673,6 +666,11 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # terminal consolidation chunk's tool calls are duplicates (suppress)
         # or the only copy of the tool calls (pass through).
         self._cohere_tool_calls_emitted = False
+        # Analogous flag for text content. Lets the Cohere handler distinguish
+        # the common case (prior deltas already streamed the text, so the
+        # terminal chunk's text is a duplicate to suppress) from the degenerate
+        # single-event case (terminal chunk carries the only copy of the text).
+        self._cohere_text_emitted = False
 
     def chunk_creator(self, chunk: Any) -> ModelResponseStream:
         if not isinstance(chunk, str):
@@ -685,11 +683,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
             result = handle_cohere_stream_chunk(
                 dict_chunk,
                 prior_tool_calls_emitted=self._cohere_tool_calls_emitted,
+                prior_text_emitted=self._cohere_text_emitted,
             )
             if not self._cohere_tool_calls_emitted:
                 for choice in result.choices:
                     if getattr(choice.delta, "tool_calls", None):
                         self._cohere_tool_calls_emitted = True
+                        break
+            if not self._cohere_text_emitted:
+                for choice in result.choices:
+                    if getattr(choice.delta, "content", None):
+                        self._cohere_text_emitted = True
                         break
             return result
         return handle_generic_stream_chunk(dict_chunk)

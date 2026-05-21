@@ -254,14 +254,19 @@ def handle_cohere_response(
 
     content: Optional[str] = response_text if response_text else None
 
+    # Only include ``tool_calls`` in the message dict when actually present.
+    # Passing an explicit ``None`` would let downstream consumers that key off
+    # ``"tool_calls" in message`` (rather than truthiness) incorrectly conclude
+    # that tool calls were attempted. Matches the generic handler's behaviour,
+    # which only sets ``message.tool_calls`` when tool calls are present.
+    message: Dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
+
     model_response.choices = [
         Choices(
             index=0,
-            message={
-                "role": "assistant",
-                "content": content,
-                "tool_calls": tool_calls,
-            },
+            message=message,
             finish_reason=finish_reason,
         )
     ]
@@ -280,7 +285,9 @@ def handle_cohere_response(
 
 
 def handle_cohere_stream_chunk(
-    dict_chunk: dict, prior_tool_calls_emitted: bool = False
+    dict_chunk: dict,
+    prior_tool_calls_emitted: bool = False,
+    prior_text_emitted: bool = False,
 ) -> ModelResponseStream:
     """Parse a single Cohere SSE chunk into a LiteLLM ModelResponseStream.
 
@@ -290,6 +297,13 @@ def handle_cohere_stream_chunk(
     duplicate prior deltas); otherwise they are passed through so a stream
     that delivers tool calls only on the terminal chunk doesn't silently
     drop them.
+
+    ``prior_text_emitted`` plays the analogous role for the ``text`` field:
+    when set, the terminal consolidation chunk's ``text`` is suppressed
+    (it would re-emit the full assembled response on top of prior deltas);
+    when unset (e.g. a degenerate stream that delivers the entire response
+    in a single SSE event carrying both ``chatHistory`` and ``finishReason``),
+    the text is passed through so the response content isn't silently lost.
     """
     try:
         typed_chunk = CohereStreamChunk(**dict_chunk)
@@ -315,7 +329,14 @@ def handle_cohere_stream_chunk(
     # chunks) emit ``content=None`` rather than ``content=""`` so downstream
     # stream-mergers that distinguish "no text in this delta" from "an
     # explicitly empty text delta" behave correctly.
-    text: Optional[str] = None if is_terminal_consolidation else typed_chunk.text
+    #
+    # We only suppress the terminal chunk's ``text`` when the caller has
+    # confirmed that text deltas were already emitted earlier — otherwise
+    # (e.g. a degenerate stream that delivers the whole response in a
+    # single SSE event), passing it through is the only chance to surface it.
+    text: Optional[str] = (
+        None if (is_terminal_consolidation and prior_text_emitted) else typed_chunk.text
+    )
 
     # Tool calls on the terminal consolidation chunk (whether from
     # `typed_chunk.toolCalls` or from `chatHistory`) typically restate what
