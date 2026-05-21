@@ -1,10 +1,10 @@
 import base64
-import datetime
 import hashlib
 import json
 import os
 import re
 from dataclasses import dataclass
+from email.utils import formatdate
 from typing import Any, Dict, Optional, Protocol, Tuple
 from urllib.parse import urlparse
 
@@ -296,9 +296,7 @@ def sign_with_manual_credentials(
     path = parsed.path or "/"
     host = parsed.netloc
 
-    date = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%a, %d %b %Y %H:%M:%S GMT"
-    )
+    date = formatdate(usegmt=True)
     content_type = headers.get("content-type", "application/json")
     content_length = str(len(body))
     x_content_sha256 = sha256_base64(body)
