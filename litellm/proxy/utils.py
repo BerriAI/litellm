@@ -6068,6 +6068,8 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
     )
 
+    effective_team_id = team_id or user_api_key_dict.team_id
+
     # Get complete model list
     all_models = get_complete_model_list(
         key_models=key_models,
@@ -6080,6 +6082,7 @@ async def get_available_models_for_user(
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
+        team_id=effective_team_id,
     )
 
     return all_models
