@@ -43,6 +43,20 @@ class _FakeRedisCache(RedisCache):
             return None
         return json.loads(raw)
 
+    async def async_get_cache(self, key, **kwargs):  # type: ignore[override]
+        return self.get_cache(key=key, **kwargs)
+
+    async def async_set_cache(self, key, value, **kwargs):  # type: ignore[override]
+        if kwargs.get("nx") and key in self._store:
+            return False
+        return self.set_cache(key=key, value=value, **kwargs)
+
+    async def async_increment(self, key, value, **kwargs):  # type: ignore[override]
+        current_value = self.get_cache(key=key) or 0.0
+        new_value = float(current_value) + float(value)
+        self.set_cache(key=key, value=new_value, **kwargs)
+        return new_value
+
 
 @contextmanager
 def _patched_init_cache(litellm_settings: dict, cache_params: dict):
