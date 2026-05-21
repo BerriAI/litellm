@@ -137,9 +137,7 @@ def test_add_single_member(api_client, new_team):
 
 
 @pytest.mark.skip(
-    reason="Flaky on CI: /team/info intermittently returns 404 immediately after a "
-    "successful /team/new + /team/member_add. The single-member happy path is covered "
-    "by test_add_single_member; we lose only the 10-iteration stress loop here."
+    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404/400 mid-loop after add_team_member calls. Single-member coverage in test_add_single_member is sufficient; team-member CRUD is also covered by tests/test_litellm/proxy/management_endpoints/."
 )
 def test_add_multiple_members(api_client, new_team):
     """Test adding multiple members to a new team"""
