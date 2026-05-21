@@ -252,21 +252,45 @@ class MCPRequestHandler:
                 # than coercing (``int("None")`` would raise ValueError and
                 # rewrite the auth error as a 500).
                 status = e.status_code if isinstance(e, HTTPException) else e.code
-                if status in (
-                    401,
-                    403,
-                    "401",
-                    "403",
-                ) and MCPRequestHandler._target_servers_use_oauth2(
+                is_auth_error = status in (401, 403, "401", "403")
+                client_ip = IPAddressUtils.get_mcp_client_ip(request)
+                if is_auth_error and MCPRequestHandler._target_servers_use_oauth2(
                     path=request.url.path,
                     mcp_servers=mcp_servers,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    client_ip=client_ip,
                 ):
                     verbose_logger.debug(
                         "MCP OAuth2: target server is OAuth2-mode, treating "
                         "Authorization as upstream OAuth2 token passthrough"
                     )
                     validated_user_api_key_auth = UserAPIKeyAuth()
+                elif is_auth_error:
+                    # Pass-through cold-start return: per RFC 9728 / MCP
+                    # Authorization spec the client completes upstream OAuth
+                    # discovery and returns with ``Authorization: Bearer
+                    # <upstream-token>``. For ``auth_type=none`` passthrough
+                    # servers that bearer is not a LiteLLM key (auth above
+                    # failed) but is meant to be forwarded upstream
+                    # unchanged. Fall back to anonymous admission so the
+                    # caller is not rejected for following the discovery
+                    # flow without also setting ``x-litellm-api-key``.
+                    mcp_servers_from_path = _parse_mcp_server_names_from_path(
+                        request.url.path
+                    )
+                    if (
+                        mcp_servers_from_path is not None
+                        and _is_mcp_passthrough_cold_start(
+                            mcp_servers_from_path, client_ip=client_ip
+                        )
+                    ):
+                        verbose_logger.debug(
+                            "MCP pass-through return: target server is "
+                            "passthrough, treating Authorization as "
+                            "upstream OAuth token for delegated auth"
+                        )
+                        validated_user_api_key_auth = UserAPIKeyAuth()
+                    else:
+                        raise
                 else:
                     raise
         else:

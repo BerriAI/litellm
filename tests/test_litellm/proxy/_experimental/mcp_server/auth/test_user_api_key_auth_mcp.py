@@ -1170,9 +1170,14 @@ class TestMCPOAuth2FallbackTargetGating:
     """
 
     @staticmethod
-    def _make_server(auth_type):
+    def _make_server(auth_type, is_oauth_passthrough=False):
         server = MagicMock()
         server.auth_type = auth_type
+        # MagicMock would otherwise auto-create truthy stand-ins for any
+        # attribute access (including ``is_oauth_passthrough``), which
+        # would silently flip the passthrough fallback gate on. Pin the
+        # boolean explicitly so non-passthrough fixtures stay non-passthrough.
+        server.is_oauth_passthrough = is_oauth_passthrough
         return server
 
     async def test_fallback_blocked_when_target_is_not_oauth2(self):
@@ -1274,6 +1279,48 @@ class TestMCPOAuth2FallbackTargetGating:
             (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
 
+    async def test_fallback_allowed_when_target_is_passthrough(self):
+        """
+        Cold-start return per RFC 9728 / MCP Authorization spec: client
+        discovered the upstream IdP via the gateway's protected-resource
+        metadata, completed OAuth, and is returning with
+        ``Authorization: Bearer <upstream-token>``. The bearer is not a
+        LiteLLM key but the target is a pass-through server, so admission
+        falls back to anonymous and forwards the bearer upstream.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"authorization", b"Bearer upstream-token-xyz")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPOAuth2FallbackTargetGating._make_server(
+                    auth_type=MCPAuth.none,
+                    is_oauth_passthrough=True,
+                )
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+            assert auth_result.api_key is None
+
     async def test_fallback_blocked_when_client_ip_hides_oauth2_target(self):
         from fastapi import HTTPException
 
@@ -1305,7 +1352,12 @@ class TestMCPOAuth2FallbackTargetGating:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+            # Lookup may run twice — once for the oauth2-target fallback gate
+            # and once for the passthrough-target fallback gate. Both must
+            # resolve to ``None`` (hidden by client IP) so neither bypass
+            # opens. Use ``assert_any_call`` to assert the IP-scoped lookup
+            # happened without locking the count.
+            mock_mgr.get_mcp_server_by_name.assert_any_call(
                 "hidden_oauth2_server", client_ip="203.0.113.10"
             )
 

@@ -1148,6 +1148,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
         oauth2_headers: Optional[Dict[str, str]],
         raw_headers: Optional[Dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
         """Build auth and extra headers for a server."""
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
@@ -1177,6 +1178,17 @@ if MCP_AVAILABLE:
             has_explicit_litellm_admission_header = (
                 normalized_raw_headers.get("x-litellm-api-key") is not None
             )
+            # Admission consumed ``Authorization`` as a LiteLLM key only when
+            # auth produced a validated ``api_key`` AND the caller did not
+            # supply ``x-litellm-api-key``. When admission was anonymous
+            # (e.g. pass-through cold-start return per RFC 9728), the bearer
+            # in ``Authorization`` is the upstream OAuth token and must be
+            # forwarded — not stripped — for the delegated flow to work.
+            admission_consumed_authorization_as_litellm_key = (
+                user_api_key_auth is not None
+                and bool(getattr(user_api_key_auth, "api_key", None))
+                and not has_explicit_litellm_admission_header
+            )
 
             for header in server.extra_headers:
                 if not isinstance(header, str):
@@ -1189,13 +1201,20 @@ if MCP_AVAILABLE:
                         continue
                     # Transparent OAuth pass-through: forward the caller's
                     # Authorization header only when LiteLLM admission used
-                    # a different header (`x-litellm-api-key`). Without an
-                    # explicit admission header, `Authorization` may itself
-                    # be the LiteLLM key — strip it to avoid leaking the
-                    # gateway credential upstream.
-                    if (
-                        server.is_oauth_passthrough
-                        and not has_explicit_litellm_admission_header
+                    # a different header (`x-litellm-api-key`) or when
+                    # admission was anonymous (delegated to upstream).
+                    # Without that signal `Authorization` may itself be the
+                    # LiteLLM key — strip it to avoid leaking the gateway
+                    # credential upstream. The legacy ``user_api_key_auth
+                    # is None`` callers keep the conservative pre-PR
+                    # behavior of stripping when no explicit admission
+                    # header was supplied.
+                    if server.is_oauth_passthrough and (
+                        admission_consumed_authorization_as_litellm_key
+                        or (
+                            user_api_key_auth is None
+                            and not has_explicit_litellm_admission_header
+                        )
                     ):
                         continue
                 header_value = normalized_raw_headers.get(header.lower())
@@ -1391,6 +1410,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=mcp_auth_header,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
 
                 # Prefer server-stored per-user OAuth when configured, so a stale
@@ -1565,6 +1585,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
             try:
@@ -1622,6 +1643,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
             try:
@@ -1677,6 +1699,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
             try:
@@ -2512,6 +2535,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=mcp_auth_header,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await global_mcp_server_manager.get_prompt_from_server(
@@ -2562,6 +2586,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=mcp_auth_header,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await global_mcp_server_manager.read_resource_from_server(
