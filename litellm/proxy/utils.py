@@ -3882,7 +3882,6 @@ class PrismaClient:
                         data_json = self.jsonify_object(
                             data={k: v for k, v in t.items() if v is not None}
                         )
-                        data_json["token"] = token
                     else:
                         # check if plain text or hash
                         if t.token.startswith("sk-"):  # type: ignore
