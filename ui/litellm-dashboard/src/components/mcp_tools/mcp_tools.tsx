@@ -4,6 +4,7 @@ import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
+import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
 
 import { Card, Title, Text } from "@tremor/react";
@@ -31,8 +32,8 @@ const MCPToolsViewer = ({
   // OAuth session token (sessionStorage-backed, cleared on tab/browser close)
   const isOAuth = auth_type === "oauth2";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isOAuth && isTokenValid(serverId)
-      ? (getToken(serverId)?.access_token ?? null)
+    isOAuth && isTokenValid(serverId, userID)
+      ? (getToken(serverId, userID)?.access_token ?? null)
       : null
   );
 
@@ -40,6 +41,7 @@ const MCPToolsViewer = ({
     accessToken: accessToken ?? "",
     serverId,
     serverAlias,
+    userId: userID,
     onSuccess: setOauthToken,
   });
 
@@ -57,7 +59,12 @@ const MCPToolsViewer = ({
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
     if (oauthToken) {
       if (serverAlias) {
-        customHeaders[`x-mcp-${serverAlias}-authorization`] = `Bearer ${oauthToken}`;
+        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
+        if (safeAlias) {
+          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
+        } else {
+          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
+        }
       } else {
         customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
       }
@@ -65,13 +72,16 @@ const MCPToolsViewer = ({
 
     // Add passthrough headers with server-specific prefix
     if (serverAlias && hasExtraHeaders) {
-      Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
-        if (headerValue && headerValue.trim()) {
-          // Format: x-mcp-{alias}-{header_name}
-          const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
-          customHeaders[mcpHeaderName] = headerValue;
-        }
-      });
+      const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
+      if (safeAlias) {
+        Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
+          if (headerValue && headerValue.trim()) {
+            // Format: x-mcp-{alias}-{header_name}
+            const mcpHeaderName = `x-mcp-${safeAlias}-${headerName.toLowerCase()}`;
+            customHeaders[mcpHeaderName] = headerValue;
+          }
+        });
+      }
     }
 
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
@@ -92,6 +102,10 @@ const MCPToolsViewer = ({
       // here so useQuery's retry/onError can react (e.g. clear the cached
       // OAuth token on 401).
       if (result?.error) {
+        const status = (result as { status?: number }).status;
+        if (status === 401) {
+          removeToken(serverId, userID);
+        }
         const enhancedError = new Error(
           result.message || result.error || "Failed to fetch MCP tools",
         ) as Error & {
@@ -99,7 +113,7 @@ const MCPToolsViewer = ({
           statusText?: string;
           details?: any;
         };
-        enhancedError.status = (result as any).status;
+        enhancedError.status = status;
         enhancedError.statusText = (result as any).statusText;
         enhancedError.details = (result as any).details;
         throw enhancedError;
@@ -124,10 +138,10 @@ const MCPToolsViewer = ({
       | null;
     const status = err?.status ?? err?.response?.status;
     if (status === 401) {
-      removeToken(serverId);
+      removeToken(serverId, userID);
       setOauthToken(null);
     }
-  }, [mcpToolsError, serverId]);
+  }, [mcpToolsError, serverId, userID]);
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
@@ -156,7 +170,7 @@ const MCPToolsViewer = ({
       setToolResult(null);
       // On 401, clear the cached token so the auth gate is shown again
       if (error?.status === 401 || (error as any)?.response?.status === 401) {
-        removeToken(serverId);
+        removeToken(serverId, userID);
         setOauthToken(null);
       }
     },

@@ -25,6 +25,7 @@ export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
 
 interface CreateMCPServerProps {
   userRole: string;
+  userID?: string | null;
   accessToken: string | null;
   onCreateSuccess: (newMcpServer: MCPServer) => void;
   isModalVisible: boolean;
@@ -48,6 +49,7 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
 };
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
+  userID,
   userRole,
   accessToken,
   onCreateSuccess,
@@ -413,12 +415,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // Cache the OAuth token in sessionStorage so the Tools tab can use it
         // immediately without re-authenticating.  No backend DB write.
         if (oauthTokenResponse?.access_token && response?.server_id) {
-          setToken(response.server_id, {
-            access_token: oauthTokenResponse.access_token,
-            expires_in: oauthTokenResponse.expires_in,
-            refresh_token: oauthTokenResponse.refresh_token,
-            token_type: oauthTokenResponse.token_type,
-          });
+          setToken(
+            response.server_id,
+            {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            },
+            userID,
+          );
         }
 
         NotificationsManager.success(

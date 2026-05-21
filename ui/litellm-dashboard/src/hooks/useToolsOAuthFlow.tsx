@@ -33,6 +33,7 @@ interface UseToolsOAuthFlowOptions {
   accessToken: string;
   serverId: string;
   serverAlias?: string | null;
+  userId?: string | null;
   scopes?: string[];
   clientId?: string | null;
   onSuccess: (accessToken: string) => void;
@@ -82,6 +83,7 @@ export const useToolsOAuthFlow = ({
   accessToken,
   serverId,
   serverAlias,
+  userId,
   scopes,
   clientId: preClientId,
   onSuccess,
@@ -89,6 +91,8 @@ export const useToolsOAuthFlow = ({
   const [status, setStatus] = useState<ToolsOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
+  const onSuccessRef = useRef(onSuccess);
+  onSuccessRef.current = onSuccess;
 
   const startOAuthFlow = useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -215,17 +219,21 @@ export const useToolsOAuthFlow = ({
       });
 
       // Store in sessionStorage only — no backend DB write
-      setToken(flowState.serverId, {
-        access_token: token.access_token,
-        expires_in: token.expires_in,
-        refresh_token: token.refresh_token,
-        token_type: token.token_type,
-      });
+      setToken(
+        flowState.serverId,
+        {
+          access_token: token.access_token,
+          expires_in: token.expires_in,
+          refresh_token: token.refresh_token,
+          token_type: token.token_type,
+        },
+        userId,
+      );
 
       setStatus("success");
       setError(null);
       NotificationsManager.success("Connected successfully");
-      onSuccess(token.access_token);
+      onSuccessRef.current(token.access_token);
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
@@ -235,7 +243,7 @@ export const useToolsOAuthFlow = ({
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => { processingRef.current = false; }, 1000);
     }
-  }, [accessToken, serverId, onSuccess]);
+  }, [accessToken, serverId, userId]);
 
   useEffect(() => {
     resumeOAuthFlow();
