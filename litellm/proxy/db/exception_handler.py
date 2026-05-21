@@ -43,24 +43,24 @@ class PrismaDBExceptionHandler:
         to True so genuine outages that don't match a specific subclass
         still trigger the fallback.
         """
-        import prisma
+        from litellm.proxy.db.sqlmodel import errors as prisma_errors
 
         # Explicit data-layer exclusion: DB IS reachable, fallback must
         # NOT fire.
         data_layer_errors = (
-            prisma.errors.DataError,
-            prisma.errors.UniqueViolationError,
-            prisma.errors.ForeignKeyViolationError,
-            prisma.errors.MissingRequiredValueError,
-            prisma.errors.RawQueryError,
-            prisma.errors.TableNotFoundError,
-            prisma.errors.RecordNotFoundError,
+            prisma_errors.DataError,
+            prisma_errors.UniqueViolationError,
+            prisma_errors.ForeignKeyViolationError,
+            prisma_errors.MissingRequiredValueError,
+            prisma_errors.RawQueryError,
+            prisma_errors.TableNotFoundError,
+            prisma_errors.RecordNotFoundError,
         )
         if isinstance(e, data_layer_errors):
             return False
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, prisma_errors.PrismaError):
             return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
@@ -75,19 +75,19 @@ class PrismaDBExceptionHandler:
         Use this for reconnect logic — data-layer errors like UniqueViolationError
         mean the DB IS reachable, so reconnecting would be pointless.
         """
-        import prisma
+        from litellm.proxy.db.sqlmodel import errors as prisma_errors
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
         if isinstance(
             e,
             (
-                prisma.errors.ClientNotConnectedError,
-                prisma.errors.HTTPClientClosedError,
+                prisma_errors.ClientNotConnectedError,
+                prisma_errors.HTTPClientClosedError,
             ),
         ):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, prisma_errors.PrismaError):
             error_message = str(e).lower()
             connection_keywords = (
                 "can't reach database server",

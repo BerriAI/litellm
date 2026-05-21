@@ -2738,115 +2738,85 @@ class PrismaClient:
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
-        verbose_proxy_logger.debug("Creating Prisma Client..")
-        try:
-            from prisma import Prisma  # type: ignore
-        except Exception as e:
-            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
-            verbose_proxy_logger.error(
-                "This usually means 'prisma generate' hasn't been run yet."
+        verbose_proxy_logger.debug(
+            "Creating SQLAlchemy-backed prisma-compatibility client.."
+        )
+        # NOTE: as part of the Prisma -> SQLAlchemy big-bang migration, this
+        # constructor no longer instantiates a Prisma client. Instead it
+        # builds a :class:`LiteLLMDB` (engine + sessionmaker) and exposes
+        # the historical ``prisma_client.db.<table>.<method>(...)`` surface
+        # via :class:`PrismaCompatClient` (see
+        # ``litellm/proxy/db/sqlmodel/compat.py``). All ~1,680 existing
+        # call sites continue to work without modification.
+        from litellm.proxy.db.sqlmodel.compat import (
+            PrismaCompatClient,
+            create_client,
+        )
+        from litellm.proxy.db.sqlmodel.engine import LiteLLMDB
+
+        # ``http_client`` is preserved in the signature for compatibility but
+        # is unused -- prisma-client-py forwarded it to its HTTP engine, and
+        # the SQLAlchemy backend has no equivalent. We log a one-line
+        # warning so deployment scripts that previously passed a custom
+        # client see why the kwarg is being ignored.
+        if http_client is not None:
+            verbose_proxy_logger.warning(
+                "PrismaClient(http_client=...) is ignored after the SQLAlchemy "
+                "migration; SQLAlchemy manages its own connection pool."
             )
-            verbose_proxy_logger.error(
-                "Please run 'prisma generate' to generate the Prisma client."
-            )
-            raise Exception(
-                "Unable to find Prisma binaries. Please run 'prisma generate' first."
-            )
+
         iam_flag = (
             self.iam_token_db_auth if self.iam_token_db_auth is not None else False
         )
-        # When read-replica routing is on, tag log lines with [writer]/[reader]
-        # so the two wrappers' interleaved IAM refresh logs can be told apart.
-        # Single-DB deployments get an empty prefix (logs unchanged).
         read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
-        writer_log_prefix = "[writer]" if read_replica_url else ""
-        if http_client is not None:
-            writer_wrapper = PrismaWrapper(
-                original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
-                log_prefix=writer_log_prefix,
-            )
-        else:
-            writer_wrapper = PrismaWrapper(
-                original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
-                log_prefix=writer_log_prefix,
-            )
-
-        # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
-        # reads (find_*, count, group_by, query_raw/_first) are routed to the
-        # reader endpoint and writes stay on the writer. Falls back to the
-        # writer-only wrapper when the env var is unset, preserving existing
-        # single-DB deployments.
-        self.db: Union[PrismaWrapper, RoutingPrismaWrapper]
-        if read_replica_url:
+        litellm_db = LiteLLMDB(
+            database_url=database_url,
+            read_replica_url=read_replica_url,
+        )
+        # IAM token rotation is wired in :class:`LiteLLMDB`; callers that
+        # need it should configure ``iam_token_db_auth`` on the client.
+        if iam_flag:
             try:
-                # If IAM auth is enabled, the reader refreshes its own token on
-                # the same cadence as the writer. We parse the static endpoint
-                # pieces (host/port/user/db) once from the reader URL — only
-                # the IAM token rotates after that.
-                reader_iam_endpoint = (
-                    parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
-                )
-                # Mint a fresh IAM token for the reader BEFORE constructing the
-                # Prisma client. Mirrors what `proxy_cli.py` already does for
-                # the writer (proxy_cli.py:812-832) — without this, the reader
-                # Prisma is built with whatever placeholder URL the user
-                # supplied (no real token), and the first query falls through
-                # to the synchronous fallback path in
-                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
-                # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
+                from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+
+                parsed = urllib.parse.urlparse(database_url)
+
+                def _provider() -> str:
+                    return generate_iam_auth_token(
+                        db_host=parsed.hostname or "",
+                        db_port=str(parsed.port or 5432),
+                        db_user=parsed.username or "",
                     )
 
-                    reader_token = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
-                    os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
-                reader_kwargs: Dict[str, Any] = {
-                    "datasource": {"url": read_replica_url}
-                }
-                if http_client is not None:
-                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
-                else:
-                    reader_prisma = Prisma(**reader_kwargs)
-                reader_wrapper = PrismaWrapper(
-                    original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
-                    db_url_env_var="DATABASE_URL_READ_REPLICA",
-                    iam_endpoint=reader_iam_endpoint,
-                    recreate_uses_datasource=True,
-                    log_prefix="[reader]",
+                # 12-minute refresh -- matches the historical default
+                # cadence (RDS tokens expire after 15 minutes).
+                litellm_db.configure_iam_token_refresh(
+                    token_provider=_provider, interval_seconds=12 * 60
                 )
-                self.db = RoutingPrismaWrapper(
-                    writer=writer_wrapper, reader=reader_wrapper
-                )
-                verbose_proxy_logger.info(
-                    "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
-                )
-            except Exception as e:
-                # Reader is opt-in; never let its construction fail proxy
-                # startup. Mirrors the runtime contract from
-                # `RoutingPrismaWrapper.connect`: reader-side failures are
-                # logged and we keep serving traffic via the writer alone.
-                # This recovers from transient AWS STS hiccups during the
-                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
-                # and Prisma construction errors. Operator restart is required
-                # to retry read-routing once the underlying issue is resolved.
+            except Exception as exc:  # noqa: BLE001
                 verbose_proxy_logger.warning(
-                    "Failed to initialize read replica Prisma client: %s. "
-                    "Falling back to writer-only mode (no read routing) until proxy restart.",
-                    e,
+                    "Failed to wire IAM token refresh: %s. Continuing without "
+                    "automatic rotation -- the proxy will only succeed for the "
+                    "lifetime of the initial IAM token.",
+                    exc,
                 )
-                self.db = writer_wrapper
-        else:
-            self.db = writer_wrapper  # Client to connect to Prisma db
+
+        compat_client: PrismaCompatClient = create_client(litellm_db)
+        # ``self.db`` historically pointed at PrismaWrapper / RoutingPrismaWrapper
+        # which wrapped a real ``prisma.Prisma`` instance. PrismaCompatClient
+        # exposes the same surface (``litellm_<table>.<method>``,
+        # ``query_raw``, ``execute_raw``, ``batch_``, ``tx``,
+        # ``connect/disconnect/is_connected``, IAM hooks) so call sites
+        # continue to work unchanged. Read-replica routing is honoured at
+        # the engine level (see :class:`LiteLLMDB`) rather than via a
+        # wrapper that dispatches per-call -- the two-engine + per-session
+        # routing approach is more idiomatic for SQLAlchemy.
+        self.db = compat_client  # type: ignore[assignment]
+        if read_replica_url:
+            verbose_proxy_logger.info(
+                "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA "
+                "(handled at the SQLAlchemy engine layer)."
+            )
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
         self._db_last_reconnect_attempt_ts: float = 0.0
@@ -4182,13 +4152,10 @@ class PrismaClient:
             raise e
 
     def _get_engine_pid(self) -> int:
-        try:
-            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
-            process = getattr(engine, "process", None) if engine is not None else None
-            if process is not None:
-                return process.pid
-        except (AttributeError, TypeError):
-            pass
+        # SQLAlchemy uses an in-process connection pool; there is no engine
+        # subprocess to track. Returning 0 short-circuits ``_is_engine_alive``
+        # to ``True`` and disables the zombie-reaping watchdog that
+        # prisma-client-py needed.
         return 0
 
     def _is_engine_alive(self) -> bool:

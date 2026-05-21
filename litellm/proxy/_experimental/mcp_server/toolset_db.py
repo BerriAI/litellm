@@ -92,7 +92,7 @@ async def update_mcp_toolset(
             data=data_dict,
         )
     except Exception as e:
-        from prisma.errors import RecordNotFoundError
+        from litellm.proxy.db.sqlmodel.errors import RecordNotFoundError
 
         if isinstance(e, RecordNotFoundError):
             return None
@@ -109,7 +109,7 @@ async def delete_mcp_toolset(
             where={"toolset_id": toolset_id}
         )
     except Exception as e:
-        from prisma.errors import RecordNotFoundError
+        from litellm.proxy.db.sqlmodel.errors import RecordNotFoundError
 
         if isinstance(e, RecordNotFoundError):
             return None

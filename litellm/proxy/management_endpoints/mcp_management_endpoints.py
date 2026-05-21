@@ -37,7 +37,10 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 try:
-    from prisma.errors import RecordNotFoundError, UniqueViolationError
+    from litellm.proxy.db.sqlmodel.errors import (
+        RecordNotFoundError,
+        UniqueViolationError,
+    )
 except ImportError:
     RecordNotFoundError = Exception  # type: ignore
     UniqueViolationError = Exception  # type: ignore

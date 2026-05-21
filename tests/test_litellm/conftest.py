@@ -16,7 +16,19 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../"))  # tests/_prisma_compat
 import asyncio
+
+# Install the prisma stand-in **before** importing litellm. After the
+# SQLAlchemy big-bang migration, prisma is no longer a runtime dep but
+# a handful of tests still ``from prisma.errors import X``; the shim
+# registers stub modules in ``sys.modules`` so those imports resolve.
+try:
+    from _prisma_compat import install as _install_prisma_compat
+
+    _install_prisma_compat()
+except ImportError:
+    pass
 
 import litellm
 from litellm._logging import ALL_LOGGERS

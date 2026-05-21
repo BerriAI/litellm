@@ -19,7 +19,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
-    from prisma.errors import UniqueViolationError
+    from litellm.proxy.db.sqlmodel.errors import UniqueViolationError
 except ImportError:
     UniqueViolationError = None  # type: ignore
 from pydantic import BaseModel

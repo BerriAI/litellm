@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 try:
-    from prisma.errors import RecordNotFoundError
+    from litellm.proxy.db.sqlmodel.errors import RecordNotFoundError
 except ImportError:
     RecordNotFoundError = Exception  # type: ignore
 
