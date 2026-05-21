@@ -12,7 +12,6 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
 from typing import Any, cast
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
-from mcp.types import CallToolResult, TextContent
 
 
 class _DummyMCPResult:
@@ -278,56 +277,6 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
     assert call_tool_mock.await_count == 1
     assert call_tool_mock.await_args is not None
     assert call_tool_mock.await_args.kwargs["name"] == tool_name
-
-
-@pytest.mark.asyncio
-async def test_execute_tool_calls_uses_post_mcp_hook_response(monkeypatch):
-    _setup_proxy_logging(monkeypatch)
-    original_result = CallToolResult(
-        content=[TextContent(type="text", text="unsafe output")], isError=False
-    )
-    replacement_result = CallToolResult(
-        content=[TextContent(type="text", text="blocked output")], isError=True
-    )
-    fake_manager = types.SimpleNamespace(
-        call_tool=AsyncMock(return_value=original_result),
-        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        fake_manager,
-    )
-
-    logging_obj = MagicMock()
-    logging_obj.model_call_details = {}
-    logging_obj.pre_call = MagicMock()
-    logging_obj.post_call = MagicMock()
-    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(
-        return_value=replacement_result
-    )
-    logging_obj.async_success_handler = AsyncMock()
-
-    handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
-    )
-    monkeypatch.setattr(
-        handler_module,
-        "function_setup",
-        lambda *args, **kwargs: (logging_obj, kwargs),
-    )
-
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-        tool_server_map={"echo": "echo"},
-        tool_calls=[{"id": "call-1", "function": {"name": "echo", "arguments": "{}"}}],
-        user_api_key_auth=None,
-    )
-
-    assert results[0]["result"] == "blocked output"
-    logging_obj.async_success_handler.assert_awaited_once()
-    assert (
-        logging_obj.async_success_handler.await_args.kwargs["result"]
-        is replacement_result
-    )
 
 
 @pytest.mark.asyncio

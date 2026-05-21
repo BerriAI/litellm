@@ -2983,13 +2983,14 @@ class TestCiscoAIDefenseSurfaceBypass:
 
 
 class TestCiscoAIDefenseMCPBlockingContract:
-    """MCP response blocks use the dispatcher replacement contract."""
+    """MCP response blocks survive non-enforcing dispatcher paths."""
 
     @pytest.mark.asyncio
     async def test_block_response_survives_dispatcher_contract(self):
-        """Block must return a synthetic response the dispatcher can parse."""
+        """Block must mutate the original tool result and return a synthetic response."""
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.types.mcp import MCPPostCallResponseObject
+        from mcp.types import CallToolResult, TextContent
 
         g = CiscoAIDefenseGuardrail(
             guardrail_name="cisco-mcp",
@@ -2998,14 +2999,25 @@ class TestCiscoAIDefenseMCPBlockingContract:
             event_hook=["pre_mcp_call", "during_mcp_call"],
             default_on=True,
         )
-        response_obj = _mcp_response([{"type": "text", "text": "exfiltrated"}])
+        raw_response = CallToolResult(
+            content=[TextContent(type="text", text="exfiltrated")],
+            isError=False,
+        )
+        response_obj = MCPPostCallResponseObject(
+            mcp_tool_call_response=raw_response,
+            hidden_params={},
+        )
 
         post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
         captured: Dict[str, Any] = {}
         with patch.object(g.async_handler, "post", new=post_mock):
             try:
                 captured["result"] = await g.async_post_mcp_tool_call_hook(
-                    kwargs={"name": "leak", "arguments": {}},
+                    kwargs={
+                        "name": "leak",
+                        "arguments": {},
+                        "original_response": raw_response,
+                    },
                     response_obj=response_obj,
                     start_time=datetime.now(),
                     end_time=datetime.now(),
@@ -3020,9 +3032,11 @@ class TestCiscoAIDefenseMCPBlockingContract:
         )
         result = captured["result"]
         assert isinstance(result, MCPPostCallResponseObject), (
-            "Hook must return a MCPPostCallResponseObject so the "
-            "dispatcher swaps the tool output with the synthetic block."
+            "Hook must keep returning a MCPPostCallResponseObject for "
+            "dispatcher paths that do honor returned replacements."
         )
+        assert raw_response.isError is True
+        assert "Blocked by Cisco AI Defense" in raw_response.content[0].text
         logging_stub = Logging.__new__(Logging)
         logging_stub.model_call_details = {}
         parsed = logging_stub._parse_post_mcp_call_hook_response(response=result)

@@ -147,6 +147,10 @@ class _CiscoAIDefenseMcpMixin:
             blocking_response = self._build_blocking_mcp_response(
                 detail=exc.detail, original_response_obj=response_obj
             )
+            self._replace_mcp_tool_response(response_obj, blocking_response)
+            original_response = kwargs.get("original_response")
+            if original_response is not None:
+                self._replace_mcp_tool_response(original_response, blocking_response)
             add_guardrail_to_applied_guardrails_header(
                 request_data=request_data, guardrail_name=self.guardrail_name
             )
@@ -206,6 +210,48 @@ class _CiscoAIDefenseMcpMixin:
             ],
             hidden_params=hidden_params,
         )
+
+    @staticmethod
+    def _replace_mcp_tool_response(response_obj: Any, replacement_obj: Any) -> bool:
+        replacement = getattr(replacement_obj, "mcp_tool_call_response", None)
+        if replacement is None:
+            return False
+
+        inner = getattr(response_obj, "mcp_tool_call_response", None)
+        if inner is not None:
+            if _CiscoAIDefenseMcpMixin._replace_mcp_tool_response(
+                inner, replacement_obj
+            ):
+                return True
+            try:
+                setattr(response_obj, "mcp_tool_call_response", replacement)
+                return True
+            except (AttributeError, TypeError, ValueError):
+                return False
+
+        content = getattr(response_obj, "content", None)
+        if isinstance(content, list):
+            content[:] = replacement
+            if hasattr(response_obj, "isError"):
+                try:
+                    setattr(response_obj, "isError", True)
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            return True
+
+        if isinstance(response_obj, list):
+            response_obj[:] = replacement
+            return True
+
+        if isinstance(response_obj, dict):
+            result = response_obj.get("result")
+            if isinstance(result, dict):
+                result["content"] = replacement
+                return True
+            response_obj["result"] = {"content": replacement}
+            return True
+
+        return False
 
     @staticmethod
     def _extract_mcp_tool_call_response(response_obj: Any) -> Any:

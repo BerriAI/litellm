@@ -826,16 +826,12 @@ class LiteLLM_Proxy_MCP_Handler:
                     try:
                         litellm_logging_obj.post_call(original_response=result)
                         end_time = datetime.now()
-                        hook_result = (
-                            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                                kwargs=litellm_logging_obj.model_call_details,
-                                response_obj=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
+                        await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                            kwargs=litellm_logging_obj.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
                         )
-                        if hook_result is not None:
-                            result = hook_result
                         await litellm_logging_obj.async_success_handler(
                             result=result,
                             start_time=start_time,

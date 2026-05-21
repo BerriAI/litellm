@@ -2795,14 +2795,12 @@ if MCP_AVAILABLE:
         if litellm_logging_obj:
             litellm_logging_obj.post_call(original_response=response)
             end_time = datetime.now()
-            hook_response = await litellm_logging_obj.async_post_mcp_tool_call_hook(
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
                 kwargs=litellm_logging_obj.model_call_details,
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
             )
-            if hook_response is not None:
-                response = hook_response
             litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
             await litellm_logging_obj.async_success_handler(
                 result=response, start_time=start_time, end_time=end_time
