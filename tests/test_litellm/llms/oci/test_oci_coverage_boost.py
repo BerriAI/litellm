@@ -397,7 +397,7 @@ def test_handle_generic_stream_chunk_no_message():
     """Chunks without a message key should still parse without error."""
     chunk = {"finishReason": "COMPLETE", "index": 1}
     result = handle_generic_stream_chunk(chunk)
-    assert result.choices[0].delta.content == ""
+    assert result.choices[0].delta.content is None
     assert result.choices[0].finish_reason == "stop"
 
 
