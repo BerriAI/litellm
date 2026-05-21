@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 _ENDPOINT_ANTHROPIC_MESSAGES = "/v1/messages"
 _WEBHOOK_PATH_TOOL_BLOCKING = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
-_DEFAULT_MAX_QUEUE_SIZE = 10_000
+_MAX_QUEUE_SIZE = 10_000
 _DROP_WARNING_INTERVAL_SECONDS = 60.0
 
 
@@ -101,23 +101,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # authenticated traffic accumulate prompt/response payloads until the
         # proxy runs out of memory. Once the cap is reached, oldest events are
         # dropped to make room for fresh ones (drop-oldest backpressure).
-        self.max_queue_size = _DEFAULT_MAX_QUEUE_SIZE
-        _max_queue_size = os.getenv("RUBRIK_MAX_QUEUE_SIZE")
-        if _max_queue_size:
-            try:
-                parsed_max = int(_max_queue_size)
-                if parsed_max > 0:
-                    self.max_queue_size = parsed_max
-                else:
-                    verbose_logger.warning(
-                        f"RUBRIK_MAX_QUEUE_SIZE={_max_queue_size!r} must be > 0; "
-                        f"using default {_DEFAULT_MAX_QUEUE_SIZE}"
-                    )
-            except ValueError:
-                verbose_logger.warning(
-                    f"Invalid RUBRIK_MAX_QUEUE_SIZE: {_max_queue_size!r}, "
-                    f"using default {_DEFAULT_MAX_QUEUE_SIZE}"
-                )
+        self.max_queue_size = _MAX_QUEUE_SIZE
         self._dropped_since_warning = 0
         self._last_drop_warning_time = 0.0
 
