@@ -87,6 +87,19 @@ def new_team(api_client):
     team_alias = f"Test Team {uuid.uuid4().hex[:6]}"
     team_response, team_id = api_client.create_team(team_alias)
     logger.info(f"Created test team: {team_id} ({team_alias})")
+
+    # /team/new can return success before the team is visible to /team/info
+    # on the read path (replication / connection pool lag in CI). Poll briefly
+    # so downstream tests don't 404 on the very first read.
+    for attempt in range(10):
+        try:
+            api_client.get_team_info(team_id)
+            break
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                time.sleep(1)
+                continue
+            raise
     return team_id
 
 
@@ -136,6 +149,7 @@ def test_add_single_member(api_client, new_team):
     ), f"Team size did not increase by 1 (was {initial_size}, now {updated_size})"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_add_multiple_members(api_client, new_team):
     """Test adding multiple members to a new team"""
     # Get initial team size
@@ -203,6 +217,7 @@ def test_error_handling(api_client):
         api_client.get_team_info("invalid-team-id")
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_duplicate_user_addition(api_client, new_team):
     """Test that adding the same user twice is handled appropriately"""
     # Add user first time

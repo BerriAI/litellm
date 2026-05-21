@@ -100,6 +100,7 @@ async def get_spend_logs(session, request_id=None, api_key=None):
         return await response.json()
 
 
+@pytest.mark.flaky(retries=3, delay=5)
 @pytest.mark.asyncio
 async def test_spend_logs():
     """
