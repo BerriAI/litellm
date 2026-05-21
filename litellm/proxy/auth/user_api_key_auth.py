@@ -587,6 +587,40 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     return api_key
 
 
+def _resolve_inherited_team_id(
+    jwt_handler: JWTHandler,
+    jwt_claims: dict,
+) -> Optional[str]:
+    """
+    Resolve the team_id the JWT would have been bound to under standard team-
+    based auth. AUTO_REGISTER stamps this on the new key so it inherits the
+    team's budget/model/tpm/rpm/route limits — auto-registered clients then
+    have the same constraints they'd have via the JWT team-auth path.
+
+    If ``team_id_jwt_field`` is configured but the JWT lacks the claim and no
+    ``team_id_default`` is set, raise 403: the operator has declared every JWT
+    must carry a team, and registering a teamless (unbounded) key here would
+    silently grant broader access than the team-auth path allows.
+    """
+    if (
+        jwt_handler.litellm_jwtauth.team_id_jwt_field is None
+        and jwt_handler.litellm_jwtauth.team_id_default is None
+    ):
+        return None
+
+    team_id = jwt_handler.get_team_id(token=jwt_claims, default_value=None)
+    if team_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "JWT Key Mapping: AUTO_REGISTER requires a team_id on the JWT "
+                "(via team_id_jwt_field) or a configured team_id_default — "
+                "refusing to create an unbounded key. Access denied."
+            ),
+        )
+    return team_id
+
+
 async def _auto_register_jwt_mapping(
     virtual_key_claim_field: str,
     claim_value: str,
@@ -596,15 +630,19 @@ async def _auto_register_jwt_mapping(
     parent_otel_span: Optional[Span],
     proxy_logging_obj: ProxyLogging,
     cache_key: str,
+    team_id: Optional[str] = None,
 ) -> Optional[UserAPIKeyAuth]:
     """
-    Auto-register: create a new virtual key + mapping for an unrecognised JWT claim value.
-    The new key carries no model/budget restrictions; admins can tighten it later.
+    Auto-register: create a new virtual key + mapping for an unrecognised JWT
+    claim value. The key is stamped with the JWT's resolved ``team_id`` (when
+    available) so it inherits the team's budget/model/tpm/rpm/route limits via
+    the standard auth path — auto-registered clients are then no more permissive
+    than the team-based JWT auth path they would otherwise have taken.
 
-    Race safety: if two concurrent requests both reach here simultaneously (both saw
-    no mapping in the DB), one will win the unique-constraint race on
-    litellm_jwtkeymapping. The loser catches the conflict, fetches the winner's
-    mapping, and proceeds — no orphaned keys and no error surfaced to the caller.
+    Race safety: if two concurrent requests both reach here simultaneously (both
+    saw no mapping in the DB), one will win the unique-constraint race on
+    litellm_jwtkeymapping. The loser catches the conflict, deletes its orphaned
+    key, fetches the winner's mapping, and proceeds — no error surfaced.
     """
     # Inline import required: key_management_endpoints imports user_api_key_auth
     # (line 51) so a module-level import here would create a circular dependency.
@@ -614,6 +652,7 @@ async def _auto_register_jwt_mapping(
 
     key_data = await generate_key_helper_fn(
         request_type="key",
+        team_id=team_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -757,6 +796,7 @@ async def _resolve_jwt_to_virtual_key(
                         "Configure a database or change unregistered_jwt_client_behavior."
                     ),
                 )
+            inherited_team_id = _resolve_inherited_team_id(jwt_handler, jwt_claims)
             await user_api_key_cache.async_delete_cache(cache_key)
             return await _auto_register_jwt_mapping(
                 virtual_key_claim_field=virtual_key_claim_field,
@@ -767,6 +807,7 @@ async def _resolve_jwt_to_virtual_key(
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 cache_key=cache_key,
+                team_id=inherited_team_id,
             )
         return None
     elif cached_mapping is not None:
@@ -827,6 +868,7 @@ async def _resolve_jwt_to_virtual_key(
                     "Configure a database or change unregistered_jwt_client_behavior."
                 ),
             )
+        inherited_team_id = _resolve_inherited_team_id(jwt_handler, jwt_claims)
         return await _auto_register_jwt_mapping(
             virtual_key_claim_field=virtual_key_claim_field,
             claim_value=str(claim_value),
@@ -836,6 +878,7 @@ async def _resolve_jwt_to_virtual_key(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             cache_key=cache_key,
+            team_id=inherited_team_id,
         )
 
     # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the

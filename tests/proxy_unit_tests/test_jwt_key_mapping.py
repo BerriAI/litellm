@@ -1070,6 +1070,207 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
 
 
 # ──────────────────────────────────────────────
+# Tests: AUTO_REGISTER inherits team_id from JWT
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_auto_register_stamps_team_id_from_jwt_claim():
+    """
+    When team_id_jwt_field is configured and the JWT carries the claim,
+    AUTO_REGISTER must stamp the resolved team_id on the new key so it inherits
+    the team's limits via standard auth (budget, models, tpm/rpm, allowed_routes).
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        team_id_jwt_field="team_id",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user", "team_id": "team-engineering"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = DualCache()
+    mock_key_obj = UserAPIKeyAuth(token="hashed", team_id="team-engineering")
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_gen_key,
+    ):
+        mock_gen_key.return_value = {"token": "sk-newkey", "key": "sk-newkey"}
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert result == mock_key_obj
+    # generate_key_helper_fn must have been called with team_id from the JWT,
+    # so the key inherits team-level limits via the standard auth path.
+    mock_gen_key.assert_called_once()
+    assert mock_gen_key.call_args.kwargs["team_id"] == "team-engineering"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_rejects_when_team_id_required_but_missing_from_jwt():
+    """
+    Security: when team_id_jwt_field is configured (operator wants every JWT
+    bound to a team), AUTO_REGISTER must refuse a JWT that lacks the team
+    claim. Otherwise the auto-created key would be teamless and inherit no
+    budget/model/rate limits — broader access than the team-auth path allows.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        team_id_jwt_field="team_id",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user"}  # no "team_id"
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_gen_key,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "team_id" in exc_info.value.detail
+    # No key was created — we refused before generate_key_helper_fn ran
+    mock_gen_key.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_uses_team_id_default_when_jwt_lacks_team_claim():
+    """
+    When team_id_jwt_field is configured but the JWT lacks the claim and
+    team_id_default is set, the default team_id is stamped on the new key —
+    the explicit operator-chosen fallback team bounds the auto-registered key.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        team_id_jwt_field="team_id",
+        team_id_default="default-team",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user"}  # no "team_id"
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    mock_key_obj = UserAPIKeyAuth(token="hashed", team_id="default-team")
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_gen_key,
+    ):
+        mock_gen_key.return_value = {"token": "sk-newkey", "key": "sk-newkey"}
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert result == mock_key_obj
+    assert mock_gen_key.call_args.kwargs["team_id"] == "default-team"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_no_team_id_when_team_field_not_configured():
+    """
+    When the operator has NOT configured team_id_jwt_field or team_id_default,
+    they have explicitly opted out of team-based bounding. AUTO_REGISTER then
+    creates a teamless key (preserving prior behavior) — there is no team to
+    inherit from. The key being unbounded matches what the team-auth path
+    would have produced in the same config.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user", "team_id": "ignored-because-not-configured"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    mock_key_obj = UserAPIKeyAuth(token="hashed", team_id=None)
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_gen_key,
+    ):
+        mock_gen_key.return_value = {"token": "sk-newkey", "key": "sk-newkey"}
+        mock_get_key.return_value = mock_key_obj
+
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    # team_id is None because the operator opted out of team-based config
+    assert mock_gen_key.call_args.kwargs["team_id"] is None
+
+
+# ──────────────────────────────────────────────
 # Tests: backward-compat alias jwt_client_id_field
 # ──────────────────────────────────────────────
 
