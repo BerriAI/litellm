@@ -3,9 +3,11 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
+import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
+import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
+import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
 import { Input, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({
@@ -21,29 +23,57 @@ const MCPToolsViewer = ({
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
-  
+
   // State for passthrough headers
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
+
+  // OAuth session token (sessionStorage-backed, cleared on tab/browser close)
+  const isOAuth = auth_type === "oauth2";
+  const [oauthToken, setOauthToken] = useState<string | null>(() =>
+    isOAuth && isTokenValid(serverId)
+      ? (getToken(serverId)?.access_token ?? null)
+      : null
+  );
+
+  const { startOAuthFlow, status: oauthStatus, error: oauthError } = useToolsOAuthFlow({
+    accessToken: accessToken ?? "",
+    serverId,
+    serverAlias,
+    onSuccess: (token) => setOauthToken(token),
+  });
 
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
 
   // Build custom headers for MCP server requests
   const buildCustomHeaders = () => {
-    if (!serverAlias || !hasExtraHeaders) return undefined;
-    
     const customHeaders: Record<string, string> = {};
-    
-    // Add passthrough headers with server-specific prefix
-    Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
-      if (headerValue && headerValue.trim()) {
-        // Format: x-mcp-{alias}-{header_name}
-        const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
-        customHeaders[mcpHeaderName] = headerValue;
+
+    // Include the session OAuth token using MCP-specific headers so it doesn't
+    // conflict with the Authorization header used by the LiteLLM proxy itself.
+    // The backend's _get_mcp_server_auth_headers_from_headers() picks up the
+    // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
+    // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
+    if (oauthToken) {
+      if (serverAlias) {
+        customHeaders[`x-mcp-${serverAlias}-authorization`] = `Bearer ${oauthToken}`;
+      } else {
+        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
       }
-    });
-    
+    }
+
+    // Add passthrough headers with server-specific prefix
+    if (serverAlias && hasExtraHeaders) {
+      Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
+        if (headerValue && headerValue.trim()) {
+          // Format: x-mcp-{alias}-{header_name}
+          const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
+          customHeaders[mcpHeaderName] = headerValue;
+        }
+      });
+    }
+
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
@@ -54,13 +84,19 @@ const MCPToolsViewer = ({
     error: mcpToolsError,
     refetch: refetchTools,
   } = useQuery({
-    queryKey: ["mcpTools", serverId, passthroughHeaders],
+    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
       return listMCPTools(accessToken, serverId, buildCustomHeaders());
     },
-    enabled: !!accessToken,
+    // For OAuth servers, block the query until a session token is available
+    enabled: !!accessToken && (!isOAuth || oauthToken !== null),
     staleTime: 30000, // Consider data fresh for 30 seconds
+    retry: (failureCount, error: any) => {
+      // Don't retry on 401 — token is invalid, user must re-authenticate
+      if (error?.status === 401 || error?.response?.status === 401) return false;
+      return failureCount < 2;
+    },
   });
 
   // Mutation for calling a tool
@@ -85,9 +121,14 @@ const MCPToolsViewer = ({
       setToolResult(data.content);
       setToolError(null);
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { status?: number; response?: { status?: number } }) => {
       setToolError(error);
       setToolResult(null);
+      // On 401, clear the cached token so the auth gate is shown again
+      if (error?.status === 401 || (error as any)?.response?.status === 401) {
+        removeToken(serverId);
+        setOauthToken(null);
+      }
     },
   });
 
@@ -197,7 +238,31 @@ const MCPToolsViewer = ({
                   )}
                 </Text>
 
-                {/* Search Bar */}
+                {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
+                {isOAuth && !oauthToken && (
+                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
+                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Authenticate to view available tools
+                    </p>
+                    <AntdButton
+                      size="small"
+                      type="primary"
+                      loading={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
+                      onClick={startOAuthFlow}
+                      disabled={!accessToken}
+                    >
+                      Authorize
+                    </AntdButton>
+                    {oauthError && (
+                      <p className="text-xs text-red-500 mt-2">{oauthError}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Search Bar — only shown when tools are loaded */}
+                {!isOAuth || oauthToken ? <>
                 {toolsData.length > 0 && (
                   <div className="mb-3">
                     <Input
@@ -315,6 +380,7 @@ const MCPToolsViewer = ({
                     )}
                   </>
                 )}
+                </> : null}
               </div>
             </div>
           </div>
