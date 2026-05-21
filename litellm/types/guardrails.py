@@ -788,12 +788,6 @@ class Mode(BaseModel):
 
 
 class LitellmParams(
-    # Cisco AI Defense must be listed BEFORE GraySwan so that
-    # ``optional_params`` is coerced into Cisco's optional-params model when
-    # a Cisco guardrail is configured. Without this, GraySwan (whose default
-    # ``on_flagged_action="passthrough"`` is a sentinel value Cisco doesn't
-    # accept) wins on MRO order and silently drops Cisco-specific fields
-    # like ``inspection_type``.
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,

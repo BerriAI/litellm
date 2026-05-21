@@ -1,32 +1,8 @@
-# +-------------------------------------------------------------+
-#
-#               Cisco AI Defense MCP-specific guardrail logic
-#       https://developer.cisco.com/docs/ai-defense-inspection/
-#
-# +-------------------------------------------------------------+
 """MCP-specific inspection logic for the Cisco AI Defense guardrail.
 
-This module is a focused split-out of the MCP code paths from
-``cisco_ai_defense.py`` — the main module grew large enough during the
-PR review rounds (chat surface, Responses API support, tool-call
-extraction, streaming buffer, security hardening) that it warrants
-splitting the orthogonal MCP code into its own file.
-
-The class here is a private mixin
-(``_CiscoAIDefenseMcpMixin``) consumed by ``CiscoAIDefenseGuardrail``
-in ``cisco_ai_defense.py``. Consumers continue to import the public
-guardrail class from
-``litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense`` exactly
-as before — this split is purely an internal organization change.
-
-The mixin's instance methods rely on attributes / helpers supplied by
-the main class (``self.api_base``, ``self.inspect_path``,
-``self.inspection_type``, ``self.guardrail_name``,
-``self._post_inspection``, ``self._handle_api_error``,
-``self._finalize_inspection``, ``self.should_run_guardrail``). Python's
-late binding resolves these at call time, so the mixin does not need
-to import the main module — keeping the dependency direction one-way
-and avoiding circular imports.
+The public guardrail class imports this private mixin from
+``cisco_ai_defense.py``. Keeping MCP logic here avoids circular imports
+while preserving the existing public import path.
 """
 
 from datetime import datetime
@@ -45,11 +21,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 def _serialize_mcp_content_item(item: Any) -> Dict[str, Any]:
     """Serialize an MCP content item to a JSON-friendly dict.
 
-    The MCP SDK exposes content items as Pydantic models (TextContent,
-    ImageContent, EmbeddedResource); the proxy also occasionally hands
-    us raw dicts and naïve objects with a ``.text`` attribute. This
-    helper produces the wire-shape Cisco's ``/inspect/mcp`` endpoint
-    expects, regardless of input shape.
+    Handles raw dicts, MCP SDK Pydantic models, and simple ``.text`` objects.
     """
     if isinstance(item, dict):
         return dict(item)
@@ -68,46 +40,20 @@ def _serialize_mcp_content_item(item: Any) -> Dict[str, Any]:
 class _CiscoAIDefenseMcpMixin:
     """MCP-specific instance methods for ``CiscoAIDefenseGuardrail``.
 
-    Mixed into the main class via ``class CiscoAIDefenseGuardrail(
-    _CiscoAIDefenseMcpMixin, CustomGuardrail)``. Holds the MCP post-tool
-    hook, MCP request/response payload builders, JSON-RPC normalization,
-    sanitized-argument extraction, and the in-place redact helper.
-
-    All chat-surface code (pre/moderation/post-call hooks, streaming
-    iterator, Responses API flattening, tool-call argument extraction)
-    stays in the main module.
+    Holds the MCP hooks, JSON-RPC payload builders, and redaction helpers.
     """
 
-    # ------------------------------------------------------------------
-    # Attributes / methods supplied by the concrete subclass.
-    #
-    # The mixin's methods call ``self.api_base``, ``self._post_inspection``,
-    # ``self._finalize_inspection`` etc. — all defined on
-    # ``CiscoAIDefenseGuardrail`` (the chat module) or inherited from
-    # ``CustomGuardrail``. At runtime Python's late binding resolves
-    # these without any explicit declaration, but mypy needs the type
-    # stubs below to type-check the mixin file in isolation. The stubs
-    # are inside ``TYPE_CHECKING`` so they have no runtime cost and do
-    # not shadow the real attributes defined by the concrete class.
     if TYPE_CHECKING:
-        # Attributes / constants supplied by the concrete subclass.
         api_base: str
         inspect_path: str
         inspection_type: str
         _PROVIDER_NAME: str
-        # ``guardrail_name`` is inherited from ``CustomGuardrail`` on the
-        # concrete subclass and declared there as ``Optional[str]``. Match
-        # that shape so the mypy "incompatible base-class definition"
-        # check passes on the concrete class's MRO.
         guardrail_name: Optional[str]
 
-        # Methods supplied by ``CustomGuardrail`` (base class of the
-        # concrete subclass).
         def should_run_guardrail(
             self, data: dict, event_type: GuardrailEventHooks
         ) -> bool: ...
 
-        # Shared helpers defined on ``CiscoAIDefenseGuardrail`` itself.
         async def _post_inspection(
             self, url: str, payload: Dict[str, Any], surface: str
         ) -> Dict[str, Any]: ...
@@ -143,45 +89,13 @@ class _CiscoAIDefenseMcpMixin:
         start_time: Any,
         end_time: Any,
     ) -> Optional[Any]:
-        """Scan the MCP tool-call response after it returns from upstream.
-
-        LiteLLM dispatches MCP responses through this CustomLogger hook
-        (not through ``async_post_call_success_hook``), so this is where
-        mcp-mode guardrails must intercept tool output. ``response_obj`` is
-        a ``MCPPostCallResponseObject`` whose ``mcp_tool_call_response``
-        attribute carries the actual content blocks from the tool.
-
-        Important production-path subtleties:
-
-        1. The litellm post-MCP dispatcher
-           (``litellm_logging.async_post_mcp_tool_call_hook``) wraps every
-           callback in ``try: ... except Exception``, logs as non-blocking,
-           and continues. So a guardrail can NOT enforce ``block`` by
-           raising — that's silently swallowed and the unsafe tool output
-           reaches the caller anyway. The only blocking lever the
-           dispatcher exposes is its "if hook returns non-None, swap
-           ``mcp_tool_call_response`` with the returned object" path
-           (litellm_logging.py: ``_parse_post_mcp_call_hook_response``).
-           When the verdict is ``block`` we therefore build a synthetic
-           ``MCPPostCallResponseObject`` whose payload is a single text
-           block describing the violation, and return it so the dispatcher
-           replaces the real tool output.
-
-        2. The hook is registered on ``litellm.success_callback`` so that
-           the dispatcher reaches us, but that registration is independent
-           of the user's ``mode`` setting. We must gate on
-           ``should_run_guardrail`` with ``during_mcp_call`` so a user who
-           configured only ``mode: pre_mcp_call`` (request-only scanning)
-           doesn't get every tool response scanned as a side effect.
-        """
+        """Scan MCP tool output and return a replacement object on block."""
         del start_time, end_time
 
         if self.inspection_type != "mcp":
             return None
 
         request_data: Dict[str, Any] = {}
-        # Carry forward identifiers from kwargs so logging / correlation
-        # work even though MCP tool calls bypass standard request_data.
         for key in (
             "litellm_call_id",
             "id",
@@ -192,8 +106,6 @@ class _CiscoAIDefenseMcpMixin:
             "arguments",
             "mcp_server_name",
             "server_name",
-            # Carry metadata so should_run_guardrail can read per-request
-            # guardrail opt-in / opt-out signals.
             "metadata",
             "litellm_metadata",
             "guardrails",
@@ -201,11 +113,6 @@ class _CiscoAIDefenseMcpMixin:
             if key in kwargs and kwargs[key] is not None:
                 request_data[key] = kwargs[key]
 
-        # Per product decision: either MCP mode (``pre_mcp_call`` OR
-        # ``during_mcp_call``) enables response scanning. Users picking
-        # ``pre_mcp_call`` expect "guard the MCP call" which means both
-        # request AND response. Check both event types — if neither is
-        # enabled the scan is not requested.
         if not (
             self.should_run_guardrail(
                 data=request_data,
@@ -237,11 +144,6 @@ class _CiscoAIDefenseMcpMixin:
                 response=mcp_tool_response,
             )
         except HTTPException as exc:
-            # The dispatcher swallows exceptions. Translate the block into
-            # a synthetic MCPPostCallResponseObject — when this hook
-            # returns non-None, the dispatcher swaps
-            # ``mcp_tool_call_response`` with our payload, so the caller
-            # gets the violation message instead of the real tool output.
             blocking_response = self._build_blocking_mcp_response(
                 detail=exc.detail, original_response_obj=response_obj
             )
@@ -265,14 +167,7 @@ class _CiscoAIDefenseMcpMixin:
         detail: Any,
         original_response_obj: Any,
     ) -> Any:
-        """Build a synthetic MCPPostCallResponseObject that replaces blocked output.
-
-        The dispatcher swallows raised exceptions, so returning a
-        non-None ``MCPPostCallResponseObject`` is the only blocking
-        lever. The text content carries the SAME canonical block
-        payload (JSON-encoded) used by the HTTPException and SSE paths,
-        so downstream consumers see a uniform shape across surfaces.
-        """
+        """Build a synthetic MCPPostCallResponseObject for blocked output."""
         import json as _json
 
         from litellm.types.llms.base import HiddenParams
@@ -294,7 +189,6 @@ class _CiscoAIDefenseMcpMixin:
                 "action": "block",
             }
 
-        # Preserve response_cost if the original captured one.
         original_hidden = getattr(original_response_obj, "hidden_params", None)
         if isinstance(original_hidden, HiddenParams):
             hidden_params: Any = original_hidden
@@ -319,9 +213,6 @@ class _CiscoAIDefenseMcpMixin:
         inner = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is None and isinstance(response_obj, dict):
             inner = response_obj.get("mcp_tool_call_response")
-        # The proxy gives us either a list of content blocks or an object
-        # with a ``content`` attribute — both are valid inputs to
-        # ``_normalize_mcp_response``.
         return inner if inner is not None else response_obj
 
     # ------------------------------------------------------------------
@@ -474,22 +365,8 @@ class _CiscoAIDefenseMcpMixin:
     def _normalize_mcp_response(response: Any) -> Optional[Dict[str, Any]]:
         """Normalize an MCP tool response into a JSON-RPC envelope.
 
-        Handles four production input shapes:
-
-        1. A dict already shaped as a JSON-RPC envelope
-           (``{"jsonrpc": "2.0", ...}``).
-        2. A dict with a nested ``result`` object.
-        3. A raw list of content items — the actual production wire shape
-           because ``MCPPostCallResponseObject.mcp_tool_call_response`` is
-           typed ``List[Union[...]]`` and the dispatcher hands us the
-           unpacked list.
-        4. A Pydantic-coerced ``List[(field_name, value)]`` of tuples
-           produced when a ``CallToolResult`` BaseModel is iterated under
-           a ``List[...]``-typed field. The real ``content`` list is
-           buried inside one of the tuples.
-
-        Returns the JSON-RPC envelope dict, or ``None`` if no scannable
-        payload can be extracted.
+        Handles JSON-RPC dicts, raw content lists, MCP SDK models, and
+        Pydantic-coerced ``[(field_name, value)]`` lists.
         """
         if isinstance(response, dict):
             if response.get("jsonrpc") == "2.0":
@@ -501,10 +378,6 @@ class _CiscoAIDefenseMcpMixin:
                     "result": response["result"],
                 }
         if isinstance(response, list):
-            # Detect Pydantic's iterated-BaseModel shape and reach back into
-            # the real ``content`` list. Without this branch, MCP response
-            # inspection silently no-ops on the production path because
-            # tuples can't be serialized as content items.
             if response and all(
                 isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
                 for item in response
@@ -513,8 +386,6 @@ class _CiscoAIDefenseMcpMixin:
                 if isinstance(inner_content, list):
                     response = inner_content
                 else:
-                    # Iterated BaseModel without a usable ``content`` field —
-                    # we have nothing meaningful to inspect.
                     return None
             return {
                 "jsonrpc": "2.0",
@@ -548,27 +419,7 @@ class _CiscoAIDefenseMcpMixin:
 
     @staticmethod
     def _set_mcp_tool_response_text(response_obj: Any, text: str) -> bool:
-        """Replace the text content of an MCP tool response in-place.
-
-        ``response_obj`` arrives in any of four production shapes — must
-        handle all of them or redact silently falls through to block:
-
-        1. ``MCPPostCallResponseObject`` wrapper with a
-           ``.mcp_tool_call_response`` attribute holding the content list.
-        2. A test-shim with a ``.content`` attribute.
-        3. A raw ``List[content_item]`` — what
-           ``_extract_mcp_tool_call_response`` returns in production
-           because ``MCPPostCallResponseObject.mcp_tool_call_response``
-           is typed as ``List[Union[...]]``.
-        4. A Pydantic-coerced ``List[(field_name, value)]`` of tuples
-           produced when the dispatcher hands us a ``CallToolResult``
-           BaseModel — the real ``content`` list is buried inside the
-           ``("content", [...])`` tuple.
-
-        Returns True iff at least one text item was rewritten; False
-        means there was nothing to redact and the caller should fall
-        back to its on_flagged_action policy.
-        """
+        """Replace text content in any supported MCP response shape."""
         content_list = _CiscoAIDefenseMcpMixin._coerce_to_content_list(response_obj)
         if not isinstance(content_list, list) or not content_list:
             return False
@@ -579,10 +430,6 @@ class _CiscoAIDefenseMcpMixin:
                 item["text"] = text
                 replaced = True
             elif hasattr(item, "type") and getattr(item, "type", None) == "text":
-                # mcp.types.TextContent is a Pydantic BaseModel and is
-                # mutable by default. ``setattr`` is safe; guard for the
-                # rare frozen-model case so a failed rewrite doesn't
-                # take the whole redact path down.
                 try:
                     setattr(item, "text", text)
                     replaced = True
@@ -592,24 +439,15 @@ class _CiscoAIDefenseMcpMixin:
 
     @staticmethod
     def _coerce_to_content_list(response_obj: Any) -> Optional[List[Any]]:
-        """Find the MCP content list inside any of the production response shapes.
-
-        See ``_set_mcp_tool_response_text`` for the shapes we handle.
-        Returns ``None`` if no content list can be located.
-        """
+        """Find the MCP content list inside supported response shapes."""
         if response_obj is None:
             return None
-        # Shape 1: wrapper with ``.mcp_tool_call_response``.
         inner = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
             return _CiscoAIDefenseMcpMixin._coerce_to_content_list(inner)
-        # Shape 2: object with ``.content`` (CallToolResult / SimpleNamespace).
         content = getattr(response_obj, "content", None)
         if isinstance(content, list):
             return content
-        # Shapes 3 & 4: a list — either raw content items, or Pydantic's
-        # coerced ``(field_name, value)`` tuples from iterating a
-        # BaseModel under a ``List[...]`` field.
         if isinstance(response_obj, list):
             if response_obj and all(
                 isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)

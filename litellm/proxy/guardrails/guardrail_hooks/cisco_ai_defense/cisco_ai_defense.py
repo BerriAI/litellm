@@ -1,9 +1,3 @@
-# +-------------------------------------------------------------+
-#
-#               Cisco AI Defense Inspection Guardrail
-#       https://developer.cisco.com/docs/ai-defense-inspection/
-#
-# +-------------------------------------------------------------+
 """
 Cisco AI Defense guardrail integration for LiteLLM.
 
@@ -107,15 +101,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     Each instance scans exactly one inspection surface (``chat`` or ``mcp``)
     via the corresponding Cisco AI Defense Inspection API endpoint.
 
-    MCP-specific hooks (``async_post_mcp_tool_call_hook``,
-    ``_inspect_mcp_request`` / ``_inspect_mcp_response``, JSON-RPC payload
-    builders, redact helper) live on ``_CiscoAIDefenseMcpMixin`` in
-    ``cisco_ai_defense_mcp.py`` to keep this module focused on the chat
-    surface. The mixin's methods call back into shared infrastructure on
-    ``self`` (``self._post_inspection``, ``self._finalize_inspection``,
-    ``self._handle_api_error``, etc.); Python's late binding resolves
-    those at call time so the split is purely organizational — public
-    behaviour and imports are unchanged.
+    MCP-specific hooks and helpers live on ``_CiscoAIDefenseMcpMixin`` in
+    ``cisco_ai_defense_mcp.py``.
     """
 
     SUPPORTED_ON_FLAGGED_ACTIONS: Tuple[str, ...] = ("block", "monitor")
@@ -165,11 +152,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             setting_name="inspection_type",
         )
 
-        # MCP-only event hooks (``pre_mcp_call`` / ``during_mcp_call``) are
-        # unambiguous about the surface the user wants to scan — auto-infer
-        # ``inspection_type=mcp`` so the dashboard form only requires picking
-        # one field. The reverse direction is the default already (chat
-        # inspection + chat hooks).
         inferred = self._infer_inspection_type_from_mode(
             kwargs.get("event_hook"), self.inspection_type
         )
@@ -182,8 +164,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
             self.inspection_type = inferred
 
-        # Derive the inspection endpoint path from the surface, with an
-        # explicit override available for non-standard deployments.
         if inspect_path:
             self.inspect_path = (
                 inspect_path if inspect_path.startswith("/") else f"/{inspect_path}"
@@ -235,16 +215,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
 
-        # Advertise every event hook the proxy can dispatch so the
-        # dashboard's "create guardrail" form accepts any combination of
-        # ``mode`` + ``inspection_type``. At runtime ``_surface_matches()``
-        # is the source of truth: chat-mode guardrails are no-ops for MCP
-        # traffic, and mcp-mode guardrails are no-ops for chat traffic.
-        # Validating compatibility here would just re-create the
-        # construction-time error users see when they pick e.g.
-        # mode=pre_mcp_call but forget to flip inspection_type=mcp; the
-        # PANW Prisma AIRS handler takes the same all-hooks approach for
-        # exactly this reason.
+        # Register broadly; runtime filtering happens in ``_surface_matches``.
         supported_event_hooks = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
@@ -260,11 +231,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             **kwargs,
         )
 
-        # Best-effort warning when the configured ``mode`` doesn't line up
-        # with ``inspection_type`` — the guardrail will register cleanly
-        # but won't actually scan any traffic because the surface filter
-        # will reject everything. Runs after super() so self.guardrail_name
-        # is populated.
         self._warn_if_mode_surface_mismatch(kwargs.get("event_hook"))
 
         verbose_proxy_logger.debug(
@@ -330,20 +296,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return bool(call_type) and call_type in _MCP_CALL_TYPES
 
     # ------------------------------------------------------------------
-    # Surface decision rule
-    # ------------------------------------------------------------------
-    # The pre-call, moderation, and post-call hooks deliberately do NOT
-    # sniff the request/response body shape to decide whether traffic is
-    # chat or MCP. The proxy-asserted ``call_type`` is the authoritative
-    # signal; the body is caller-controlled and was previously used as
-    # an OR-clause that let a chat-completion caller bypass a chat-mode
-    # guardrail by sprinkling ``mcp_tool_name`` / ``mcp_arguments`` /
-    # ``"jsonrpc": "2.0"`` into the payload (Veria AI security review on
-    # PR #28249, High severity). Helpers like ``_is_mcp_request_shape``
-    # / ``_is_mcp_response_shape`` were removed so they cannot be
-    # re-introduced into the surface decision by accident.
-
-    # ------------------------------------------------------------------
     # Hook methods
     # ------------------------------------------------------------------
 
@@ -366,15 +318,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
-        # SECURITY: do NOT OR in ``_is_mcp_request_shape(data)`` here. The
-        # request body is caller-controlled — a chat completion that adds
-        # spoofed ``mcp_tool_name`` / ``mcp_arguments`` / ``jsonrpc`` fields
-        # would have flipped ``is_mcp`` to True, and a chat-mode guardrail
-        # would then have skipped scanning via ``_surface_matches``. The
-        # proxy is the authoritative source of the call surface; treat
-        # ``call_type`` as the only signal. See Veria AI security review
-        # on PR #28249 ("chat guardrail bypass via user-controlled MCP
-        # shape", High severity).
+        # Trust proxy call_type, not caller-controlled request shape.
         is_mcp = self._is_mcp_call_type(call_type)
 
         if not self._surface_matches(is_mcp):
@@ -386,8 +330,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
             return data
 
-        # Honor explicit event_hook config; for MCP-mode guardrails the
-        # framework dispatches via pre_mcp_call.
         event_type = (
             GuardrailEventHooks.pre_mcp_call if is_mcp else GuardrailEventHooks.pre_call
         )
@@ -433,9 +375,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
-        # SECURITY: see ``async_pre_call_hook`` — surface is decided by
-        # the proxy-asserted ``call_type``, never by caller-controlled
-        # request-body shape, to prevent chat-guardrail bypass.
         is_mcp = self._is_mcp_call_type(call_type)
 
         if not self._surface_matches(is_mcp):
@@ -475,24 +414,8 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
-        # Chat-mode only — MCP responses come through
-        # async_post_mcp_tool_call_hook, which the proxy dispatches as a
-        # CustomLogger hook (post_call is intentionally not in our event
-        # hook list for mcp-mode guardrails).
         if self.inspection_type != "chat":
             return response
-
-        # SECURITY: do NOT early-return based on payload-shape sniffing
-        # of either the request body or the model response. Both are
-        # caller / model controlled — a chat request containing spoofed
-        # ``mcp_tool_name`` fields, or a model emitting a JSON-RPC-shaped
-        # text payload, would otherwise bypass the chat post-call scan.
-        # The proxy only dispatches this hook on actual chat-completion
-        # paths (MCP tool responses flow through
-        # ``async_post_mcp_tool_call_hook``), so the inspection-type guard
-        # above is the right surface gate. See Veria AI security review
-        # on PR #28249 ("chat guardrail bypass via user-controlled MCP
-        # shape", High severity).
 
         if (
             self.should_run_guardrail(
@@ -502,10 +425,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         ):
             return response
 
-        # ``_extract_response_messages`` handles both ``ModelResponse``
-        # (Chat Completions) and ``ResponsesAPIResponse`` (``/v1/responses``)
-        # — do NOT gate on ``isinstance(response, ModelResponse)`` here;
-        # that silently bypassed Responses API output (Veria AI High).
         response_messages = self._extract_response_messages(response)
         if not response_messages:
             verbose_proxy_logger.debug(
@@ -536,34 +455,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         response: Any,
         request_data: dict,
     ):
-        """Scan the assembled streaming chat response BEFORE it's delivered.
-
-        Without this hook the proxy lets streamed chunks reach the client
-        first and runs ``async_post_call_success_hook`` only after the
-        stream is closed — by which point any violations have already
-        been delivered. A caller can therefore set ``stream: true`` to
-        bypass chat-mode response scanning. (Veria AI security review on
-        PR #28249, High severity: "Streaming output bypass".)
-
-        Pattern matches the other partner output guardrails (Pillar,
-        PANW Prisma AIRS, Lasso): buffer every chunk, assemble into a
-        ``ModelResponse`` via ``stream_chunk_builder``, run the chat
-        inspection on the assembled text, then either re-yield the
-        original chunks (allow), emit an SSE error event (block), or
-        emit modified chunks via ``MockResponseIterator`` (redact).
-
-        Important error-surfacing rule: raising ``HTTPException`` from a
-        Python generator does not propagate as an HTTP error — the proxy
-        treats it as a generic 500. We therefore catch the exception and
-        ``yield`` a structured SSE error event whose code matches the
-        exception's ``status_code``; ``create_response`` recognises that
-        shape and returns the correct JSON error.
-        """
+        """Buffer and inspect streaming chat output before delivery."""
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
 
-        # MCP-mode guardrails do not own the chat post-call surface — MCP
-        # tool responses flow through ``async_post_mcp_tool_call_hook``.
         if self.inspection_type != "chat":
             async for chunk in response:
                 yield chunk
@@ -581,9 +476,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             self.guardrail_name,
         )
 
-        # Buffer everything before we let any byte hit the wire. We must
-        # not yield incrementally before the inspection completes — that
-        # is the bypass the security review flagged.
         all_chunks: List[Any] = []
         try:
             async for chunk in response:
@@ -595,19 +487,10 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             )
             raise
 
-        # If there are no chunks (or none are ``ModelResponse(Stream)``
-        # shaped), assembly will fail or be meaningless. Be conservative:
-        # if we can't assemble a scannable payload, allow the original
-        # chunks through unchanged (we still recorded any earlier
-        # failures via verbose_proxy_logger).
         if not all_chunks:
             return
 
         if not isinstance(all_chunks[0], (ModelResponse, ModelResponseStream)):
-            # Non-OpenAI streaming shapes (Anthropic SSE bytes,
-            # /v1/responses pydantic events, etc.). We can't parse or
-            # assemble these today. Fail closed: emit an SSE error event
-            # rather than delivering content we couldn't inspect.
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): unsupported streaming "
                 "chunk shape (%s) — failing closed.",
@@ -623,9 +506,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 yield chunk
             return
 
-        # ``_inspect_chat`` shares its block/redact/allow vocabulary with
-        # the non-streaming path. ``response_obj=assembled`` lets the
-        # redact path rewrite the assistant message in place.
         response_messages = self._extract_response_messages(assembled)
         if not response_messages:
             for chunk in all_chunks:
@@ -644,8 +524,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 response_obj=assembled,
             )
         except HTTPException as exc:
-            # See docstring: raising would be reported as a generic 500.
-            # Format as a structured SSE error event.
             error_obj: Dict[str, Any] = self._http_exception_to_error_obj(exc)
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): streaming response "
@@ -662,14 +540,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 self.guardrail_name,
                 exc,
             )
-            # Fail closed by default: a scan error must not let the
-            # buffered chunks leak. The ``fallback_on_error`` policy is
-            # already enforced inside ``_inspect_chat`` /
-            # ``_handle_api_error`` for the non-streaming path; if we
-            # reach here it means an unexpected exception bubbled out,
-            # which the dispatcher would otherwise log as non-blocking
-            # and deliver the original chunks. Emit a structured error
-            # so the caller sees an explicit failure.
             error_obj = {
                 "message": (
                     "Cisco AI Defense streaming scan failed — response " "withheld."
@@ -685,10 +555,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             request_data=request_data, guardrail_name=self.guardrail_name
         )
 
-        # Allow / redact path. If ``_inspect_chat`` rewrote the assistant
-        # content (redact action), the assembled ModelResponse now
-        # contains the sanitized text and we need to deliver THAT, not
-        # the buffered original chunks.
         if self._streaming_content_was_modified(all_chunks, assembled):
             mock_iterator = MockResponseIterator(model_response=assembled)
             async for chunk in mock_iterator:
@@ -1094,21 +960,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _normalize_rule(rule: Any) -> Dict[str, Any]:
         """Coerce a user-supplied rule into the wire-shape dict Cisco expects.
 
-        Accepts three input shapes:
-
-        * ``str`` — shorthand for ``{"rule_name": "<value>"}``.
-        * ``dict`` — copied as-is, picking up known fields.
-        * Pydantic ``CiscoAIDefenseRule`` (or any object exposing a
-          ``model_dump`` method) — produced when ``enabled_rules``
-          travels through the typed
-          ``CiscoAIDefenseGuardrailConfigModelOptionalParams`` path
-          (YAML config → ``LitellmParams`` validation →
-          ``_get_optional_value``). Without this branch the helper
-          raised ``ValueError`` for the Pydantic shape, and because the
-          call site (``_build_chat_payload``) sits BEFORE the try/except
-          in ``_inspect_chat``, that exception escaped uncaught and any
-          user who configured ``enabled_rules`` in YAML got a 500 on
-          every request. (Greptile P1 review on PR #28249.)
+        Accepts ``str``, ``dict``, and Pydantic model inputs.
         """
         if isinstance(rule, str):
             return {"rule_name": rule}
@@ -1217,8 +1069,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         rules = verdict.get("rules") or []
         explanation = verdict.get("explanation")
         event_id = verdict.get("event_id")
-        # Did Cisco return sanitized content to rewrite the request/response
-        # with? (Maps the reference plugin's `redact` action.)
         sanitized_text = self._extract_sanitized_text(verdict)
         sanitized_messages = self._extract_sanitized_messages(verdict)
         sanitized_mcp_arguments = self._extract_sanitized_mcp_arguments(verdict)
@@ -1239,9 +1089,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         flagged = self._is_flagged(is_safe, classifications)
 
-        # Decide the effective action. Explicit "action" wins; otherwise
-        # infer from is_safe + presence of sanitized content. This matches
-        # the reference plugin's `_decision_action` heuristic.
         action_raw = verdict.get("action")
         if isinstance(action_raw, str) and action_raw.strip():
             action = self._normalize_action(action_raw)
@@ -1255,24 +1102,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
-        # Record structured guardrail info for spend logs, Datadog, Langfuse,
-        # OTEL, and any other StandardLoggingPayload-aware logger. We pass
-        # the full Cisco verdict so dashboards can group by surface,
-        # severity, classifications, and rules.
-        #
-        # Pick the event type so observability tools can tell request scans
-        # apart from response scans. We do NOT collapse every scan to
-        # ``pre_*`` because dashboards built on ``standard_logging_payload``
-        # rely on the event type to bucket input vs output violations.
-        #
-        # Mapping (matches the framework's existing ``pre_*`` / ``post_*``
-        # / ``during_*`` conventions):
-        #   chat  + input  -> pre_call
-        #   chat  + output -> post_call
-        #   mcp   + input  -> pre_mcp_call
-        #   mcp   + output -> during_mcp_call  (there is no ``post_mcp_call``;
-        #                     ``during_mcp_call`` is the framework's
-        #                     designated MCP response-phase event.)
         if surface == "mcp":
             logging_event_type = (
                 GuardrailEventHooks.during_mcp_call
@@ -1304,8 +1133,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             event_type=logging_event_type,
         )
 
-        # Refresh stash with the resolved action so response headers reflect
-        # block/redact/allow correctly.
         self._stash_verdict_on_request(
             request_data=request_data,
             surface=surface,
@@ -1318,9 +1145,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             action=action,
         )
 
-        # Always emit one visible log line per scan so operators can see
-        # the guardrail running without bumping the global proxy log
-        # level to DEBUG. Allowed → INFO, intervened/redacted → WARNING.
         self._log_decision(
             surface=surface,
             direction=direction,
@@ -1355,9 +1179,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     event_id,
                 )
                 return inspect_response
-            # Cisco asked for redact but we couldn't apply it — fall through
-            # to the block decision instead of silently letting unsafe
-            # content through.
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): redact requested but no "
                 "rewritable surface found — falling through to "
@@ -1404,8 +1225,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         metadata_store = request_data.setdefault("metadata", {})
         if not isinstance(metadata_store, dict):
             return
-        # Namespace by surface + direction (input/output) so chat & MCP plus
-        # request- and response-side verdicts coexist on the same request.
         prefix = f"cisco_ai_defense_{surface}_{direction}"
         metadata_store[f"{prefix}_is_safe"] = is_safe
         if action:
@@ -1469,8 +1288,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     # Verdict extraction helpers (sanitized content + JSON-RPC errors)
     # ------------------------------------------------------------------
 
-    # Keys whose presence indicates a dict actually contains a Cisco
-    # decision/verdict (as opposed to being an envelope around it).
     _DECISION_FIELDS: Tuple[str, ...] = (
         "action",
         "allowed",
@@ -1530,7 +1347,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if cls._has_decision_fields(value):
                 return value  # type: ignore[return-value]
 
-        # Double-nested case: ``result.{data,inspection,ai_defense,...}``
         result = inspect_response.get("result")
         if isinstance(result, dict):
             for key in ("data", "inspection", "ai_defense", "aiDefense"):
@@ -1753,14 +1569,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if response_obj is None:
             return False
 
-        # Chat Completions shape.
         choices = getattr(response_obj, "choices", None)
         if isinstance(choices, list):
             return self._redact_model_response_choices(
                 choices, sanitized_text, sanitized_messages
             )
 
-        # Responses API shape.
         output_items = getattr(response_obj, "output", None)
         if isinstance(output_items, list):
             return self._redact_responses_api_output(
@@ -1775,10 +1589,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_text: Optional[str],
         sanitized_messages: Optional[List[Dict[str, Any]]],
     ) -> bool:
-        """Redact all choices. For n > 1 completions every choice was
-        scanned together, so a redact verdict must apply to every choice
-        — returning after the first leaks the rest (Codex P1).
-        """
+        """Redact every returned choice, including tool-call arguments."""
         if sanitized_messages:
             applied = False
             msg_iter = iter(sanitized_messages)
@@ -1787,11 +1598,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     continue
                 replacement = next(msg_iter, None)
                 if replacement is not None:
-                    # Cisco may send ``content`` as a plain string OR as
-                    # the OpenAI structured shape
-                    # ``[{"type":"output_text","text":"..."}]``. Coerce
-                    # via ``_normalize_message_content`` so structured
-                    # payloads don't silently no-op (Codex P1).
                     text = CiscoAIDefenseGuardrail._normalize_message_content(
                         replacement.get("content")
                     )
@@ -1799,9 +1605,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                         choice.message.content = text
                         applied = True
                 else:
-                    # Cisco returned fewer replacements than choices.
-                    # Scrub remaining choices to a safe default rather
-                    # than leaving the original (unsafe) content alive.
                     fallback = sanitized_text or "[REDACTED]"
                     if getattr(choice.message, "content", None):
                         choice.message.content = fallback
@@ -1857,9 +1660,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     ) -> bool:
         replacement_text: Optional[str] = sanitized_text
         if not replacement_text and sanitized_messages:
-            # Coerce content via ``_normalize_message_content`` so the
-            # OpenAI structured shape ``[{"type":"output_text",...}]``
-            # is handled alongside plain strings (Codex P1).
             replacement_text = " ".join(
                 self._normalize_message_content(m.get("content"))
                 for m in sanitized_messages
@@ -1886,8 +1686,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                                 applied = True
                             except (AttributeError, TypeError, ValueError):
                                 continue
-            # Clear function-call arguments on output items — same
-            # reasoning as ``_clear_tool_call_arguments``.
             args = (
                 item.get("arguments")
                 if isinstance(item, dict)
@@ -1959,7 +1757,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                             return rewritten
             return None
 
-        # Flat list of content parts.
         rewritten_parts = list(original_input)
         for j, part in enumerate(rewritten_parts):
             if isinstance(part, dict) and part.get("type") in text_types:
@@ -2015,10 +1812,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         if request_data is not None and start_time is not None:
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            # Pick the event type from (surface, direction) — same
-            # mapping as ``_finalize_inspection``. Without this, output-
-            # side API failures were recorded as pre_call/pre_mcp_call
-            # and skewed dashboards (Codex P2).
             if surface == "mcp":
                 evt = (
                     GuardrailEventHooks.during_mcp_call
@@ -2132,9 +1925,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
            ``{"type": "input_text", "text": "..."}`` -> single user
            message containing the concatenated text.
 
-        Without (2) and the ``input_text`` part type, structured
-        Responses API requests slipped past the pre-call scan entirely
-        (Veria AI High: "Responses API input bypass").
         """
         if input_value is None:
             return []
@@ -2144,7 +1934,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             text = str(input_value)
             return [{"role": "user", "content": text}] if text else []
 
-        # Shape 2: list of message-shaped dicts (has ``role``).
         if any(isinstance(item, dict) and "role" in item for item in input_value):
             result: List[Dict[str, str]] = []
             for item in input_value:
@@ -2158,7 +1947,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     result.append({"role": role, "content": text})
             return result
 
-        # Shape 3: flat list of content parts.
         text = CiscoAIDefenseGuardrail._normalize_message_content(input_value)
         return [{"role": "user", "content": text}] if text else []
 
@@ -2175,8 +1963,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         * List of message-shaped dicts with a nested ``content`` list —
           recurses into the nested content so a Responses API ``input``
           item like ``{"role":"user","content":[{"type":"input_text",...}]}``
-          gets flattened correctly. (Without this branch the bypass
-          surface Veria AI flagged was open.)
+          gets flattened correctly.
         """
         if content is None:
             return ""
@@ -2188,13 +1975,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(part, dict):
                     continue
                 part_type = part.get("type")
-                # Recognised text content part.
                 if part_type in CiscoAIDefenseGuardrail._TEXT_PART_TYPES and part.get(
                     "text"
                 ):
                     parts.append(str(part["text"]))
                     continue
-                # Nested message-shaped item (Responses API input).
                 nested = part.get("content")
                 if nested is not None:
                     nested_text = CiscoAIDefenseGuardrail._normalize_message_content(
@@ -2215,7 +2000,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         alongside the main text so a model can't bypass the scan by
         placing content there.
         """
-        # Chat Completions: choices[*].message.{content, tool_calls, function_call}.
         if isinstance(response, ModelResponse):
             result: List[Dict[str, str]] = []
             for choice in getattr(response, "choices", None) or []:
@@ -2238,10 +2022,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     result.append({"role": "assistant", "content": " ".join(parts)})
             return result
 
-        # Responses API: output[*].content[*].text and output[*].arguments
-        # (and a generic .text fallback for other item types). Detected
-        # via the ``output`` attribute rather than isinstance so the SDK
-        # can swap response classes without breaking us.
         output_items = getattr(response, "output", None)
         if not isinstance(output_items, list):
             return []
@@ -2294,10 +2074,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         )
         if args is None:
             return None
-        # OpenAI emits ``arguments`` as a JSON string. Keep it as-is —
-        # Cisco's text inspection works on the raw string regardless of
-        # whether it parses as JSON, and round-tripping through
-        # json.loads/dumps would lose data on malformed arguments.
         return str(args)
 
     # ------------------------------------------------------------------
@@ -2311,8 +2087,3 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         )
 
         return CiscoAIDefenseGuardrailConfigModel
-
-
-# ``_serialize_mcp_content_item`` lives in ``cisco_ai_defense_mcp.py``
-# alongside the other MCP-specific helpers (it's only invoked from
-# ``_normalize_mcp_response`` which now also lives there).

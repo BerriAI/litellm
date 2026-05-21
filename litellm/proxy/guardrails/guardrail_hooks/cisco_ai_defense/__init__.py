@@ -58,20 +58,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,
     )
-    # Register on litellm.callbacks so the proxy's pre_call / during_call /
-    # post_call guardrail dispatch picks us up (this is how every other
-    # guardrail wires itself in).
     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
-    # ALSO register on litellm.success_callback so the MCP post-tool-call
-    # dispatcher in litellm_logging.async_post_mcp_tool_call_hook reaches
-    # us. That dispatcher only iterates ``litellm.success_callback`` (via
-    # ``get_combined_callback_list(global_callbacks=litellm.success_callback)``)
-    # — without this second registration, mcp-mode Cisco guardrails would
-    # silently skip MCP response scanning even though the handler defines
-    # ``async_post_mcp_tool_call_hook``. The other CustomLogger methods
-    # inherited by CustomGuardrail are no-ops by default, so adding to
-    # success_callback doesn't introduce side effects on chat completions.
+    # MCP post-tool-call hooks are dispatched through success callbacks.
     litellm.logging_callback_manager.add_litellm_success_callback(_callback)
 
     return _callback
@@ -117,7 +106,6 @@ def _get_optional_value(litellm_params, optional_params, attribute_name):
                 if value is not None:
                     return value
 
-    # Fallback: honor a user-explicit top-level setting (flattened config).
     if litellm_params is None:
         return None
     fields_set = getattr(litellm_params, "model_fields_set", None)

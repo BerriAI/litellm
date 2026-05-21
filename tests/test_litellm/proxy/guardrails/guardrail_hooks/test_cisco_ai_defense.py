@@ -1,5 +1,7 @@
 import os
 import sys
+from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, patch
 
@@ -52,7 +54,9 @@ CHAT_URL = f"{CISCO_BASE}/api/v1/inspect/chat"
 MCP_URL = f"{CISCO_BASE}/api/v1/inspect/mcp"
 
 
-def _make_response(status: int, json_body: dict, url: str = CHAT_URL) -> Response:
+def _mock_inspect_response(
+    json_body: dict, *, status: int = 200, url: str = CHAT_URL
+) -> Response:
     return Response(
         status_code=status,
         json=json_body,
@@ -61,8 +65,7 @@ def _make_response(status: int, json_body: dict, url: str = CHAT_URL) -> Respons
 
 
 def _safe_response(url: str = CHAT_URL) -> Response:
-    return _make_response(
-        200,
+    return _mock_inspect_response(
         {
             "is_safe": True,
             "classifications": [],
@@ -74,8 +77,7 @@ def _safe_response(url: str = CHAT_URL) -> Response:
 
 
 def _violation_response(url: str = CHAT_URL) -> Response:
-    return _make_response(
-        200,
+    return _mock_inspect_response(
         {
             "is_safe": False,
             "classifications": ["SECURITY_VIOLATION", "PRIVACY_VIOLATION"],
@@ -91,8 +93,7 @@ def _violation_response(url: str = CHAT_URL) -> Response:
     )
 
 
-def _mcp_request_data(name="lookup", args=None, jsonrpc=False, **extra):
-    """Build a request data dict shaped like an MCP call."""
+def _mcp_request(name="lookup", args=None, jsonrpc=False, **extra):
     args = args if args is not None else {}
     if jsonrpc:
         return {
@@ -105,16 +106,20 @@ def _mcp_request_data(name="lookup", args=None, jsonrpc=False, **extra):
     return {"mcp_tool_name": name, "mcp_arguments": args, **extra}
 
 
-def _mock_mcp_response_obj(content=None, response_cost=0.0):
-    """Build the SimpleNamespace shim used to mimic MCPPostCallResponseObject."""
-    from types import SimpleNamespace
-
+def _mcp_response(content=None, response_cost=0.0):
     if content is None:
         content = [{"type": "text", "text": "ok"}]
     return SimpleNamespace(
         mcp_tool_call_response=content,
         hidden_params=SimpleNamespace(response_cost=response_cost),
     )
+
+
+def _mcp_result_text(content) -> str:
+    if not content:
+        return ""
+    item = content[0] if isinstance(content, list) else content
+    return getattr(item, "text", None) or item.get("text", "")
 
 
 def _redact_response(
@@ -144,7 +149,7 @@ def _redact_response(
         body["sanitized_mcp_arguments"] = sanitized_mcp_arguments
     if sanitized_payload is not None:
         body["sanitized_payload"] = sanitized_payload
-    return _make_response(200, body, url=url)
+    return _mock_inspect_response(body, url=url)
 
 
 def _responses_api_response(text, role="assistant"):
@@ -343,7 +348,6 @@ class TestCiscoAIDefenseFlattenedConfig:
                         "guardrail": "cisco_ai_defense",
                         "mode": "pre_call",
                         "default_on": True,
-                        # ── flattened: NOT under optional_params ──
                         "on_flagged_action": "monitor",
                         "fallback_on_error": "allow",
                         "timeout": 20,
@@ -368,9 +372,9 @@ class TestCiscoAIDefenseFlattenedConfig:
                         "guardrail": "cisco_ai_defense",
                         "mode": "pre_call",
                         "default_on": True,
-                        "on_flagged_action": "monitor",  # flattened
+                        "on_flagged_action": "monitor",
                         "optional_params": {
-                            "fallback_on_error": "allow",  # nested
+                            "fallback_on_error": "allow",
                         },
                     },
                 }
@@ -378,7 +382,6 @@ class TestCiscoAIDefenseFlattenedConfig:
             config_file_path="",
         )
         cb = _find_callback("mixed-cfg")
-        # Both were user-set; both flow through to the callback.
         assert cb.on_flagged_action == "monitor"
         assert cb.fallback_on_error == "allow"
 
@@ -397,9 +400,6 @@ class TestCiscoAIDefenseFlattenedConfig:
                         "guardrail": "cisco_ai_defense",
                         "mode": "pre_call",
                         "default_on": True,
-                        # No on_flagged_action / fallback_on_error / timeout
-                        # anywhere — must NOT inherit GraySwan's
-                        # ``on_flagged_action="passthrough"`` via MRO.
                     },
                 }
             ],
@@ -500,16 +500,9 @@ class TestCiscoAIDefenseGuardrailInit:
     @pytest.mark.parametrize(
         "event_hook,default_type,expected_inspection_type",
         [
-            # ``mode: pre_mcp_call`` auto-flips to mcp (dashboard form
-            # only needs one toggle).
             ("pre_mcp_call", None, "mcp"),
-            # ``during_mcp_call`` overrides explicit chat inspection_type.
             ("during_mcp_call", "chat", "mcp"),
-            # ``pre_call`` only overrides back to chat from mode.
             ("pre_call", "mcp", "chat"),
-            # Mixed mode list keeps the user's inspection_type (both
-            # branches of the original mixed-mode test preserved as
-            # separate cases).
             (["pre_call", "pre_mcp_call"], "chat", "chat"),
             (["pre_call", "pre_mcp_call"], "mcp", "mcp"),
         ],
@@ -608,11 +601,7 @@ class TestCiscoAIDefenseChatMode:
             event_hook="pre_call",
             default_on=True,
         )
-        # MCP-shaped data should be passed through untouched without an API call.
-        data = {
-            "mcp_tool_name": "send_email",
-            "mcp_arguments": {"to": "x@y.com"},
-        }
+        data = _mcp_request(name="send_email", args={"to": "x@y.com"})
         post_mock = AsyncMock()
         with patch.object(g.async_handler, "post", new=post_mock):
             result = await g.async_pre_call_hook(
@@ -659,11 +648,9 @@ class TestCiscoAIDefenseMCPMode:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "mcp_tool_name": "send_email",
-            "mcp_arguments": {"to": "x@y.com"},
-            "litellm_call_id": "call-1",
-        }
+        data = _mcp_request(
+            name="send_email", args={"to": "x@y.com"}, litellm_call_id="call-1"
+        )
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
             result = await g.async_pre_call_hook(
@@ -673,17 +660,12 @@ class TestCiscoAIDefenseMCPMode:
                 call_type="mcp_call",
             )
         assert result == data
-        # MCP endpoint was hit
         assert post_mock.call_args.kwargs["url"] == MCP_URL
-        # The wire payload is the JSON-RPC envelope itself — NOT wrapped under
-        # a "request" key. This matches the working curl contract for
-        # Cisco AI Defense's /inspect/mcp endpoint.
         sent_payload = post_mock.call_args.kwargs["json"]
         assert sent_payload["jsonrpc"] == "2.0"
         assert sent_payload["method"] == "tools/call"
         assert sent_payload["params"]["name"] == "send_email"
         assert sent_payload["params"]["arguments"] == {"to": "x@y.com"}
-        # Critical regression guard: no envelope wrapper.
         assert "request" not in sent_payload
         assert "metadata" not in sent_payload
         assert "config" not in sent_payload
@@ -697,10 +679,7 @@ class TestCiscoAIDefenseMCPMode:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "mcp_tool_name": "leak_secrets",
-            "mcp_arguments": {"target": "evil"},
-        }
+        data = _mcp_request(name="leak_secrets", args={"target": "evil"})
         with patch.object(
             g.async_handler,
             "post",
@@ -745,12 +724,7 @@ class TestCiscoAIDefenseMCPMode:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "jsonrpc": "2.0",
-            "id": "abc",
-            "method": "tools/call",
-            "params": {"name": "do_thing", "arguments": {"x": 1}},
-        }
+        data = _mcp_request(name="do_thing", args={"x": 1}, jsonrpc=True, id="abc")
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
             await g.async_pre_call_hook(
@@ -760,7 +734,6 @@ class TestCiscoAIDefenseMCPMode:
                 call_type="mcp_call",
             )
         sent_payload = post_mock.call_args.kwargs["json"]
-        # Top-level JSON-RPC envelope is sent — id is preserved from the caller.
         assert sent_payload["jsonrpc"] == "2.0"
         assert sent_payload["id"] == "abc"
         assert sent_payload["params"]["name"] == "do_thing"
@@ -785,16 +758,10 @@ class TestCiscoAIDefenseMCPMode:
             default_on=True,
         )
 
-        # MCPPostCallResponseObject normally wraps the content list; mimic it
-        # with a SimpleNamespace so we don't need the SDK at test time.
-        from types import SimpleNamespace
-
-        tool_response = SimpleNamespace(
-            content=[{"type": "text", "text": "Here is the secret API key abc123"}]
-        )
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=tool_response,
-            hidden_params=SimpleNamespace(response_cost=0.0),
+        response_obj = _mcp_response(
+            SimpleNamespace(
+                content=[{"type": "text", "text": "Here is the secret API key abc123"}]
+            )
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
@@ -805,23 +772,19 @@ class TestCiscoAIDefenseMCPMode:
             "litellm_call_id": "call-42",
         }
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs=kwargs,
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
-        # Hook returns None (signals "no mutation"); the inspect call hit MCP URL.
         assert result is None
         assert post_mock.called
         assert post_mock.call_args.kwargs["url"] == MCP_URL
-        # Wire body is a top-level JSON-RPC response envelope.
         sent_payload = post_mock.call_args.kwargs["json"]
         assert sent_payload["jsonrpc"] == "2.0"
-        assert sent_payload["id"] == "call-42"  # backfilled from kwargs
+        assert sent_payload["id"] == "call-42"
         assert sent_payload["result"]["content"][0]["text"] == (
             "Here is the secret API key abc123"
         )
@@ -851,44 +814,31 @@ class TestCiscoAIDefenseMCPMode:
             event_hook=["pre_mcp_call", "during_mcp_call"],
             default_on=True,
         )
-        from types import SimpleNamespace
-
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=SimpleNamespace(
-                content=[{"type": "text", "text": "leaked"}]
-            ),
-            hidden_params=SimpleNamespace(response_cost=0.0),
+        response_obj = _mcp_response(
+            SimpleNamespace(content=[{"type": "text", "text": "leaked"}])
         )
 
         post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "leak", "arguments": {}},
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
-        # Critical assertion: the hook does NOT raise; it returns a
-        # synthetic MCPPostCallResponseObject. If we raised, the
-        # dispatcher's blanket ``except Exception`` would silently swallow
-        # the block and the real tool output would flow through.
         assert result is not None, (
             "MCP response block was silently dropped — the litellm "
             "dispatcher swallows raised exceptions, so the hook must "
             "return a non-None MCPPostCallResponseObject to enforce a block."
         )
         assert isinstance(result, MCPPostCallResponseObject)
-        # The synthetic payload replaces the tool output with a violation
-        # message containing classifications/event_id for operator triage.
         replacement = result.mcp_tool_call_response
         assert len(replacement) == 1
-        text = getattr(replacement[0], "text", None) or replacement[0].get("text", "")
+        text = _mcp_result_text(replacement)
         assert "Blocked by Cisco AI Defense" in text
-        assert "evt_123" in text  # event_id from _violation_response
-        assert "SECURITY_VIOLATION" in text  # classification
+        assert "evt_123" in text
+        assert "SECURITY_VIOLATION" in text
 
     @pytest.mark.asyncio
     async def test_mcp_response_hook_skipped_in_chat_mode(self):
@@ -900,24 +850,17 @@ class TestCiscoAIDefenseMCPMode:
             event_hook="pre_call",
             default_on=True,
         )
-        from types import SimpleNamespace
-
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=SimpleNamespace(
-                content=[{"type": "text", "text": "hi"}]
-            ),
-            hidden_params=SimpleNamespace(response_cost=0.0),
+        response_obj = _mcp_response(
+            SimpleNamespace(content=[{"type": "text", "text": "hi"}])
         )
 
         post_mock = AsyncMock()
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "tool", "arguments": {}},
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
         assert result is None
         post_mock.assert_not_called()
@@ -942,7 +885,6 @@ class TestCiscoAIDefenseMCPMode:
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=response,
             )
-        # No inspection performed, response passed through unchanged.
         assert result is response
         post_mock.assert_not_called()
 
@@ -957,27 +899,22 @@ class TestCiscoAIDefenseMCPMode:
             guardrail_name="t",
             api_key="x",
             inspection_type="mcp",
-            event_hook="pre_mcp_call",  # ← no during_mcp_call; should still scan
+            event_hook="pre_mcp_call",
             default_on=True,
         )
-        from types import SimpleNamespace
-
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=SimpleNamespace(
+        response_obj = _mcp_response(
+            SimpleNamespace(
                 content=[{"type": "text", "text": "would have been scanned"}]
-            ),
-            hidden_params=SimpleNamespace(response_cost=0.0),
+            )
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "lookup", "arguments": {}},
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
         assert post_mock.called, (
@@ -999,8 +936,6 @@ class TestCiscoAIDefenseMCPMode:
         typing). Inspect must fire for the raw-list shape, and a
         violation verdict must produce a synthetic ``MCPPostCallResponseObject``.
         """
-        from datetime import datetime as _dt
-
         from litellm.types.mcp import MCPPostCallResponseObject
 
         g = CiscoAIDefenseGuardrail(
@@ -1016,7 +951,7 @@ class TestCiscoAIDefenseMCPMode:
             if cisco_response_kind == "violation"
             else "Here is the secret API key abc123"
         )
-        response_obj = _mock_mcp_response_obj([{"type": "text", "text": text_content}])
+        response_obj = _mcp_response([{"type": "text", "text": text_content}])
 
         cisco_resp = (
             _violation_response(url=MCP_URL)
@@ -1034,8 +969,8 @@ class TestCiscoAIDefenseMCPMode:
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs=kwargs,
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
         assert post_mock.called, (
@@ -1048,10 +983,7 @@ class TestCiscoAIDefenseMCPMode:
             assert isinstance(result, MCPPostCallResponseObject)
             replacement = result.mcp_tool_call_response
             assert len(replacement) == 1
-            text = getattr(replacement[0], "text", None) or replacement[0].get(
-                "text", ""
-            )
-            assert "Blocked by Cisco AI Defense" in text
+            assert "Blocked by Cisco AI Defense" in _mcp_result_text(replacement)
         else:
             sent_payload = post_mock.call_args.kwargs["json"]
             assert sent_payload["jsonrpc"] == "2.0"
@@ -1093,9 +1025,6 @@ class TestCiscoAIDefenseMCPMode:
             default_on=True,
         )
 
-        # Real production wire: CallToolResult from the MCP SDK, then
-        # wrapped through the real MCPPostCallResponseObject — exactly
-        # what litellm_logging.async_post_mcp_tool_call_hook builds.
         real_result = CallToolResult(
             content=[TextContent(type="text", text="leak 9045629876")],
             isError=False,
@@ -1105,7 +1034,6 @@ class TestCiscoAIDefenseMCPMode:
             hidden_params={},
         )
 
-        # Sanity: confirm the production-shape coercion we're guarding against.
         assert isinstance(wrapped.mcp_tool_call_response, list)
         assert all(
             isinstance(item, tuple) and len(item) == 2
@@ -1117,8 +1045,6 @@ class TestCiscoAIDefenseMCPMode:
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={
                     "name": "leak_tool",
@@ -1127,8 +1053,8 @@ class TestCiscoAIDefenseMCPMode:
                     "litellm_call_id": "real-wire-call",
                 },
                 response_obj=wrapped,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
         assert post_mock.called, (
@@ -1140,12 +1066,6 @@ class TestCiscoAIDefenseMCPMode:
         sent_payload = post_mock.call_args.kwargs["json"]
         content_items = sent_payload["result"]["content"]
 
-        # The core regression assertion. The pre-fix code would have produced
-        # something like:
-        #   [{"type":"text","text":"('meta', None)"},
-        #    {"type":"text","text":"('content', [TextContent(...)])"},
-        #    ...]
-        # i.e. tuple stringifications. We must instead see the actual tool text.
         assert len(content_items) == 1, (
             f"expected exactly 1 content item from the real "
             f"CallToolResult.content list, got {len(content_items)}: "
@@ -1223,25 +1143,7 @@ async def _streaming_setup(
 
 
 class TestCiscoAIDefenseResponsesAPIOutput:
-    """Regression for Veria AI High on PR #28249:
-    "Responses API output is not scanned".
-
-    Non-streaming ``/v1/responses`` calls return a ``ResponsesAPIResponse``
-    (not a ``ModelResponse``). The post-call hook's
-    ``isinstance(response, ModelResponse)`` early-return therefore
-    skipped the scan entirely while the assistant text was returned to
-    the client unchanged. The streaming iterator had the same gap for
-    Responses pydantic-event chunks.
-
-    Fix: ``_extract_response_messages`` now also walks
-    ``ResponsesAPIResponse.output[*].content[*].text`` and
-    ``output[*].arguments``; the post-call hook stops early-returning
-    on non-ModelResponse and instead relies on the extractor returning
-    ``[]`` for shapes it genuinely cannot scan. The streaming hook
-    fails closed (emits an SSE error event) for any chunk shape it
-    cannot inspect, so Anthropic-native SSE bytes and Responses
-    pydantic events stop bypassing the post-call scan.
-    """
+    """Responses API output must be included in post-call scans."""
 
     @staticmethod
     def _make_responses_api_response(text: str):
@@ -1279,9 +1181,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_scans_responses_api_message_output(self):
-        """A ``ResponsesAPIResponse`` with ``output[].content[].text`` must
-        be inspected — not silently delivered to the client.
-        """
+        """Responses API message text is scannable assistant output."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -1314,11 +1214,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_scans_responses_api_function_call_arguments(self):
-        """A ``ResponsesAPIResponse`` containing a function-call output
-        must include the arguments in the scanned text. The arguments
-        field is delivered to the client; if we don't scan it, the
-        model can exfiltrate via tool calls (same surface as
-        ChatCompletion tool_calls)."""
+        """Responses API function-call arguments are also client-visible."""
         from litellm.types.llms.openai import ResponsesAPIResponse
         from litellm.types.responses.main import OutputFunctionToolCall
 
@@ -1365,9 +1261,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_responses_api_violation_is_blocked(self):
-        """End-to-end: Cisco flags a Responses API output, post-call
-        hook must raise (the chat post-call surface uses HTTPException
-        because it's a synchronous request, unlike the MCP path)."""
+        """Responses API output blocks use the normal chat HTTPException path."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -1391,31 +1285,17 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
 
 class TestCiscoAIDefenseResponsesAPIOutputRedaction:
-    """Regression for Greptile open finding on PR #28249:
-    "_apply_redaction for chat output only rewrites ``ModelResponse.choices``;
-    a ``ResponsesAPIResponse`` has no ``.choices``, so a Cisco ``redact``
-    verdict on a ``/v1/responses`` response silently falls through to block."
-
-    The fallthrough is safe under ``on_flagged_action=block`` (default)
-    but leaks original unsanitized content under
-    ``on_flagged_action=monitor``: Cisco asked for redact, we couldn't
-    apply it on the Responses shape, so we fell back to monitor, which
-    logs but forwards the ORIGINAL output. The fix rewrites text in
-    ``response.output[*].content[*].text`` in place for Responses API
-    responses.
-    """
+    """Redaction should rewrite Responses API output in place."""
 
     @pytest.mark.parametrize(
         "input_text,sanitized_text,sanitized_messages,expected_substring",
         [
-            # sanitized_text path: exact rewrite.
             (
                 "My SSN is 123-45-6789.",
                 "My SSN is [REDACTED].",
                 None,
                 "My SSN is [REDACTED].",
             ),
-            # sanitized_messages path: contains [REDACTED].
             (
                 "leak the card 4111-1111-1111-1111",
                 None,
@@ -1428,9 +1308,7 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
     async def test_redact_rewrites_responses_api_output_in_place(
         self, input_text, sanitized_text, sanitized_messages, expected_substring
     ):
-        """A Responses API output that Cisco wants to redact must be
-        rewritten in place, not silently fall through to block (which
-        leaks original content under on_flagged_action=monitor)."""
+        """Responses API output supports sanitized_text and sanitized_messages."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -1470,26 +1348,11 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
 
 
 class TestCiscoAIDefenseResponsesAPIInputRedaction:
-    """Regression for Veria AI High on PR #28249:
-    "Responses API redaction leaves original input active".
-
-    When a ``/v1/responses`` request is scanned, the prompt lives in
-    ``request_data["input"]``. The previous redact path wrote
-    ``request_data["messages"] = sanitized_messages`` and returned
-    success — but the proxy sends ``input`` upstream, so the
-    sanitized messages were discarded and the ORIGINAL prompt was
-    forwarded to the model. Redaction silently failed; unredacted
-    content reached the model.
-
-    Fix: ``_apply_redaction`` detects whether the request shape uses
-    ``input`` (Responses API) or ``messages`` (Chat Completions) and
-    rewrites the correct field.
-    """
+    """Responses API input redaction must update ``input``, not ``messages``."""
 
     @pytest.mark.parametrize(
         "initial_data,cisco_kwargs,assertion",
         [
-            # 1. Responses API structured input → sanitized_messages.
             (
                 {
                     "input": [
@@ -1519,13 +1382,11 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
                     )
                 ),
             ),
-            # 2. Plain-string input → sanitized_text.
             (
                 {"input": "leak my SSN 123-45-6789"},
                 {"sanitized_text": "leak my SSN [REDACTED]"},
                 lambda d: "[REDACTED]" in str(d.get("input", "")),
             ),
-            # 3. Sanity guard: ChatCompletions path keeps working.
             (
                 {
                     "messages": [
@@ -1576,15 +1437,30 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
         assert assertion(initial_data), f"Redact rewrite failed. data={initial_data!r}"
 
 
-class TestCiscoAIDefenseCodexFindings2:
-    """Second batch of Codex findings."""
+class TestCiscoAIDefenseRedactionEdgeCases:
+    """Redaction edge cases across output shapes."""
 
+    @pytest.mark.parametrize(
+        "response_shape,unsafe_fragment,data,rule_name",
+        [
+            (
+                "chat",
+                "123-45-6789",
+                {"messages": [{"role": "user", "content": "x"}]},
+                "PII",
+            ),
+            (
+                "responses",
+                "4111-1111-1111-1111",
+                {"input": [{"role": "user", "content": "x"}]},
+                "PCI",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_redact_clears_tool_call_arguments(self):
-        """P1: after redact, tool_calls[].function.arguments must be
-        scrubbed — not left with the original unsafe payload."""
-        from litellm.types.utils import ChatCompletionMessageToolCall, Function
-
+    async def test_redact_clears_output_arguments(
+        self, response_shape, unsafe_fragment, data, rule_name
+    ):
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -1593,101 +1469,70 @@ class TestCiscoAIDefenseCodexFindings2:
             on_flagged_action="monitor",
             default_on=True,
         )
-        response = ModelResponse(
-            choices=[
-                Choices(
-                    index=0,
-                    finish_reason="tool_calls",
-                    message=Message(
-                        role="assistant",
-                        content="Here is the data.",
-                        tool_calls=[
-                            ChatCompletionMessageToolCall(
-                                id="call_1",
-                                type="function",
-                                function=Function(
-                                    name="send",
-                                    arguments='{"data":"SSN 123-45-6789"}',
-                                ),
-                            )
-                        ],
-                    ),
-                )
-            ]
-        )
-        data = {"messages": [{"role": "user", "content": "anything"}]}
+        if response_shape == "chat":
+            from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        cisco_resp = _make_response(
-            200,
-            {
-                "is_safe": False,
-                "classifications": ["PRIVACY_VIOLATION"],
-                "severity": "HIGH",
-                "rules": [{"rule_name": "PII"}],
-                "action": "redact",
-                "sanitized_text": "Here is the data. [REDACTED]",
-            },
-        )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
-            result = await g.async_post_call_success_hook(
-                data=data,
-                user_api_key_dict=UserAPIKeyAuth(),
-                response=response,
+            response = ModelResponse(
+                choices=[
+                    Choices(
+                        index=0,
+                        finish_reason="tool_calls",
+                        message=Message(
+                            role="assistant",
+                            content="Here is the data.",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_1",
+                                    type="function",
+                                    function=Function(
+                                        name="send",
+                                        arguments='{"data":"SSN 123-45-6789"}',
+                                    ),
+                                )
+                            ],
+                        ),
+                    )
+                ]
             )
+            get_args = (
+                lambda result: result.choices[0]
+                .message.tool_calls[0]
+                .function.arguments
+            )
+        else:
+            from litellm.types.llms.openai import ResponsesAPIResponse
+            from litellm.types.responses.main import OutputFunctionToolCall
 
-        tc_args = result.choices[0].message.tool_calls[0].function.arguments
-        assert "123-45-6789" not in tc_args, (
-            f"Redact applied to content but tool_calls arguments still "
-            f"contain the original unsafe payload: {tc_args!r}"
-        )
+            response = ResponsesAPIResponse(
+                id="resp_1",
+                created_at=0,
+                output=[
+                    OutputFunctionToolCall(
+                        type="function_call",
+                        name="exfil",
+                        call_id="c1",
+                        arguments='{"data":"card 4111-1111-1111-1111"}',
+                        id="fc_1",
+                        status="completed",
+                    )
+                ],
+                parallel_tool_calls=False,
+                tool_choice=None,
+                tools=None,
+                top_p=None,
+                usage=None,
+            )
+            get_args = lambda result: result.output[0].arguments or ""
 
-    @pytest.mark.asyncio
-    async def test_redact_clears_responses_api_output_arguments(self):
-        """P1: Responses API output[*].arguments must be scrubbed."""
-        from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.responses.main import OutputFunctionToolCall
-
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
-        response = ResponsesAPIResponse(
-            id="resp_1",
-            created_at=0,
-            output=[
-                OutputFunctionToolCall(
-                    type="function_call",
-                    name="exfil",
-                    call_id="c1",
-                    arguments='{"data":"card 4111-1111-1111-1111"}',
-                    id="fc_1",
-                    status="completed",
-                )
-            ],
-            parallel_tool_calls=False,
-            tool_choice=None,
-            tools=None,
-            top_p=None,
-            usage=None,
-        )
-        data = {"input": [{"role": "user", "content": "anything"}]}
-
-        cisco_resp = _make_response(
-            200,
+        cisco_resp = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
                 "severity": "HIGH",
-                "rules": [{"rule_name": "PCI"}],
+                "rules": [{"rule_name": rule_name}],
                 "action": "redact",
                 "sanitized_text": "[REDACTED]",
-            },
+            }
         )
         with patch.object(
             g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
@@ -1698,20 +1543,15 @@ class TestCiscoAIDefenseCodexFindings2:
                 response=response,
             )
 
-        out_args = result.output[0].arguments
-        assert "4111-1111-1111-1111" not in (out_args or ""), (
-            f"Responses API output arguments still contain the original "
-            f"unsafe payload after redact: {out_args!r}"
+        args = get_args(result)
+        assert unsafe_fragment not in args, (
+            f"{response_shape} output arguments still contain the original "
+            f"unsafe payload after redact: {args!r}"
         )
 
     @pytest.mark.asyncio
     async def test_redact_applies_to_all_choices_for_n_gt_1(self):
-        """P1 follow-up: ``_redact_model_response_choices`` returned after
-        the first choice in the ``sanitized_text`` branch. For n > 1
-        completions, Cisco's redact verdict left later choices with the
-        original unsafe content. Reproduced by Codex with n=2: choice 0
-        became [REDACTED], choice 1 still contained the SSN.
-        """
+        """All choices must be rewritten when n > 1."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
         g = CiscoAIDefenseGuardrail(
@@ -1722,7 +1562,6 @@ class TestCiscoAIDefenseCodexFindings2:
             on_flagged_action="monitor",
             default_on=True,
         )
-        # Two choices. Both have unsafe content + tool-call args.
         response = ModelResponse(
             choices=[
                 Choices(
@@ -1763,8 +1602,7 @@ class TestCiscoAIDefenseCodexFindings2:
         )
         data = {"messages": [{"role": "user", "content": "ask"}]}
 
-        cisco_resp = _make_response(
-            200,
+        cisco_resp = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
@@ -1841,9 +1679,7 @@ class TestCiscoAIDefenseCodexFindings2:
             ]
         )
         data = {"messages": [{"role": "user", "content": "ask"}]}
-        # Cisco returns ONE sanitized message but the response has 2 choices.
-        cisco_resp = _make_response(
-            200,
+        cisco_resp = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
@@ -1863,9 +1699,7 @@ class TestCiscoAIDefenseCodexFindings2:
                 response=response,
             )
 
-        # Choice 0 got the sanitized replacement.
         assert "[REDACTED]" in result.choices[0].message.content
-        # Choice 1 must not retain the original unsafe content / args.
         c1_content = result.choices[1].message.content or ""
         assert "4111-1111-1111-1111" not in c1_content, (
             f"choice[1] retained the original unsafe content after a "
@@ -1875,51 +1709,96 @@ class TestCiscoAIDefenseCodexFindings2:
         for tc in result.choices[1].message.tool_calls or []:
             assert "4111-1111-1111-1111" not in tc.function.arguments
 
+    @pytest.mark.parametrize(
+        "response_shape,unsafe_fragment,data,rule_name",
+        [
+            (
+                "chat",
+                "123-45-6789",
+                {"messages": [{"role": "user", "content": "ask"}]},
+                "PII",
+            ),
+            (
+                "responses",
+                "4111-1111-1111-1111",
+                {"input": [{"role": "user", "content": "ask"}]},
+                "PCI",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_redact_handles_structured_sanitized_messages_for_chat(self):
-        """P1 follow-up: Cisco can return OpenAI-style structured
-        ``sanitized_messages[*].content`` (a list of content parts).
-        The previous extractor used ``isinstance(content, str)`` only,
-        so structured payloads were skipped and the original assistant
-        content leaked under ``on_flagged_action=monitor``.
-        """
+    async def test_redact_handles_structured_sanitized_messages(
+        self, response_shape, unsafe_fragment, data, rule_name
+    ):
+        """Structured sanitized_messages must rewrite both chat and Responses API output."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
             inspection_type="chat",
             event_hook="post_call",
-            on_flagged_action="monitor",  # leak surface
+            on_flagged_action="monitor",
             default_on=True,
         )
-        response = ModelResponse(
-            choices=[
-                Choices(
-                    index=0,
-                    finish_reason="stop",
-                    message=Message(
+        if response_shape == "chat":
+            response = ModelResponse(
+                choices=[
+                    Choices(
+                        index=0,
+                        finish_reason="stop",
+                        message=Message(
+                            role="assistant",
+                            content="leak the SSN 123-45-6789",
+                        ),
+                    )
+                ]
+            )
+            get_text = lambda result: result.choices[0].message.content or ""
+        else:
+            from litellm.types.llms.openai import ResponsesAPIResponse
+            from litellm.types.responses.main import (
+                GenericResponseOutputItem,
+                OutputText,
+            )
+
+            response = ResponsesAPIResponse(
+                id="r1",
+                created_at=0,
+                output=[
+                    GenericResponseOutputItem(
+                        type="message",
+                        id="m1",
+                        status="completed",
                         role="assistant",
-                        content="leak the SSN 123-45-6789",
-                    ),
-                )
-            ]
-        )
-        data = {"messages": [{"role": "user", "content": "ask"}]}
-        cisco_resp = _make_response(
-            200,
+                        content=[
+                            OutputText(
+                                type="output_text",
+                                text="leak the card 4111-1111-1111-1111",
+                                annotations=[],
+                            )
+                        ],
+                    )
+                ],
+                parallel_tool_calls=False,
+                tool_choice=None,
+                tools=None,
+                top_p=None,
+                usage=None,
+            )
+            get_text = lambda result: result.output[0].content[0].text
+
+        cisco_resp = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
-                "rules": [{"rule_name": "PII"}],
+                "rules": [{"rule_name": rule_name}],
                 "action": "redact",
-                # Structured content — what /v1/responses-shaped Cisco
-                # returns.
                 "sanitized_messages": [
                     {
                         "role": "assistant",
                         "content": [{"type": "output_text", "text": "leak [REDACTED]"}],
                     }
                 ],
-            },
+            }
         )
         with patch.object(
             g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
@@ -1929,85 +1808,12 @@ class TestCiscoAIDefenseCodexFindings2:
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=response,
             )
-        out = result.choices[0].message.content or ""
-        assert "123-45-6789" not in out, (
-            f"Chat output redact silently failed on structured "
-            f"sanitized_messages content. Original payload leaked: {out!r}"
+        out = get_text(result)
+        assert unsafe_fragment not in out, (
+            f"{response_shape} output redact failed on structured "
+            f"sanitized_messages content. Original leaked: {out!r}"
         )
         assert "[REDACTED]" in out
-
-    @pytest.mark.asyncio
-    async def test_redact_handles_structured_sanitized_messages_for_responses_api(self):
-        """Same bug on the Responses API output path: replacement_text was
-        built only from string contents, so structured sanitized_messages
-        produced an empty replacement and the original output leaked."""
-        from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.responses.main import (
-            GenericResponseOutputItem,
-            OutputText,
-        )
-
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
-        response = ResponsesAPIResponse(
-            id="r1",
-            created_at=0,
-            output=[
-                GenericResponseOutputItem(
-                    type="message",
-                    id="m1",
-                    status="completed",
-                    role="assistant",
-                    content=[
-                        OutputText(
-                            type="output_text",
-                            text="leak the card 4111-1111-1111-1111",
-                            annotations=[],
-                        )
-                    ],
-                )
-            ],
-            parallel_tool_calls=False,
-            tool_choice=None,
-            tools=None,
-            top_p=None,
-            usage=None,
-        )
-        cisco_resp = _make_response(
-            200,
-            {
-                "is_safe": False,
-                "classifications": ["PRIVACY_VIOLATION"],
-                "rules": [{"rule_name": "PCI"}],
-                "action": "redact",
-                "sanitized_messages": [
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "leak [REDACTED]"}],
-                    }
-                ],
-            },
-        )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
-            result = await g.async_post_call_success_hook(
-                data={"input": [{"role": "user", "content": "ask"}]},
-                user_api_key_dict=UserAPIKeyAuth(),
-                response=response,
-            )
-        out_text = result.output[0].content[0].text
-        assert "4111-1111-1111-1111" not in out_text, (
-            f"Responses API output redact silently failed on structured "
-            f"sanitized_messages content. Original leaked: {out_text!r}"
-        )
-        assert "[REDACTED]" in out_text
 
     def _canonical_payload_assertions(self, payload, surface, direction):
         """Shared invariants every Cisco block payload must satisfy."""
@@ -2017,7 +1823,6 @@ class TestCiscoAIDefenseCodexFindings2:
         assert payload["surface"] == surface
         assert payload["direction"] == direction
         assert payload["action"] == "block"
-        # Structured fields are present (may be empty/None but key is there).
         for key in ("classifications", "rules", "severity", "explanation", "event_id"):
             assert (
                 key in payload
@@ -2037,8 +1842,6 @@ class TestCiscoAIDefenseCodexFindings2:
     async def test_block_payload_canonical(self, surface, direction, transport):
         """Every block surface emits the same canonical payload shape."""
         import json as _json
-        from datetime import datetime as _dt
-
         from litellm.types.mcp import MCPPostCallResponseObject
 
         url = MCP_URL if surface == "mcp" else CHAT_URL
@@ -2073,7 +1876,7 @@ class TestCiscoAIDefenseCodexFindings2:
                         await g.async_pre_call_hook(
                             user_api_key_dict=UserAPIKeyAuth(),
                             cache=DualCache(),
-                            data=_mcp_request_data(name="leak", args={"x": 1}),
+                            data=_mcp_request(name="leak", args={"x": 1}),
                             call_type="mcp_call",
                         )
             payload = exc.value.detail
@@ -2098,22 +1901,20 @@ class TestCiscoAIDefenseCodexFindings2:
                         await g.async_pre_call_hook(
                             user_api_key_dict=UserAPIKeyAuth(),
                             cache=DualCache(),
-                            data=_mcp_request_data(name="leak", args={"x": 1}),
+                            data=_mcp_request(name="leak", args={"x": 1}),
                             call_type="mcp_call",
                         )
                 payload = exc.value.detail
             else:
-                response_obj = _mock_mcp_response_obj(
-                    [{"type": "text", "text": "leaked"}]
-                )
+                response_obj = _mcp_response([{"type": "text", "text": "leaked"}])
                 with patch.object(
                     g.async_handler, "post", new=AsyncMock(return_value=violation)
                 ):
                     result = await g.async_post_mcp_tool_call_hook(
                         kwargs={"name": "leak", "arguments": {}},
                         response_obj=response_obj,
-                        start_time=_dt.now(),
-                        end_time=_dt.now(),
+                        start_time=datetime.now(),
+                        end_time=datetime.now(),
                     )
                 assert isinstance(result, MCPPostCallResponseObject)
                 text = result.mcp_tool_call_response[0].text
@@ -2142,8 +1943,7 @@ class TestCiscoAIDefenseCodexFindings2:
         )
 
     def test_sanitize_logging_strips_nested_keys(self):
-        """P2: _sanitize_response_for_logging must strip sensitive keys
-        from nested dicts (e.g. MCP ``result.raw_request``)."""
+        """Logging sanitization strips sensitive nested keys."""
         verdict = {
             "is_safe": False,
             "result": {
@@ -2167,36 +1967,13 @@ class TestCiscoAIDefenseCodexFindings2:
         assert (
             "sanitized_payload" not in result
         ), f"Nested result.sanitized_payload not stripped: {result!r}"
-        # Legitimate fields survive.
         assert result.get("classifications") == ["PII"]
         assert result.get("action") == "block"
         assert sanitized.get("surface") == "mcp"
 
 
-class TestCiscoAIDefenseCodexFindings:
-    """Regressions for Codex review on PR #28249.
-
-    Covers four findings + one UX clarification:
-
-    * P1 — Streaming non-OpenAI shapes (Anthropic SSE bytes, Responses
-      API pydantic events) bypassed the post-call scan. We now fail
-      closed instead of passing them through unscanned.
-    * P1 — ``_apply_redaction`` for ``surface=mcp, direction=input``
-      only wrote ``request_data["mcp_arguments"]``. For JSON-RPC
-      requests the real arguments live at
-      ``data["params"]["arguments"]``; the proxy forwards the original
-      ``params`` upstream, so redact was silently dropped.
-    * P2 — ``_handle_api_error`` always recorded ``pre_call`` /
-      ``pre_mcp_call`` as the logging ``event_type``, even when the
-      failing scan was an output-side one. Skews
-      ``standard_logging_payload``-driven dashboards.
-    * P3 — Stale ``mcp_api_key`` reference in the config model docstring
-      (the field doesn't exist).
-    * UX — MCP response scanning previously required
-      ``during_mcp_call`` to be configured; users who picked only
-      ``pre_mcp_call`` got request-only scanning. Per product
-      decision, either MCP mode now enables response scanning.
-    """
+class TestCiscoAIDefenseEdgeCases:
+    """Additional streaming, MCP, logging, and config edge cases."""
 
     @pytest.mark.asyncio
     async def test_streaming_anthropic_sse_bytes_fails_closed(self):
@@ -2226,13 +2003,11 @@ class TestCiscoAIDefenseCodexFindings:
             ):
                 yielded.append(chunk)
 
-        # The original Anthropic bytes must NOT be in the output.
         for chunk in yielded:
             assert chunk not in anthropic_chunks, (
                 f"Anthropic SSE bytes leaked to the client unscanned. "
                 f"Chunk: {chunk!r}"
             )
-        # An SSE error event must have been emitted.
         assert any(
             isinstance(c, str)
             and c.startswith("data: ")
@@ -2247,8 +2022,6 @@ class TestCiscoAIDefenseCodexFindings:
     @pytest.mark.asyncio
     async def test_streaming_responses_pydantic_events_fail_closed(self):
         """Same fail-closed posture for ``/v1/responses`` pydantic events."""
-        from types import SimpleNamespace
-
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -2256,9 +2029,6 @@ class TestCiscoAIDefenseCodexFindings:
             event_hook=["pre_call", "post_call"],
             default_on=True,
         )
-        # SimpleNamespace stands in for a Responses event Pydantic model
-        # (the proxy delivers various event subclasses; what matters is
-        # they're not ModelResponse/ModelResponseStream).
         responses_events = [
             SimpleNamespace(
                 type="response.output_text.delta", delta="leak 4111-1111-1111-1111"
@@ -2296,21 +2066,15 @@ class TestCiscoAIDefenseCodexFindings:
             api_key="x",
             inspection_type="mcp",
             event_hook="pre_mcp_call",
-            on_flagged_action="monitor",  # Fall-through-to-monitor leaks
-            # the original arguments if redact writes the wrong field.
+            on_flagged_action="monitor",
             default_on=True,
         )
-        data = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "tools/call",
-            "params": {
-                "name": "send_data",
-                "arguments": {"data": "leak 123-45-6789"},
-            },
-        }
-        cisco_resp = _make_response(
-            200,
+        data = _mcp_request(
+            name="send_data",
+            args={"data": "leak 123-45-6789"},
+            jsonrpc=True,
+        )
+        cisco_resp = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
@@ -2334,8 +2098,6 @@ class TestCiscoAIDefenseCodexFindings:
                 call_type="mcp_call",
             )
 
-        # The proxy reads ``data["params"]["arguments"]`` — that's what
-        # must be sanitized.
         actual = data.get("params", {}).get("arguments", {})
         assert actual == {"data": "leak [REDACTED]"}, (
             f"Redact did not rewrite ``params.arguments`` on a JSON-RPC "
@@ -2405,12 +2167,10 @@ class TestCiscoAIDefenseCodexFindings:
             CiscoAIDefenseGuardrailConfigModelOptionalParams,
         )
 
-        # The field genuinely doesn't exist.
         assert (
             "mcp_api_key"
             not in CiscoAIDefenseGuardrailConfigModelOptionalParams.model_fields
         )
-        # And the docstring must not advertise it.
         api_key_field = CiscoAIDefenseGuardrailConfigModel.model_fields["api_key"]
         description = api_key_field.description or ""
         assert "mcp_api_key" not in description, (
@@ -2431,25 +2191,20 @@ class TestCiscoAIDefenseCodexFindings:
             guardrail_name="t",
             api_key="x",
             inspection_type="mcp",
-            event_hook="pre_mcp_call",  # No during_mcp_call.
+            event_hook="pre_mcp_call",
             default_on=True,
         )
-        from types import SimpleNamespace
-
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=[{"type": "text", "text": "leaked SSN 123-45-6789"}],
-            hidden_params=SimpleNamespace(response_cost=0.0),
+        response_obj = _mcp_response(
+            [{"type": "text", "text": "leaked SSN 123-45-6789"}]
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "lookup", "arguments": {}},
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
         assert post_mock.called, (
@@ -2461,35 +2216,16 @@ class TestCiscoAIDefenseCodexFindings:
 
 
 class TestCiscoAIDefenseEnabledRulesPydanticShape:
-    """Regression for Greptile P1 (PR #28249):
-    "_normalize_rule raises ValueError for Pydantic CiscoAIDefenseRule".
-
-    When ``enabled_rules`` is configured via YAML / the dashboard form,
-    it travels through the typed
-    ``CiscoAIDefenseGuardrailConfigModelOptionalParams.enabled_rules:
-    List[CiscoAIDefenseRule]`` validation path. Pydantic coerces each
-    entry into a ``CiscoAIDefenseRule`` model instance — NOT a dict.
-
-    ``_normalize_rule`` was only handling ``dict`` and ``str``, so the
-    third branch raised ``ValueError`` for the Pydantic shape. Because
-    ``_build_chat_payload`` is called BEFORE the try/except in
-    ``_inspect_chat``, the ``ValueError`` propagated uncaught and any
-    user who configured ``enabled_rules`` in YAML would get a 500 on
-    every request.
-    """
+    """enabled_rules may arrive as Pydantic rule objects."""
 
     @pytest.mark.asyncio
     async def test_enabled_rules_from_pydantic_model_does_not_500(self):
-        """End-to-end via the typed config path. Before the fix this
-        raised ``ValueError`` from _normalize_rule → 500 to the user.
-        """
+        """Typed config enabled_rules are normalized into Cisco wire shape."""
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseGuardrailConfigModelOptionalParams,
             CiscoAIDefenseRule,
         )
 
-        # Build optional_params the same way LitellmParams validation does
-        # — Pydantic coerces each entry to ``CiscoAIDefenseRule``.
         optional_params = CiscoAIDefenseGuardrailConfigModelOptionalParams(
             enabled_rules=[
                 {"rule_name": "PII", "entity_types": ["Email Address"]},
@@ -2514,10 +2250,6 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
         )
         data = {"messages": [{"role": "user", "content": "hi"}]}
 
-        # If _normalize_rule still raises ValueError on the Pydantic
-        # shape, this will fail with a 500 chain (ValueError ascending
-        # past the try/except in _inspect_chat → HTTPException with
-        # status 500 from the framework wrapper).
         post_mock = AsyncMock(return_value=_safe_response())
         with patch.object(g.async_handler, "post", new=post_mock):
             await g.async_pre_call_hook(
@@ -2532,8 +2264,6 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
             "ValueError for the CiscoAIDefenseRule Pydantic shape, "
             "and the exception bubbled out of _build_chat_payload."
         )
-        # The wire payload must contain the user's enabled_rules in the
-        # ``config`` envelope so Cisco actually applies them.
         sent = post_mock.call_args.kwargs["json"]
         config = sent.get("config") or {}
         rules = config.get("enabled_rules") or []
@@ -2548,12 +2278,7 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
         )
 
     def test_normalize_rule_handles_pydantic_basemodel_directly(self):
-        """Unit-level test pinning the helper's contract for any
-        BaseModel-like input (defense in depth — even if the typed
-        config path stops emitting Pydantic instances tomorrow, the
-        helper must still survive whatever ``_get_optional_value``
-        returns).
-        """
+        """BaseModel-like inputs are accepted by the normalization helper."""
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseRule,
         )
@@ -2565,24 +2290,12 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
 
 
 class TestCiscoAIDefenseRedactListShape:
-    """Regression for Greptile P1 (PR #28249):
-    "MCP response redaction silently blocked instead of redacted".
-
-    The redaction helper ``_set_mcp_tool_response_text`` was implemented
-    against the original ``MCPPostCallResponseObject`` wrapper but is
-    invoked with the *extracted inner* — a raw list of content items
-    (or a Pydantic-coerced list of ``(field_name, value)`` tuples).
-    Neither has a ``.content`` attribute, so the helper returned
-    ``False`` and the redact path silently fell through to ``block``.
-    Cisco asked for ``redact``; we returned ``block``. Still safe, but
-    incorrect.
-    """
+    """MCP response redaction handles list-shaped tool output."""
 
     @staticmethod
     def _violation_with_redact_response(text: str = "[REDACTED tool output]"):
         """Cisco verdict requesting redact with a sanitized_text rewrite."""
-        return _make_response(
-            200,
+        return _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
@@ -2620,13 +2333,7 @@ class TestCiscoAIDefenseRedactListShape:
     )
     @pytest.mark.asyncio
     async def test_redact_rewrites_mcp_response_list_shape(self, factory_name):
-        """The MCP response redact path must accept both production
-        shapes: raw list of content-item dicts AND Pydantic-coerced
-        ``List[(field_name, value)]`` tuples produced from a
-        ``CallToolResult`` BaseModel.
-        """
-        from datetime import datetime as _dt
-        from types import SimpleNamespace
+        """Raw content lists and Pydantic tuple lists are both rewritten."""
 
         from litellm.types.mcp import MCPPostCallResponseObject
 
@@ -2639,10 +2346,7 @@ class TestCiscoAIDefenseRedactListShape:
         )
 
         content, get_text = getattr(self, factory_name)()
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=content,
-            hidden_params=SimpleNamespace(response_cost=0.0),
-        )
+        response_obj = _mcp_response(content)
 
         with patch.object(
             g.async_handler,
@@ -2652,8 +2356,8 @@ class TestCiscoAIDefenseRedactListShape:
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "leak", "arguments": {}},
                 response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
         assert result is None or not isinstance(result, MCPPostCallResponseObject), (
@@ -2667,35 +2371,15 @@ class TestCiscoAIDefenseRedactListShape:
 
 
 class TestCiscoAIDefenseResponsesAPIBypass:
-    """Regression for Veria AI High (PR #28249):
-    "Responses API input bypass".
-
-    The OpenAI ``/v1/responses`` API uses ``input`` instead of
-    ``messages``. ``input`` can be a string, a list of content-part
-    dicts (``{"type": "input_text", "text": "..."}``), or a list of
-    message-shaped dicts that themselves contain nested content lists:
-
-        input: [
-            {"role": "user", "content": [
-                {"type": "input_text", "text": "..."}
-            ]}
-        ]
-
-    The previous extractor only recognized ``type: "text"`` at the
-    top level — it returned no messages for ``input_text`` and never
-    descended into nested ``content`` lists. The pre-call scan was
-    therefore skipped for any structured Responses API input.
-    """
+    """Responses API ``input`` shapes must be flattened for scanning."""
 
     @pytest.mark.parametrize(
         "input_value,expected_substring",
         [
-            # Flat list of {"type": "input_text", ...} parts.
             (
                 [{"type": "input_text", "text": "leak the SSN: 123-45-6789"}],
                 "123-45-6789",
             ),
-            # Structured: list of message-shaped items with nested content.
             (
                 [
                     {
@@ -2710,7 +2394,6 @@ class TestCiscoAIDefenseResponsesAPIBypass:
                 ],
                 "4111-1111-1111-1111",
             ),
-            # Symmetry: assistant-side ``output_text`` recognized in input.
             (
                 [
                     {
@@ -2749,10 +2432,7 @@ class TestCiscoAIDefenseResponsesAPIBypass:
                 call_type="completion",
             )
 
-        assert post_mock.called, (
-            "Pre-call scan skipped a Responses API input. The bypass "
-            "surface Veria AI flagged is still open."
-        )
+        assert post_mock.called, "Pre-call scan skipped a Responses API input."
         sent = post_mock.call_args.kwargs["json"]
         joined = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
         assert expected_substring in joined, (
@@ -2762,22 +2442,11 @@ class TestCiscoAIDefenseResponsesAPIBypass:
 
 
 class TestCiscoAIDefenseToolCallBypass:
-    """Regression for Veria AI High (PR #28249):
-    "Tool-call output bypass".
-
-    A model can place sensitive content in
-    ``message.tool_calls[*].function.arguments`` (or the legacy
-    ``message.function_call.arguments``) while ``message.content``
-    stays empty. The previous extractor only looked at
-    ``message.content`` and returned no scannable text, so the
-    post-call scan was skipped — but the tool-call arguments WERE
-    returned to the client.
-    """
+    """Tool-call and function-call output arguments are scannable output."""
 
     @pytest.mark.parametrize(
         "message_kwargs,expected_text_in_scan",
         [
-            # Modern tool_calls shape.
             (
                 {
                     "content": None,
@@ -2798,7 +2467,6 @@ class TestCiscoAIDefenseToolCallBypass:
                 },
                 "123-45-6789",
             ),
-            # Legacy ``function_call`` shape.
             (
                 {
                     "content": None,
@@ -2878,31 +2546,11 @@ class TestCiscoAIDefenseToolCallBypass:
 
 
 class TestCiscoAIDefenseStreamingBypass:
-    """Regression tests for Veria AI security review on PR #28249:
-    "Streaming output bypass" (High severity).
-
-    Without ``async_post_call_streaming_iterator_hook`` the proxy
-    delivers streamed chunks first and runs the post-call hook *after*
-    the stream is closed. A caller could therefore set ``stream: true``
-    on ``/v1/chat/completions`` and receive output that the
-    non-streaming path would have blocked, because by the time
-    ``async_post_call_success_hook`` runs the violation has already
-    been delivered to the client.
-
-    The fix buffers every chunk, assembles a ``ModelResponse`` via
-    ``stream_chunk_builder``, runs the same chat inspection the
-    non-streaming path uses, and only releases chunks (or a sanitized
-    rewrite) AFTER the verdict is known. On block we emit an SSE
-    ``data: {"error": ...}`` event in place of the buffered chunks so
-    the client sees an explicit failure instead of leaked content.
-    """
+    """Streaming output is buffered until Cisco returns a verdict."""
 
     @pytest.mark.asyncio
     async def test_streaming_violation_does_not_deliver_original_chunks(self):
-        """The core bypass regression: with a violation verdict, the
-        original buffered chunks must NEVER be yielded; an SSE error
-        event must be yielded instead.
-        """
+        """Block verdicts yield an SSE error instead of original chunks."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -2941,11 +2589,7 @@ class TestCiscoAIDefenseStreamingBypass:
 
     @pytest.mark.asyncio
     async def test_streaming_inspect_is_called_before_any_chunk_is_yielded(self):
-        """Defense property: the hook must buffer the full upstream stream
-        BEFORE making any client-visible yield. If any chunk is yielded
-        before Cisco returns a verdict, a malicious upstream could be
-        racing the inspect call.
-        """
+        """The hook buffers the full stream before any client-visible yield."""
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
             api_key="x",
@@ -3061,31 +2705,12 @@ class TestCiscoAIDefenseStreamingBypass:
 
 
 class TestCiscoAIDefenseSurfaceBypass:
-    """Regression tests for Veria AI security review on PR #28249:
-    "chat guardrail bypass via user-controlled MCP shape" (High severity).
-
-    Before the fix the surface decision was
-
-        is_mcp = self._is_mcp_call_type(call_type) or self._is_mcp_request_shape(data)
-
-    The OR with payload-shape sniffing let a caller bypass a chat-mode
-    guardrail by adding ``mcp_tool_name`` + ``mcp_arguments`` (or a
-    JSON-RPC envelope) to a regular chat completion request, even though
-    the proxy set ``call_type="completion"``. ``_surface_matches`` then
-    returned False for a chat-mode guardrail and the request flowed
-    unscanned.
-
-    The fix: trust ``call_type`` (set by the proxy, not the caller) as
-    the authoritative source. Payload-shape sniffing is removed from the
-    pre/moderation/post hooks. Tests pin that the proxy-asserted surface
-    wins over any caller-controlled body content.
-    """
+    """Surface routing trusts proxy call_type over request body shape."""
 
     @pytest.mark.parametrize(
         "hook,inspection_type,event_hook,call_type,data,response,"
         "expected_called,expected_url",
         [
-            # Chat pre_call must scan even with spoofed MCP fields.
             (
                 "pre_call",
                 "chat",
@@ -3102,7 +2727,6 @@ class TestCiscoAIDefenseSurfaceBypass:
                 True,
                 CHAT_URL,
             ),
-            # Chat pre_call must scan even with spoofed JSON-RPC field.
             (
                 "pre_call",
                 "chat",
@@ -3116,7 +2740,6 @@ class TestCiscoAIDefenseSurfaceBypass:
                 True,
                 CHAT_URL,
             ),
-            # Chat moderation/during_call: same bypass closed.
             (
                 "moderation",
                 "chat",
@@ -3131,7 +2754,6 @@ class TestCiscoAIDefenseSurfaceBypass:
                 True,
                 CHAT_URL,
             ),
-            # Chat post_call: request with spoofed MCP fields still scans.
             (
                 "post_call",
                 "chat",
@@ -3146,8 +2768,6 @@ class TestCiscoAIDefenseSurfaceBypass:
                 True,
                 None,
             ),
-            # Chat post_call: model returns JSON-RPC-looking payload as
-            # text — must still scan.
             (
                 "post_call",
                 "chat",
@@ -3158,8 +2778,6 @@ class TestCiscoAIDefenseSurfaceBypass:
                 True,
                 None,
             ),
-            # MCP pre_mcp_call must SKIP chat traffic even with spoofed
-            # mcp_tool_name in the body.
             (
                 "pre_call",
                 "mcp",
@@ -3235,30 +2853,12 @@ class TestCiscoAIDefenseSurfaceBypass:
 
 
 class TestCiscoAIDefenseMCPBlockingContract:
-    """Regression tests for the litellm post-MCP dispatcher contract.
-
-    The dispatcher (``litellm_logging.async_post_mcp_tool_call_hook``):
-
-    1. Iterates ``litellm.success_callback`` only.
-    2. Wraps each callback in ``try: ... except Exception``, logging as
-       non-blocking. A raised ``HTTPException`` is therefore silently
-       swallowed and the unsafe tool output flows to the caller.
-    3. If the callback returns a non-None ``MCPPostCallResponseObject``,
-       its ``mcp_tool_call_response`` REPLACES the original tool output.
-
-    So the only way an MCP-response guardrail can enforce a block is to
-    return a synthetic ``MCPPostCallResponseObject``. These tests pin
-    that contract.
-    """
+    """MCP response blocks use the dispatcher replacement contract."""
 
     @pytest.mark.asyncio
-    async def test_block_returns_synthetic_response_does_not_raise(self):
-        """P1 regression: block must NOT raise — must return a synthetic
-        ``MCPPostCallResponseObject``. Verified by passing the hook
-        through the same blanket ``except Exception`` the dispatcher uses
-        and asserting that the returned object would still propagate
-        through ``_parse_post_mcp_call_hook_response``.
-        """
+    async def test_block_response_survives_dispatcher_contract(self):
+        """Block must return a synthetic response the dispatcher can parse."""
+        from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.types.mcp import MCPPostCallResponseObject
 
         g = CiscoAIDefenseGuardrail(
@@ -3268,30 +2868,21 @@ class TestCiscoAIDefenseMCPBlockingContract:
             event_hook=["pre_mcp_call", "during_mcp_call"],
             default_on=True,
         )
-        from types import SimpleNamespace
+        response_obj = _mcp_response([{"type": "text", "text": "exfiltrated"}])
 
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=[{"type": "text", "text": "exfiltrated"}],
-            hidden_params=SimpleNamespace(response_cost=0.0),
-        )
-
-        # Mimic the dispatcher's blanket exception swallow.
         post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
         captured: Dict[str, Any] = {}
         with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
             try:
                 captured["result"] = await g.async_post_mcp_tool_call_hook(
                     kwargs={"name": "leak", "arguments": {}},
                     response_obj=response_obj,
-                    start_time=_dt.now(),
-                    end_time=_dt.now(),
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
                 )
-            except Exception as e:  # dispatcher's blanket clause
+            except Exception as e:
                 captured["swallowed"] = repr(e)
 
-        # No swallowed exception (P1 regression).
         assert "swallowed" not in captured, (
             f"async_post_mcp_tool_call_hook raised — the litellm "
             f"dispatcher would swallow this and the block would be lost. "
@@ -3302,65 +2893,15 @@ class TestCiscoAIDefenseMCPBlockingContract:
             "Hook must return a MCPPostCallResponseObject so the "
             "dispatcher swaps the tool output with the synthetic block."
         )
-        replacement = result.mcp_tool_call_response
-        assert len(replacement) == 1
-        text = getattr(replacement[0], "text", None) or replacement[0].get("text", "")
-        assert "Blocked by Cisco AI Defense" in text
-
-    @pytest.mark.asyncio
-    async def test_blocking_response_is_compatible_with_dispatcher_parser(self):
-        """The returned object must round-trip through
-        ``_parse_post_mcp_call_hook_response`` — that's what the dispatcher
-        calls on a non-None hook return to extract the new tool response.
-        """
-        from litellm.litellm_core_utils.litellm_logging import Logging
-
-        from types import SimpleNamespace
-
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-mcp",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook=["pre_mcp_call", "during_mcp_call"],
-            default_on=True,
-        )
-        response_obj = SimpleNamespace(
-            mcp_tool_call_response=[{"type": "text", "text": "leak"}],
-            hidden_params=SimpleNamespace(response_cost=0.0),
-        )
-
-        post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
-            from datetime import datetime as _dt
-
-            synthetic = await g.async_post_mcp_tool_call_hook(
-                kwargs={"name": "leak", "arguments": {}},
-                response_obj=response_obj,
-                start_time=_dt.now(),
-                end_time=_dt.now(),
-            )
-
-        # The dispatcher's parser pulls the new mcp_tool_call_response out
-        # of the synthetic envelope; it must not raise.
         logging_stub = Logging.__new__(Logging)
         logging_stub.model_call_details = {}
-        parsed = logging_stub._parse_post_mcp_call_hook_response(response=synthetic)
+        parsed = logging_stub._parse_post_mcp_call_hook_response(response=result)
         assert parsed is not None
-        # The replacement reaches the caller; the dispatcher returns
-        # ``response_obj`` after the swap, so this is what an MCP client
-        # would see.
-        text = getattr(parsed[0], "text", None) or parsed[0].get("text", "")
-        assert "Blocked by Cisco AI Defense" in text
+        assert "Blocked by Cisco AI Defense" in _mcp_result_text(parsed)
 
 
 class TestCiscoAIDefenseEventTypeDirection:
-    """Regression tests for review comment P3 (PR #28249).
-
-    Output-direction scans must log under ``post_call`` (chat) /
-    ``during_mcp_call`` (mcp), not ``pre_call`` / ``pre_mcp_call``, so
-    Datadog/Langfuse/OTEL dashboards can bucket input vs output
-    violations correctly.
-    """
+    """Input and output scans log under distinct event types."""
 
     @staticmethod
     def _spy_event_types(g: "CiscoAIDefenseGuardrail") -> "tuple[list, Any]":
@@ -3394,8 +2935,6 @@ class TestCiscoAIDefenseEventTypeDirection:
     async def test_direction_logs_as_expected_event_type(
         self, inspection_type, direction, expected_event_attr
     ):
-        from datetime import datetime as _dt
-
         from litellm.types.guardrails import GuardrailEventHooks
 
         if inspection_type == "chat":
@@ -3447,17 +2986,15 @@ class TestCiscoAIDefenseEventTypeDirection:
             elif inspection_type == "mcp" and direction == "output":
                 await g.async_post_mcp_tool_call_hook(
                     kwargs={"name": "lookup", "arguments": {}},
-                    response_obj=_mock_mcp_response_obj(),
-                    start_time=_dt.now(),
-                    end_time=_dt.now(),
+                    response_obj=_mcp_response(),
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
                 )
             else:  # mcp input
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
                     cache=DualCache(),
-                    data=_mcp_request_data(
-                        name="tool", args={"x": 1}, litellm_call_id="c"
-                    ),
+                    data=_mcp_request(name="tool", args={"x": 1}, litellm_call_id="c"),
                     call_type="mcp_call",
                 )
 
@@ -3542,7 +3079,7 @@ class TestCiscoAIDefenseRedactAction:
         }
         if sanitized_messages is not None:
             body["sanitized_messages"] = sanitized_messages
-        return _make_response(200, body, url=url)
+        return _mock_inspect_response(body, url=url)
 
     @pytest.mark.asyncio
     async def test_chat_request_redact_rewrites_last_user_message(self):
@@ -3574,7 +3111,6 @@ class TestCiscoAIDefenseRedactAction:
                 data=data,
                 call_type="completion",
             )
-        # Did NOT raise; the user message was rewritten in place.
         assert result == data
         assert data["messages"][1]["content"] == "my email is [REDACTED]", data[
             "messages"
@@ -3643,14 +3179,10 @@ class TestCiscoAIDefenseRedactAction:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "mcp_tool_name": "send_email",
-            "mcp_arguments": {"to": "alice@example.com", "body": "hi"},
-        }
-        # Reference plugin returns sanitized arguments under params.arguments
-        # or sanitized_payload.params.arguments.
-        cisco_response = _make_response(
-            200,
+        data = _mcp_request(
+            name="send_email", args={"to": "alice@example.com", "body": "hi"}
+        )
+        cisco_response = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
@@ -3685,19 +3217,14 @@ class TestCiscoAIDefenseRedactAction:
             default_on=True,
             on_flagged_action="block",
         )
-        # Data has no messages at all and only a 'prompt' string — but the
-        # API claims redact without supplying sanitized content. We must
-        # block, not silently pass through.
         data = {"prompt": "secret abc"}
-        cisco_response = _make_response(
-            200,
+        cisco_response = _mock_inspect_response(
             {
                 "is_safe": False,
                 "classifications": ["PRIVACY_VIOLATION"],
                 "severity": "HIGH",
                 "rules": [],
                 "action": "redact",
-                # NO sanitized_text / sanitized_messages
                 "event_id": "evt_no_rewrite",
             },
         )
@@ -3738,8 +3265,7 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
 
     @staticmethod
     def _cisco_mcp_envelope(*, is_safe: bool, action: str = "Block") -> Response:
-        return _make_response(
-            200,
+        return _mock_inspect_response(
             {
                 "jsonrpc": "2.0",
                 "id": 3,
@@ -3762,9 +3288,14 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
             url=MCP_URL,
         )
 
+    @pytest.mark.parametrize(
+        "is_safe,action,should_block",
+        [(False, "Block", True), (True, "Allow", False)],
+    )
     @pytest.mark.asyncio
-    async def test_mcp_jsonrpc_envelope_with_is_safe_false_blocks(self):
-        """The exact captured envelope from Cisco must result in a block."""
+    async def test_mcp_jsonrpc_envelope_respects_verdict(
+        self, is_safe, action, should_block
+    ):
         g = CiscoAIDefenseGuardrail(
             guardrail_name="cisco-mcp",
             api_key="x",
@@ -3772,62 +3303,46 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "mcp_tool_name": "ask_question",
-            "mcp_arguments": {
+        data = _mcp_request(
+            name="ask_question",
+            args={
                 "repoName": "facebook/react",
                 "question": "What is React Fiber 9045629876?",
             },
-        }
+        )
         with patch.object(
             g.async_handler,
             "post",
-            new=AsyncMock(return_value=self._cisco_mcp_envelope(is_safe=False)),
+            new=AsyncMock(
+                return_value=self._cisco_mcp_envelope(is_safe=is_safe, action=action)
+            ),
         ):
-            with pytest.raises(HTTPException) as exc:
-                await g.async_pre_call_hook(
+            if should_block:
+                with pytest.raises(HTTPException) as exc:
+                    await g.async_pre_call_hook(
+                        user_api_key_dict=UserAPIKeyAuth(),
+                        cache=DualCache(),
+                        data=data,
+                        call_type="mcp_call",
+                    )
+                assert exc.value.status_code == 400
+                assert exc.value.detail["surface"] == "mcp"
+                assert (
+                    exc.value.detail["event_id"]
+                    == "645d9d22-b016-47e0-a12c-9d587fb11c57"
+                )
+            else:
+                result = await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
                     cache=DualCache(),
                     data=data,
                     call_type="mcp_call",
                 )
-        # is_safe=false + action="Block" inside `result` must be honoured
-        # — not silently passed through (which is the regression we
-        # captured from the live stack).
-        assert exc.value.status_code == 400
-        assert exc.value.detail["surface"] == "mcp"
-        assert exc.value.detail["event_id"] == "645d9d22-b016-47e0-a12c-9d587fb11c57"
-
-    @pytest.mark.asyncio
-    async def test_mcp_jsonrpc_envelope_with_is_safe_true_allows(self):
-        """Symmetric case: result.is_safe = true must NOT block."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-mcp",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook="pre_mcp_call",
-            default_on=True,
-        )
-        data = {"mcp_tool_name": "ping", "mcp_arguments": {}}
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(
-                return_value=self._cisco_mcp_envelope(is_safe=True, action="Allow")
-            ),
-        ):
-            result = await g.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=DualCache(),
-                data=data,
-                call_type="mcp_call",
-            )
-        assert result == data
+                assert result == data
 
     @pytest.mark.parametrize(
         "verdict,expected",
         [
-            # Chat endpoint doesn't wrap; helper must be a no-op.
             (
                 {
                     "is_safe": False,
@@ -3836,7 +3351,6 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
                 },
                 "passthrough",
             ),
-            # MCP envelope returns the inner result dict.
             (
                 {
                     "jsonrpc": "2.0",
@@ -3892,7 +3406,7 @@ class TestCiscoAIDefenseJsonRpcError:
             event_hook="pre_call",
             default_on=True,
         )
-        cisco_response = _make_response(200, cisco_body)
+        cisco_response = _mock_inspect_response(cisco_body)
         data = {"messages": [{"role": "user", "content": "hi"}]}
         with patch.object(
             g.async_handler, "post", new=AsyncMock(return_value=cisco_response)
@@ -3918,19 +3432,22 @@ class TestCiscoAIDefenseJsonRpcError:
 
 class TestCiscoAIDefenseFlaggedHeuristic:
     @pytest.mark.parametrize(
-        "is_safe,classifications,expected_flagged",
+        "is_safe,classifications,action,expected_flagged,expected_action",
         [
-            (False, [], True),
-            (True, ["SECURITY_VIOLATION"], False),
-            (None, ["PRIVACY_VIOLATION"], True),
-            (None, [], False),
+            (False, [], "Block", True, "block"),
+            (True, ["SECURITY_VIOLATION"], "Allow", False, "allow"),
+            (None, ["PRIVACY_VIOLATION"], "redacted", True, "redact"),
+            (None, [], "safe", False, "allow"),
         ],
     )
-    def test_is_flagged(self, is_safe, classifications, expected_flagged):
+    def test_verdict_helpers(
+        self, is_safe, classifications, action, expected_flagged, expected_action
+    ):
         assert (
             CiscoAIDefenseGuardrail._is_flagged(is_safe, classifications)
             is expected_flagged
         )
+        assert CiscoAIDefenseGuardrail._normalize_action(action) == expected_action
 
 
 class TestCiscoAIDefenseStandardLogging:
@@ -3978,7 +3495,6 @@ class TestCiscoAIDefenseStandardLogging:
         assert entry["guardrail_provider"] == "cisco_ai_defense"
         assert entry["guardrail_status"] == "success"
         assert entry["duration"] is not None and entry["duration"] >= 0
-        # Verdict payload is preserved (with the surface tag added).
         assert entry["guardrail_response"]["surface"] == "chat"
         assert entry["guardrail_response"]["is_safe"] is True
 
@@ -4026,10 +3542,7 @@ class TestCiscoAIDefenseStandardLogging:
             event_hook="pre_mcp_call",
             default_on=True,
         )
-        data = {
-            "mcp_tool_name": "leak_secrets",
-            "mcp_arguments": {"target": "evil"},
-        }
+        data = _mcp_request(name="leak_secrets", args={"target": "evil"})
         with patch.object(
             g.async_handler,
             "post",
