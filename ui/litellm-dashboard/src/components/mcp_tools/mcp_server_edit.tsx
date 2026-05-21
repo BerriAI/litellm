@@ -554,14 +554,27 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
         // ``delegate_auth_to_upstream`` is only honored server-side for
-        // ``auth_type=oauth2``. The Form.Item is conditionally rendered so the
-        // value drops out of the form on auth_type change; force false for any
-        // non-oauth2 server to avoid persisting a stale ``true`` that would
-        // silently re-activate if auth_type is later switched back to oauth2.
-        delegate_auth_to_upstream:
-          restValues.auth_type === AUTH_TYPE.OAUTH2
+        // ``auth_type=oauth2`` (PKCE passthrough) or ``auth_type=none`` with
+        // ``Authorization`` in ``extra_headers`` (OAuth pass-through). The
+        // Form.Item is conditionally rendered so the value drops out of the
+        // form on auth_type change; force false for any other configuration
+        // to avoid persisting a stale ``true`` that would silently
+        // re-activate if the configuration is later switched back.
+        delegate_auth_to_upstream: (() => {
+          const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
+          const isNoneAuth =
+            restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
+          const extraHeaders = Array.isArray(restValues.extra_headers)
+            ? restValues.extra_headers
+            : [];
+          const hasAuthorizationHeader = extraHeaders.some(
+            (h: unknown) => typeof h === "string" && h.toLowerCase() === "authorization",
+          );
+          const eligible = isOauth2 || (isNoneAuth && hasAuthorizationHeader);
+          return eligible
             ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
-            : false,
+            : false;
+        })(),
         // Include token_validation when it is set (non-null) or when clearing an existing value
         ...(tokenValidation !== null || mcpServer.token_validation
           ? { token_validation: tokenValidation }
