@@ -3756,6 +3756,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["type"] == "auto"
     assert (
         request_data["additionalModelRequestFields"]["tool_choice"][
             "disable_parallel_tool_use"
@@ -3763,6 +3764,91 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
         is True
     )
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
+
+
+def test_parallel_tool_calls_true_includes_type_field():
+    """parallel_tool_calls=True should include Anthropic's required tool_choice type."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": True, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "additionalModelRequestFields" in request_data
+    tool_choice = request_data["additionalModelRequestFields"]["tool_choice"]
+    assert tool_choice["type"] == "auto"
+    assert tool_choice["disable_parallel_tool_use"] is False
+    assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
+
+
+@pytest.mark.parametrize(
+    ("openai_tool_choice", "expected_anthropic_tool_choice"),
+    [
+        (
+            "auto",
+            {"type": "auto", "disable_parallel_tool_use": True},
+        ),
+        (
+            "required",
+            {"type": "any", "disable_parallel_tool_use": True},
+        ),
+        (
+            {"type": "function", "function": {"name": "get_weather"}},
+            {
+                "type": "tool",
+                "name": "get_weather",
+                "disable_parallel_tool_use": True,
+            },
+        ),
+    ],
+    ids=["auto", "required", "named-tool"],
+)
+def test_parallel_tool_calls_moves_explicit_tool_choice_into_anthropic_extension(
+    openai_tool_choice,
+    expected_anthropic_tool_choice,
+):
+    """Explicit tool_choice should not conflict with Anthropic's parallel tool extension."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": _TOOL_PARAM,
+            "tool_choice": openai_tool_choice,
+            "parallel_tool_calls": False,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert (
+        request_data["additionalModelRequestFields"]["tool_choice"]
+        == expected_anthropic_tool_choice
+    )
+    assert "toolChoice" not in request_data["toolConfig"]
 
 
 def test_parallel_tool_calls_older_model_drops_disable_flag():

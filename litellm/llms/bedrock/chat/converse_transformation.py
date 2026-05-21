@@ -606,6 +606,24 @@ class AmazonConverseConfig(BaseConfig):
                 status_code=400,
             )
 
+    @staticmethod
+    def _map_bedrock_tool_choice_to_anthropic_tool_choice(
+        tool_choice: Optional[ToolChoiceValuesBlock],
+    ) -> dict:
+        if tool_choice is None or "auto" in tool_choice:
+            return {"type": "auto"}
+        if "any" in tool_choice:
+            return {"type": "any"}
+
+        specific_tool_choice = tool_choice.get("tool")
+        if specific_tool_choice is not None:
+            name = specific_tool_choice.get("name")
+            if name:
+                return {"type": "tool", "name": name}
+            return {"type": "tool"}
+
+        return {"type": "auto"}
+
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
@@ -1241,7 +1259,15 @@ class AmazonConverseConfig(BaseConfig):
             "_parallel_tool_use_config", None
         )
         if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+            bedrock_tool_choice = inference_params.pop("tool_choice", None)
+            anthropic_tool_choice = (
+                self._map_bedrock_tool_choice_to_anthropic_tool_choice(
+                    tool_choice=bedrock_tool_choice,
+                )
+            )
             for key, value in parallel_tool_use_config.items():
+                if key == "tool_choice" and isinstance(value, dict):
+                    value = {**anthropic_tool_choice, **value}
                 if (
                     key in additional_request_params
                     and isinstance(additional_request_params[key], dict)
