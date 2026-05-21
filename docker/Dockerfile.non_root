@@ -24,6 +24,7 @@ RUN for i in 1 2 3; do \
         curl \
         openssl \
         libsndfile \
+        libatomic \
         nodejs && break || sleep 5; \
     done
 
@@ -103,7 +104,7 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python3 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
+      apk add --no-cache python3 bash openssl tzdata libsndfile libatomic nodejs && break || sleep 5; \
     done
 
 COPY --from=builder /app /app
