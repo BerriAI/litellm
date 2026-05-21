@@ -24,6 +24,31 @@ from litellm.utils import ModelResponse
 
 
 class BudgetManager:
+    """
+    Track per-user spend against a configured budget for a LiteLLM project.
+
+    The manager keeps a ``user_dict`` mapping each user identifier to their
+    budget metadata (``total_budget``, optional renewal ``duration``,
+    ``current_cost``, and a per-model ``model_cost`` breakdown). State can be
+    persisted either to a local JSON file (``client_type="local"``, writes
+    ``user_cost.json`` in the working directory) or to a hosted LiteLLM
+    budget service reachable at ``api_base`` (``client_type="hosted"``).
+
+    This is the SDK-side budget manager and is independent from the proxy
+    server's budget enforcement, which lives in ``proxy_server.py``.
+
+    Args:
+        project_name: Identifier used when persisting state to the hosted
+            backend.
+        client_type: Where to persist budget state. ``"local"`` writes to
+            ``user_cost.json``; ``"hosted"`` reads/writes via the LiteLLM
+            budget API at ``api_base``.
+        api_base: Base URL for the hosted budget API. Defaults to
+            ``https://api.litellm.ai``.
+        headers: Extra HTTP headers to send to the hosted API. Defaults to
+            ``{"Content-Type": "application/json"}``.
+    """
+
     def __init__(
         self,
         project_name: str,
