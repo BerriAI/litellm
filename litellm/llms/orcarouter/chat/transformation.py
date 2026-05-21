@@ -52,8 +52,18 @@ class CacheControlSupportedModels(str, Enum):
     ZAI = "z-ai"
 
 
+# --------------------------------------------------------------------------
+# Per-model parameter quirks (drop / force / auto-reason).
+#
+# These tables encode upstream API constraints, not OrcaRouter routing policy.
+# They live in source today because `model_prices_and_context_window.json`
+# has no schema slot for "drop these params" or "force these values"; adding
+# one is a cross-cutting change that should span OpenRouter and other meta
+# routers that currently hardcode the same kind of tables. Treat these as
+# intentionally temporary and revisit once a JSON-driven schema lands.
+# --------------------------------------------------------------------------
+
 # Fields that upstream providers reject with 400 for specific models.
-# Source: orcarouter-shared-notes.md §16 A.
 _MODEL_FIELD_BLACKLIST: Dict[str, Tuple[str, ...]] = {
     "anthropic/claude-opus-4.7": ("temperature", "top_k"),
     "openai/gpt-4o": ("top_k",),
