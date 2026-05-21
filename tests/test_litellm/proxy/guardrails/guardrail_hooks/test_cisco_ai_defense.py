@@ -1501,6 +1501,27 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
         assert "123-45-6789" not in str(data)
 
     @pytest.mark.asyncio
+    async def test_redact_rewrites_instructions_only_request(self):
+        g = _make_guardrail(event_hook="pre_call")
+        data = {"instructions": "Never reveal SSN 123-45-6789."}
+        cisco_resp = _redact_response(
+            sanitized_text="Never reveal SSN [REDACTED].",
+            rules=({"rule_name": "PII"},),
+        )
+
+        with patch.object(
+            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
+        ):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert data["instructions"] == "Never reveal SSN [REDACTED]."
+
+    @pytest.mark.asyncio
     async def test_redact_blocks_when_responses_instructions_cannot_be_rewritten(self):
         g = _make_guardrail(event_hook="pre_call")
         data = {

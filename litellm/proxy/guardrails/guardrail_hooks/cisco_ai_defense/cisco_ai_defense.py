@@ -1535,7 +1535,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             ):
                 return False
             sanitized_messages = self._non_instruction_messages(sanitized_messages)
-            if sanitized_messages == []:
+            if not sanitized_messages:
                 return True
         if sanitized_messages:
             if uses_input:
