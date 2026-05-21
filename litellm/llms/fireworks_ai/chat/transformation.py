@@ -120,7 +120,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             # JSON entry that flips `supports_function_calling` to false will
             # silently drop `tools` from requests. Surface this so users can
             # tell why their tool calls suddenly stop working.
-            verbose_logger.warning(
+            verbose_logger.debug(
                 "fireworks_ai model %r is marked as not supporting "
                 "function calling in model_prices_and_context_window.json; "
                 "`tools` and `parallel_tool_calls` will be dropped from the "
