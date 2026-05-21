@@ -971,11 +971,16 @@ async def oauth_protected_resource_mcp(
     )
 
 
-async def _build_oauth_authorization_server_response(
+def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: Optional[str],
 ) -> dict:
-    """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
+    """Build OAuth authorization server metadata response (gateway-as-AS shape).
+
+    Synchronous because the body only does dict construction and synchronous
+    registry lookups; unlike :func:`_build_oauth_protected_resource_response`
+    it does not need to await any upstream IO.
+    """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -1039,7 +1044,7 @@ async def oauth_authorization_server_mcp_standard(
     Standard pattern: /mcp/{server_name}
     Discovery path: /.well-known/oauth-authorization-server/mcp/{server_name}
     """
-    return await _build_oauth_authorization_server_response(
+    return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )
@@ -1058,7 +1063,7 @@ async def oauth_authorization_server_mcp(
 
     Supports both legacy pattern (/{server_name}) and root endpoint.
     """
-    return await _build_oauth_authorization_server_response(
+    return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )
@@ -1129,7 +1134,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
     """
-    return await _build_oauth_authorization_server_response(
+    return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
     )

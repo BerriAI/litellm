@@ -2754,3 +2754,26 @@ def test_build_decode_kwargs_no_warning_when_scoped(
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert matching == []
+
+
+def test_build_decode_kwargs_no_warning_when_issuer_config_scoped(
+    monkeypatch, _reset_unscoped_warning_flag, caplog
+):
+    """When per-issuer config (``LiteLLM_JWTAuth.issuers``) scopes the proxy,
+    the global path's unscoped-fallback warning must not fire — admins who
+    intentionally use issuer config without env-var scoping otherwise see a
+    misleading warning implying their JWT auth is unscoped."""
+    import logging
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    caplog.set_level(logging.WARNING)
+
+    JWTHandler._build_decode_kwargs(has_issuer_config=True)
+
+    matching = [
+        r
+        for r in caplog.records
+        if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
+    ]
+    assert matching == []
