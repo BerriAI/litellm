@@ -145,7 +145,8 @@ def get_vendor_from_model(model: str) -> OCIVendors:
     - ``"COHERE"`` for Cohere models (``cohere.*``)
     - ``"GENERIC"`` for all others (Meta Llama, xAI Grok, Google Gemini, …)
     """
-    vendor = model.split(".")[0].lower()
+    name = model[4:] if model.lower().startswith("oci/") else model
+    vendor = name.split(".")[0].lower()
     if vendor == "cohere":
         return OCIVendors.COHERE
     return OCIVendors.GENERIC
