@@ -543,7 +543,7 @@ class OCIChatConfig(BaseConfig):
         vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
             model_response = handle_cohere_response(
-                response_json, model, model_response
+                response_json, model, model_response, raw_response
             )
         else:
             model_response = handle_generic_response(

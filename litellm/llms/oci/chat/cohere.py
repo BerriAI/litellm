@@ -10,6 +10,7 @@ import datetime
 import json
 from typing import Any, Dict, List, Optional
 
+import httpx
 from pydantic import ValidationError
 
 from litellm.llms.oci.chat.generic import _synthesize_oci_tool_call_id
@@ -202,9 +203,16 @@ def handle_cohere_response(
     json_response: dict,
     model: str,
     model_response: ModelResponse,
+    raw_response: httpx.Response,
 ) -> ModelResponse:
     """Parse a non-streaming Cohere OCI response into a LiteLLM ModelResponse."""
-    cohere_response = CohereChatResult(**json_response)
+    try:
+        cohere_response = CohereChatResult(**json_response)
+    except (TypeError, ValidationError) as e:
+        raise OCIError(
+            message=f"Response cannot be casted to CohereChatResult: {str(e)}",
+            status_code=raw_response.status_code,
+        )
 
     model_response.model = model
     model_response.created = int(datetime.datetime.now().timestamp())

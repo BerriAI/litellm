@@ -532,10 +532,13 @@ _COHERE_RESPONSE_JSON = {
 }
 
 
+_COHERE_RAW_RESPONSE = httpx.Response(200, request=httpx.Request("POST", "https://oci"))
+
+
 def test_handle_cohere_response_complete():
     model_response = ModelResponse()
     result = handle_cohere_response(
-        _COHERE_RESPONSE_JSON, _COHERE_MODEL, model_response
+        _COHERE_RESPONSE_JSON, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
     )
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[0].message["content"] == "Hello from Cohere!"
@@ -551,7 +554,9 @@ def test_handle_cohere_response_max_tokens():
         },
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(resp, _COHERE_MODEL, model_response)
+    result = handle_cohere_response(
+        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
+    )
     assert result.choices[0].finish_reason == "length"
 
 
@@ -565,7 +570,9 @@ def test_handle_cohere_response_tool_call():
         },
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(resp, _COHERE_MODEL, model_response)
+    result = handle_cohere_response(
+        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
+    )
     assert result.choices[0].finish_reason == "tool_calls"
     tool_calls = result.choices[0].message["tool_calls"]
     assert tool_calls is not None
@@ -582,10 +589,21 @@ def test_handle_cohere_response_missing_usage():
         },
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(resp, _COHERE_MODEL, model_response)
+    result = handle_cohere_response(
+        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
+    )
     assert result.usage.prompt_tokens == 0
     assert result.usage.completion_tokens == 0
     assert result.usage.total_tokens == 0
+
+
+def test_handle_cohere_response_malformed_raises_oci_error():
+    bad_json = {"chatResponse": {"apiFormat": "COHERE"}}
+    raw = httpx.Response(502, request=httpx.Request("POST", "https://oci"))
+    model_response = ModelResponse()
+    with pytest.raises(OCIError) as exc_info:
+        handle_cohere_response(bad_json, _COHERE_MODEL, model_response, raw)
+    assert exc_info.value.status_code == 502
 
 
 # ===========================================================================
