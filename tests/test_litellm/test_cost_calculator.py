@@ -527,6 +527,131 @@ def test_provider_dispatch_preserved_without_custom_pricing(monkeypatch):
     assert completion_cost_value == 0.34
 
 
+def test_custom_pricing_preferred_over_bedrock_dispatch(monkeypatch):
+    """Same fix must apply to providers other than anthropic — pick bedrock as a
+    second smoke check so we don't lock the behavior to a single dispatch."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    model = "bedrock/custom-pricing-provider-dispatch"
+    original_model_info = litellm.model_cost.get(model)
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+            }
+        }
+    )
+
+    def raise_if_provider_dispatch_is_used(*args, **kwargs):
+        raise AssertionError(
+            "bedrock_cost_per_token should not run when custom pricing is configured"
+        )
+
+    monkeypatch.setattr(
+        "litellm.cost_calculator.bedrock_cost_per_token",
+        raise_if_provider_dispatch_is_used,
+    )
+
+    try:
+        response = ModelResponse(
+            id="test-id",
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+        )
+
+        cost = completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock",
+            custom_pricing=True,
+        )
+
+        assert cost == 0.0
+    finally:
+        if original_model_info is None:
+            litellm.model_cost.pop(model, None)
+        else:
+            litellm.model_cost[model] = original_model_info
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_custom_pricing_preferred_with_cache_only_pricing(monkeypatch):
+    """A model registered with only cache-token prices (no input/output) should
+    still be treated as having explicit custom pricing — the helper inspects the
+    broader set of token-based keys, not just input/output."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    model = "anthropic/custom-pricing-cache-only"
+    original_model_info = litellm.model_cost.get(model)
+    litellm.register_model(
+        model_cost={
+            model: {
+                "cache_creation_input_token_cost": 0.0,
+                "cache_read_input_token_cost": 0.0,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+            }
+        }
+    )
+
+    def raise_if_provider_dispatch_is_used(*args, **kwargs):
+        raise AssertionError(
+            "provider-specific cost calculator should not run when cache-only "
+            "custom pricing is configured"
+        )
+
+    monkeypatch.setattr(
+        "litellm.cost_calculator.anthropic_cost_per_token",
+        raise_if_provider_dispatch_is_used,
+    )
+
+    try:
+        prompt_cost, completion_cost_value = litellm.cost_calculator.cost_per_token(
+            model=model,
+            custom_llm_provider="anthropic",
+            usage_object=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            custom_pricing=True,
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost_value == 0.0
+    finally:
+        if original_model_info is None:
+            litellm.model_cost.pop(model, None)
+        else:
+            litellm.model_cost[model] = original_model_info
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_has_token_based_custom_pricing_helper():
+    """Direct unit coverage for the predicate so regressions surface here, not
+    only via the integration tests."""
+    from litellm.cost_calculator import _has_token_based_custom_pricing
+
+    assert _has_token_based_custom_pricing(None) is False
+    assert _has_token_based_custom_pricing({}) is False
+    assert _has_token_based_custom_pricing({"max_tokens": 1000}) is False
+    # Explicit zero is the whole point of #25204 — must count as "has pricing".
+    assert _has_token_based_custom_pricing({"input_cost_per_token": 0.0}) is True
+    assert _has_token_based_custom_pricing({"output_cost_per_token": 0.0}) is True
+    assert (
+        _has_token_based_custom_pricing({"cache_creation_input_token_cost": 0.0})
+        is True
+    )
+    assert _has_token_based_custom_pricing({"cache_read_input_token_cost": 0.0}) is True
+    assert _has_token_based_custom_pricing({"input_cost_per_audio_token": 0.0}) is True
+    assert _has_token_based_custom_pricing({"output_cost_per_audio_token": 0.0}) is True
+    assert (
+        _has_token_based_custom_pricing({"output_cost_per_reasoning_token": 0.0})
+        is True
+    )
+    # Per-second pricing alone is NOT token-based — keep the dispatch fall-through.
+    assert _has_token_based_custom_pricing({"input_cost_per_second": 0.001}) is False
+
+
 def test_provider_dispatch_when_custom_pricing_true_without_token_pricing(monkeypatch):
     """custom_pricing=True without registered token-based pricing should still
     fall through to the provider-specific dispatch."""
