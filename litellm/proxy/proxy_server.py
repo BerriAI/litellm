@@ -15858,6 +15858,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             )
             if toolset is not None:
                 scope = dict(request.scope)
+                scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:

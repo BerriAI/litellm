@@ -2,7 +2,7 @@ import os
 import sys
 import types
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch

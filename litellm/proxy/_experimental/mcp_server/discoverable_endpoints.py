@@ -126,6 +126,19 @@ def decode_state_hash(encrypted_state: str) -> dict:
     return state_data
 
 
+def _get_validated_client_redirect_uri(
+    request: Request, state_data: Dict[str, Any]
+) -> str:
+    """Return a trusted (same-origin, loopback, or ops-allowlisted)
+    client redirect URI from OAuth state.
+    """
+    redirect_uri = state_data.get("client_redirect_uri") or state_data.get("base_url")
+    if not redirect_uri or not isinstance(redirect_uri, str):
+        raise HTTPException(status_code=400, detail="Invalid redirect URI")
+    validate_trusted_redirect_uri(request, redirect_uri)
+    return redirect_uri
+
+
 def _append_query_params(url: str, params: Dict[str, str]) -> str:
     parsed = urlparse(url)
     query_params = parse_qsl(parsed.query, keep_blank_values=True)
@@ -677,11 +690,6 @@ async def token_endpoint(
 async def callback(request: Request, code: str, state: str):
     try:
         state_data = decode_state_hash(state)
-        redirect_uri = state_data.get("client_redirect_uri") or state_data.get(
-            "base_url"
-        )
-        if not redirect_uri or not isinstance(redirect_uri, str):
-            raise HTTPException(status_code=400, detail="Invalid redirect URI")
         original_state = state_data["original_state"]
 
         # Re-validate the client redirect URI at the sink. /authorize
@@ -690,7 +698,7 @@ async def callback(request: Request, code: str, state: str):
         # expiry and remain valid indefinitely. Validating here blocks
         # the open-redirect + code-theft primitive even for pre-fix
         # states while permitting same-origin / allowlisted clients.
-        validate_trusted_redirect_uri(request, redirect_uri)
+        redirect_uri = _get_validated_client_redirect_uri(request, state_data)
 
         params = {"code": code, "state": original_state}
         complete_returned_url = _append_query_params(redirect_uri, params)

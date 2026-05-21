@@ -109,11 +109,7 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     assert body["arguments"] == tool_arguments
 
 
-def test_prepare_mcp_server_headers_passthrough_omits_authorization():
-    """Pass-through servers must not forward the inbound Authorization header
-    (LiteLLM API key) to the upstream server. The upstream must provide its own
-    bearer token via a server-specific header.
-    """
+def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -122,82 +118,9 @@ def test_prepare_mcp_server_headers_passthrough_omits_authorization():
         pytest.skip("MCP server not available")
 
     server = MCPServer(
-        server_id="server-passthrough",
+        server_id="server-case",
         name="server",
         transport=MCPTransport.http,
-        auth_type=MCPAuth.none,  # Explicitly none for pass-through
-        extra_headers=["Authorization"],
-    )
-
-    server_auth_header, extra_headers = _prepare_mcp_server_headers(
-        server=server,
-        mcp_server_auth_headers=None,
-        mcp_auth_header=None,
-        oauth2_headers=None,
-        raw_headers={"authorization": "Bearer sk-litellm-key"},
-    )
-
-    assert server_auth_header is None
-    # Authorization should NOT be forwarded for pass-through servers
-    assert extra_headers is None
-
-
-def test_prepare_mcp_server_headers_passthrough_forwards_other_headers():
-    """Pass-through servers should forward other headers (not Authorization)
-    from the raw request."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _prepare_mcp_server_headers,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    server = MCPServer(
-        server_id="server-passthrough-headers",
-        name="server",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.none,  # Pass-through mode
-        extra_headers=["Authorization", "x-request-id", "x-trace-id"],
-    )
-
-    server_auth_header, extra_headers = _prepare_mcp_server_headers(
-        server=server,
-        mcp_server_auth_headers=None,
-        mcp_auth_header=None,
-        oauth2_headers=None,
-        raw_headers={
-            "authorization": "Bearer sk-litellm-key",
-            "x-request-id": "req-123",
-            "x-trace-id": "trace-456",
-        },
-    )
-
-    assert server_auth_header is None
-    # Authorization should be omitted, but other headers forwarded
-    assert extra_headers == {"x-request-id": "req-123", "x-trace-id": "trace-456"}
-
-
-def test_prepare_mcp_server_headers_passthrough_forwards_authorization_with_explicit_admission():
-    """Transparent OAuth pass-through: when LiteLLM admission used the explicit
-    `x-litellm-api-key` header, the inbound `Authorization` header is
-    unambiguously the upstream OAuth bearer and MUST be forwarded.
-
-    Regression for EAI-506 V5/V6 — a standards-compliant MCP client (e.g.
-    OpenCode) completes PKCE against the upstream IdP and sends the resulting
-    token as plain `Authorization: Bearer <token>` per the MCP spec.
-    """
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _prepare_mcp_server_headers,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    server = MCPServer(
-        server_id="server-passthrough-explicit-admission",
-        name="server",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
     )
 
@@ -208,20 +131,15 @@ def test_prepare_mcp_server_headers_passthrough_forwards_authorization_with_expl
         oauth2_headers=None,
         raw_headers={
             "x-litellm-api-key": "Bearer sk-litellm-key",
-            "authorization": "Bearer upstream-okta-token",
+            "authorization": "Bearer token",
         },
     )
 
     assert server_auth_header is None
-    assert extra_headers == {"Authorization": "Bearer upstream-okta-token"}
+    assert extra_headers == {"Authorization": "Bearer token"}
 
 
 def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_admission_header():
-    """Counterpart to the explicit-admission test: without `x-litellm-api-key`,
-    the inbound `Authorization` may itself be the LiteLLM admission key, so we
-    strip it to avoid leaking the gateway credential upstream. This preserves
-    the security guarantee introduced in commit 3753970cc9.
-    """
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,

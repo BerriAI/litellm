@@ -2835,6 +2835,30 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    def _get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
+        request = StarletteRequest(scope)
+        base_url = get_request_base_url(request)
+        _path = scope.get("_original_path") or scope.get("path", "") or ""
+
+        if _path.startswith(f"/{server_name}/mcp"):
+            return f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
+        return f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
+
+    def _get_passthrough_www_authenticate(
+        scope: Scope,
+        server_name: str,
+        invalid_token: bool = False,
+    ) -> str:
+        resource_metadata_url = _get_passthrough_resource_metadata_url(
+            scope=scope,
+            server_name=server_name,
+        )
+        params = []
+        if invalid_token:
+            params.append('error="invalid_token"')
+        params.append(f'resource_metadata="{resource_metadata_url}"')
+        return "Bearer " + ", ".join(params)
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: Optional[List[str]],
@@ -2895,18 +2919,10 @@ if MCP_AVAILABLE:
                     server, oauth2_headers, mcp_server_auth_headers
                 )
             ):
-                request = StarletteRequest(scope)
-                base_url = get_request_base_url(request)
-                _path = scope.get("_original_path") or scope.get("path", "") or ""
-
-                # Pick the well-known resource-metadata form that matches the inbound
-                # route pattern so the metadata's `resource` field round-trips to what
-                # the client actually hit (RFC 9728 §3.2).
-                if _path.startswith(f"/{server_name}/mcp"):
-                    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
-                else:
-                    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
-                www_authenticate = f'Bearer resource_metadata="{resource_metadata_url}"'
+                www_authenticate = _get_passthrough_www_authenticate(
+                    scope=scope,
+                    server_name=server_name,
+                )
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",
@@ -3045,30 +3061,16 @@ if MCP_AVAILABLE:
                 for srv in passthrough_servers
             ]
         )
-        request = StarletteRequest(scope)
-        base_url = get_request_base_url(request)
-        _path = scope.get("_original_path") or scope.get("path", "") or ""
         for srv, (probe_status, _) in zip(passthrough_servers, probe_results):
             if probe_status == 401:
-                # Token is missing or expired — direct the client at the
-                # gateway's oauth-protected-resource well-known URL (which
-                # proxies the upstream IdP's metadata), matching the
-                # pre-emptive 401 path in
-                # _raise_preemptive_401_for_unauthenticated_servers. The
-                # gateway is not the authorization server for pass-through
-                # servers, so emitting ``authorization_uri=`` would point
-                # clients at the wrong AS metadata.
-                if _path.startswith(f"/{srv.name}/mcp"):
-                    resource_metadata_url = (
-                        f"{base_url}/.well-known/oauth-protected-resource/"
-                        f"{srv.name}/mcp"
-                    )
-                else:
-                    resource_metadata_url = (
-                        f"{base_url}/.well-known/oauth-protected-resource/mcp/"
-                        f"{srv.name}"
-                    )
-                www_authenticate = f'Bearer resource_metadata="{resource_metadata_url}"'
+                # Token is missing or expired: keep pass-through clients on the
+                # protected-resource discovery flow so they re-authorize against
+                # the upstream IdP metadata proxied by LiteLLM.
+                www_authenticate = _get_passthrough_www_authenticate(
+                    scope=scope,
+                    server_name=srv.name,
+                    invalid_token=True,
+                )
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",
