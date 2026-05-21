@@ -120,4 +120,5 @@ crash.log
 crash.*.log
 # .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
 # and should be committed.
-.vscodeui/litellm-dashboard/tsconfig.tsbuildinfo
+.vscode
+ui/litellm-dashboard/tsconfig.tsbuildinfo
