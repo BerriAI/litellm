@@ -154,6 +154,11 @@ jobs:
           # Make the mutants/ sandbox win over site-packages on sys.path so the
           # trampolined files are imported instead of the installed copy.
           PYTHONPATH: ${{ github.workspace }}/mutants
+          # mutmut's mutate_only_covered_lines pass looks up covered lines by
+          # absolute path; pyproject.toml's `relative_files = true` would make
+          # coverage.py store relative paths (every lookup misses -> zero
+          # mutants). This rcfile overrides it for the mutmut run only.
+          COVERAGE_RCFILE: ${{ github.workspace }}/scripts/mutmut.coveragerc
         run: |
           set -o pipefail
           mkdir -p mutants

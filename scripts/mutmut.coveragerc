@@ -1,0 +1,16 @@
+# Coverage.py config used ONLY by .github/workflows/mutation-test.yml, selected
+# via the COVERAGE_RCFILE env var on the "Run mutmut" step.
+#
+# mutmut runs with `mutate_only_covered_lines = true` ([tool.mutmut] in
+# pyproject.toml): before generating mutants it measures coverage and then
+# looks up each file's covered lines by ABSOLUTE path. The project's
+# pyproject.toml sets `[tool.coverage.run] relative_files = true`, which makes
+# coverage.py store RELATIVE paths — so every absolute-path lookup misses,
+# mutmut sees zero covered lines, generates zero mutants, and aborts with
+# "we could not find any test case for any mutant".
+#
+# Pointing COVERAGE_RCFILE at this file overrides pyproject.toml for the mutmut
+# run only, keeping coverage paths absolute so the lookups match. The project's
+# real coverage/Codecov flow still uses pyproject.toml and is unaffected.
+[run]
+relative_files = false
