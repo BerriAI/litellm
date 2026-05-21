@@ -100,6 +100,7 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_auth_checks.py
               tests/proxy_unit_tests/test_user_api_key_auth.py
+              tests/proxy_unit_tests/test_deprecated_key_grace_period.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -141,6 +142,8 @@ jobs:
               tests/proxy_unit_tests/test_server_root_path.py
               tests/proxy_unit_tests/test_proxy_pass_user_config.py
               tests/proxy_unit_tests/test_proxy_token_counter.py
+              tests/proxy_unit_tests/test_request_size_limit_middleware.py
+              tests/proxy_unit_tests/test_multipart_bypass_repro.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -212,8 +215,10 @@ jobs:
               tests/proxy_unit_tests/test_models_fallback_endpoint.py
               tests/proxy_unit_tests/test_google_endpoint_routing.py
               tests/proxy_unit_tests/test_google_gemini_proxy_request.py
+              tests/proxy_unit_tests/test_gemini_agents_endpoints.py
               tests/proxy_unit_tests/test_get_favicon.py
               tests/proxy_unit_tests/test_get_image.py
+              tests/proxy_unit_tests/test_reducto_ocr_route.py
               tests/proxy_unit_tests/test_ui_path_detection.py
               tests/proxy_unit_tests/test_prompt_test_endpoint.py
               tests/proxy_unit_tests/test_check_batch_cost.py

@@ -2485,7 +2485,9 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, **kwargs
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], [], {})
 
@@ -2506,6 +2508,100 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
         pass
 
     assert called_model_lists == [[{"model_name": "model-a"}]]
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_legacy_three_arg_stub(
+    monkeypatch,
+):
+    """Monkeypatched perform_health_check with only base kwargs should still run."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    result = await proxy_server._run_direct_health_check_with_instrumentation(
+        [{"model_name": "m"}],
+        True,
+        1,
+        {"enabled": True, "source": "test", "cycle_id": "c1"},
+    )
+    assert result == ([], [], {})
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_instrumentation_only(
+    monkeypatch,
+):
+    """Stub that accepts instrumentation_context but not health_check filter kwargs."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None, instrumentation_context=None
+    ):
+        seen.append(instrumentation_context)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        False,
+        2,
+        {"enabled": True, "source": "test", "cycle_id": "c2"},
+    )
+    assert len(seen) == 1
+    assert seen[0]["cycle_id"] == "c2"
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
+    monkeypatch,
+):
+    """Stub that accepts health_check_skip_disabled_background_models but not instrumentation."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    seen: list = []
+
+    async def fake_perform_health_check(
+        model_list,
+        details,
+        max_concurrency=None,
+        health_check_skip_disabled_background_models=False,
+    ):
+        seen.append(health_check_skip_disabled_background_models)
+        return ([], [], {})
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    await proxy_server._run_direct_health_check_with_instrumentation(
+        [],
+        True,
+        None,
+        {"enabled": False},
+    )
+    assert len(seen) == 1
+    assert seen[0] is False
+
+
+@pytest.mark.asyncio
+async def test_run_direct_health_check_with_instrumentation_non_kw_typeerror_reraises(
+    monkeypatch,
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    async def fake_perform_health_check(**kwargs):
+        raise TypeError("unsupported operand type(s)")
+
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    with pytest.raises(TypeError, match="unsupported operand"):
+        await proxy_server._run_direct_health_check_with_instrumentation(
+            [],
+            True,
+            1,
+            {},
+        )
 
 
 def test_get_timeout_from_request():
@@ -2768,40 +2864,40 @@ async def test_update_config_success_callback_normalization():
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import ConfigYAML
 
-    # Ensure feature is enabled and prisma_client is set
-    setattr(proxy_server, "store_model_in_db", True)
     setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    existing_litellm_settings = {"success_callback": ["langfuse"]}
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    upserted = {}
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "litellm_settings":
+            return FakeRow("litellm_settings", existing_litellm_settings)
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
 
     class MockPrisma:
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_config = MagicMock()
-            self.db.litellm_config.upsert = AsyncMock()
-
-        # proxy_server.update_config expects this to be sync returning a dict
-        def jsonify_object(self, obj):
-            return obj
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
 
     setattr(proxy_server, "prisma_client", MockPrisma())
 
     class MockProxyConfig:
-        def __init__(self):
-            self.saved_config = None
-
-        async def get_config(self):
-            # Existing config has one lowercase callback already
-            return {"litellm_settings": {"success_callback": ["langfuse"]}}
-
-        async def save_config(self, new_config: dict):
-            self.saved_config = new_config
-
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
             return None
 
-    mock_proxy_config = MockProxyConfig()
-    setattr(proxy_server, "proxy_config", mock_proxy_config)
+    setattr(proxy_server, "proxy_config", MockProxyConfig())
 
-    # Update config with mixed-case callbacks - expect normalization to lowercase
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -2810,9 +2906,10 @@ async def test_update_config_success_callback_normalization():
     )
     await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
 
-    saved = mock_proxy_config.saved_config
-    assert saved is not None, "save_config was not called"
-    callbacks = saved["litellm_settings"]["success_callback"]
+    assert (
+        "litellm_settings" in upserted
+    ), "litellm_config.upsert was not called for litellm_settings"
+    callbacks = upserted["litellm_settings"]["success_callback"]
 
     # Deduped and normalized
     assert "sqs" in callbacks

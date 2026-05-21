@@ -110,7 +110,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=200,
-            total_tokens=210,
+            total_tokens=360,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -136,7 +136,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=20,
             completion_tokens=300,
-            total_tokens=320,
+            total_tokens=520,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -177,7 +177,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=12,
             completion_tokens=50,  # Less than reasoning_tokens
-            total_tokens=62,
+            total_tokens=162,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -204,7 +204,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=100000,  # Above 128k threshold
-            total_tokens=250000,
+            total_tokens=300000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -233,7 +233,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=100000,  # Below 128k threshold
             completion_tokens=50000,
-            total_tokens=150000,
+            total_tokens=160000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -261,7 +261,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=200000,  # Above 128k threshold
             completion_tokens=100000,
-            total_tokens=300000,
+            total_tokens=350000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -289,7 +289,7 @@ class TestXAICostCalculator:
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=50000,  # Below 128k threshold
-            total_tokens=200000,
+            total_tokens=210000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -327,6 +327,29 @@ class TestXAICostCalculator:
         # Completion: 50000 tokens * $5e-7 (regular rate) = $0.025
         expected_prompt_cost = 150000 * 3e-7
         expected_completion_cost = 50000 * 5e-7
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_already_normalised_usage_does_not_double_count_reasoning(self):
+        """Cost calc must not double-bill when Usage is already OpenAI-normalised."""
+        usage = Usage(
+            prompt_tokens=12,
+            completion_tokens=200,
+            total_tokens=212,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                accepted_prediction_tokens=0,
+                audio_tokens=0,
+                reasoning_tokens=100,
+                rejected_prediction_tokens=0,
+                text_tokens=None,
+            ),
+        )
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+
+        expected_prompt_cost = 12 * 3e-7
+        expected_completion_cost = 200 * 5e-7
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)

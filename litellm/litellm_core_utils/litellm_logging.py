@@ -1050,6 +1050,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+            # Set-once first provider-handoff instant. api_call_start_time
+            # is overwritten on every retry, so it can't measure one-time
+            # preprocessing; pinning the first attempt excludes retry loops
+            # + backoff. Logging object only — must NOT go into
+            # litellm_params["metadata"] (caller request metadata, typed
+            # Dict[str, str], echoed downstream; a datetime breaks it).
+            if self.model_call_details.get("first_api_call_start_time") is None:
+                self.model_call_details["first_api_call_start_time"] = (
+                    self.model_call_details["api_call_start_time"]
+                )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -1212,7 +1222,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response)
+            original_response = json.dumps(original_response, default=str)
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -3242,10 +3252,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     langfuse_secret=self.standard_callback_dynamic_params.get(
                         "langfuse_secret"
-                    ),
+                    )
+                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
                     langfuse_host=self.standard_callback_dynamic_params.get(
                         "langfuse_host"
                     ),
+                    allow_env_credentials=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    )
+                    is None,
                 )
             return langFuseLogger
 
@@ -4720,7 +4735,7 @@ class StandardLoggingPayloadSetup:
         ):
             for key, value in litellm_params["metadata"].items():
                 # Skip non-serializable objects like UserAPIKeyAuth
-                if key == "user_api_key_auth":
+                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
                     continue
                 merged_metadata[key] = value
 

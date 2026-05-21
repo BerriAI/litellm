@@ -10,6 +10,7 @@ All /team management endpoints
 """
 
 import asyncio
+import math
 import json
 import traceback
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
@@ -914,25 +916,31 @@ async def new_team(  # noqa: PLR0915
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1041,6 +1049,10 @@ async def new_team(  # noqa: PLR0915
                 data.members_with_roles.append(
                     Member(role="admin", user_id=user_api_key_dict.user_id)
                 )
+
+        _check_passthrough_routes_caller_permission(
+            data, user_api_key_dict, entity="team"
+        )
 
         ## ADD TO MODEL TABLE
         _model_id = None
@@ -1595,25 +1607,31 @@ async def update_team(  # noqa: PLR0915
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         # Validate budget values are not negative
-        if data.max_budget is not None and data.max_budget < 0:
+        if data.max_budget is not None and (
+            not math.isfinite(data.max_budget) or data.max_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+                    "error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"
                 },
             )
-        if data.team_member_budget is not None and data.team_member_budget < 0:
+        if data.team_member_budget is not None and (
+            not math.isfinite(data.team_member_budget) or data.team_member_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"
+                    "error": f"team_member_budget must be a non-negative finite number. Received: {data.team_member_budget}"
                 },
             )
-        if data.soft_budget is not None and data.soft_budget < 0:
+        if data.soft_budget is not None and (
+            not math.isfinite(data.soft_budget) or data.soft_budget < 0
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+                    "error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"
                 },
             )
 
@@ -1631,6 +1649,10 @@ async def update_team(  # noqa: PLR0915
         await _verify_team_access(
             team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
             user_api_key_dict=user_api_key_dict,
+        )
+
+        _check_passthrough_routes_caller_permission(
+            data, user_api_key_dict, entity="team"
         )
 
         if data.soft_budget is not None:
@@ -3805,6 +3827,7 @@ async def _build_team_list_where_conditions(
     organization_id: Optional[str],
     user_id: Optional[str],
     use_deleted_table: bool,
+    search: Optional[str] = None,
     org_admin_org_ids: Optional[List[str]] = None,
     user_api_key_cache: Optional[Any] = None,
     proxy_logging_obj: Optional[Any] = None,
@@ -3825,6 +3848,12 @@ async def _build_team_list_where_conditions(
             "contains": team_alias,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if search:
+        where_conditions["OR"] = [
+            {"team_id": search},
+            {"team_alias": {"contains": search, "mode": "insensitive"}},
+        ]
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
@@ -4019,6 +4048,10 @@ async def list_team_v2(
         default=None,
         description="Only return teams which this 'team_alias' belongs to. Supports partial matching.",
     ),
+    search: Optional[str] = fastapi.Query(
+        default=None,
+        description="Combined search: matches teams whose 'team_id' equals the value OR whose 'team_alias' contains it (case-insensitive).",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -4104,6 +4137,7 @@ async def list_team_v2(
         organization_id=organization_id,
         user_id=user_id,
         use_deleted_table=use_deleted_table,
+        search=search,
         org_admin_org_ids=org_admin_org_ids,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -4683,9 +4717,11 @@ async def team_member_permissions(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    # Admin Viewer follows the read-parity rule: see team permissions like
+    # a Proxy Admin would. Team / org admins keep their existing scope.
     if (
         hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _user_has_admin_view(user_api_key_dict)
         and not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
@@ -5026,24 +5062,30 @@ async def get_team_daily_activity(
     }
 
     # Check if user is team admin or has /team/daily/activity permission
-    # If not, filter by user's API keys
+    # If not, filter by user's API keys.
+    #
+    # Earlier this loop used `any-team admin -> set has_full_team_view=True
+    # for the entire request`, so an admin of one team that requested
+    # data for several teams would see API-key-level breakdowns for all
+    # of them. Require full view on EVERY requested team — if the caller
+    # only has admin/permission for a strict subset, fall back to
+    # filtering the entire response by their own API keys (they can re-
+    # request the admin-only teams separately to get the wider view).
     user_api_keys: Optional[List[str]] = None
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        # Check if user is team admin or has usage view permission for any team
-        has_full_team_view = False
+        has_full_team_view = True
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
-            if _is_user_team_admin(
+            is_admin = _is_user_team_admin(
                 user_api_key_dict=user_api_key_dict, team_obj=team_obj
-            ):
-                has_full_team_view = True
-                break
-            if _team_member_has_permission(
+            )
+            has_perm = _team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 permission="/team/daily/activity",
-            ):
-                has_full_team_view = True
+            )
+            if not (is_admin or has_perm):
+                has_full_team_view = False
                 break
 
         # If user does not have full team view, filter by their API keys

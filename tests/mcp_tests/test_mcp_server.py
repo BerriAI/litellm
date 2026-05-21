@@ -382,6 +382,11 @@ async def test_mcp_http_transport_tool_not_found():
         }
     )
 
+    # Mapping populated for this server but not for the requested tool
+    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+        "test_http_server"
+    )
+
     # Try to call a tool that doesn't exist in mapping
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
@@ -881,6 +886,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                user_api_key_auth=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1494,6 +1500,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.approval_status = "active"
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1551,6 +1558,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.approval_status = "active"
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1609,6 +1617,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.approval_status = "active"
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
 
@@ -1853,6 +1862,7 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            user_api_key_auth=None,
         )
 
         # Verify the result

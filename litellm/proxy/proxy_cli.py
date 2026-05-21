@@ -38,6 +38,35 @@ class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_timeout = 60
 
 
+def _build_db_connection_url_params(
+    connection_limit: int,
+    pool_timeout: Optional[Union[int, float]],
+    connect_timeout: Optional[Union[int, float]] = None,
+    socket_timeout: Optional[Union[int, float]] = None,
+    extra_params: Optional[dict] = None,
+) -> dict:
+    """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
+
+    `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
+    name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
+    omitted when None so Prisma's defaults apply. `extra_params` is an
+    untyped passthrough — keys it provides win over the named arguments above,
+    so it can be used to override any default we set here.
+    """
+    params: dict = {
+        "connection_limit": connection_limit,
+    }
+    if pool_timeout is not None:
+        params["pool_timeout"] = pool_timeout
+    if connect_timeout is not None:
+        params["connect_timeout"] = connect_timeout
+    if socket_timeout is not None:
+        params["socket_timeout"] = socket_timeout
+    if extra_params:
+        params.update(extra_params)
+    return params
+
+
 def append_query_params(url: Optional[str], params: dict) -> str:
     from litellm._logging import verbose_proxy_logger
 
@@ -168,6 +197,66 @@ class ProxyInitializationHelpers:
                     f"Ignoring the flag.\033[0m"
                 )
         return uvicorn_args
+
+    @staticmethod
+    def _get_reload_options(config_path: Optional[str]) -> dict:
+        """Build uvicorn reload kwargs so --reload also reacts to YAML edits."""
+        options: dict = {"reload": True}
+        if not config_path:
+            return options
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        cwd = os.path.abspath(os.getcwd())
+        reload_dirs = [cwd]
+        if config_dir and config_dir != cwd:
+            reload_dirs.append(config_dir)
+        options["reload_dirs"] = reload_dirs
+        # Must be a basename, not an absolute path: uvicorn's
+        # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
+        # NotImplementedError on absolute patterns (uvicorn discussion #2156).
+        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
+        return options
+
+    @staticmethod
+    def _patch_statreload_for_config(config_path: str) -> bool:
+        """Make uvicorn's StatReload reloader notice YAML config changes.
+
+        Uvicorn uses WatchFilesReload when the optional `watchfiles` package
+        is installed, otherwise StatReload. StatReload hard-codes `*.py` in
+        `iter_py_files()` and silently ignores `reload_includes`, so the
+        kwargs from `_get_reload_options` alone don't trigger reloads on YAML
+        edits. We monkey-patch `iter_py_files` to also yield the config path.
+
+        Idempotent across calls and a no-op for the WatchFilesReload path.
+        """
+        try:
+            from uvicorn.supervisors.statreload import StatReload
+        except ImportError:  # pragma: no cover - uvicorn is a hard dep
+            return False
+
+        if not config_path:
+            return False
+
+        from pathlib import Path
+
+        config_abs = Path(config_path).resolve()
+
+        patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
+        if patched_paths is None:
+            original_iter = StatReload.iter_py_files
+            patched_paths = set()
+
+            def _iter_with_config(self):  # type: ignore[no-untyped-def]
+                yield from original_iter(self)
+                for path in StatReload._litellm_patched_config_paths:
+                    if path.exists():
+                        yield path
+
+            StatReload.iter_py_files = _iter_with_config  # type: ignore[assignment]
+            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+
+        patched_paths.add(config_abs)
+        return True
 
     @staticmethod
     def _init_hypercorn_server(
@@ -619,7 +708,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -745,7 +834,11 @@ def run_server(  # noqa: PLR0915
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Starts optional due to config fallback checks; guaranteed non-None before use.
+        db_connection_timeout: Optional[Union[int, float]] = 60
+        db_connect_timeout: Optional[Union[int, float]] = None
+        db_socket_timeout: Optional[Union[int, float]] = None
+        db_extra_connection_params: Optional[dict] = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -753,7 +846,12 @@ def run_server(  # noqa: PLR0915
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
-            db_port = os.getenv("DATABASE_PORT")
+            # Default to the Postgres standard port. Without a default,
+            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
+            # and botocore stringifies it to `"None"` while building the
+            # presigned URL, which then blows up with `ValueError: Port could
+            # not be cast to integer value as 'None'` during signing.
+            db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
@@ -849,9 +947,19 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
-            db_connection_timeout = general_settings.get(
-                "database_connection_pool_timeout",
-                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
+            db_connection_timeout = general_settings.get("database_connection_timeout")
+            if db_connection_timeout is None:
+                db_connection_timeout = general_settings.get(
+                    "database_connection_pool_timeout"
+                )
+            if db_connection_timeout is None:
+                db_connection_timeout = (
+                    LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+                )
+            db_connect_timeout = general_settings.get("database_connect_timeout")
+            db_socket_timeout = general_settings.get("database_socket_timeout")
+            db_extra_connection_params = general_settings.get(
+                "database_extra_connection_params"
             )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
@@ -892,27 +1000,26 @@ def run_server(  # noqa: PLR0915
             try:
                 from litellm.secret_managers.main import get_secret
 
+                connection_url_params = _build_db_connection_url_params(
+                    connection_limit=db_connection_pool_limit,
+                    pool_timeout=db_connection_timeout,
+                    connect_timeout=db_connect_timeout,
+                    socket_timeout=db_socket_timeout,
+                    extra_params=db_extra_connection_params,
+                )
                 if os.getenv("DATABASE_URL", None) is not None:
-                    ### add connection pool + pool timeout args
-                    params = {
-                        "connection_limit": db_connection_pool_limit,
-                        "pool_timeout": db_connection_timeout,
-                    }
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(
-                        str(database_url) if database_url else None, params
+                        str(database_url) if database_url else None,
+                        connection_url_params,
                     )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
-                    ### add connection pool + pool timeout args
-                    params = {
-                        "connection_limit": db_connection_pool_limit,
-                        "pool_timeout": db_connection_timeout,
-                    }
                     database_url = os.getenv("DIRECT_URL")
-                    modified_url = append_query_params(database_url, params)
+                    modified_url = append_query_params(
+                        database_url, connection_url_params
+                    )
                     os.environ["DIRECT_URL"] = modified_url
-                    ###
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
@@ -990,11 +1097,6 @@ def run_server(  # noqa: PLR0915
             litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
         )
 
-        # --- SEPARATE HEALTH APP LOGIC ---
-        # To run the health app separately, use:
-        #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
-        # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
-        # --- END SEPARATE HEALTH APP LOGIC ---
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
@@ -1028,7 +1130,11 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                uvicorn_args["reload"] = True
+                uvicorn_args.update(
+                    ProxyInitializationHelpers._get_reload_options(config)
+                )
+                if config:
+                    ProxyInitializationHelpers._patch_statreload_for_config(config)
 
             uvicorn.run(
                 **uvicorn_args,
