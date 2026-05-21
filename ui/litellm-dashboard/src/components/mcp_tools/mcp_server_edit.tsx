@@ -9,7 +9,11 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import {
+  validateMCPServerUrl,
+  validateMCPServerName,
+  guessLogoFromUrl,
+} from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -60,6 +64,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   // Watch form fields that affect tool fetching
   const currentUrl = Form.useWatch("url", form);
+
+  // Suggest a logo from the URL host only when the admin hasn't picked one
+  // (e.g. an existing server saved without a logo, where the user later
+  // edits the URL). Never overwrites an existing pick — see create form
+  // for the same pattern keyed on the explicit WELL_KNOWN_LOGOS host list.
+  useEffect(() => {
+    if (logoUrl) return;
+    const suggested = guessLogoFromUrl(currentUrl);
+    if (suggested) setLogoUrl(suggested);
+  }, [currentUrl, logoUrl]);
+
   const currentSpecPath = Form.useWatch("spec_path", form);
   const currentServerName = Form.useWatch("server_name", form);
   const currentAuthType = Form.useWatch("auth_type", form);
@@ -1115,7 +1130,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               />
             </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="mt-6 flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>
               <Button type="submit">Save Changes</Button>
             </div>

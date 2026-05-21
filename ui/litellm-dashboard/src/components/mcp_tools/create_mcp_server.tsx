@@ -19,7 +19,11 @@ import {
   EnvVarDefinition,
 } from "./mock/mockMcpEnvVars";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import {
+  validateMCPServerUrl,
+  validateMCPServerName,
+  guessLogoFromUrl,
+} from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -257,6 +261,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       description: prefillData.description || "",
       transport: transport,
     };
+
+    // Curated discovery entries carry their own icon — use it as the default
+    // logo so the user doesn't have to re-pick one from the grid.
+    if (prefillData.icon_url) {
+      setLogoUrl(prefillData.icon_url);
+    }
 
     if (transport === "stdio") {
       const stdioObj: Record<string, any> = {};
@@ -523,6 +533,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setFormValues((prev) => ({ ...prev, alias: normalized }));
     }
   }, [formValues.server_name]);
+
+  // Suggest a logo from the URL host when the admin hasn't picked one yet.
+  // Driven by an explicit host allow-list (see WELL_KNOWN_LOGOS in utils),
+  // not slug arithmetic on the server name — so renaming the server later
+  // can't change the icon. Only fires when `logoUrl` is unset, so it never
+  // clobbers a manually selected logo or a discovery prefill.
+  React.useEffect(() => {
+    if (logoUrl) return;
+    const suggested = guessLogoFromUrl(formValues.url);
+    if (suggested) setLogoUrl(suggested);
+  }, [formValues.url, logoUrl]);
 
   // Clear formValues when modal closes to reset child components
   React.useEffect(() => {
