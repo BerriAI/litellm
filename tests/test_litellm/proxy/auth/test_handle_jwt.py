@@ -3173,6 +3173,27 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     assert "must configure audience" in str(exc.value)
 
 
+def test_multi_issuer_jwt_rejects_audience_with_disable_audience_validation():
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+
+    with pytest.raises(Exception) as exc:
+        LiteLLM_JWTAuth(
+            issuers=[
+                {
+                    "issuer": issuer,
+                    "jwks_url": jwks_url,
+                    "audience": "some-audience",
+                    "disable_audience_validation": True,
+                }
+            ]
+        )
+
+    assert "cannot set audience and disable_audience_validation=True together" in str(
+        exc.value
+    )
+
+
 @pytest.mark.asyncio
 async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     from litellm.caching.dual_cache import DualCache

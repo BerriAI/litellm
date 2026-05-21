@@ -4476,6 +4476,10 @@ class JWTIssuerConfig(BaseModel):
             raise ValueError(
                 f"JWT issuer {self.issuer} must configure audience or set disable_audience_validation=True"
             )
+        if self.audience is not None and self.disable_audience_validation:
+            raise ValueError(
+                f"JWT issuer {self.issuer} cannot set audience and disable_audience_validation=True together"
+            )
         return self
 
 

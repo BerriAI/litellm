@@ -19,43 +19,22 @@ from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 
 def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
-    """Parse a single MCP server name from /mcp/{name} or /{name}/mcp path patterns.
-    Returns None for the aggregate /mcp route (no bypass for multi-server paths).
-
-    Multi-server CSV paths like ``/mcp/server1,server2`` also return ``None`` —
-    the cold-start bypass must not activate when any of the co-targeted servers
-    might not be passthrough-eligible.
-
-    Server names may contain a single slash (e.g. ``custom_solutions/user_123``),
-    so the ``/mcp/...`` form must mirror
-    :meth:`MCPRequestHandler._extract_target_server_names_from_path` rather than
-    stop at the first ``/``. Otherwise the cold-start lookup would miss
-    slashed-name servers and fall through to the generic admission error
-    instead of the spec-compliant 401 challenge."""
-    mcp_path_match = re.match(r"^/mcp/([^?#]+)", path)
-    if mcp_path_match:
-        servers_and_path = mcp_path_match.group(1)
-        if not servers_and_path:
-            return None
-        if "," in servers_and_path:
-            return None
-        # Server name may contain at most one slash; strip any trailing
-        # path segments so the registry lookup uses the canonical name.
-        single_server_match = re.match(
-            r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+    """Resolve the single MCP server name a cold-start passthrough bypass may
+    target. Delegates parsing to
+    :meth:`MCPRequestHandler._extract_target_server_names_from_path` so the
+    names used here always match the names downstream routing uses; returns
+    ``None`` whenever the bypass must not activate (aggregate ``/mcp``,
+    multi-server CSV paths, or any other unrecognized path)."""
+    servers = MCPRequestHandler._extract_target_server_names_from_path(path)
+    if len(servers) != 1:
+        verbose_logger.debug(
+            "MCP cold-start: path %r resolved to %r; passthrough 401 bypass "
+            "requires exactly one target and will not activate",
+            path,
+            servers,
         )
-        if single_server_match:
-            return [single_server_match.group(1)]
-        return [servers_and_path]
-    m = re.match(r"^/([^/,?#]+)/mcp", path)
-    if m:
-        return [m.group(1)]
-    verbose_logger.debug(
-        "MCP cold-start: path %r does not match /mcp/{name} or /{name}/mcp; "
-        "passthrough 401 bypass will not activate",
-        path,
-    )
-    return None
+        return None
+    return servers
 
 
 def _is_mcp_passthrough_cold_start(
