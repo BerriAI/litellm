@@ -123,6 +123,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
+  "Cisco AI Defense": `${asset_logos_folder}cisco.png`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
   "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
   "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,

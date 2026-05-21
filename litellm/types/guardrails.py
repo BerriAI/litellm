@@ -44,6 +44,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
+    CiscoAIDefenseGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -77,6 +80,7 @@ class SupportedGuardrailIntegrations(Enum):
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
+    CISCO_AI_DEFENSE = "cisco_ai_defense"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
@@ -784,6 +788,13 @@ class Mode(BaseModel):
 
 
 class LitellmParams(
+    # Cisco AI Defense must be listed BEFORE GraySwan so that
+    # ``optional_params`` is coerced into Cisco's optional-params model when
+    # a Cisco guardrail is configured. Without this, GraySwan (whose default
+    # ``on_flagged_action="passthrough"`` is a sentinel value Cisco doesn't
+    # accept) wins on MRO order and silently drops Cisco-specific fields
+    # like ``inspection_type``.
+    CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
