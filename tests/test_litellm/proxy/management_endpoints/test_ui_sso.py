@@ -5720,6 +5720,7 @@ class TestCliSsoAttributionMetadata:
             ),
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
             patch(
                 "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
                 return_value="<html>Success</html>",
