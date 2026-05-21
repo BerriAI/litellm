@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 _ENDPOINT_ANTHROPIC_MESSAGES = "/v1/messages"
 _WEBHOOK_PATH_TOOL_BLOCKING = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
+_DEFAULT_MAX_QUEUE_SIZE = 10_000
+_DROP_WARNING_INTERVAL_SECONDS = 60.0
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
@@ -94,6 +96,30 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 verbose_logger.warning(
                     f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default"
                 )
+
+        # Cap the in-memory retry queue so a Rubrik webhook outage cannot let
+        # authenticated traffic accumulate prompt/response payloads until the
+        # proxy runs out of memory. Once the cap is reached, oldest events are
+        # dropped to make room for fresh ones (drop-oldest backpressure).
+        self.max_queue_size = _DEFAULT_MAX_QUEUE_SIZE
+        _max_queue_size = os.getenv("RUBRIK_MAX_QUEUE_SIZE")
+        if _max_queue_size:
+            try:
+                parsed_max = int(_max_queue_size)
+                if parsed_max > 0:
+                    self.max_queue_size = parsed_max
+                else:
+                    verbose_logger.warning(
+                        f"RUBRIK_MAX_QUEUE_SIZE={_max_queue_size!r} must be > 0; "
+                        f"using default {_DEFAULT_MAX_QUEUE_SIZE}"
+                    )
+            except ValueError:
+                verbose_logger.warning(
+                    f"Invalid RUBRIK_MAX_QUEUE_SIZE: {_max_queue_size!r}, "
+                    f"using default {_DEFAULT_MAX_QUEUE_SIZE}"
+                )
+        self._dropped_since_warning = 0
+        self._last_drop_warning_time = 0.0
 
         _webhook_url = api_base or os.getenv("RUBRIK_WEBHOOK_URL")
 
@@ -391,6 +417,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 return
 
             self.log_queue.append(payload)
+            self._enforce_max_queue_size()
 
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
@@ -400,6 +427,24 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 "Skipping logging for this event.",
                 exc_info=True,
             )
+
+    def _enforce_max_queue_size(self) -> None:
+        overflow = len(self.log_queue) - self.max_queue_size
+        if overflow <= 0:
+            return
+        del self.log_queue[:overflow]
+        self._dropped_since_warning += overflow
+        now = time.time()
+        if now - self._last_drop_warning_time >= _DROP_WARNING_INTERVAL_SECONDS:
+            verbose_logger.warning(
+                "Rubrik: log queue exceeded max_queue_size=%s; dropped %s "
+                "oldest events since the last warning. The Rubrik webhook may "
+                "be unhealthy or undersized for current traffic.",
+                self.max_queue_size,
+                self._dropped_since_warning,
+            )
+            self._dropped_since_warning = 0
+            self._last_drop_warning_time = now
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._enqueue_log_event(kwargs, "success")

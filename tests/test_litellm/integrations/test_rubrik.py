@@ -349,6 +349,27 @@ class TestBatchLogging:
         await handler.flush_queue()
         assert handler.log_queue == [{"msg": "a"}, {"msg": "b"}]
 
+    async def test_enqueue_drops_oldest_when_queue_exceeds_max_size(self, handler):
+        """A sustained Rubrik webhook outage must not let the in-memory retry
+        queue grow without bound. Once max_queue_size is exceeded, the oldest
+        events are dropped to make room for new ones."""
+        handler.max_queue_size = 3
+        handler.batch_size = 10**6  # disable size-triggered flush
+        handler.flush_queue = AsyncMock()
+        for i in range(5):
+            await handler._enqueue_log_event(
+                kwargs={
+                    "standard_logging_object": {
+                        "messages": [{"role": "user", "content": f"hi-{i}"}],
+                        "response": "hello",
+                    },
+                },
+                event_type="success",
+            )
+        assert len(handler.log_queue) == 3
+        retained = [item["messages"][0]["content"] for item in handler.log_queue]
+        assert retained == ["hi-2", "hi-3", "hi-4"]
+
     async def test_log_batch_failure_preserves_events_added_during_send(self, handler):
         """Failure must preserve both the snapshot AND events appended mid-flush."""
         handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
