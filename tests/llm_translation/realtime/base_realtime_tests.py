@@ -79,7 +79,7 @@ class RealTimeWebSocketClient:
 
     def _is_initial_event(self, msg_type: str) -> bool:
         """Check if message type is an initial connection event"""
-        # OpenAI sends "session.created", xAI sends "conversation.created"
+        # OpenAI and xAI send "session.created"; some providers send "conversation.created"
         return msg_type in ["session.created", "conversation.created"]
 
     async def receive_text(self):

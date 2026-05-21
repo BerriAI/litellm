@@ -19,8 +19,8 @@ class TestXAIRealtime(BaseRealtimeTest):
     """
     E2E tests for xAI Realtime API.
 
-    xAI's Grok Voice Agent API is OpenAI-compatible but uses:
-    - Different initial event: "conversation.created" instead of "session.created"
+    xAI's Grok Voice Agent API is OpenAI-compatible:
+    - Initial event: "session.created" (matches OpenAI)
     - Different endpoint: wss://api.x.ai/v1/realtime
     - Model: grok-4-1-fast-non-reasoning
     """
@@ -32,4 +32,4 @@ class TestXAIRealtime(BaseRealtimeTest):
         return "XAI_API_KEY"
 
     def get_initial_event_type(self) -> str:
-        return "conversation.created"
+        return "session.created"
