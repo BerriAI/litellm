@@ -362,7 +362,7 @@ def handle_generic_response(
     else:
         # Explicitly clear the default so a missing OCI ``finishReason`` doesn't
         # masquerade as ``"stop"`` — matches the other three OCI handlers.
-        model_response.choices[0].finish_reason = None  # type: ignore[union-attr]
+        model_response.choices[0].finish_reason = None  # type: ignore[union-attr,assignment]
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
