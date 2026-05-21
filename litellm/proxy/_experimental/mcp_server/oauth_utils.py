@@ -345,9 +345,9 @@ def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
         _oauth_invalid_request(
             "redirect_uri must not contain a URL fragment (#...).",
         )
-    if not parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if not parsed.netloc:
         _oauth_invalid_request(
-            "redirect_uri must include a host and must not contain userinfo (user:pass@host).",
+            "redirect_uri must include a host (e.g. https://your-host/path).",
         )
     if parsed.username is not None or parsed.password is not None:
         _oauth_invalid_request(
