@@ -10,11 +10,11 @@ LiteLLM ships new releases regularly with new provider support, performance impr
 
 ## Latest Release
 
-### [v1.85.0 — Realtime GA, MCP Gateway Expansion & Hardened Multi-Tenancy](/release_notes/v1.85.0/v1-85-0)
+### [v1.85.1 — Gemini 3.5 Flash & Reliability Fixes](/release_notes/v1.85.1/v1-85-1)
 
-_May 16, 2026_
+_May 20, 2026_
 
-OpenAI Realtime GA (with `gpt-realtime-2` pricing and `/openai/v1/realtime` logging), a broad multi-tenancy hardening sweep across keys, projects, batches, files, and MCP servers, MCP Gateway expansion (org-level permissions, OBO auth, `delegate_auth_to_upstream` PKCE passthrough), an observability overhaul (Prometheus label/cardinality fixes + OTEL handler isolation), and new models including xAI `grok-4.3`, OpenAI `gpt-realtime-2`, OpenRouter Qwen 3.6 Plus, SambaNova MiniMax-M2.7, and Bedrock Z.AI GLM-5.
+A patch release on top of [v1.85.0](/release_notes/v1.85.0/v1-85-0): day-0 support for Gemini 3.5 Flash on Google AI Studio and Vertex AI, a Vertex AI tool-calling fix that resolves Gemini 3.5+ HTTP 400 `Unknown name "id"` errors, and a cross-pod spend-counter fix that stops team budgets from double-counting after a Redis cache miss. The same fixes are also shipped for the 1.84 line as [v1.84.1](/release_notes/v1.84.1/v1-84-1).
 
 ---
 
@@ -22,6 +22,8 @@ OpenAI Realtime GA (with `gpt-realtime-2` pricing and `/openai/v1/realtime` logg
 
 | Version                             | Date         | Highlights                                                 |
 | ----------------------------------- | ------------ | ---------------------------------------------------------- |
+| [v1.85.1](/release_notes/v1.85.1/v1-85-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |
+| [v1.84.1](/release_notes/v1.84.1/v1-84-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |
 | [v1.85.0](/release_notes/v1.85.0/v1-85-0)   | May 16, 2026 | Realtime GA, MCP Gateway expansion & hardened multi-tenancy |
 | [v1.84.0](/release_notes/v1.84.0/v1-84-0)   | May 14, 2026 | Reliability hardening + multi-pod budget accuracy          |
 | [v1.83.14](/release_notes/v1.83.14/v1-83-14) | Apr 27, 2026 | GPT-5.5, Prompt Compression & Memory API                   |
