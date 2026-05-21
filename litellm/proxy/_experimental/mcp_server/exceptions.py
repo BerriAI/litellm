@@ -33,13 +33,21 @@ class MCPUpstreamAuthError(Exception):
         preserves the upstream status code and any ``WWW-Authenticate``
         challenge, so standards-compliant MCP clients can trigger the
         upstream OAuth flow.
+
+        When the upstream 401 omits ``WWW-Authenticate`` (non-compliant per
+        RFC 7235 §3.1) we fabricate a ``Bearer resource_metadata=`` challenge
+        that points at the gateway's standard-pattern well-known endpoint for
+        this server, so MCP clients can still initiate RFC 9728 discovery
+        against the upstream IdP via the gateway's proxied metadata.
         """
+        challenge: Optional[str] = self.www_authenticate
+        if challenge is None and self.status_code == 401:
+            challenge = (
+                "Bearer resource_metadata="
+                f'"/.well-known/oauth-protected-resource/mcp/{self.server_name}"'
+            )
         return HTTPException(
             status_code=self.status_code,
             detail="Unauthorized",
-            headers=(
-                {"www-authenticate": self.www_authenticate}
-                if self.www_authenticate
-                else None
-            ),
+            headers={"www-authenticate": challenge} if challenge else None,
         )

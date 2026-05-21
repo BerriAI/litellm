@@ -112,6 +112,46 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     assert tools == [tool]
 
 
+def test_to_http_exception_preserves_upstream_www_authenticate():
+    err = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+        server_name="sample_docs",
+    )
+
+    http_exc = err.to_http_exception()
+    assert http_exc.status_code == 401
+    assert http_exc.headers == {
+        "www-authenticate": 'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"'
+    }
+
+
+def test_to_http_exception_fabricates_resource_metadata_when_upstream_omits_header():
+    err = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate=None,
+        server_name="sample_docs",
+    )
+
+    http_exc = err.to_http_exception()
+    assert http_exc.status_code == 401
+    assert http_exc.headers == {
+        "www-authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/sample_docs"'
+    }
+
+
+def test_to_http_exception_skips_challenge_for_non_401_status():
+    err = MCPUpstreamAuthError(
+        status_code=403,
+        www_authenticate=None,
+        server_name="sample_docs",
+    )
+
+    http_exc = err.to_http_exception()
+    assert http_exc.status_code == 403
+    assert http_exc.headers is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_tools_from_gateway_managed_swallows_errors():
     """Regression guard: non-pass-through servers keep returning [] on errors."""
