@@ -5,7 +5,12 @@ on:
   schedule:
     - cron: '27 12 * * 4'
   push:
-    branches: ["main"]
+    # "main" is upstream's default branch; "litellm_internal_staging" is this
+    # fork's default branch — without it the Scorecard scan never re-runs on a
+    # push, leaving code-scanning alerts stale against an old commit.
+    branches: ["main", "litellm_internal_staging"]
+  # Allow on-demand re-scan (e.g. to refresh alerts after a fix lands).
+  workflow_dispatch:
 
 permissions: read-all
 
