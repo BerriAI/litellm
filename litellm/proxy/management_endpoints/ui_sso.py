@@ -1935,6 +1935,129 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
+async def _build_cli_sso_user_defined_values(
+    result: Union[OpenID, dict],
+    parsed_openid_result: ParsedOpenIDResult,
+) -> Optional[SSOUserDefinedValues]:
+    from litellm.proxy.proxy_server import user_custom_sso
+
+    user_id = parsed_openid_result.get("user_id")
+    if user_custom_sso is not None:
+        if inspect.iscoroutinefunction(user_custom_sso):
+            return await user_custom_sso(result)  # type: ignore
+        raise ValueError("user_custom_sso must be a coroutine function")
+    if user_id is None:
+        return None
+    return SSOUserDefinedValues(
+        models=[],
+        user_id=user_id,
+        user_email=parsed_openid_result.get("user_email"),
+        max_budget=litellm.max_internal_user_budget,
+        user_role=parsed_openid_result.get("user_role"),
+        budget_duration=litellm.internal_user_budget_duration,
+    )
+
+
+async def _fetch_cli_sso_team_details(
+    prisma_client: PrismaClient,
+    teams: List[str],
+) -> List[Dict[str, Any]]:
+    team_details: List[Dict[str, Any]] = []
+    try:
+        if teams:
+            prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
+                where={"team_id": {"in": teams}}
+            )
+            for team_row in prisma_teams:
+                team_dict = team_row.model_dump()
+                team_details.append(
+                    {
+                        "team_id": team_dict.get("team_id"),
+                        "team_alias": team_dict.get("team_alias"),
+                    }
+                )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error fetching team details for CLI SSO session: {e}"
+        )
+    return team_details
+
+
+async def _complete_cli_sso_callback_session(
+    *,
+    request: Request,
+    key: str,
+    flow: dict,
+    result: Union[OpenID, dict],
+    parsed_openid_result: ParsedOpenIDResult,
+    user_defined_values: Optional[SSOUserDefinedValues],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+):
+    from fastapi.responses import HTMLResponse
+
+    user_id = parsed_openid_result.get("user_id")
+    user_email = parsed_openid_result.get("user_email")
+    user_info = await get_user_info_from_db(
+        result=result,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        user_email=user_email,
+        user_defined_values=user_defined_values,
+        alternate_user_id=user_id,
+    )
+    if user_info is None:
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve user information from SSO"
+        )
+
+    teams: List[str] = []
+    if hasattr(user_info, "teams") and user_info.teams:
+        teams = user_info.teams if isinstance(user_info.teams, list) else []
+
+    team_details = await _fetch_cli_sso_team_details(
+        prisma_client=prisma_client, teams=teams
+    )
+    attribution_metadata = build_cli_sso_attribution_metadata(result=result)
+    if attribution_metadata:
+        await _persist_cli_sso_user_metadata(
+            prisma_client=prisma_client,
+            user_id=user_info.user_id,
+            attribution_metadata=attribution_metadata,
+        )
+
+    flow["session_data"] = {
+        "user_id": user_info.user_id,
+        "user_role": user_info.user_role,
+        "models": user_info.models if hasattr(user_info, "models") else [],
+        "user_email": user_email,
+        "teams": teams,
+        "team_details": team_details,
+        "attribution_metadata": attribution_metadata,
+    }
+    flow["sso_complete"] = True
+    browser_complete_token = secrets.token_urlsafe(32)
+    flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
+    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+
+    verbose_proxy_logger.info(
+        f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
+    )
+    verify_url = get_custom_url(
+        request_base_url=str(request.base_url),
+        route=f"sso/cli/complete/{key}",
+    )
+    return HTMLResponse(
+        content=_render_cli_sso_verification_page(
+            verify_url=verify_url,
+            browser_complete_token=browser_complete_token,
+        ),
+        status_code=200,
+    )
+
+
 async def cli_sso_callback(
     request: Request,
     key: Optional[str] = None,
@@ -1965,126 +2088,30 @@ async def cli_sso_callback(
     # After None check, cast to non-None type for type checker
     result_non_none: Union[OpenID, dict] = cast(Union[OpenID, dict], result)
 
-    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
     parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(
         result=result_non_none,
-        generic_client_id=generic_client_id,
+        generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
     )
     verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
-
-    user_id = parsed_openid_result.get("user_id")
-    user_email = parsed_openid_result.get("user_email")
-    user_role = parsed_openid_result.get("user_role")
-
-    user_defined_values: Optional[SSOUserDefinedValues] = None
-    from litellm.proxy.proxy_server import user_custom_sso
-
-    if user_custom_sso is not None:
-        if inspect.iscoroutinefunction(user_custom_sso):
-            user_defined_values = await user_custom_sso(result_non_none)  # type: ignore
-        else:
-            raise ValueError("user_custom_sso must be a coroutine function")
-    elif user_id is not None:
-        user_defined_values = SSOUserDefinedValues(
-            models=[],
-            user_id=user_id,
-            user_email=user_email,
-            max_budget=litellm.max_internal_user_budget,
-            user_role=user_role,
-            budget_duration=litellm.internal_user_budget_duration,
-        )
+    user_defined_values = await _build_cli_sso_user_defined_values(
+        result=result_non_none,
+        parsed_openid_result=parsed_openid_result,
+    )
 
     try:
-        user_info = await get_user_info_from_db(
+        return await _complete_cli_sso_callback_session(
+            request=request,
+            key=cast(str, key),
+            flow=flow,
             result=result_non_none,
+            parsed_openid_result=parsed_openid_result,
+            user_defined_values=user_defined_values,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
-            alternate_user_id=user_id,
         )
-
-        if user_info is None:
-            raise HTTPException(
-                status_code=500, detail="Failed to retrieve user information from SSO"
-            )
-
-        # Get all teams from user_info - CLI will let user select which one
-        teams: List[str] = []
-        if hasattr(user_info, "teams") and user_info.teams:
-            teams = user_info.teams if isinstance(user_info.teams, list) else []
-
-        # Also fetch team aliases for a better CLI UX. We keep the original
-        # "teams" list of IDs for backwards compatibility and add an
-        # optional "team_details" field containing objects with both
-        # team_id and team_alias.
-        team_details: List[Dict[str, Any]] = []
-        try:
-            if teams:
-                prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
-                    where={"team_id": {"in": teams}}
-                )
-                for team_row in prisma_teams:
-                    team_dict = team_row.model_dump()
-                    team_details.append(
-                        {
-                            "team_id": team_dict.get("team_id"),
-                            "team_alias": team_dict.get("team_alias"),
-                        }
-                    )
-        except Exception as e:
-            # If anything goes wrong here, fall back gracefully without
-            # impacting the SSO flow.
-            verbose_proxy_logger.error(
-                f"Error fetching team details for CLI SSO session: {e}"
-            )
-
-        attribution_metadata = build_cli_sso_attribution_metadata(
-            result=result_non_none
-        )
-        if attribution_metadata:
-            await _persist_cli_sso_user_metadata(
-                prisma_client=prisma_client,
-                user_id=user_info.user_id,
-                attribution_metadata=attribution_metadata,
-            )
-
-        session_data = {
-            "user_id": user_info.user_id,
-            "user_role": user_info.user_role,
-            "models": user_info.models if hasattr(user_info, "models") else [],
-            "user_email": parsed_openid_result.get("user_email"),
-            "teams": teams,
-            # Optional rich metadata for clients that want nicer display
-            "team_details": team_details,
-            "attribution_metadata": attribution_metadata,
-        }
-
-        flow["session_data"] = session_data
-        flow["sso_complete"] = True
-        browser_complete_token = secrets.token_urlsafe(32)
-        flow["browser_complete_token_hash"] = _hash_cli_sso_secret(
-            browser_complete_token
-        )
-        _set_cli_sso_flow(login_id=cast(str, key), cache=user_api_key_cache, flow=flow)
-
-        verbose_proxy_logger.info(
-            f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
-        )
-
-        from fastapi.responses import HTMLResponse
-
-        verify_url = get_custom_url(
-            request_base_url=str(request.base_url),
-            route=f"sso/cli/complete/{key}",
-        )
-        html_content = _render_cli_sso_verification_page(
-            verify_url=verify_url,
-            browser_complete_token=browser_complete_token,
-        )
-        return HTMLResponse(content=html_content, status_code=200)
-
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error with CLI SSO callback: {e}")
         raise HTTPException(
