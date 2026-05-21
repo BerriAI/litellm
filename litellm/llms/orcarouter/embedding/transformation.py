@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -44,13 +43,14 @@ class OrcaRouterEmbeddingConfig(BaseEmbeddingConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """Set Authorization + attribution headers; user headers take priority."""
-        resolved_key = (
-            api_key
-            or litellm.api_key
-            or litellm.orcarouter_key
-            or get_secret_str("ORCAROUTER_API_KEY")
-        )
+        """Set Authorization + attribution headers; user headers take priority.
+
+        The chat / embedding dispatch in `litellm/main.py` resolves api_key
+        through litellm.api_key / litellm.orcarouter_key before calling us;
+        we only need the explicit-arg + env-var fallback here, mirroring
+        `litellm/llms/openrouter/embedding/transformation.py`.
+        """
+        resolved_key = api_key or get_secret_str("ORCAROUTER_API_KEY")
         if not resolved_key:
             raise ValueError(
                 "OrcaRouter API key is required. Set ORCAROUTER_API_KEY environment variable or pass api_key parameter."
