@@ -3202,6 +3202,89 @@ class TestAgentMCPPermissions:
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
 
+    async def test_get_agent_object_permission_uses_shared_helper(self):
+        """``_get_agent_object_permission`` must resolve the agent's
+        ``object_permission_id`` and then defer to the shared
+        ``get_object_permission`` helper so cache entries are shared with the
+        org / team / key paths."""
+        from litellm.caching.dual_cache import DualCache
+
+        cache = DualCache()
+        agent_row = MagicMock()
+        agent_row.object_permission_id = "perm-xyz"
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+            return_value=agent_row
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-shared",
+        )
+        expected_perm = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=expected_perm,
+            ) as mock_get_perm,
+        ):
+            result = await MCPRequestHandler._get_agent_object_permission(
+                user_api_key_auth
+            )
+            assert result is expected_perm
+            mock_get_perm.assert_awaited_once()
+            assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-xyz"
+
+            # Second call: the agent_id -> object_permission_id mapping is
+            # cached, so the agent row is not re-fetched.
+            prisma_client.db.litellm_agentstable.find_unique.reset_mock()
+            await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+            prisma_client.db.litellm_agentstable.find_unique.assert_not_called()
+
+    async def test_get_agent_object_permission_caches_missing_permission(self):
+        """When the agent has no ``object_permission_id`` the sentinel must be
+        cached so subsequent requests do not hit the DB again."""
+        from litellm.caching.dual_cache import DualCache
+
+        cache = DualCache()
+        agent_row = MagicMock()
+        agent_row.object_permission_id = None
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+            return_value=agent_row
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-no-perm",
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+            ) as mock_get_perm,
+        ):
+            assert (
+                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+                is None
+            )
+            assert (
+                await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+                is None
+            )
+
+            mock_get_perm.assert_not_awaited()
+            prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 async def test_tool_permission_servers_included_in_allowed_servers():

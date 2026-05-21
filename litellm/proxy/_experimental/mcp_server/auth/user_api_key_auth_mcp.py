@@ -1289,12 +1289,17 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """
-        Get agent object_permission, using user_api_key_cache to avoid DB hits on every request.
-
-        Caches both positive results and the absence of an object_permission so that agents
-        with no MCP permissions configured do not trigger a DB query on every request.
+        Get agent object_permission via the established ``get_object_permission``
+        helper. Caches the ``agent_id -> object_permission_id`` mapping so we
+        avoid re-reading the agent row on every request, and reuses the shared
+        ``object_permission_id`` cache populated by the org / team / key paths.
         """
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
@@ -1304,42 +1309,41 @@ class MCPRequestHandler:
             return None
 
         agent_id = user_api_key_auth.agent_id
-        cache_key = f"agent_object_permission:{agent_id}"
-
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        cache_key = f"agent_object_permission_id:{agent_id}"
 
         try:
-            cached = await user_api_key_cache.async_get_cache(key=cache_key)
-            if cached is not None:
-                if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
-                    return None
-                # Redis deserialises to a plain dict; reconstruct the Pydantic model
-                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
-                if isinstance(cached, dict):
-                    return LiteLLM_ObjectPermissionTable(**cached)
-                return cached
-
-            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": agent_id},
-                include={"object_permission": True},
+            object_permission_id: Optional[str] = (
+                await user_api_key_cache.async_get_cache(key=cache_key)
             )
-            if agent_row is None or agent_row.object_permission is None:
-                await user_api_key_cache.async_set_cache(
-                    key=cache_key,
-                    value=MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
-                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-                )
+
+            if object_permission_id == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None
 
-            obj_perm = LiteLLM_ObjectPermissionTable(
-                **agent_row.object_permission.dict()
+            if object_permission_id is None:
+                agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                    where={"agent_id": agent_id},
+                )
+                object_permission_id = (
+                    getattr(agent_row, "object_permission_id", None)
+                    if agent_row is not None
+                    else None
+                )
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=object_permission_id
+                    or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
+                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                )
+                if not object_permission_id:
+                    return None
+
+            return await get_object_permission(
+                object_permission_id=object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-            await user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=obj_perm.dict(),
-                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-            )
-            return obj_perm
         except Exception as e:
             verbose_logger.warning(f"Failed to get agent object permission: {str(e)}")
             return None

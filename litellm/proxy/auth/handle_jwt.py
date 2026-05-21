@@ -843,7 +843,7 @@ class JWTHandler:
     _unscoped_jwt_warning_emitted = False
 
     @classmethod
-    def _build_decode_kwargs(cls, has_issuer_config: bool = False) -> dict:
+    def _build_decode_kwargs(cls) -> dict:
         """Build the audience/issuer/options kwargs for ``jwt.decode``.
 
         Setting ``JWT_AUDIENCE`` (and optionally ``JWT_ISSUER``) turns on the
@@ -852,10 +852,10 @@ class JWTHandler:
         When both are unset PyJWT only checks the signature and expiry, which
         is preserved for backward compatibility but logged once as a warning.
 
-        ``has_issuer_config`` suppresses the warning when the caller has
-        configured per-issuer scoping via ``LiteLLM_JWTAuth.issuers``: this
-        global path is then just the fallback for tokens whose ``iss`` did not
-        match any configured issuer, not the only scoping mechanism.
+        The warning fires even in mixed deployments that also configure
+        ``LiteLLM_JWTAuth.issuers``: tokens whose ``iss`` does not match any
+        configured issuer fall through to this global path, and if env-var
+        scoping is absent that fallback is itself unscoped.
         """
         audience = os.getenv("JWT_AUDIENCE")
         issuer = os.getenv("JWT_ISSUER")
@@ -863,7 +863,6 @@ class JWTHandler:
         if (
             audience is None
             and issuer is None
-            and not has_issuer_config
             and not cls._unscoped_jwt_warning_emitted
         ):
             verbose_proxy_logger.warning(
@@ -1057,11 +1056,7 @@ class JWTHandler:
                 kid=kid,
             )
 
-        decode_kwargs = self._build_decode_kwargs(
-            has_issuer_config=bool(
-                getattr(getattr(self, "litellm_jwtauth", None), "issuers", None)
-            )
-        )
+        decode_kwargs = self._build_decode_kwargs()
 
         public_key = await self.get_public_key(kid=kid)
 
