@@ -650,8 +650,14 @@ async def _auto_register_jwt_mapping(
         generate_key_helper_fn,
     )
 
+    # ``table_name="key"`` is required: without it, generate_key_helper_fn
+    # falls into the user-upsert branch (`table_name is None or "user"`) and
+    # attempts to insert into LiteLLM_UserTable with user_id=None, which fails
+    # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
+    # /key/generate) passes table_name="key" explicitly.
     key_data = await generate_key_helper_fn(
         request_type="key",
+        table_name="key",
         team_id=team_id,
         metadata={
             "auto_registered": True,
@@ -705,8 +711,18 @@ async def _auto_register_jwt_mapping(
                 prisma_client=prisma_client,
             )
             if token_hash is None:
-                # Should not happen, but guard against a delete racing our fetch.
-                return None
+                # The winner's mapping vanished between the unique-constraint
+                # conflict and our re-fetch (concurrent delete). Returning None
+                # here would silently fall through to team-based JWT auth —
+                # a less-restrictive path than the operator configured. Raise
+                # 503 so the caller retries against a stable state instead.
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "JWT Key Mapping: AUTO_REGISTER race resolution failed — "
+                        "winner's mapping was concurrently removed. Retry the request."
+                    ),
+                )
         else:
             raise
 

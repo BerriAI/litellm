@@ -1069,6 +1069,59 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
     prisma_client.db.litellm_verificationtoken.delete.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_auto_register_raises_503_when_winner_mapping_vanishes():
+    """
+    Race edge case: this request loses the unique-constraint race, deletes its
+    orphan, then refetches the winner's mapping — but the winner's row was
+    concurrently deleted. Previously this returned None, silently falling
+    through to less-restrictive team-based JWT auth (bypassing the configured
+    AUTO_REGISTER policy). Must now raise HTTP 503 so the caller retries
+    rather than getting unintended fallback access.
+    """
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
+        side_effect=Exception("Unique constraint failed (P2002)")
+    )
+    prisma_client.db.litellm_verificationtoken.delete = AsyncMock()
+    # Winner row no longer exists by the time we refetch
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    user_api_key_cache = DualCache()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": "sk-loser", "key": "sk-loser"},
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _auto_register_jwt_mapping(
+            virtual_key_claim_field="sub",
+            claim_value="user-42",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            cache_key="jwt_key_mapping:sub:user-42",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "concurrently removed" in exc_info.value.detail
+
+
 # ──────────────────────────────────────────────
 # Tests: AUTO_REGISTER inherits team_id from JWT
 # ──────────────────────────────────────────────
