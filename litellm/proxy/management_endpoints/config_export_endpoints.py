@@ -190,6 +190,52 @@ def _redact_mcp_credentials(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
+# Fields inside litellm_params that hold provider credentials.
+# Non-secret config (api_base, api_version, region_name, vertex_project, etc.)
+# is left intact so the export can be re-applied to a target environment.
+_LITELLM_PARAMS_SECRET_KEYS: frozenset = frozenset(
+    {
+        "api_key",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "vertex_credentials",
+    }
+)
+
+
+def _redact_litellm_params(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact credential sub-fields inside a litellm_params dict.
+
+    Replaces known secret keys with the string sentinel ``"__redacted__"``
+    while leaving non-secret config fields (api_base, region_name, etc.)
+    in place so the export remains useful for environment promotion.
+    """
+    params = record.get("litellm_params")
+    if not isinstance(params, dict):
+        return record
+    redacted_params = {
+        k: "__redacted__" if k in _LITELLM_PARAMS_SECRET_KEYS and v is not None else v
+        for k, v in params.items()
+    }
+    return {**record, "litellm_params": redacted_params}
+
+
+def _redact_mcp_sensitive_fields(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact MCP server fields that can carry auth values.
+
+    ``credentials`` is handled by _redact_mcp_credentials.
+    ``static_headers`` can contain Authorization headers.
+    ``env`` can contain environment variable values including secrets.
+    ``url`` and ``spec_path`` are connectivity config, not credentials — kept.
+    """
+    record = dict(record)
+    if record.get("static_headers"):
+        record["static_headers"] = {"__redacted__": True}
+    if record.get("env"):
+        record["env"] = {"__redacted__": True}
+    return record
+
+
 def _is_redacted(value: Any) -> bool:
     return isinstance(value, dict) and value.get("__redacted__") is True
 
@@ -485,10 +531,10 @@ async def _fetch_export_sections(
                 take=limit, order={"created_at": "asc"}
             ),
         )
-        records = [_strip(r, _STRIP_FIELDS["credentials"]) for r in rows]
-        if redact_secrets:
-            records = [_redact_credential_values(rec) for rec in records]
-        envelope["credentials"] = records
+        envelope["credentials"] = [
+            _redact_credential_values(rec) if redact_secrets else rec
+            for rec in [_strip(r, _STRIP_FIELDS["credentials"]) for r in rows]
+        ]
 
     if "models" in sections:
         rows = _cap(
@@ -497,7 +543,10 @@ async def _fetch_export_sections(
                 take=limit, order={"created_at": "asc"}
             ),
         )
-        envelope["models"] = [_strip(r, _STRIP_FIELDS["models"]) for r in rows]
+        envelope["models"] = [
+            _redact_litellm_params(rec) if redact_secrets else rec
+            for rec in [_strip(r, _STRIP_FIELDS["models"]) for r in rows]
+        ]
 
     if "mcp_servers" in sections:
         rows = _cap(
@@ -506,10 +555,14 @@ async def _fetch_export_sections(
                 take=limit, order={"created_at": "asc"}
             ),
         )
-        records = [_strip(r, _STRIP_FIELDS["mcp_servers"]) for r in rows]
-        if redact_secrets:
-            records = [_redact_mcp_credentials(rec) for rec in records]
-        envelope["mcp_servers"] = records
+        envelope["mcp_servers"] = [
+            (
+                _redact_mcp_sensitive_fields(_redact_mcp_credentials(rec))
+                if redact_secrets
+                else rec
+            )
+            for rec in [_strip(r, _STRIP_FIELDS["mcp_servers"]) for r in rows]
+        ]
 
     if "agents" in sections:
         rows = _cap(
@@ -518,7 +571,10 @@ async def _fetch_export_sections(
                 take=limit, order={"created_at": "asc"}
             ),
         )
-        envelope["agents"] = [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
+        envelope["agents"] = [
+            _redact_litellm_params(rec) if redact_secrets else rec
+            for rec in [_strip(r, _STRIP_FIELDS["agents"]) for r in rows]
+        ]
 
     if "guardrails" in sections:
         rows = _cap(
@@ -1169,6 +1225,20 @@ async def _import_section(
             )
         return
 
+    # Snapshot counts before entering the transaction so that a rollback can
+    # restore them to their pre-section state before recording the failure.
+    # Without this, _upsert increments created/updated/skipped inside the block
+    # and the except branch then adds errors on top, making
+    # created + updated + skipped + errors > total_processed.
+    _snap = (
+        section_result.created,
+        section_result.updated,
+        section_result.skipped,
+        section_result.errors,
+        section_result.total_processed,
+        list(section_result.warnings),
+    )
+
     try:
         async with table._client.tx() as tx:
             # Use the explicit snake_case table_name to look up the accessor on
@@ -1189,7 +1259,17 @@ async def _import_section(
                     id_query_field=id_query_field,
                 )
     except Exception as e:
+        # Restore pre-transaction counts, then record every record as an error.
+        (
+            section_result.created,
+            section_result.updated,
+            section_result.skipped,
+            section_result.errors,
+            section_result.total_processed,
+            section_result.warnings,
+        ) = _snap
         section_result.errors += len(records)
+        section_result.total_processed += len(records)
         section_result.warnings.append(f"Section transaction rolled back: {e}")
         verbose_proxy_logger.error(
             "Section %s transaction failed: %s", table_name, e, exc_info=True

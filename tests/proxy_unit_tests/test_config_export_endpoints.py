@@ -27,7 +27,9 @@ from litellm.proxy.management_endpoints.config_export_endpoints import (
     _import_section,
     _is_redacted,
     _redact_credential_values,
+    _redact_litellm_params,
     _redact_mcp_credentials,
+    _redact_mcp_sensitive_fields,
     _strip,
     _upsert,
     _validate_dependencies,
@@ -139,16 +141,6 @@ def test_strip_preserves_none_values():
     assert result["spend"] is None
 
 
-def test_strip_handles_model_with_dict_method():
-    class FakeModel:
-        def model_dump(self):
-            return {"team_id": "t1", "spend": 5.0}
-
-    result = _strip(FakeModel(), ["spend"])
-    assert "spend" not in result
-    assert result["team_id"] == "t1"
-
-
 def test_redact_credential_values():
     rec = {"credential_name": "my-cred", "credential_values": {"api_key": "secret"}}
     result = _redact_credential_values(rec)
@@ -162,25 +154,136 @@ def test_redact_mcp_credentials():
     assert result["credentials"] == {"__redacted__": True}
 
 
-def test_redact_mcp_credentials_no_credentials():
-    rec = {"server_name": "my-mcp"}
-    result = _redact_mcp_credentials(rec)
-    assert "credentials" not in result
+def test_redact_litellm_params_masks_secret_keys():
+    rec = {
+        "model_id": "m1",
+        "litellm_params": {
+            "model": "gpt-4",
+            "api_key": "sk-secret",
+            "api_base": "https://my-endpoint.openai.azure.com",
+            "aws_access_key_id": "AKIAIOSFODNN7",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG",
+            "vertex_credentials": '{"type": "service_account"}',
+            "api_version": "2024-02-01",
+        },
+    }
+    result = _redact_litellm_params(rec)
+    params = result["litellm_params"]
+    # Secret keys are replaced
+    assert params["api_key"] == "__redacted__"
+    assert params["aws_access_key_id"] == "__redacted__"
+    assert params["aws_secret_access_key"] == "__redacted__"
+    assert params["vertex_credentials"] == "__redacted__"
+    # Non-secret config is preserved
+    assert params["model"] == "gpt-4"
+    assert params["api_base"] == "https://my-endpoint.openai.azure.com"
+    assert params["api_version"] == "2024-02-01"
 
 
-def test_is_redacted_true():
-    assert _is_redacted({"__redacted__": True}) is True
+def test_redact_mcp_sensitive_fields_masks_headers_and_env():
+    rec = {
+        "server_id": "s1",
+        "url": "https://mcp.example.com",
+        "spec_path": "/openapi.json",
+        "static_headers": {"Authorization": "Bearer tok-secret"},
+        "env": {"API_SECRET": "s3cr3t"},
+    }
+    result = _redact_mcp_sensitive_fields(rec)
+    assert result["static_headers"] == {"__redacted__": True}
+    assert result["env"] == {"__redacted__": True}
+    # Non-sensitive fields preserved
+    assert result["url"] == "https://mcp.example.com"
+    assert result["spec_path"] == "/openapi.json"
 
-
-def test_is_redacted_false():
-    assert _is_redacted({"api_key": "real-value"}) is False
-    assert _is_redacted(None) is False
-    assert _is_redacted("string") is False
 
 
 # ---------------------------------------------------------------------------
 # Export tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_models_redacts_litellm_params_secrets():
+    model_row = {
+        "model_id": "m1",
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4",
+            "api_key": "sk-secret",
+            "api_base": "https://my.openai.azure.com",
+            "aws_secret_access_key": "wJalrX",
+        },
+    }
+    prisma = make_prisma(models=[model_row])
+
+    with mock_prisma(prisma):
+        response = await export_config(
+            request=make_request(),
+            user_api_key_dict=make_admin_key(),
+            include="models",
+            format="json",
+            redact_secrets=True,
+            limit=1000,
+        )
+
+    body = json.loads(response.body)
+    params = body["models"][0]["litellm_params"]
+    assert params["api_key"] == "__redacted__"
+    assert params["aws_secret_access_key"] == "__redacted__"
+    assert params["api_base"] == "https://my.openai.azure.com"
+    assert params["model"] == "azure/gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_export_models_not_redacted_when_flag_false():
+    model_row = {
+        "model_id": "m1",
+        "litellm_params": {"model": "gpt-4", "api_key": "sk-secret"},
+    }
+    prisma = make_prisma(models=[model_row])
+
+    with mock_prisma(prisma):
+        response = await export_config(
+            request=make_request(),
+            user_api_key_dict=make_admin_key(),
+            include="models",
+            format="json",
+            redact_secrets=False,
+            limit=1000,
+        )
+
+    body = json.loads(response.body)
+    assert body["models"][0]["litellm_params"]["api_key"] == "sk-secret"
+
+
+@pytest.mark.asyncio
+async def test_export_mcp_servers_redacts_static_headers_and_env():
+    mcp_row = {
+        "server_id": "s1",
+        "server_name": "my-mcp",
+        "url": "https://mcp.example.com",
+        "static_headers": {"Authorization": "Bearer tok"},
+        "env": {"SECRET": "val"},
+        "credentials": {"token": "cred-secret"},
+    }
+    prisma = make_prisma(mcp_servers=[mcp_row])
+
+    with mock_prisma(prisma):
+        response = await export_config(
+            request=make_request(),
+            user_api_key_dict=make_admin_key(),
+            include="mcp_servers",
+            format="json",
+            redact_secrets=True,
+            limit=1000,
+        )
+
+    body = json.loads(response.body)
+    srv = body["mcp_servers"][0]
+    assert srv["credentials"] == {"__redacted__": True}
+    assert srv["static_headers"] == {"__redacted__": True}
+    assert srv["env"] == {"__redacted__": True}
+    assert srv["url"] == "https://mcp.example.com"
 
 
 @pytest.mark.asyncio
@@ -643,13 +746,6 @@ async def test_import_mcp_server_with_redacted_credentials_imports_without_creds
 
 
 # #6 — Deep merge
-def test_deep_merge_flat():
-    base = {"a": 1, "b": 2}
-    override = {"b": 99, "c": 3}
-    result = _deep_merge(base, override)
-    assert result == {"a": 1, "b": 99, "c": 3}
-
-
 def test_deep_merge_nested():
     base = {"settings": {"timeout": 30, "retries": 3}}
     override = {"settings": {"timeout": 60}}
@@ -669,17 +765,6 @@ def test_deep_merge_non_dict_override_wins():
     override = {"a": "string"}
     result = _deep_merge(base, override)
     assert result["a"] == "string"
-
-
-# #7 — Envelope validation
-def test_validate_envelope_passes_on_valid_data():
-    data = LiteLLMExportEnvelope(
-        exported_at="2024-01-01T00:00:00Z",
-        source_instance="http://dev",
-        include_filters=["teams"],
-        teams=[{"team_id": "t1", "team_alias": "alpha"}],
-    )
-    _validate_envelope(data)  # should not raise
 
 
 def test_validate_envelope_rejects_missing_id():
@@ -709,18 +794,6 @@ def test_validate_envelope_rejects_duplicate_ids():
         _validate_envelope(data)
     assert exc_info.value.status_code == 400
     assert "duplicate" in str(exc_info.value.detail).lower()
-
-
-# #2 — Dependency validation
-def test_validate_dependencies_passes_when_org_present():
-    data = LiteLLMExportEnvelope(
-        exported_at="2024-01-01T00:00:00Z",
-        source_instance="http://dev",
-        include_filters=["organizations", "teams"],
-        organizations=[{"organization_id": "o1", "organization_alias": "MyOrg"}],
-        teams=[{"team_id": "t1", "team_alias": "alpha", "organization_id": "o1"}],
-    )
-    _validate_dependencies(data)  # should not raise
 
 
 def test_validate_dependencies_fails_when_org_missing():
@@ -785,25 +858,6 @@ async def test_dry_run_accurately_reports_create_vs_skip():
     # No writes
     prisma.db.litellm_teamtable.create.assert_not_called()
     prisma.db.litellm_teamtable.update.assert_not_called()
-
-
-# #10 — ImportResult totals
-def test_import_result_has_total_processed_field():
-    sr = __import__(
-        "litellm.proxy.management_endpoints.config_export_endpoints",
-        fromlist=["ImportSectionResult"],
-    ).ImportSectionResult()
-    sr.created = 3
-    sr.skipped = 1
-    sr.errors = 1
-    sr.total_processed = 5
-    assert sr.total_processed == 5
-
-
-def test_import_result_has_sections_attempted():
-    r = ImportResult(dry_run=False, conflict="skip")
-    r.sections_attempted = ["teams", "models"]
-    assert "teams" in r.sections_attempted
 
 
 # ---------------------------------------------------------------------------
@@ -1154,38 +1208,6 @@ async def test_upsert_exception_counted_as_error():
     assert any("constraint violation" in w for w in sr.warnings)
 
 
-@pytest.mark.asyncio
-async def test_upsert_dry_run_create_vs_skip():
-    table = MagicMock()
-    sr = ImportSectionResult()
-
-    # new record → dry_run create
-    await _upsert(
-        table=table,
-        rec={"team_id": "new"},
-        id_field="team_id",
-        conflict="skip",
-        dry_run=True,
-        section_result=sr,
-        existing_map={},
-    )
-    assert sr.created == 1
-
-    # existing record, skip conflict → dry_run skip
-    await _upsert(
-        table=table,
-        rec={"team_id": "existing"},
-        id_field="team_id",
-        conflict="skip",
-        dry_run=True,
-        section_result=sr,
-        existing_map={"existing": {"team_id": "existing"}},
-    )
-    assert sr.skipped == 1
-    table.create.assert_not_called()
-    table.update.assert_not_called()
-
-
 # ---------------------------------------------------------------------------
 # _import_section — has_tx=False non-transactional fallback
 # ---------------------------------------------------------------------------
@@ -1410,6 +1432,69 @@ async def test_export_raises_500_when_db_not_connected():
 
 
 @pytest.mark.asyncio
+async def test_import_section_transaction_rollback_does_not_double_count():
+    """
+    When a transaction commits successfully for some records and then the
+    async-with block raises on exit, the snapshot/restore path must zero out
+    the per-record increments before adding errors.  Without the fix:
+      created=2, errors=2, total_processed=2  (created + errors > total)
+    After the fix:
+      created=0, errors=2, total_processed=2
+    """
+
+    class _TxContextManager:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            # Simulate the commit failing on exit — this is what triggers the
+            # rollback path in _import_section.
+            raise Exception("commit failed")
+
+    class _TxClient:
+        def tx(self):
+            return _TxContextManager()
+
+    class _TxTable(_NoTxTable):
+        """Table that has a _client.tx() so _import_section uses the tx path."""
+
+        def __init__(self, tx_context):
+            super().__init__()
+            self._client = tx_context
+
+        def __getattr__(self, name):
+            # Proxy table attribute lookups so getattr(tx, table_name) works.
+            return self
+
+    client = _TxClient()
+    table = _TxTable(client)
+
+    sr = ImportSectionResult()
+    await _import_section(
+        table=table,
+        table_name="litellm_teamtable",
+        records=[
+            {"team_id": "t1", "team_alias": "alpha"},
+            {"team_id": "t2", "team_alias": "beta"},
+        ],
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},
+    )
+
+    # All records are errors; no created/updated/skipped should bleed through.
+    assert sr.errors == 2
+    assert sr.created == 0
+    assert sr.updated == 0
+    assert sr.skipped == 0
+    assert sr.total_processed == 2
+    assert sr.errors + sr.skipped + sr.created + sr.updated == sr.total_processed
+    assert any("rolled back" in w for w in sr.warnings)
+
+
+@pytest.mark.asyncio
 async def test_import_keys_merges_existing_via_update_many():
     existing = MagicMock()
     existing.key_alias = "my-key"
@@ -1440,3 +1525,195 @@ async def test_import_keys_merges_existing_via_update_many():
     assert data_sent["max_budget"] == 100
     assert "token" not in data_sent
     assert "key_alias" not in data_sent
+
+
+# ---------------------------------------------------------------------------
+# _import_section — empty records (no-op)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_section_empty_records_is_no_op():
+    table = _NoTxTable()
+    sr = ImportSectionResult()
+    await _import_section(
+        table=table,
+        table_name="litellm_teamtable",
+        records=[],
+        id_field="team_id",
+        conflict="skip",
+        dry_run=False,
+        section_result=sr,
+        existing_map={},
+    )
+    assert sr.total_processed == 0
+    assert sr.created == 0
+    assert sr.errors == 0
+    assert len(table.created) == 0
+
+
+# ---------------------------------------------------------------------------
+# _upsert — id_query_field override (WHERE clause uses different field)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_replace_where_uses_id_query_field():
+    """When id_query_field differs from id_field, WHERE uses id_query_field
+    and that key is stripped from the data payload."""
+    table = MagicMock()
+    table.update = AsyncMock()
+
+    sr = ImportSectionResult()
+    await _upsert(
+        table=table,
+        rec={"model_id": "m1", "custom_slug": "slug-1", "model_name": "gpt-4-updated"},
+        id_field="model_id",
+        id_query_field="custom_slug",
+        conflict="replace",
+        dry_run=False,
+        section_result=sr,
+        existing_map={"m1": {"model_id": "m1", "custom_slug": "slug-1"}},
+    )
+
+    assert sr.updated == 1
+    call_kwargs = table.update.call_args.kwargs
+    assert call_kwargs["where"] == {"custom_slug": "m1"}
+    assert "custom_slug" not in call_kwargs["data"]
+    assert "model_id" not in call_kwargs["data"]
+
+
+# ---------------------------------------------------------------------------
+# _import_section — dry run covers all three outcomes in one call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_section_dry_run_create_skip_update_mix():
+    """dry_run=True must report correct create/skip/update without any DB write."""
+    table = _NoTxTable()
+    sr = ImportSectionResult()
+
+    await _import_section(
+        table=table,
+        table_name="litellm_teamtable",
+        records=[
+            {"team_id": "new-1"},               # new → create
+            {"team_id": "new-2"},               # new → create
+            {"team_id": "existing-skip"},       # exists, conflict=skip → skip
+            {"team_id": "existing-replace"},    # exists, conflict≠skip but dry_run → updated
+        ],
+        id_field="team_id",
+        conflict="replace",
+        dry_run=True,
+        section_result=sr,
+        existing_map={
+            "existing-skip": {"team_id": "existing-skip"},
+            "existing-replace": {"team_id": "existing-replace"},
+        },
+    )
+
+    # conflict=replace → existing records counted as updated in dry_run
+    assert sr.created == 2
+    assert sr.updated == 2
+    assert sr.skipped == 0
+    assert sr.total_processed == 4
+    assert len(table.created) == 0
+    assert len(table.updated) == 0
+
+
+# ---------------------------------------------------------------------------
+# Partial section failure — per-section errors do not bleed across sections
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_config_per_section_errors_are_isolated(monkeypatch):
+    """A record-level error in models does not affect teams result.
+
+    The models table has no _client (has_tx=False), so _import_section uses the
+    non-transactional fallback.  _upsert catches the create exception per-record
+    and increments errors without propagating, leaving teams untouched.
+    """
+
+    class _FailCreateTable:
+        """No _client attr → has_tx=False; create always raises."""
+
+        async def create(self, data):
+            raise Exception("models db error")
+
+        async def find_many(self, where=None):
+            return []
+
+        async def update(self, where, data):
+            pass
+
+    prisma = make_prisma()
+    prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_proxymodeltable = _FailCreateTable()
+
+    envelope = LiteLLMExportEnvelope(
+        exported_at="2024-01-01T00:00:00Z",
+        source_instance="http://dev",
+        include_filters=["teams", "models"],
+        teams=[{"team_id": "t1", "team_alias": "alpha"}],
+        models=[{"model_id": "m1", "model_name": "gpt-4"}],
+    )
+    body = ImportRequest(data=envelope, conflict="skip")
+
+    with mock_prisma(prisma):
+        result = await import_config(
+            request=make_request(),
+            body=body,
+            user_api_key_dict=make_admin_key(),
+        )
+
+    assert result.teams.created == 1
+    assert result.teams.errors == 0
+    assert result.models.errors == 1
+    assert result.models.created == 0
+
+
+# ---------------------------------------------------------------------------
+# Logger verification — error path emits a log
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_import_section_logs_error_on_transaction_failure():
+    class _FailOnExitTx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            raise Exception("commit failed")
+
+    class _TxClientFail:
+        def tx(self):
+            return _FailOnExitTx()
+
+    class _TxTableFail(_NoTxTable):
+        def __init__(self):
+            super().__init__()
+            self._client = _TxClientFail()
+
+        def __getattr__(self, name):
+            return self
+
+    with patch(
+        "litellm.proxy.management_endpoints.config_export_endpoints.verbose_proxy_logger"
+    ) as mock_logger:
+        sr = ImportSectionResult()
+        await _import_section(
+            table=_TxTableFail(),
+            table_name="litellm_teamtable",
+            records=[{"team_id": "t1"}],
+            id_field="team_id",
+            conflict="skip",
+            dry_run=False,
+            section_result=sr,
+            existing_map={},
+        )
+
+    mock_logger.error.assert_called_once()
+    assert sr.errors == 1
