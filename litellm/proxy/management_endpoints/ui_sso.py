@@ -355,19 +355,17 @@ def _flatten_cli_sso_metadata_for_poll(
     metadata: Dict[str, Any],
 ) -> Dict[str, Union[str, int, float, bool]]:
     """Expose scalar attribution metadata as a flat dict for CLI poll responses."""
-
-    def _walk(prefix: str, value: Any) -> Dict[str, Union[str, int, float, bool]]:
-        flattened: Dict[str, Union[str, int, float, bool]] = {}
+    flattened: Dict[str, Union[str, int, float, bool]] = {}
+    stack: List[Tuple[str, Any]] = [("", metadata)]
+    while stack:
+        prefix, value = stack.pop()
         if isinstance(value, dict):
             for key, nested in value.items():
                 nested_prefix = f"{prefix}.{key}" if prefix else key
-                flattened.update(_walk(nested_prefix, nested))
-            return flattened
-        if _is_safe_cli_sso_scalar_claim_value(value):
+                stack.append((nested_prefix, nested))
+        elif _is_safe_cli_sso_scalar_claim_value(value):
             flattened[prefix] = value
-        return flattened
-
-    return _walk("", metadata)
+    return flattened
 
 
 def build_cli_sso_attribution_metadata(
@@ -409,17 +407,22 @@ def _merge_cli_sso_attribution_metadata(
 
     Preserves original value types (in particular, string claim values that
     happen to look numeric are NOT coerced to ``int``/``float``). Nested dicts
-    are merged recursively so attribution claims do not clobber unrelated keys
+    are merged iteratively so attribution claims do not clobber unrelated keys
     under the same parent.
     """
-    for key, value in attribution_metadata.items():
-        if value is None:
-            continue
-        existing_value = existing_metadata.get(key)
-        if isinstance(value, dict) and isinstance(existing_value, dict):
-            _merge_cli_sso_attribution_metadata(existing_value, value)
-        else:
-            existing_metadata[key] = value
+    pending: List[Tuple[Dict[str, Any], Dict[str, Any]]] = [
+        (existing_metadata, attribution_metadata)
+    ]
+    while pending:
+        target, source = pending.pop()
+        for key, value in source.items():
+            if value is None:
+                continue
+            existing_value = target.get(key)
+            if isinstance(value, dict) and isinstance(existing_value, dict):
+                pending.append((existing_value, value))
+            else:
+                target[key] = value
     return existing_metadata
 
 
@@ -1997,7 +2000,7 @@ async def _complete_cli_sso_callback_session(
     parsed_openid_result: ParsedOpenIDResult,
     user_defined_values: Optional[SSOUserDefinedValues],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ):
     from fastapi.responses import HTMLResponse
@@ -2017,6 +2020,10 @@ async def _complete_cli_sso_callback_session(
         raise HTTPException(
             status_code=500, detail="Failed to retrieve user information from SSO"
         )
+    if not user_info.user_id:
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve user information from SSO"
+        )
 
     teams: List[str] = []
     if hasattr(user_info, "teams") and user_info.teams:
@@ -2029,12 +2036,12 @@ async def _complete_cli_sso_callback_session(
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
             prisma_client=prisma_client,
-            user_id=user_info.user_id,
+            user_id=cast(str, user_info.user_id),
             attribution_metadata=attribution_metadata,
         )
 
     flow["session_data"] = {
-        "user_id": user_info.user_id,
+        "user_id": cast(str, user_info.user_id),
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
