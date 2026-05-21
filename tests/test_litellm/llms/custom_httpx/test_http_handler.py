@@ -17,10 +17,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+import litellm.llms.custom_httpx.http_handler as http_handler
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
 )
@@ -61,7 +61,7 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
         transport=httpx.MockTransport(mock_handler)
     )
     try:
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
             await asyncio.wait_for(
                 litellm_handler.post(
                     "https://vertex.example/streamRawPredict",
@@ -113,7 +113,7 @@ def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
     litellm_handler.client.close()
     litellm_handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
     try:
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
             litellm_handler.post(
                 "https://vertex.example/streamRawPredict",
                 stream=True,
@@ -782,18 +782,22 @@ def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
     Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).
     Uses an uncommon timeout value to avoid colliding with other cached clients in-process.
     """
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+
     timeout = 3847.291
-    handler = _get_httpx_client(params={"timeout": timeout})
+    handler = http_handler_module._get_httpx_client(params={"timeout": timeout})
     try:
-        assert isinstance(handler, HTTPHandler)
+        assert isinstance(handler, http_handler_module.HTTPHandler)
         assert handler.client.timeout == httpx.Timeout(timeout)
     finally:
         handler.close()
 
 
 def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler():
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+
     t = httpx.Timeout(40.0, connect=5.0)
-    handler = _get_httpx_client(params={"timeout": t})
+    handler = http_handler_module._get_httpx_client(params={"timeout": t})
     try:
         assert handler.client.timeout == t
     finally:

@@ -23,13 +23,23 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _org_admin_can_invite_user,
-    _set_object_metadata_field,
     _team_admin_can_invite_user,
-    _update_metadata_fields,
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
 )
+
+
+def _update_metadata_fields(updated_kv: dict) -> None:
+    from litellm.proxy.management_endpoints import common_utils
+
+    common_utils._update_metadata_fields(updated_kv=updated_kv)
+
+
+def _set_object_metadata_field(obj, field_name: str, value) -> None:
+    from litellm.proxy.management_endpoints import common_utils
+
+    common_utils._set_object_metadata_field(obj, field_name, value)
 
 
 class TestUpdateMetadataFieldsEmptyCollections:

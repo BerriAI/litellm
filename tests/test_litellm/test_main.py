@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from contextlib import ExitStack
 
 import httpx
 import pytest
@@ -49,6 +50,20 @@ def add_api_keys_to_env(monkeypatch):
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
     monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    # Keep these request-shaping tests independent from global LiteLLM routing
+    # state mutated by other tests in the same xdist worker.
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "custom_prompt_dict", {})
+    monkeypatch.setattr(litellm, "custom_provider_map", [])
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", False)
 
 
 @pytest.fixture
@@ -169,6 +184,10 @@ def test_completion_missing_role(openai_api_response):
 @pytest.mark.asyncio
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
     from litellm import acompletion, completion
+    from litellm.llms.bedrock.chat import (
+        converse_handler as bedrock_converse_handler,
+    )
+    from litellm.llms.bedrock.chat import invoke_handler as bedrock_invoke_handler
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
 
@@ -215,7 +234,49 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
     }
     if model.startswith("gemini/"):
         args["api_key"] = "test-api-key"
-    with patch.object(client, "post", new=MagicMock()) as mock_client:
+    mock_client = MagicMock()
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(client, "post", new=mock_client))
+        if model.startswith("bedrock/"):
+            sync_bedrock_client = client if sync_mode else HTTPHandler()
+            async_bedrock_client = client if not sync_mode else AsyncHTTPHandler()
+            if sync_bedrock_client is not client:
+                stack.enter_context(
+                    patch.object(sync_bedrock_client, "post", new=mock_client)
+                )
+            if async_bedrock_client is not client:
+                stack.enter_context(
+                    patch.object(async_bedrock_client, "post", new=mock_client)
+                )
+            stack.enter_context(
+                patch.object(
+                    bedrock_invoke_handler,
+                    "_get_httpx_client",
+                    return_value=sync_bedrock_client,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    bedrock_invoke_handler,
+                    "get_async_httpx_client",
+                    return_value=async_bedrock_client,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    bedrock_converse_handler,
+                    "_get_httpx_client",
+                    return_value=sync_bedrock_client,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    bedrock_converse_handler,
+                    "get_async_httpx_client",
+                    return_value=async_bedrock_client,
+                )
+            )
+        completion_error = None
         try:
             if sync_mode:
                 response = completion(**args, client=client)
@@ -223,8 +284,10 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                 response = await acompletion(**args, client=client)
             print(response)
         except Exception as e:
-            pass
+            completion_error = e
 
+        if not mock_client.called and completion_error is not None:
+            raise completion_error
         mock_client.assert_called()
 
         print(mock_client.call_args.kwargs)

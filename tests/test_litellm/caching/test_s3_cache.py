@@ -261,12 +261,14 @@ async def test_s3_cache_async_set_cache_pipeline(mock_s3_dependencies):
     # Should have called put_object 3 times
     assert cache.s3_client.put_object.call_count == 3
 
-    # Verify each call
+    # async_set_cache_pipeline uses run_in_executor, so completion order is not
+    # deterministic. Verify all writes happened without relying on call order.
     calls = cache.s3_client.put_object.call_args_list
-    for i, (key, value) in enumerate(cache_list):
-        call_args = calls[i][1]
+    calls_by_key = {call[1]["Key"]: call[1] for call in calls}
+    assert set(calls_by_key) == {key for key, _ in cache_list}
+    for key, value in cache_list:
+        call_args = calls_by_key[key]
         assert call_args["Bucket"] == "test-bucket"
-        assert call_args["Key"] == key
         assert call_args["Body"] == json.dumps(value)
 
 
@@ -288,12 +290,15 @@ async def test_s3_cache_concurrent_async_operations(mock_s3_dependencies):
     # Verify all operations were called
     assert cache.s3_client.put_object.call_count == 5
 
-    # Verify each call had correct parameters
+    # Concurrent writes can complete in any order.
     calls = cache.s3_client.put_object.call_args_list
-    for i, call in enumerate(calls):
+    expected_keys = {f"concurrent_key_{i}" for i in range(5)}
+    observed_keys = set()
+    for call in calls:
         call_args = call[1]
         assert call_args["Bucket"] == "test-bucket"
-        assert f"concurrent_key_{i}" == call_args["Key"]
+        observed_keys.add(call_args["Key"])
+    assert observed_keys == expected_keys
 
 
 @pytest.mark.asyncio

@@ -363,9 +363,14 @@ def test_litellm_image_generation_dashscope_end_to_end():
         },
     }
 
+    mock_post = MagicMock()
+    mock_client = MagicMock()
+    mock_client.post = mock_post
+
     with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_body
         mock_http_response.status_code = 200

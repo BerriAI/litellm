@@ -439,9 +439,10 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         response = web.StreamResponse()
         await response.prepare(request)
 
-        # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
-        for i in range(5):
-            await asyncio.sleep(0.05)  # Less than sock_read timeout
+        # Send chunks over a total duration longer than the sock_read timeout,
+        # while keeping each individual gap comfortably below it.
+        for i in range(8):
+            await asyncio.sleep(0.1)  # Less than sock_read timeout
             await response.write(f"chunk{i}\n".encode())
 
         await response.write_eof()
@@ -465,11 +466,11 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
 
     # Set sock_read timeout that's longer than individual chunk delays
     # but shorter than total stream duration
-    # Total duration: ~0.25s, sock_read timeout: 0.15s per chunk
-    # This should NOT timeout because each chunk arrives within 0.15s
+    # Total duration: ~0.8s, sock_read timeout: 0.5s per chunk
+    # This should NOT timeout because each chunk arrives within 0.5s
     request.extensions["timeout"] = {
         "connect": 5.0,
-        "read": 0.15,  # Timeout for individual reads
+        "read": 0.5,  # Timeout for individual reads
         "pool": 5.0,
         # Note: total is NOT set - this is the fix!
     }
@@ -487,7 +488,7 @@ async def test_handle_async_request_streaming_does_not_timeout_on_total_duration
         # Verify we got all chunks
         full_response = b"".join(chunks).decode()
         assert "chunk0" in full_response
-        assert "chunk4" in full_response
+        assert "chunk7" in full_response
     finally:
         await transport.aclose()
         await runner.cleanup()

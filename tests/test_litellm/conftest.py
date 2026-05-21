@@ -28,6 +28,28 @@ from litellm.llms.custom_httpx.async_client_cleanup import (
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module
 
+DB_ENV_VARS = (
+    "DATABASE_URL",
+    "DATABASE_URL_READ_REPLICA",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_USER",
+    "DATABASE_USERNAME",
+    "DATABASE_NAME",
+    "DATABASE_SCHEMA",
+    "DATABASE_PASSWORD",
+    "DATABASE_HOST_READ_REPLICA",
+    "DATABASE_PORT_READ_REPLICA",
+    "DATABASE_USER_READ_REPLICA",
+    "DATABASE_USERNAME_READ_REPLICA",
+    "DATABASE_NAME_READ_REPLICA",
+    "DATABASE_SCHEMA_READ_REPLICA",
+    "DATABASE_PASSWORD_READ_REPLICA",
+    "IAM_TOKEN_DB_AUTH",
+)
+
+PROXY_ENV_VARS = DB_ENV_VARS + ("SERVER_ROOT_PATH",)
+
 
 def _reset_module_level_aws_auth_caches():
     """
@@ -147,6 +169,7 @@ def isolate_litellm_state():
     """
     # Get worker ID if running with pytest-xdist
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    proxy_env_state = {var: os.environ.get(var) for var in PROXY_ENV_VARS}
 
     # Store original callback state (all callback lists)
     original_state = {}
@@ -328,6 +351,11 @@ def isolate_litellm_state():
         litellm.__dict__["module_level_aclient"] = original_module_level_aclient
     else:
         litellm.__dict__.pop("module_level_aclient", None)
+    for var, value in proxy_env_state.items():
+        if value is None:
+            os.environ.pop(var, None)
+        else:
+            os.environ[var] = value
 
 
 @pytest.fixture(scope="module", autouse=True)

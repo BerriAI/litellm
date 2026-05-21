@@ -16,16 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    MaskedHTTPStatusError,
-    _raise_masked_async_error,
-    _raise_masked_sync_error,
-    _safe_aread_response,
-    _safe_get_response_text,
-    _safe_read_response,
-)
+import litellm.llms.custom_httpx.http_handler as http_handler
 
 
 def _make_httpx_status_error(
@@ -46,28 +37,30 @@ def _make_httpx_status_error(
 class TestMaskedHTTPStatusError:
     def test_masks_url_in_request(self):
         orig = _make_httpx_status_error(url="https://api.example.com?key=MY_SECRET")
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         assert "MY_SECRET" not in str(masked.request.url)
         assert "[REDACTED_API_KEY]" in str(masked.request.url)
 
     def test_masks_original_message(self):
         orig = _make_httpx_status_error(url="https://api.example.com?key=SUPER_SECRET")
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         assert "SUPER_SECRET" not in str(masked)
         assert "[REDACTED_API_KEY]" in str(masked)
 
     def test_preserves_status_code(self):
         orig = _make_httpx_status_error(status_code=403)
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         assert masked.status_code == 403
         assert masked.response.status_code == 403
 
     def test_preserves_message_and_text_attrs(self):
         orig = _make_httpx_status_error()
-        masked = MaskedHTTPStatusError(orig, message="custom msg", text="custom text")
+        masked = http_handler.MaskedHTTPStatusError(
+            orig, message="custom msg", text="custom text"
+        )
 
         assert masked.message == "custom msg"
         assert masked.text == "custom text"
@@ -83,7 +76,7 @@ class TestMaskedHTTPStatusError:
                 lambda self: (_ for _ in ()).throw(Exception("zlib error"))
             ),
         ):
-            masked = MaskedHTTPStatusError(orig)
+            masked = http_handler.MaskedHTTPStatusError(orig)
 
         assert masked.response.content == b""
         assert masked.status_code == 400
@@ -96,7 +89,7 @@ class TestMaskedHTTPStatusError:
         RuntimeError("The .request property has not been set.").
         """
         orig = _make_httpx_status_error(url="https://api.example.com?key=KEY_X")
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         # Must not raise RuntimeError.
         req = masked.response.request
@@ -122,7 +115,7 @@ class TestMaskedHTTPStatusError:
             response=response,
         )
 
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         assert masked.status_code == 400
         assert masked.response.status_code == 400
@@ -153,7 +146,7 @@ class TestMaskedHTTPStatusError:
         orig = httpx.HTTPStatusError("400", request=request, response=response)
 
         # Previously this raised httpx.DecodingError; must now succeed.
-        masked = MaskedHTTPStatusError(orig)
+        masked = http_handler.MaskedHTTPStatusError(orig)
 
         # Content must be the once-decoded bytes, not a double-decode attempt.
         assert masked.response.content == body
@@ -164,7 +157,7 @@ class TestMaskedHTTPStatusError:
 class TestSafeResponseHelpers:
     def test_safe_get_response_text_normal(self):
         response = httpx.Response(200, content=b"hello world")
-        assert _safe_get_response_text(response) == "hello world"
+        assert http_handler._safe_get_response_text(response) == "hello world"
 
     def test_safe_get_response_text_error(self):
         response = MagicMock(spec=httpx.Response)
@@ -173,30 +166,30 @@ class TestSafeResponseHelpers:
                 UnicodeDecodeError("utf-8", b"", 0, 1, "bad")
             )
         )
-        assert _safe_get_response_text(response) == ""
+        assert http_handler._safe_get_response_text(response) == ""
 
     def test_safe_read_response_normal(self):
         response = httpx.Response(200, content=b"raw bytes")
-        result = _safe_read_response(response)
+        result = http_handler._safe_read_response(response)
         assert result == b"raw bytes"
 
     def test_safe_read_response_error(self):
         response = MagicMock(spec=httpx.Response)
         response.read.side_effect = Exception("read failure")
-        assert _safe_read_response(response) == b""
+        assert http_handler._safe_read_response(response) == b""
 
     @pytest.mark.asyncio
     async def test_safe_aread_response_normal(self):
         response = MagicMock(spec=httpx.Response)
         response.aread = AsyncMock(return_value=b"async bytes")
-        result = await _safe_aread_response(response)
+        result = await http_handler._safe_aread_response(response)
         assert result == b"async bytes"
 
     @pytest.mark.asyncio
     async def test_safe_aread_response_error(self):
         response = MagicMock(spec=httpx.Response)
         response.aread = AsyncMock(side_effect=Exception("async read failure"))
-        result = await _safe_aread_response(response)
+        result = await http_handler._safe_aread_response(response)
         assert result == b""
 
 
@@ -205,8 +198,8 @@ class TestRaiseMaskedError:
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="error body"
         )
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            _raise_masked_sync_error(orig, stream=False)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            http_handler._raise_masked_sync_error(orig, stream=False)
 
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
@@ -217,8 +210,8 @@ class TestRaiseMaskedError:
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="stream body"
         )
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            _raise_masked_sync_error(orig, stream=True)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            http_handler._raise_masked_sync_error(orig, stream=True)
 
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
@@ -226,8 +219,8 @@ class TestRaiseMaskedError:
 
     def test_sync_breaks_exception_chain(self):
         orig = _make_httpx_status_error()
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            _raise_masked_sync_error(orig, stream=False)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            http_handler._raise_masked_sync_error(orig, stream=False)
 
         assert exc_info.value.__cause__ is None
 
@@ -236,8 +229,8 @@ class TestRaiseMaskedError:
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="async error"
         )
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            await _raise_masked_async_error(orig, stream=False)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            await http_handler._raise_masked_async_error(orig, stream=False)
 
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
@@ -249,8 +242,8 @@ class TestRaiseMaskedError:
         orig = _make_httpx_status_error(
             url="https://api.example.com?key=LEAKED_KEY", body="async stream"
         )
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            await _raise_masked_async_error(orig, stream=True)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            await http_handler._raise_masked_async_error(orig, stream=True)
 
         err = exc_info.value
         assert "LEAKED_KEY" not in str(err.request.url)
@@ -259,8 +252,8 @@ class TestRaiseMaskedError:
     @pytest.mark.asyncio
     async def test_async_breaks_chain(self):
         orig = _make_httpx_status_error()
-        with pytest.raises(MaskedHTTPStatusError) as exc_info:
-            await _raise_masked_async_error(orig, stream=False)
+        with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
+            await http_handler._raise_masked_async_error(orig, stream=False)
 
         assert exc_info.value.__cause__ is None
 
@@ -270,13 +263,13 @@ class TestHTTPHandlerErrorPaths:
 
     @pytest.fixture
     def sync_handler(self):
-        handler = HTTPHandler()
+        handler = http_handler.HTTPHandler()
         yield handler
         handler.close()
 
     @pytest.fixture
     async def async_handler(self):
-        handler = AsyncHTTPHandler()
+        handler = http_handler.AsyncHTTPHandler()
         yield handler
         await handler.close()
 
@@ -287,7 +280,7 @@ class TestHTTPHandlerErrorPaths:
             "send",
             side_effect=_make_httpx_status_error(url="https://api.test.com?key=SECRET"),
         ):
-            with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
                 kwargs = {"url": "https://api.test.com?key=SECRET"}
                 if method != "delete":
                     kwargs["data"] = {"test": 1}
@@ -304,7 +297,7 @@ class TestHTTPHandlerErrorPaths:
             new_callable=AsyncMock,
             side_effect=_make_httpx_status_error(url="https://api.test.com?key=SECRET"),
         ):
-            with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            with pytest.raises(http_handler.MaskedHTTPStatusError) as exc_info:
                 kwargs = {"url": "https://api.test.com?key=SECRET"}
                 if method != "delete":
                     kwargs["data"] = {"test": 1}

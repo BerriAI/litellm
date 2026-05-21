@@ -106,12 +106,9 @@ class TestRouterSettingsEndpoints:
 
         monkeypatch.setattr(proxy_server, "llm_router", llm_router)
 
-        async def fake_get_config(self, config_file_path=None):
-            return {}
-
-        monkeypatch.setattr(
-            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
-        )
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = AsyncMock(return_value={})
+        monkeypatch.setattr(proxy_server, "proxy_config", mock_proxy_config)
 
         admin_user = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"

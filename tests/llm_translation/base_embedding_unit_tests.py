@@ -20,18 +20,11 @@ from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
 )
-import requests
-import base64
 
 # test_example.py
 from abc import ABC, abstractmethod
 
-url = "https://dummyimage.com/100/100/fff&text=Test+image"
-response = requests.get(url)
-file_data = response.content
-
-encoded_file = base64.b64encode(file_data).decode("utf-8")
-base64_image = f"data:image/png;base64,{encoded_file}"
+base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 
 class BaseLLMEmbeddingTest(ABC):

@@ -1092,9 +1092,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -1169,6 +1169,10 @@ class TestVertexAIDiscoveryPassThroughHandler:
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
+            mock.patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_managed_vector_store",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             # Mock credentials object with necessary attributes
             mock_credentials = Mock()
@@ -1231,16 +1235,20 @@ class TestVertexAIDiscoveryPassThroughHandler:
             with patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(
-                    return_value={"status": "success"}
-                )
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_managed_vector_store",
+                    new=AsyncMock(return_value=None),
+                ):
+                    mock_pass_through.return_value = AsyncMock(
+                        return_value={"status": "success"}
+                    )
 
-                # Call the function
-                result = await vertex_discovery_proxy_route(
-                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
-                    request=mock_request,
-                    fastapi_response=mock_response,
-                )
+                    # Call the function
+                    result = await vertex_discovery_proxy_route(
+                        endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
+                        request=mock_request,
+                        fastapi_response=mock_response,
+                    )
 
                 # Verify user_api_key_auth was called with the correct Bearer token
                 mock_auth.assert_called_once()
