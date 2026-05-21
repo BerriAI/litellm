@@ -2088,17 +2088,19 @@ async def cli_sso_callback(
     # After None check, cast to non-None type for type checker
     result_non_none: Union[OpenID, dict] = cast(Union[OpenID, dict], result)
 
-    parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(
-        result=result_non_none,
-        generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
-    )
-    verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
-    user_defined_values = await _build_cli_sso_user_defined_values(
-        result=result_non_none,
-        parsed_openid_result=parsed_openid_result,
-    )
-
     try:
+        parsed_openid_result = (
+            SSOAuthenticationHandler._get_user_email_and_id_from_result(
+                result=result_non_none,
+                generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
+            )
+        )
+        verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
+        user_defined_values = await _build_cli_sso_user_defined_values(
+            result=result_non_none,
+            parsed_openid_result=parsed_openid_result,
+        )
+
         return await _complete_cli_sso_callback_session(
             request=request,
             key=cast(str, key),
