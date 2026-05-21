@@ -15,6 +15,10 @@ import pytest
 from fastapi import status
 
 import litellm
+from litellm.llms.base_llm.managed_resources.utils import (
+    encode_unified_id,
+    generate_unified_id_string,
+)
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
@@ -44,6 +48,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
+    common_checks,
     get_key_object,
     get_user_object,
     vector_store_access_check,
@@ -231,6 +236,68 @@ def test_can_object_call_model_denials_return_forbidden(
 
     assert exc_info.value.type == expected_error_type
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+def _make_unified_vector_store_id(model_id: str = "internal-model") -> str:
+    return encode_unified_id(
+        generate_unified_id_string(
+            resource_type="vector_store",
+            unified_uuid="vs-unified-1",
+            target_model_names=[model_id],
+            provider_resource_id="vs-provider-1",
+            model_id=model_id,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_does_not_team_model_check_managed_vector_store_id():
+    vector_store_id = _make_unified_vector_store_id()
+    route = f"/v1/vector_stores/{vector_store_id}/files"
+    request_body = {
+        "vector_store_id": vector_store_id,
+        "vector_store_ids": [vector_store_id],
+    }
+    request = MagicMock()
+    request.headers = {}
+    request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.can_team_access_model",
+            new_callable=AsyncMock,
+        ) as can_team_access_model_mock,
+        patch(
+            "litellm.proxy.auth.auth_checks.vector_store_access_check",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.auth.route_checks.RouteChecks.non_proxy_admin_allowed_routes_check"
+        ),
+    ):
+        assert (
+            await common_checks(
+                request_body=request_body,
+                team_object=LiteLLM_TeamTable(
+                    team_id="team-a", models=["public/team-model"]
+                ),
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route=route,
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=UserAPIKeyAuth(user_id="internal-user", team_id="team-a"),
+                request=request,
+                skip_budget_checks=True,
+            )
+            is True
+        )
+
+    can_team_access_model_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1143,7 +1143,6 @@ _MODEL_ROUTING_ID_FIELDS = (
     "fine_tuning_job_id",
     "training_file",
     "validation_file",
-    "vector_store_id",
     "video_id",
     "character_id",
 )
