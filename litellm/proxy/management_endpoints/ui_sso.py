@@ -1798,7 +1798,10 @@ async def cli_sso_callback(
 
         from fastapi.responses import HTMLResponse
 
-        verify_url = str(request.url_for("cli_sso_complete", login_id=key))
+        verify_url = get_custom_url(
+            request_base_url=str(request.base_url),
+            route=f"sso/cli/complete/{key}",
+        )
         html_content = _render_cli_sso_verification_page(
             verify_url=verify_url,
             browser_complete_token=browser_complete_token,

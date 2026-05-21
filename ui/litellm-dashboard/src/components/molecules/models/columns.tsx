@@ -2,7 +2,7 @@ import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icon
 import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
-import { Divider, Flex, Popover, Space, Tooltip, Typography } from "antd";
+import { Divider, Flex, Popover, Space, Switch, Tooltip, Typography } from "antd";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -53,6 +53,8 @@ export const columns = (
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
   onDeleteClick?: (modelId: string) => void,
+  onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>,
+  pausingModelId?: string | null,
 ): ColumnDef<ModelData>[] => [
     {
       header: () => <span className="text-sm font-semibold">Model ID</span>,
@@ -398,15 +400,48 @@ export const columns = (
     {
       id: "actions",
       header: () => <span className="text-sm font-semibold">Actions</span>,
-      size: 60,
-      minSize: 40,
+      size: 100,
+      minSize: 80,
       enableResizing: false,
       cell: ({ row }) => {
         const model = row.original;
         const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
         const isConfigModel = !model.model_info?.db_model;
+        const isAdmin = userRole === "Admin";
+        const isBlocked = model.model_info?.blocked === true;
+        const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
+        const pauseTooltip = isConfigModel
+          ? "Config models cannot be paused from the dashboard. Pause is DB-backed."
+          : !isAdmin
+            ? "Only proxy admins can pause or resume a model."
+            : isBlocked
+              ? "Resume model — restore normal routing."
+              : "Pause model — stop routing requests until resumed.";
+        // antd's `loading` prop on Switch is purely cosmetic — it does not block
+        // clicks. Pair `loading` with `disabled` derived from the same condition
+        // so a double-click during a pending PATCH cannot send a second,
+        // conflicting `blocked` value.
+        const isPausing = pausingModelId === model.model_info?.id;
         return (
           <div className="flex items-center justify-end gap-2 pr-4">
+            <Tooltip title={pauseTooltip}>
+              <Switch
+                size="small"
+                checked={!isBlocked}
+                disabled={!isPauseToggleable || isPausing}
+                loading={isPausing}
+                aria-label={isBlocked ? "Resume model" : "Pause model"}
+                onClick={(_, e) => {
+                  e.stopPropagation();
+                }}
+                onChange={(nextChecked) => {
+                  const modelId = model.model_info?.id;
+                  if (isPauseToggleable && onTogglePauseClick && modelId) {
+                    void onTogglePauseClick(modelId, !nextChecked);
+                  }
+                }}
+              />
+            </Tooltip>
             {isConfigModel ? (
               <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
                 <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />

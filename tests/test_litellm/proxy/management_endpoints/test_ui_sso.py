@@ -2218,6 +2218,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request
         mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
 
         # Test data
         session_key = "cli-session-4567890"
@@ -2242,11 +2243,14 @@ class TestCLIKeyRegenerationFlow:
             "user_code_verified": False,
             "session_data": None,
         }
-        mock_request.url_for.return_value = (
-            "https://test.example.com/sso/cli/complete/cli-session-4567890"
-        )
-
         with (
+            patch.dict(
+                os.environ,
+                {
+                    "PROXY_BASE_URL": "https://test.example.com",
+                    "SERVER_ROOT_PATH": "",
+                },
+            ),
             patch(
                 "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
                 return_value=mock_user_info,
@@ -2290,6 +2294,10 @@ class TestCLIKeyRegenerationFlow:
             assert result.status_code == 200
             # Verify response contains success message (response is HTML)
             assert result.body is not None
+            assert (
+                'action="https://test.example.com/sso/cli/complete/cli-session-4567890"'
+                in result.body.decode()
+            )
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
