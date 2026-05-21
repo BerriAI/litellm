@@ -298,6 +298,67 @@ def test_generic_cost_per_token_above_200k_tokens():
     )
 
 
+def test_input_image_tokens_use_custom_pricing_when_set():
+    """When input_cost_per_image_token IS defined, it must be used in preference
+    to prompt_base_cost. Covers the `if` branch of the image fallback fix."""
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_image_token": 3e-6,
+    }
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=None, text_tokens=0, image_tokens=1000
+        ),
+    )
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, _ = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="gemini"
+        )
+    assert round(prompt_cost, 12) == round(1000 * 3e-6, 12)
+
+
+def test_image_tokens_above_200k_uses_tiered_rate():
+    """
+    gemini-2.5-pro charges 2x input_cost_per_token above 200k. The model_cost
+    entry has no input_cost_per_image_token, so image tokens above the
+    threshold must also use the above-200k rate, not the base rate.
+    """
+    model = "gemini-2.5-pro"
+    custom_llm_provider = "vertex_ai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    assert "input_cost_per_image_token" not in model_cost_map
+    above_200k_rate = model_cost_map["input_cost_per_token_above_200k_tokens"]
+
+    prompt_tokens = 250_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None,
+            cached_tokens=None,
+            text_tokens=0,
+            image_tokens=prompt_tokens,
+        ),
+    )
+    prompt_cost, _ = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider=custom_llm_provider
+    )
+    assert round(prompt_cost, 10) == round(prompt_tokens * above_200k_rate, 10)
+
+
 def test_generic_cost_per_token_gpt54_above_272k_tokens():
     """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
     model = "gpt-5.4"
