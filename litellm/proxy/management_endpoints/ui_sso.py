@@ -338,9 +338,6 @@ def _extract_sso_claim_value(
 def _set_nested_metadata_value(
     metadata: Dict[str, Any], key_path: str, value: Any
 ) -> None:
-    key_path = (
-        key_path[len("metadata.") :] if key_path.startswith("metadata.") else key_path
-    )
     placeholder = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
