@@ -54,7 +54,7 @@ _STRIP_FIELDS: Dict[str, List[str]] = {
     "budgets": [],
     "organizations": ["spend"],
     "teams": ["spend"],
-    "users": ["spend", "user_api_key_hash"],
+    "users": ["spend", "user_api_key_hash", "password"],
     "keys": ["token", "spend"],
     "credentials": [],  # credential_values handled separately (redaction)
     "models": [],
