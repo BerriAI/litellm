@@ -110,7 +110,6 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
-from litellm.utils import _update_dictionary
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -299,6 +298,29 @@ def _sso_result_to_dict(result: Union[CustomOpenID, OpenID, dict]) -> Dict[str, 
     return {}
 
 
+def _get_nested_claim_value(data: Dict[str, Any], claim_path: str) -> Any:
+    """Resolve a dot-notation claim path against an SSO result dict.
+
+    Unlike ``get_nested_value``, this does not strip a leading ``metadata.``
+    prefix, since OIDC claims may legitimately use ``metadata`` as a top-level
+    key.
+    """
+    if not claim_path:
+        return None
+    if claim_path in data:
+        return data[claim_path]
+    placeholder = "\x00"
+    parts = claim_path.replace("\\.", placeholder).split(".")
+    parts = [p.replace(placeholder, ".") for p in parts]
+    current: Any = data
+    for part in parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
 def _extract_sso_claim_value(
     result: Union[CustomOpenID, OpenID, dict], claim_path: str
 ) -> Any:
@@ -307,12 +329,10 @@ def _extract_sso_claim_value(
         return extra_fields[claim_path]
 
     if isinstance(result, dict):
-        return get_nested_value(result, claim_path)
+        return _get_nested_claim_value(result, claim_path)
 
     result_dict = _sso_result_to_dict(result)
-    if claim_path in result_dict:
-        return result_dict[claim_path]
-    return get_nested_value(result_dict, claim_path)
+    return _get_nested_claim_value(result_dict, claim_path)
 
 
 def _set_nested_metadata_value(
@@ -385,6 +405,27 @@ def build_cli_sso_attribution_metadata(
     return metadata
 
 
+def _merge_cli_sso_attribution_metadata(
+    existing_metadata: Dict[str, Any], attribution_metadata: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge attribution metadata into existing user metadata in-place.
+
+    Preserves original value types (in particular, string claim values that
+    happen to look numeric are NOT coerced to ``int``/``float``). Nested dicts
+    are merged recursively so attribution claims do not clobber unrelated keys
+    under the same parent.
+    """
+    for key, value in attribution_metadata.items():
+        if value is None:
+            continue
+        existing_value = existing_metadata.get(key)
+        if isinstance(value, dict) and isinstance(existing_value, dict):
+            _merge_cli_sso_attribution_metadata(existing_value, value)
+        else:
+            existing_metadata[key] = value
+    return existing_metadata
+
+
 async def _persist_cli_sso_user_metadata(
     prisma_client: PrismaClient,
     user_id: str,
@@ -403,9 +444,9 @@ async def _persist_cli_sso_user_metadata(
             if isinstance(row_metadata, dict):
                 existing_metadata = deepcopy(row_metadata)
 
-        merged_metadata = _update_dictionary(
-            existing_dict=existing_metadata,
-            new_dict=attribution_metadata,
+        merged_metadata = _merge_cli_sso_attribution_metadata(
+            existing_metadata=existing_metadata,
+            attribution_metadata=attribution_metadata,
         )
         await prisma_client.db.litellm_usertable.update_many(
             where={"user_id": user_id},
