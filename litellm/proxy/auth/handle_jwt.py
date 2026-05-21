@@ -1058,7 +1058,9 @@ class JWTHandler:
             )
 
         decode_kwargs = self._build_decode_kwargs(
-            has_issuer_config=bool(getattr(self.litellm_jwtauth, "issuers", None))
+            has_issuer_config=bool(
+                getattr(getattr(self, "litellm_jwtauth", None), "issuers", None)
+            )
         )
 
         public_key = await self.get_public_key(kid=kid)
