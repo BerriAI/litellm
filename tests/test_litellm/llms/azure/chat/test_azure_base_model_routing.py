@@ -35,10 +35,7 @@ class TestGetAzureConfigWithBaseModel:
         config = ProviderConfigManager._get_azure_config(
             model="my-deployment-id", base_model="azure/gpt-4o"
         )
-        assert (
-            isinstance(config, litellm.AzureOpenAIConfig.__class__)
-            or type(config).__name__ == "AzureOpenAIConfig"
-        )
+        assert type(config).__name__ == "AzureOpenAIConfig"
 
     def test_should_fallback_to_model_when_base_model_is_none(self):
         config = ProviderConfigManager._get_azure_config(
