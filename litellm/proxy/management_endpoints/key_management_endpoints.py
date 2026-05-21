@@ -55,6 +55,7 @@ from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_k
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
@@ -546,36 +547,6 @@ def _check_allowed_routes_caller_permission(
             )
         },
     )
-
-
-def _check_passthrough_routes_caller_permission(
-    data: BaseModel,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    """
-    Only proxy admins may set `allowed_passthrough_routes` on a key, either at
-    the top level of the request or nested under `metadata`.
-
-    The route gate evaluates passthrough access ahead of the standard role
-    gate, so the field is restricted to admins to keep that ordering safe.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return
-    if getattr(data, "allowed_passthrough_routes", None):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Only proxy admins can set `allowed_passthrough_routes` on a key."
-            },
-        )
-    metadata = getattr(data, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a key."
-            },
-        )
 
 
 async def validate_team_id_used_in_service_account_request(

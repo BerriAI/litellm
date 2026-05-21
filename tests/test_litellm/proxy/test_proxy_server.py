@@ -1170,6 +1170,434 @@ def test_add_team_models_to_all_models():
 
 
 @pytest.mark.asyncio
+async def test_apply_search_filter_matches_team_public_model_name():
+    """
+    Regression test: team BYOK models persist an internal model_name
+    (e.g. `model_name_{team_id}_{uuid}`) and surface the user-facing name
+    via `model_info.team_public_model_name`. The /v2/model/info search
+    filter must match that public name so BYOK rows appear in results.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    byok_model = {
+        "model_name": "model_name_team-abc-123_4a6b8",
+        "litellm_params": {"model": "claude-sonnet-4-5"},
+        "model_info": {
+            "id": "byok-id-1",
+            "team_id": "team-abc-123",
+            "team_public_model_name": "team-claude-sonnet",
+            "db_model": True,
+        },
+    }
+    unrelated_model = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "normal-id-1", "db_model": False},
+    }
+
+    # Search matching only team_public_model_name should still include BYOK
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="claude",
+        prisma_client=None,
+        proxy_config=MagicMock(),
+    )
+    filtered_ids = {m["model_info"]["id"] for m in filtered}
+    assert "byok-id-1" in filtered_ids
+    assert "normal-id-1" not in filtered_ids
+
+    # Search by internal model_name still matches as before
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="model_name_team-abc-123",
+        prisma_client=None,
+        proxy_config=MagicMock(),
+    )
+    assert [m["model_info"]["id"] for m in filtered] == ["byok-id-1"]
+
+    # Non-matching search returns nothing
+    filtered, _ = await _apply_search_filter_to_models(
+        all_models=[byok_model, unrelated_model],
+        search="gemini",
+        prisma_client=None,
+        proxy_config=MagicMock(),
+    )
+    assert filtered == []
+
+
+@pytest.mark.asyncio
+async def test_apply_search_filter_scopes_byok_to_caller_teams():
+    """
+    Regression test: `/v2/model/info?search=...` must not leak BYOK rows
+    from teams the caller is not a member of. Even with a bounded
+    `model_name`-contains DB query, a non-admin caller could otherwise
+    see other teams' BYOK rows that happen to match by internal name.
+    The post-fetch team scope drops those.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    # In-router BYOK rows: one in the caller's team, one in someone else's.
+    caller_team_byok = {
+        "model_name": "model_name_team-mine_internal",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-mine",
+            "team_id": "team-mine",
+            "team_public_model_name": "claude-sonnet-prod",
+            "db_model": True,
+        },
+    }
+    other_team_byok = {
+        "model_name": "model_name_team-other_internal",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-other",
+            "team_id": "team-other",
+            "team_public_model_name": "claude-sonnet-staging",
+            "db_model": True,
+        },
+    }
+    # Non-team row stays in the router-side result regardless of teams.
+    public_model = {
+        "model_name": "claude-public",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {"id": "public-id", "db_model": False},
+    }
+
+    # DB-only BYOK rows fetched by the over-broad JSON branch.
+    db_caller_row = MagicMock()
+    db_caller_row.model_id = "byok-db-mine"
+    db_caller_row.model_name = "model_name_team-mine_db"
+    db_caller_row.model_info = {
+        "id": "byok-db-mine",
+        "team_id": "team-mine",
+        "team_public_model_name": "Claude DB Mine",
+        "db_model": True,
+    }
+    db_other_row = MagicMock()
+    db_other_row.model_id = "byok-db-other"
+    db_other_row.model_name = "model_name_team-other_db"
+    db_other_row.model_info = {
+        "id": "byok-db-other",
+        "team_id": "team-other",
+        "team_public_model_name": "Claude DB Other",
+        "db_model": True,
+    }
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=2)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[db_caller_row, db_other_row]
+    )
+    caller_user_row = MagicMock()
+    caller_user_row.teams = ["team-mine"]
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=caller_user_row
+    )
+
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: [
+        {
+            "model_name": r.model_name,
+            "model_info": r.model_info,
+            "litellm_params": {"model": "claude-sonnet"},
+        }
+        for r in rows
+    ]
+
+    non_admin = MagicMock(spec=UserAPIKeyAuth)
+    non_admin.user_role = LitellmUserRoles.INTERNAL_USER
+    non_admin.user_id = "user-mine"
+
+    filtered, total_count = await _apply_search_filter_to_models(
+        all_models=[caller_team_byok, other_team_byok, public_model],
+        search="claude",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        user_api_key_dict=non_admin,
+    )
+
+    filtered_ids = {m["model_info"]["id"] for m in filtered}
+    assert "byok-mine" in filtered_ids
+    assert "byok-db-mine" in filtered_ids
+    assert "public-id" in filtered_ids
+    assert "byok-other" not in filtered_ids, (
+        "router-side BYOK from another team must be dropped from search "
+        "when caller doesn't belong to that team"
+    )
+    assert "byok-db-other" not in filtered_ids, (
+        "DB-only BYOK from another team must be dropped from search when "
+        "caller doesn't belong to that team"
+    )
+    # total_count is router_models_count (2: caller_team_byok + public_model,
+    # other_team_byok dropped router-side) + DB count (2 from the mocked
+    # `count()`). The DB count is the *unscoped* match count; non-admin
+    # team scoping applies only to the returned page so the count can be
+    # over-reported, but it must never under-report (callers can paginate
+    # within the bound).
+    assert total_count == 4
+
+    # Admins keep the un-scoped view across teams.
+    admin = MagicMock(spec=UserAPIKeyAuth)
+    admin.user_role = LitellmUserRoles.PROXY_ADMIN
+    admin.user_id = "admin-1"
+
+    filtered_admin, _ = await _apply_search_filter_to_models(
+        all_models=[caller_team_byok, other_team_byok, public_model],
+        search="claude",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        user_api_key_dict=admin,
+    )
+    admin_ids = {m["model_info"]["id"] for m in filtered_admin}
+    assert "byok-other" in admin_ids
+    assert "byok-db-other" in admin_ids
+
+
+@pytest.mark.asyncio
+async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
+    """
+    Regression test: a broad search term must not force a full BYOK-table
+    read + decrypt on each request.
+
+    * Unsorted searches: `find_many(take=N)` where N is just enough to
+      fill the current page after counting router-side matches.
+    * Sorted searches: `find_many(take=cap)` falls back to
+      `_SORTED_SEARCH_DB_FETCH_CAP` so ordering still works across a
+      large match set without scanning the whole table.
+    """
+    from litellm.proxy.proxy_server import (
+        _SORTED_SEARCH_DB_FETCH_CAP,
+        _apply_search_filter_to_models,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=10_000)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: []
+
+    # Unsorted: page=1, size=50, no router-side matches -> take must be 50.
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="model",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        page=1,
+        size=50,
+        sort_by=None,
+    )
+    take = prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["take"]
+    assert take == 50, "unsorted search must take just one page's worth of rows"
+
+    # Sorted: still bounded, but by the hard cap rather than the page.
+    prisma_client.db.litellm_proxymodeltable.find_many.reset_mock()
+    await _apply_search_filter_to_models(
+        all_models=[],
+        search="model",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+        page=1,
+        size=50,
+        sort_by="model_name",
+    )
+    take = prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["take"]
+    assert take == _SORTED_SEARCH_DB_FETCH_CAP
+    assert take < 10_000, "sorted search must cap below the full match set"
+
+
+@pytest.mark.asyncio
+async def test_filter_models_by_team_id_excludes_viewer_direct_access():
+    """
+    Regression test: when the UI picks a specific team in the Current Team
+    selector, the model list must show only that team's BYOK rows + the
+    models assigned to the team. The admin viewer's `direct_access` flag
+    (set on every non-team model upstream) must NOT widen the team's
+    visible set, or selecting team-111 still shows every public model.
+    """
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    public_model = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {
+            "id": "public-id",
+            # admin viewer has direct_access on this public model
+            "direct_access": True,
+            # team-111 is NOT in access_via_team_ids -> shouldn't show for team-111
+            "access_via_team_ids": ["team-222"],
+        },
+    }
+    team111_byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude-sonnet"},
+        "model_info": {
+            "id": "byok-team-111",
+            "team_id": "team-111",
+            "team_public_model_name": "team-claude",
+            "access_via_team_ids": ["team-111"],
+        },
+    }
+    team222_byok = {
+        "model_name": "model_name_team-222_uuid",
+        "litellm_params": {"model": "claude-haiku"},
+        "model_info": {
+            "id": "byok-team-222",
+            "team_id": "team-222",
+            "team_public_model_name": "team-haiku",
+            "access_via_team_ids": ["team-222"],
+        },
+    }
+
+    prisma = MagicMock()
+    team_db = MagicMock()
+    team_db.model_dump.return_value = {
+        "team_id": "team-111",
+        "team_alias": "Team 111",
+        # specific models list that doesn't include the BYOK's internal name
+        "models": ["some-other-model"],
+        "access_group_ids": None,
+    }
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    router = MagicMock()
+    router.get_model_access_groups = MagicMock(return_value={})
+    # team-111 only resolves "some-other-model", which has no deployments
+    router.get_model_list = MagicMock(return_value=[])
+
+    filtered = await _filter_models_by_team_id(
+        all_models=[public_model, team111_byok, team222_byok],
+        team_id="team-111",
+        prisma_client=prisma,
+        llm_router=router,
+    )
+    visible_ids = sorted(m["model_info"]["id"] for m in filtered)
+
+    assert "byok-team-111" in visible_ids, "team-111's own BYOK must always be visible"
+    assert "byok-team-222" not in visible_ids, "must not leak other teams' BYOK"
+    assert (
+        "public-id" not in visible_ids
+    ), "viewer's direct_access must not widen the team's visible set"
+
+
+@pytest.mark.asyncio
+async def test_filter_models_by_team_id_rejects_non_member():
+    """
+    Regression test: /v2/model/info?teamId=X includes BYOK rows solely on
+    `model_info.team_id == X`. Without an auth check, any authenticated user
+    could enumerate another team's BYOK metadata by guessing its id. Callers
+    that are neither proxy admins nor members of `team_id` must get 403.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude"},
+        "model_info": {"id": "byok-team-111", "team_id": "team-111"},
+    }
+
+    prisma = MagicMock()
+    # Caller is in team-222 only
+    user_row = MagicMock()
+    user_row.teams = ["team-222"]
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _filter_models_by_team_id(
+            all_models=[byok],
+            team_id="team-111",
+            prisma_client=prisma,
+            llm_router=MagicMock(),
+            user_api_key_dict=caller,
+        )
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_filter_models_by_team_id_allows_team_member():
+    """
+    A caller who IS a member of `team_id` must be allowed to filter, and
+    should see that team's BYOK rows.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _filter_models_by_team_id
+
+    byok = {
+        "model_name": "model_name_team-111_uuid",
+        "litellm_params": {"model": "claude"},
+        "model_info": {"id": "byok-team-111", "team_id": "team-111"},
+    }
+
+    prisma = MagicMock()
+    user_row = MagicMock()
+    user_row.teams = ["team-111", "team-999"]
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    team_db = MagicMock()
+    team_db.model_dump.return_value = {
+        "team_id": "team-111",
+        "team_alias": "Team 111",
+        "models": [],
+        "access_group_ids": None,
+    }
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    router = MagicMock()
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.get_model_list = MagicMock(return_value=[byok])
+
+    caller = UserAPIKeyAuth(
+        user_id="bob",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+    )
+
+    result = await _filter_models_by_team_id(
+        all_models=[byok],
+        team_id="team-111",
+        prisma_client=prisma,
+        llm_router=router,
+        user_api_key_dict=caller,
+    )
+    assert [m["model_info"]["id"] for m in result] == ["byok-team-111"]
+
+
+@pytest.mark.asyncio
+async def test_caller_byok_team_scope_treats_view_only_admin_as_unscoped():
+    """
+    Regression test: `PROXY_ADMIN_VIEW_ONLY` is an admin role
+    ("can login, view all own keys, view all spend"). Search results for
+    this role must show BYOK rows across all teams, not be silently scoped
+    to the user-id's `teams` field — that path narrows results to whatever
+    teams the admin happens to be a member of, regressing pre-PR behavior.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import _get_caller_byok_team_scope
+
+    caller = UserAPIKeyAuth(
+        user_id="view-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        api_key="sk-test",
+    )
+    scope = await _get_caller_byok_team_scope(
+        user_api_key_dict=caller,
+        prisma_client=MagicMock(),
+    )
+    assert scope is None, "PROXY_ADMIN_VIEW_ONLY must be unscoped, like PROXY_ADMIN"
+
+
+@pytest.mark.asyncio
 async def test_add_access_group_models_to_team_models():
     """
     Test that models reachable via team access groups are included in team_models.
@@ -4638,6 +5066,66 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_passes_through_google_native_sse_bytes():
+    """
+    Google-native streamGenerateContent yields raw SSE bytes; they must not be
+    re-wrapped as data: b'data: {...}'.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+    gemini_event = b'data: {"candidates": [{"content": "hi"}]}\n\n'
+    gemini_event_without_terminator = b'data: {"candidates": [{"content": "there"}]}'
+    raw_payload = b'{"partial": true}'
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield gemini_event
+            yield gemini_event_without_terminator
+            yield raw_payload
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text[0] == gemini_event.decode("utf-8")
+    assert yielded_text[1] == gemini_event_without_terminator.decode("utf-8") + "\n\n"
+    assert yielded_text[2] == f'data: {raw_payload.decode("utf-8")}\n\n'
+    assert "b'data:" not in "".join(yielded_text)
+    assert yielded_text[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_cleanup_on_normal_completion():
     """
     Test that async_data_generator calls response.aclose() even on normal completion.
@@ -6922,3 +7410,80 @@ class TestTransformRequestBannedParams:
             f"Expected 400 for banned param '{banned}', "
             f"got {response.status_code}: {response.json()}"
         )
+
+
+class TestSortModelsByDisplayName:
+    """Regression: team BYOK rows persist an internal `model_name` like
+    `model_name_{team_id}_{uuid}` and expose the user-facing name via
+    `model_info.team_public_model_name`. Sorting must use the displayed
+    name so BYOK rows interleave with non-BYOK rows alphabetically —
+    otherwise they clump at the end on their opaque IDs even though the
+    UI shows them under a normal-looking name.
+    """
+
+    def test_byok_models_sort_by_team_public_model_name(self):
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "claude-haiku-4-5", "model_info": {}},
+            {
+                # Opaque internal name; UI displays team_public_model_name.
+                "model_name": "model_name_team-1_abc123",
+                "model_info": {"team_public_model_name": "anthropic/claude"},
+            },
+            {"model_name": "gpt-4o", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="asc"
+        )
+        displayed_order = [
+            m["model_info"].get("team_public_model_name") or m["model_name"]
+            for m in sorted_models
+        ]
+        assert displayed_order == [
+            "anthropic/claude",
+            "claude-haiku-4-5",
+            "gpt-4o",
+        ]
+
+    def test_byok_models_sort_descending_by_display_name(self):
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "claude-haiku-4-5", "model_info": {}},
+            {
+                "model_name": "model_name_team-1_zzz",
+                "model_info": {"team_public_model_name": "zeta/model"},
+            },
+            {"model_name": "gpt-4o", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="desc"
+        )
+        displayed_order = [
+            m["model_info"].get("team_public_model_name") or m["model_name"]
+            for m in sorted_models
+        ]
+        assert displayed_order == [
+            "zeta/model",
+            "gpt-4o",
+            "claude-haiku-4-5",
+        ]
+
+    def test_empty_team_public_model_name_falls_back_to_model_name(self):
+        # Empty string for team_public_model_name (not None) must still
+        # fall back to model_name — otherwise BYOK rows with a blank
+        # display name would sort to the top.
+        from litellm.proxy.proxy_server import _sort_models
+
+        models = [
+            {"model_name": "alpha", "model_info": {"team_public_model_name": ""}},
+            {"model_name": "beta", "model_info": {}},
+        ]
+
+        sorted_models = _sort_models(
+            all_models=models, sort_by="model_name", sort_order="asc"
+        )
+        assert [m["model_name"] for m in sorted_models] == ["alpha", "beta"]
