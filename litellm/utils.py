@@ -994,17 +994,22 @@ def function_setup(  # noqa: PLR0915
 
                     # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
+                    if not custom_llm_provider:
+                        _litellm_params = kwargs.get("litellm_params")
+                        if isinstance(_litellm_params, dict):
+                            custom_llm_provider = _litellm_params.get(
+                                "custom_llm_provider"
+                            )
 
                     # If custom_llm_provider not in kwargs, try to determine it from the model
                     if not custom_llm_provider and model:
-                        try:
-                            _, custom_llm_provider, _, _ = get_llm_provider(
-                                model=model,
-                                custom_llm_provider=custom_llm_provider,
-                            )
-                        except Exception:
-                            # If we can't determine the provider, skip this processing
-                            pass
+                        provider_result = get_llm_provider(
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            raise_on_failure=False,
+                        )
+                        if provider_result is not None:
+                            _, custom_llm_provider, _, _ = provider_result
 
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):

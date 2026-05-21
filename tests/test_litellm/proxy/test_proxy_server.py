@@ -2781,6 +2781,11 @@ async def test_chat_completion_result_no_nested_none_values():
             return_value={"model": "gpt-3.5-turbo", "messages": []},
         ),
         patch(
+            "litellm.proxy.proxy_server.user_api_key_auth_from_request",
+            new_callable=AsyncMock,
+            return_value=mock_user_api_key_dict,
+        ),
+        patch(
             "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
             return_value=mock_base_processor,
         ),
@@ -2789,7 +2794,6 @@ async def test_chat_completion_result_no_nested_none_values():
         result = await chat_completion(
             request=mock_request,
             fastapi_response=mock_response,
-            user_api_key_dict=mock_user_api_key_dict,
         )
 
     # Verify the result is a dict (since isinstance(result, BaseModel) was True)

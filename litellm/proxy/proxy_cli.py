@@ -417,19 +417,11 @@ class ProxyInitializationHelpers:
         if num_workers <= 1 or litellm_settings is None:
             return
 
-        # Check if prometheus is in any callback list
-        # Each setting can be a list or a single string; normalize to list
-        callbacks = litellm_settings.get("callbacks") or []
-        success_callbacks = litellm_settings.get("success_callback") or []
-        failure_callbacks = litellm_settings.get("failure_callback") or []
-        if isinstance(callbacks, str):
-            callbacks = [callbacks]
-        if isinstance(success_callbacks, str):
-            success_callbacks = [success_callbacks]
-        if isinstance(failure_callbacks, str):
-            failure_callbacks = [failure_callbacks]
-        all_callbacks = callbacks + success_callbacks + failure_callbacks
-        if "prometheus" not in all_callbacks:
+        from litellm.proxy.middleware.prometheus_middleware_registry import (
+            prometheus_callbacks_enabled,
+        )
+
+        if not prometheus_callbacks_enabled(litellm_settings):
             return
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
@@ -1054,6 +1046,14 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
+        from litellm.proxy.middleware.prometheus_middleware_registry import (
+            maybe_register_prometheus_middlewares,
+        )
+
+        maybe_register_prometheus_middlewares(
+            app=app,
+            litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
+        )
 
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
