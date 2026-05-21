@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+_MASKER = SensitiveDataMasker()
+
 # Sections processed in dependency order:
 # budgets and organizations must exist before teams reference them,
 # users before keys, etc.
@@ -178,31 +182,19 @@ def _redact_mcp_credentials(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
-# Fields inside litellm_params that hold provider credentials.
-# Non-secret config (api_base, api_version, region_name, vertex_project, etc.)
-# is left intact so the export can be re-applied to a target environment.
-_LITELLM_PARAMS_SECRET_KEYS: frozenset = frozenset(
-    {
-        "api_key",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "vertex_credentials",
-    }
-)
-
-
 def _redact_litellm_params(record: Dict[str, Any]) -> Dict[str, Any]:
     """Redact credential sub-fields inside a litellm_params dict.
 
-    Replaces known secret keys with the string sentinel ``"__redacted__"``
-    while leaving non-secret config fields (api_base, region_name, etc.)
-    in place so the export remains useful for environment promotion.
+    Uses SensitiveDataMasker pattern-based detection to replace secret keys
+    with the string sentinel ``"__redacted__"`` while leaving non-secret config
+    fields (api_base, region_name, etc.) intact so the export remains useful
+    for environment promotion.
     """
     params = record.get("litellm_params")
     if not isinstance(params, dict):
         return record
     redacted_params = {
-        k: "__redacted__" if k in _LITELLM_PARAMS_SECRET_KEYS and v is not None else v
+        k: "__redacted__" if _MASKER.is_sensitive_key(k) and v is not None else v
         for k, v in params.items()
     }
     return {**record, "litellm_params": redacted_params}

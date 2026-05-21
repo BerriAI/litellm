@@ -323,7 +323,7 @@ async def _fetch_export_sections(
                 take=limit, order={"created_at": "asc"}
             ),
         )
-        envelope["agents"] = [
+        envelope["guardrails"] = [
             _redact_litellm_params(rec) if redact_secrets else rec
             for rec in [_strip(r, _STRIP_FIELDS["guardrails"]) for r in rows]
         ]
