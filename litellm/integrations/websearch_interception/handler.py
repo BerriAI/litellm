@@ -1273,7 +1273,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         full_model_name = model
         if "custom_llm_provider" in kwargs:
             custom_llm_provider = kwargs["custom_llm_provider"]
-            if not model.startswith(custom_llm_provider) and "/" not in model:
+            if not model.startswith(custom_llm_provider + "/"):
                 full_model_name = f"{custom_llm_provider}/{model}"
 
         verbose_logger.debug(
