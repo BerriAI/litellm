@@ -408,6 +408,13 @@ def _build_trusted_redirect_rejection_message(
     redirect_netloc: str,
     proxy_base: Optional[str],
 ) -> str:
+    """Build a client-facing rejection message.
+
+    Intentionally omits the proxy's resolved scheme / host / port to avoid
+    leaking internal network topology (e.g. ``http://litellm-internal:4000``)
+    through an unauthenticated endpoint. Full diagnostic detail — including
+    the computed proxy base — is logged server-side by the caller.
+    """
     redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
     proxy_parsed = urlparse(proxy_base) if proxy_base else None
     proxy_netloc_norm = (
@@ -415,34 +422,30 @@ def _build_trusted_redirect_rejection_message(
         if proxy_parsed and proxy_parsed.netloc
         else ""
     )
-    proxy_origin = (
-        _origin_label(proxy_parsed.scheme, proxy_netloc_norm)
-        if proxy_parsed
-        else "(could not determine proxy origin)"
-    )
 
     mismatch_parts: List[str] = []
     if proxy_parsed and proxy_parsed.netloc:
         if parsed.scheme != proxy_parsed.scheme:
             mismatch_parts.append(
-                f"scheme: browser/redirect_uri uses {parsed.scheme!r}, "
-                f"proxy computed {proxy_parsed.scheme!r} "
+                f"scheme: redirect_uri uses {parsed.scheme!r}, but the proxy "
+                "resolved a different scheme "
                 "(TLS often terminates at ingress — set PROXY_BASE_URL to https://… "
                 "or trust X-Forwarded-Proto from your ingress)"
             )
         if redirect_netloc != proxy_netloc_norm:
             mismatch_parts.append(
-                f"host/port: redirect_uri {redirect_netloc!r} vs proxy {proxy_netloc_norm!r}"
+                f"host/port: redirect_uri {redirect_netloc!r} does not match "
+                "the proxy origin"
             )
 
     if mismatch_parts:
         return (
-            f"redirect_uri origin ({redirect_origin}) does not match the proxy origin "
-            f"({proxy_origin}). " + "; ".join(mismatch_parts)
+            f"redirect_uri origin ({redirect_origin}) does not match the proxy "
+            "origin. " + "; ".join(mismatch_parts)
         )
     return (
         f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
-        f"proxy ({proxy_origin}), not loopback, and not listed in "
+        f"the proxy origin, not loopback, and not listed in "
         f"{_TRUSTED_REDIRECT_ORIGINS_ENV}."
     )
 
@@ -456,18 +459,6 @@ def _raise_trusted_redirect_uri_rejected(
 ) -> NoReturn:
     description = _build_trusted_redirect_rejection_message(
         redirect_uri, parsed, redirect_netloc, proxy_base
-    )
-    redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
-    proxy_parsed = urlparse(proxy_base) if proxy_base else None
-    proxy_netloc_norm = (
-        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
-        if proxy_parsed and proxy_parsed.netloc
-        else ""
-    )
-    proxy_origin = (
-        _origin_label(proxy_parsed.scheme, proxy_netloc_norm)
-        if proxy_parsed
-        else "(could not determine proxy origin)"
     )
 
     hint = (
@@ -501,8 +492,6 @@ def _raise_trusted_redirect_uri_rejected(
         description,
         hint=hint,
         redirect_uri=redirect_uri,
-        redirect_uri_origin=redirect_origin,
-        proxy_origin=proxy_origin,
     )
 
 
