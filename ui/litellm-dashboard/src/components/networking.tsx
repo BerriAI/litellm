@@ -7108,6 +7108,14 @@ export const listMCPTools = async (
     data = await response.json();
   } catch (parseError) {
     console.error("Failed to parse MCP tools response:", parseError);
+    return {
+      tools: [],
+      error: "parse_error",
+      message: "Failed to parse MCP tools response",
+      status: response.status,
+      statusText: response.statusText,
+      stack_trace: null,
+    };
   }
   console.log("Fetched MCP tools response:", data);
 
