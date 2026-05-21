@@ -45,6 +45,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponseStream
+from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -557,7 +558,29 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
-        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
+        # but older models do not — strip it to avoid request rejection.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
+        if not (
+            _supports_factory(
+                model=model,
+                custom_llm_provider="bedrock",
+                key="supports_output_config",
+            )
+            or AnthropicConfig._model_supports_effort_param(model)
+        ):
+            if anthropic_messages_request.pop("output_config", None) is not None:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripping unsupported `output_config` for "
+                    "model=%s — neither `supports_output_config` nor any "
+                    "`supports_*_reasoning_effort` flag is set in "
+                    "model_prices_and_context_window.json. Add the capability "
+                    "flag to the model JSON entry if this model accepts "
+                    "`output_config`.",
+                    model,
+                )
+
+        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847

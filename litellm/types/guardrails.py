@@ -100,6 +100,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
+    RUBRIK = "rubrik"
 
 
 class Role(Enum):

@@ -5387,6 +5387,16 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
 # Global case-insensitive lookup map for model_cost (built eagerly at module import)
 _model_cost_lowercase_map: Optional[Dict[str, str]] = None
 
+# Monotonic counter bumped on every model_cost mutation. Consumers that
+# memoize derived state (e.g. provider-specific indices) can include this
+# value in their cache key so they invalidate even when key add+remove or
+# in-place value replacement leaves len/id unchanged.
+_model_cost_mutation_generation: int = 0
+
+
+def get_model_cost_mutation_generation() -> int:
+    return _model_cost_mutation_generation
+
 
 def _invalidate_model_cost_lowercase_map() -> None:
     """Invalidate the case-insensitive lookup map for model_cost.
@@ -5394,8 +5404,9 @@ def _invalidate_model_cost_lowercase_map() -> None:
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
     Also clears related LRU caches that depend on model_cost data.
     """
-    global _model_cost_lowercase_map
+    global _model_cost_lowercase_map, _model_cost_mutation_generation
     _model_cost_lowercase_map = None
+    _model_cost_mutation_generation += 1
 
     # Clear LRU caches that depend on model_cost data
     get_model_info.cache_clear()
@@ -5986,6 +5997,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
@@ -9240,6 +9252,18 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
+
+        if provider == litellm.LlmProviders.REDUCTO:
+            from litellm.llms.reducto.ocr.transformation import (
+                ReductoParseLegacyConfig,
+                ReductoParseV3Config,
+            )
+
+            if model == "parse-v3":
+                return ReductoParseV3Config()
+            if model == "parse-legacy":
+                return ReductoParseLegacyConfig()
+            return None
 
         MistralOCRConfig = getattr(sys.modules[__name__], "MistralOCRConfig")
         PROVIDER_TO_CONFIG_MAP = {

@@ -13982,6 +13982,21 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "fireworks_ai/accounts/fireworks/models/glm-5p1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 202800,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://fireworks.ai/models/fireworks/glm-5p1",
+        "supports_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false
+    },
     "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "fireworks_ai",
@@ -14247,6 +14262,21 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "fireworks_ai/glm-5p1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 202800,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://fireworks.ai/models/fireworks/glm-5p1",
+        "supports_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false
     },
     "fireworks_ai/kimi-k2p5": {
         "cache_read_input_token_cost": 1e-07,
@@ -29121,6 +29151,24 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "reducto/parse-legacy": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "reducto/parse-v3": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
     },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",
