@@ -31,8 +31,11 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
 # Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
-_OAUTH_METADATA_CACHE: Dict[Tuple[str, str], Tuple[float, dict]] = {}
+# A payload of ``None`` is a negative-result entry that prevents repeated
+# upstream fetches when the IdP consistently has no metadata to serve.
+_OAUTH_METADATA_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[dict]]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS = 300
+_OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS = 60
 _OAUTH_METADATA_CACHE_MAX_SIZE = 128
 # Per-(server_id, resource_url) async locks so concurrent discovery requests
 # coalesce onto a single upstream fetch instead of issuing N parallel calls.
@@ -830,6 +833,15 @@ async def fetch_upstream_oauth_protected_resource(
         if len(network_errors) == len(candidates):
             raise network_errors[-1]
 
+        # Negative-result caching: when no candidate yielded a usable payload,
+        # remember that for a shorter TTL so we don't re-fetch on every
+        # subsequent discovery request (and so the per-key lock can be pruned).
+        now = time.time()
+        _OAUTH_METADATA_CACHE[cache_key] = (
+            now + _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS,
+            None,
+        )
+        _prune_oauth_metadata_cache(now)
         return None
 
 

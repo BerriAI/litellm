@@ -268,6 +268,10 @@ class MCPRequestHandler:
                     )
                     if (
                         mcp_servers_from_path is not None
+                        and not _has_client_supplied_mcp_auth(
+                            mcp_auth_header,
+                            mcp_server_auth_headers,
+                        )
                         and _is_mcp_passthrough_cold_start(
                             mcp_servers_from_path, client_ip=client_ip
                         )

@@ -518,7 +518,8 @@ def get_request_route(request: Request) -> str:
         if root_path and (
             raw_path == root_path or raw_path.startswith(root_path + "/")
         ):
-            return raw_path[len(root_path) :]
+            stripped = raw_path[len(root_path) :]
+            return stripped or "/"
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
