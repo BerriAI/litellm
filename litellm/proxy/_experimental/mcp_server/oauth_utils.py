@@ -3,7 +3,7 @@
 
 import os
 from ipaddress import ip_address
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException, Request
@@ -41,6 +41,33 @@ _DEFAULT_NATIVE_REDIRECT_URIS: List[str] = [
 ]
 
 _warned_invalid_proxy_base_url: Optional[str] = None
+
+
+def _oauth_invalid_request(
+    error_description: str,
+    *,
+    hint: Optional[str] = None,
+    **extra: Any,
+) -> None:
+    """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
+
+    FastAPI serializes ``detail`` as JSON. Callers still see ``error``:
+    ``invalid_request``; ``error_description`` and ``hint`` explain what
+    failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
+    """
+    detail: Dict[str, Any] = {
+        "error": "invalid_request",
+        "error_description": error_description,
+    }
+    if hint:
+        detail["hint"] = hint
+    detail.update(extra)
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _origin_label(scheme: str, netloc: str) -> str:
+    """Human-readable origin for error messages (scheme + host[:port])."""
+    return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
 def _resolve_proxy_base_url_env() -> Optional[str]:
@@ -319,15 +346,26 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     try:
         parsed = urlparse(redirect_uri)
     except ValueError:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri is not a valid URL.",
+            hint="Use a full absolute URL for redirect_uri (e.g. https://your-host/ui/mcp/oauth/callback).",
+        )
     if parsed.scheme not in ("http", "https"):
         if _matches_trusted_native_redirect_uri(parsed):
             return
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            f"redirect_uri scheme {parsed.scheme!r} is not allowed; use http/https "
+            "or a registered native callback (e.g. cursor://).",
+            hint="Add the full URI to MCP_TRUSTED_NATIVE_REDIRECT_URIS for custom native clients.",
+        )
     if parsed.fragment:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri must not contain a URL fragment (#...).",
+        )
     if not parsed.netloc or parsed.username is not None or parsed.password is not None:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri must include a host and must not contain userinfo (user:pass@host).",
+        )
     # Reject userinfo (``user:pass@host``) outright: OAuth redirect_uris
     # have no legitimate reason to carry credentials, and allowing them
     # opens a host-confusion attack where the netloc *looks* allowlisted
@@ -337,7 +375,9 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     # depth keeps malformed netloc strings from reaching the wildcard
     # splitter.
     if parsed.username is not None or parsed.password is not None:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri must not contain userinfo (user:pass@host).",
+        )
     # Reject backslash in netloc: urlparse keeps ``\`` as part of netloc,
     # but browsers normalize ``\`` to ``/`` for http(s) URLs and treat it
     # as the start of the path. An attacker can exploit that split by
@@ -345,7 +385,9 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     # ``attacker.net\app.example.com`` (matches ``*.example.com``) while
     # the browser navigates to ``attacker.net`` with the auth code.
     if "\\" in parsed.netloc:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri host must not contain backslashes.",
+        )
 
     redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
 
