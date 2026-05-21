@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -102,9 +103,16 @@ class _SyncToAsyncQueueIterator:
     __slots__ = ("_sync_iter", "_queue", "_thread", "_loop", "_exhausted")
 
     def __init__(self, sync_iter: Any) -> None:
+        from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
+
         self._sync_iter = sync_iter
         self._loop = asyncio.get_running_loop()
-        self._queue: asyncio.Queue = asyncio.Queue()
+        # Bounded queue: a stalled/slow async consumer must not let chunks from
+        # a fast upstream stream accumulate without limit. The producer blocks
+        # (applies backpressure) when the queue is full — see _producer.
+        self._queue: asyncio.Queue = asyncio.Queue(
+            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
+        )
         self._exhausted = False
         self._thread = threading.Thread(target=self._producer, daemon=True)
         self._thread.start()
@@ -112,10 +120,23 @@ class _SyncToAsyncQueueIterator:
     def _producer(self) -> None:
         def _put(item: Any) -> None:
             try:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+                # Await put() on the bounded queue from this background thread.
+                # run_coroutine_threadsafe(...).result() blocks the producer
+                # thread until the consumer drains a slot, giving real
+                # backpressure instead of put_nowait raising QueueFull (which
+                # would drop chunks). The thread is daemon=True, so blocking
+                # here never prevents process exit.
+                future = asyncio.run_coroutine_threadsafe(
+                    self._queue.put(item), self._loop
+                )
+                future.result()
             except RuntimeError:
                 # Event loop closed before producer finished (e.g. early cancellation).
                 # Nothing to do — the consumer is gone.
+                pass
+            except concurrent.futures.CancelledError:
+                # Loop shut down while we were blocked waiting for queue space.
+                # The consumer is gone — nothing left to deliver to.
                 pass
 
         try:
