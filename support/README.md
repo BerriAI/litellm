@@ -4,6 +4,18 @@ A single HTTP endpoint that drafts a LiteLLM customer support reply from a paste
 
 See [`AGENTS.md`](AGENTS.md) for tone, structure, and escalation policy.
 
+## Invoke in Cursor (slash command)
+
+In the Cursor chat or Agent panel, type:
+
+```
+/draft-support-reply
+```
+
+Then paste the customer question (and optional context). The command loads the support rule and skill automatically — you do not need to reference `.md` paths by hand.
+
+Source: [`.cursor/commands/draft-support-reply.md`](../.cursor/commands/draft-support-reply.md)
+
 ## Shareable bundle
 
 Both the rule and the skill are exported as a single self-contained markdown at [`exports/customer-support-bundle.md`](exports/customer-support-bundle.md). Share that file with colleagues who don't have the repo open — it reads cleanly in Notion, Slack, or any markdown viewer, and includes instructions for applying it as a Cursor rule + skill, or as a system prompt for other LLM tooling.

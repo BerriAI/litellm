@@ -31,6 +31,13 @@ See [AGENTS.md](../AGENTS.md) → **Cursor Cloud specific instructions** for ins
 
 Add root `AGENTS.md` in **litellm-docs** using the template in [contrib/litellm-docs-AGENTS.md](../contrib/litellm-docs-AGENTS.md) (separate PR to BerriAI/litellm-docs).
 
+
+## Slash command (Cursor UI)
+
+Type **`/draft-support-reply`** in chat or Agent input. Source: [commands/draft-support-reply.md](commands/draft-support-reply.md).
+
+No need to paste paths to the rule or skill manually — the command embeds those instructions.
+
 ## Published docs (@Docs)
 
 In **Cursor Settings → Docs**, add `https://docs.litellm.ai`. Use `@Docs` in chat for published-site wording. This complements the `litellm-docs` git repo; it does not replace it.
