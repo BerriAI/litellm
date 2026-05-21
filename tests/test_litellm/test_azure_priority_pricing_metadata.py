@@ -33,6 +33,27 @@ def test_azure_priority_pricing_keys_present(
     assert info["cache_read_input_token_cost_priority"] == cache_read_priority
 
 
+# Aliases that should carry supports_service_tier to match their dated counterparts
+# (azure/gpt-5.1-2025-11-13, azure/gpt-5.2-2025-12-11). PR #24924 covers the gpt-4.1 aliases.
+AZURE_SUPPORTS_SERVICE_TIER_ALIASES = [
+    "azure/gpt-5.1",
+    "azure/gpt-5.2",
+]
+
+
+@pytest.mark.parametrize("model", AZURE_SUPPORTS_SERVICE_TIER_ALIASES)
+def test_azure_undated_aliases_advertise_service_tier_support(model):
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    info = model_cost.get(model)
+    assert info is not None, f"{model} not found in model catalog"
+    assert (
+        info.get("supports_service_tier") is True
+    ), f"{model} should advertise supports_service_tier=true to match its dated variant"
+
+
 def test_azure_priority_pricing_backup_matches_main():
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     repo_root = Path(__file__).parents[2]

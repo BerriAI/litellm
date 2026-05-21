@@ -4548,6 +4548,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true
     },
@@ -4709,6 +4710,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "azure/gpt-5.2-2025-12-11": {
