@@ -296,11 +296,16 @@ curl http://localhost:4000/mcp-rest/tools/call \
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `auth_type` | Yes | Must be `oauth2` |
-| `client_id` | Yes | OAuth2 client ID. Supports `os.environ/VAR_NAME` |
-| `client_secret` | Yes | OAuth2 client secret. Supports `os.environ/VAR_NAME` |
-| `token_url` | Yes | Token endpoint URL |
-| `scopes` | No | List of scopes to request |
+| `auth_type` | Yes | Must be `oauth2`. For RFC 8693 On-Behalf-Of, use `oauth2_token_exchange` instead — see [MCP OBO Auth](./mcp_obo_auth.md). |
+| `oauth2_flow` | No | Explicit flow selector. One of `"client_credentials"` (M2M) or `"authorization_code"` (interactive PKCE). If omitted, LiteLLM infers from the other fields: `authorization_url` present → interactive; only `token_url` + `client_id` + `client_secret` → client credentials. Set explicitly when in doubt — for example, when a legacy DB row has both `authorization_url` and `token_url` but you want M2M. |
+| `client_id` | Yes for M2M, optional for interactive | OAuth2 client ID. Required for `client_credentials`. For interactive flows, can be obtained via Dynamic Client Registration (RFC 7591) at `POST /{server_name}/register` if the upstream supports it. Supports `os.environ/VAR_NAME`. |
+| `client_secret` | Yes for M2M, optional for interactive | OAuth2 client secret. Same applicability as `client_id`. Supports `os.environ/VAR_NAME`. |
+| `token_url` | Yes for M2M, optional for interactive | Token endpoint URL. LiteLLM POSTs to this for `client_credentials` and for the authorization-code exchange. |
+| `authorization_url` | Interactive only | Upstream authorization endpoint. When present, LiteLLM treats the server as interactive PKCE and proxies `GET /{server_name}/authorize` to this URL. |
+| `registration_url` | Optional | Upstream Dynamic Client Registration endpoint (RFC 7591). When present, `POST /{server_name}/register` proxies through to this URL. |
+| `scopes` | No | List of scopes to request. For M2M, joined into the `scope` parameter on the token request. For interactive, forwarded on the authorize request. |
+| `token_validation` | No | Dict of key-value rules checked against the OAuth token response after the `/token` exchange. Any rule mismatch fails the exchange with `token_validation_failed`. Useful for asserting a tenant claim like `{"team.enterprise_id": "T12345"}`. |
+| `token_storage_ttl_seconds` | No | Override the TTL for the per-user token cache (interactive flow). If unset, LiteLLM uses `expires_in - buffer` from the token response. |
 
 ## Debugging OAuth
 

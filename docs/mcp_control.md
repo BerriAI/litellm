@@ -35,6 +35,50 @@ When Creating a Key, Team, or Organization, you can select the allowed MCP Serve
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
+## Permission Hierarchy
+
+Permissions can be set at five distinct levels. When more than one level applies to a request, LiteLLM **intersects** the lists (most-restrictive wins) — except for the organization level, which acts as a **ceiling**.
+
+| Level | Source | How it composes |
+|---|---|---|
+| **Key** | `object_permission.mcp_servers` / `object_permission.mcp_access_groups` on the virtual key | If the key has an explicit list, it's used. |
+| **Team** | Same fields on the team | If both key and team have lists, the result is the **intersection** (only servers in both). If only the team has a list, the key inherits it. |
+| **End user** | Same fields on the `LiteLLM_EndUserTable` row matching `x-litellm-end-user-id` | Intersected with the running result. Skipped if no end-user-id is present on the request. |
+| **Agent** | Same fields on the agent identified by `x-litellm-agent-id` | Intersected with the running result. Skipped if no agent-id is present. |
+| **Organization** | Same fields on the org owning the key/team | Acts as a **ceiling** — the final allowed-server set is intersected with the org's list. If the org has no list, no additional restriction. |
+
+If no level has a list, the request can access **every** MCP server (open by default).
+
+```mermaid
+flowchart TD
+    A[Inbound MCP request] --> B{Key has mcp_servers list?}
+    B -->|Yes| C[Start with key's list]
+    B -->|No| D[Start with: all servers]
+    C --> E{Team has list?}
+    D --> E
+    E -->|Yes, key also had list| F[Intersect with team's list]
+    E -->|Yes, key had no list| G[Use team's list]
+    E -->|No| H[Keep current]
+    F --> I
+    G --> I
+    H --> I
+    I[Running set] --> J{end-user-id present and end-user has list?}
+    J -->|Yes| K[Intersect with end-user list]
+    J -->|No| L[Keep current]
+    K --> M
+    L --> M
+    M{agent-id present and agent has list?}
+    M -->|Yes| N[Intersect with agent list]
+    M -->|No| O[Keep current]
+    N --> P
+    O --> P
+    P{Org has list?}
+    P -->|Yes| Q[Cap final set to org's list]
+    P -->|No| R[Final set]
+    Q --> R
+```
+
+The same intersection model applies to the per-server tool-level dict `mcp_tool_permissions` (see [Per-entity Tool-Level Permissions](#per-entity-tool-level-permissions) below).
 
 ## Allow/Disallow MCP Tools
   
@@ -625,15 +669,92 @@ When creating API keys, you can assign them to specific access groups for permis
 />
 
 
-
-## Set Allowed Tools for a Key, Team, or Organization
+## Per-entity Tool-Level Permissions {#per-entity-tool-level-permissions}
 
 Control which tools different teams can access from the same MCP server. For example, give your Engineering team access to `list_repositories`, `create_issue`, and `search_code`, while Sales only gets `search_code` and `close_issue`.
-
 
 This video shows how to set allowed tools for a Key, Team, or Organization.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/7464d444c3324078892367272fe50745" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+### `mcp_tool_permissions` API
+
+`object_permission.mcp_tool_permissions` is a `Dict[server_id, List[tool_name]]` on the key, team, end-user, agent, or organization. It's evaluated **after** server-level access has been resolved (see [Permission Hierarchy](#permission-hierarchy) above) and applies the same five-level intersection — most-restrictive wins, organization acts as a ceiling.
+
+This is distinct from the server-registration-level `allowed_tools` / `disallowed_tools` (which apply to **every** caller of the server). `mcp_tool_permissions` lets you carve out per-team subsets without changing the server config.
+
+<Tabs>
+<TabItem value="key" label="On a Key">
+
+```bash title="Engineering key — full GitHub access" showLineNumbers
+curl -X POST "http://localhost:4000/key/generate" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_permission": {
+      "mcp_servers": ["github_mcp"],
+      "mcp_tool_permissions": {
+        "github_mcp": ["list_repositories", "create_issue", "search_code"]
+      }
+    }
+  }'
+```
+
+```bash title="Sales key — read-only on the same server" showLineNumbers
+curl -X POST "http://localhost:4000/key/generate" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_permission": {
+      "mcp_servers": ["github_mcp"],
+      "mcp_tool_permissions": {
+        "github_mcp": ["search_code", "close_issue"]
+      }
+    }
+  }'
+```
+
+</TabItem>
+<TabItem value="team" label="On a Team">
+
+```bash title="Team-wide tool subset (all keys inherit)" showLineNumbers
+curl -X POST "http://localhost:4000/team/new" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "team_alias": "engineering",
+    "object_permission": {
+      "mcp_servers": ["github_mcp", "deepwiki_mcp"],
+      "mcp_tool_permissions": {
+        "github_mcp": ["list_repositories", "create_issue", "search_code"]
+      }
+    }
+  }'
+```
+
+When the key also sets `mcp_tool_permissions` for `github_mcp`, the resulting tool list is the **intersection** of the two.
+
+</TabItem>
+<TabItem value="agent" label="On an Agent">
+
+When an agent (identified by `x-litellm-agent-id`) calls MCP tools, the agent's own `mcp_tool_permissions` participate in the intersection. Useful for capping what an autonomous agent can do regardless of which key originally invoked it.
+
+```bash showLineNumbers
+curl -X PATCH "http://localhost:4000/v1/agents/{agent_id}" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_permission": {
+      "mcp_servers": ["github_mcp"],
+      "mcp_tool_permissions": {
+        "github_mcp": ["search_code"]
+      }
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 ## Dashboard View Modes

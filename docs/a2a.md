@@ -211,11 +211,45 @@ POST /a2a/{agent_name}/message/send
 
 ### Authentication
 
-Include your LiteLLM Virtual Key in the `Authorization` header:
+Include your LiteLLM Virtual Key in either of two headers — `x-litellm-api-key` is preferred when the inbound `Authorization` header may carry a token destined for the backend agent (e.g. when using the [convention-based passthrough](./a2a_agent_headers#method-3--convention-based-forwarding) to forward the caller's identity).
 
 ```
 Authorization: Bearer sk-your-litellm-key
+# or
+x-litellm-api-key: Bearer sk-your-litellm-key
 ```
+
+#### Per-agent permission check
+
+After the virtual key is authenticated, LiteLLM checks whether the calling key (and its team) is allowed to invoke the requested agent. If not, the response is HTTP 403. See [Agent Permission Management](./a2a_agent_permissions) for the full intersection model and access groups.
+
+#### Trace ID enforcement (optional, per-agent)
+
+An agent can require every inbound request to carry a trace ID for cross-system audit threading. Set `require_trace_id_on_calls_to_agent: true` in the agent's `litellm_params`. When set, requests missing `x-litellm-trace-id` (or `x-litellm-session-id`) are rejected with HTTP 400.
+
+```bash title="Register an agent that requires inbound trace IDs" showLineNumbers
+curl -X POST http://localhost:4000/v1/agents \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_name": "audit-critical-agent",
+    "agent_card_params": { ... },
+    "litellm_params": {
+      "require_trace_id_on_calls_to_agent": true
+    }
+  }'
+```
+
+The reverse direction — enforcing trace ID on **outbound** calls made by a key owned by an agent — is controlled by `require_trace_id_on_calls_by_agent` on the same `litellm_params` block.
+
+#### Sub-agent identity propagation
+
+When the backend agent itself calls LiteLLM (for chat completions or to invoke a sub-agent), LiteLLM forwards two headers to maintain trace continuity:
+
+- `X-LiteLLM-Trace-Id` — links all calls in the chain to a single trace
+- `X-LiteLLM-Agent-Id` — attributes spend to the originating agent
+
+The caller's **virtual key** and **end-user ID** are not automatically forwarded. If the downstream agent needs the user's identity, propagate it explicitly via [`extra_headers` or the `x-a2a-{agent_name_or_id}-{header}` convention](./a2a_agent_headers).
 
 ### Request Format
 

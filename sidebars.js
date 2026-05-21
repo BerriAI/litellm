@@ -356,6 +356,7 @@ const sidebars = {
                 "skills_gateway",
               ],
             },
+            { type: "doc", id: "auth_overview", label: "Gateway Auth Reference" },
           ],
         },
         {
