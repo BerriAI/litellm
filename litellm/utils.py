@@ -5502,6 +5502,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
     """
     if custom_llm_provider and (
         "litellm_provider" in model_info
+        and model_info["litellm_provider"] is not None
         and model_info["litellm_provider"] != custom_llm_provider
     ):
         if custom_llm_provider == "vertex_ai" and model_info[
