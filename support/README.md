@@ -40,7 +40,7 @@ uv sync --group proxy-dev --extra proxy
 ### 4. Run the service
 
 ```bash
-uv run python support/customer_support_agent.py
+uv run python -m support.customer_support_agent
 ```
 
 Default port `8088` (override with `SUPPORT_AGENT_PORT`).
@@ -97,6 +97,87 @@ curl -X POST http://localhost:8088/draft-reply \
     "customer_segment": "prospect"
   }'
 ```
+
+## Slack integration
+
+The same service can be called from Slack via a slash command or a "Draft support reply" shortcut. The Slack handler is **only mounted if** `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are set and `slack-bolt` is installed.
+
+### 1. Install `slack-bolt`
+
+```bash
+pip install "slack-bolt" aiohttp
+```
+
+`aiohttp` is required for the async Bolt app used here. Both are intentionally not in `litellm`'s core dependencies.
+
+### 2. Create the Slack app
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From scratch**.
+2. **OAuth & Permissions -> Bot Token Scopes**, add at minimum:
+   - `commands`
+   - `chat:write`
+   - `chat:write.public`
+   - `im:write`
+3. **Slash Commands -> Create New Command**:
+   - Command: `/support-draft`
+   - Request URL: `https://<your-host>/slack/commands`
+   - Short description: `Draft a LiteLLM customer support reply`
+   - Usage hint: `<paste customer question, or run with no args to open a form>`
+4. **Interactivity & Shortcuts** -> **Enable Interactivity**:
+   - Request URL: `https://<your-host>/slack/interactions`
+   - **Create Shortcut -> Global**:
+     - Name: `Draft support reply`
+     - Callback ID: `draft_support_reply_global`
+   - **Create Shortcut -> On messages**:
+     - Name: `Draft support reply`
+     - Callback ID: `draft_support_reply_msg`
+5. **Event Subscriptions** (optional, leave off for v1 unless you add `@mention` handlers later):
+   - Request URL: `https://<your-host>/slack/events`
+6. **Install App** to your workspace; copy the **Bot User OAuth Token** (`xoxb-...`) and the **Signing Secret** from **Basic Information**.
+
+### 3. Run
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_SIGNING_SECRET=...
+export CURSOR_API_KEY=...           # or LITELLM_PROXY_URL + LITELLM_PROXY_API_KEY
+uv run python -m support.customer_support_agent
+```
+
+On startup you should see `Slack handler mounted at /slack/{events,commands,interactions}` in the logs.
+
+### 4. Expose publicly (dev)
+
+Slack must reach your service. For local testing, use a tunnel:
+
+```bash
+ngrok http 8088
+# or: cloudflared tunnel --url http://localhost:8088
+```
+
+Set the public URL in the Slack app config for slash command, interactivity, and (optionally) events. For production, put the service behind your ingress / load balancer with TLS.
+
+### 5. Use it in Slack
+
+- **Slash command (one-shot):**
+  `/support-draft Our proxy returns 429 from Anthropic despite per-key RPM limits - what's going on?`
+  Posts an ephemeral "Drafting..." right away, then the bot posts the full draft to the same channel when ready.
+- **Slash command (form):**
+  `/support-draft` (no text) opens a modal with question, context, customer segment, and tone override.
+- **Message shortcut:**
+  Hover any customer message -> `...` -> **Draft support reply**. The modal opens with the message pre-filled in **Context**.
+- **Global shortcut:**
+  Top-level Slack search -> `Draft support reply`. Opens the modal anywhere.
+
+The draft is posted as two clearly separated sections (`Customer reply (draft)` and `Internal notes`) with a footer showing the Cursor `agent_id` and a reminder that **human review is required before sending**.
+
+### Slack-specific notes
+
+- **Async pattern.** The agent run takes tens of seconds to minutes. The slash command and modal submission both `ack` within Slack's 3-second window; the actual draft is posted via `chat.postMessage` when ready.
+- **Where the reply lands.** Slash command and message shortcut reply in the same channel/thread. Global shortcut DMs the invoking user (because no channel context exists).
+- **Truncation.** Long drafts are chunked into multiple section blocks so they don't hit Slack's 3000-char per-block limit.
+- **Auth.** Slack signing-secret verification is enforced by Bolt. The `/draft-reply` HTTP route still has no auth - put it behind your ingress or proxy.
+- **Privacy.** Anything pasted into Slack goes to Cursor Cloud Agents during drafting. Treat it as Cursor-visible data and redact secrets first.
 
 ## Configuration
 

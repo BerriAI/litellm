@@ -253,16 +253,8 @@ async def _fetch_conversation(
     return ""
 
 
-app = FastAPI(title="LiteLLM Customer Support Agent", version="0.1.0")
-
-
-@app.get("/healthz")
-async def healthz() -> Dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/draft-reply", response_model=DraftReplyResponse)
-async def draft_reply(req: DraftReplyRequest) -> DraftReplyResponse:
+async def produce_draft(req: DraftReplyRequest) -> DraftReplyResponse:
+    """Core drafting logic — reusable from the HTTP route and from Slack handlers."""
     try:
         base_url, headers = _resolve_cursor_target()
     except RuntimeError as exc:
@@ -290,6 +282,47 @@ async def draft_reply(req: DraftReplyRequest) -> DraftReplyResponse:
         internal_notes=internal_notes,
         raw_text=raw_text,
     )
+
+
+app = FastAPI(title="LiteLLM Customer Support Agent", version="0.1.0")
+
+
+@app.get("/healthz")
+async def healthz() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/draft-reply", response_model=DraftReplyResponse)
+async def draft_reply(req: DraftReplyRequest) -> DraftReplyResponse:
+    return await produce_draft(req)
+
+
+def _maybe_mount_slack(api: FastAPI) -> None:
+    """Mount Slack endpoints if slack-bolt is installed and credentials are present."""
+    try:
+        from support.slack_app import get_slack_handler
+    except ImportError as exc:
+        logger.info("Slack handler not mounted (import failed: %s)", exc)
+        return
+
+    handler = get_slack_handler()
+    if handler is None:
+        logger.info(
+            "Slack handler not configured "
+            "(set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET to enable)"
+        )
+        return
+
+    async def _dispatch(request):
+        return await handler.handle(request)
+
+    api.post("/slack/events")(_dispatch)
+    api.post("/slack/commands")(_dispatch)
+    api.post("/slack/interactions")(_dispatch)
+    logger.info("Slack handler mounted at /slack/{events,commands,interactions}")
+
+
+_maybe_mount_slack(app)
 
 
 if __name__ == "__main__":
