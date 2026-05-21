@@ -1,14 +1,22 @@
 name: "Mutation Test (manual)"
 
 # Manually-triggered mutation testing. Runs mutmut against the scope
-# configured in [tool.mutmut] in pyproject.toml (currently the
-# litellm/proxy/management_endpoints/ folder). Intended cadence is roughly
-# weekly — clicked from the Actions tab when someone wants a fresh report.
+# configured in [tool.mutmut] in pyproject.toml — paths_to_mutate is the
+# litellm/proxy/management_endpoints/ folder.
 #
-# Uploads a structured `mutation-report.md` (Meta ACH-style: original +
-# mutated function with `# MUTANT START`/`# MUTANT END` delimiters + the
-# existing tests + a task instruction) as a workflow artifact. Failures
-# do not block anything because nothing depends on this workflow.
+# The job is a 2-leg matrix, one leg per test suite that exercises those
+# endpoints:
+#   * legacy   — tests/test_litellm/proxy/management_endpoints/ (mocks the DB)
+#   * behavior — tests/proxy_behavior/management/ (drives a real proxy against
+#                a live Postgres service container)
+# The two suites cannot share one pytest session — the legacy suite patches
+# `prisma_client` globally — so each leg scopes [tool.mutmut].tests_dir to its
+# own suite (via scripts/scope_mutmut_tests_dir.py) and runs mutmut separately.
+#
+# Each leg uploads a structured `mutation-report.md` (Meta ACH-style: original
+# + mutated function with `# MUTANT START`/`# MUTANT END` delimiters + the
+# existing tests + a task instruction) as a workflow artifact. Failures do not
+# block anything because nothing depends on this workflow.
 
 on:
   workflow_dispatch:
@@ -22,11 +30,50 @@ concurrency:
 
 jobs:
   mutation:
-    name: Run mutmut
+    name: Run mutmut (${{ matrix.suite }})
     runs-on: ubuntu-latest
     # Whole-folder mutation against ~15 files / ~7.5k LOC can take hours.
     # 350 minutes is just under the GitHub-hosted job cap of 360 minutes.
     timeout-minutes: 350
+
+    strategy:
+      # Best-effort workflow — let one suite finish even if the other fails.
+      fail-fast: false
+      matrix:
+        include:
+          - suite: legacy
+            tests-dir: tests/test_litellm/proxy/management_endpoints/
+            needs-postgres: false
+          - suite: behavior
+            tests-dir: tests/proxy_behavior/management/
+            needs-postgres: true
+
+    # The postgres service container is spawned per-job on localhost and
+    # destroyed with the job — nothing outside the runner can reach it, and
+    # the user/password/database are throwaway bootstrap values, not secrets.
+    # GitHub Actions cannot declare a service conditionally per matrix leg, so
+    # (mirroring .github/workflows/_test-unit-services-base.yml) the container
+    # always starts; the legacy leg simply leaves it idle while the behavior
+    # leg pushes the proxy schema to it and points DATABASE_URL at it.
+    services:
+      postgres:
+        image: postgres@sha256:705a5d5b5836f3fcba0d02c4d281e6a7dd9ed2dd4078640f08a1e1e9896e097d # postgres:14
+        env:
+          POSTGRES_USER: litellm
+          POSTGRES_PASSWORD: litellm
+          POSTGRES_DB: litellm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Empty for the legacy leg (it mocks the DB); the real URL for the
+      # behavior leg. Mirrors .github/workflows/_test-unit-services-base.yml.
+      DATABASE_URL: ${{ matrix.needs-postgres && 'postgresql://litellm:litellm@localhost:5432/litellm_test' || '' }}
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -63,6 +110,15 @@ jobs:
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
+      # The behavior suite (tests/proxy_behavior/management/) connects Prisma
+      # to a real database at session start, so the proxy schema must exist
+      # before mutmut runs its stats pass. Mirrors the Prisma migration step
+      # in .github/workflows/_test-unit-services-base.yml.
+      - name: Push Prisma schema to Postgres
+        if: ${{ matrix.needs-postgres }}
+        run: |
+          uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+
       # mutmut 3.x runs tests inside a `mutants/` sandbox where it injects
       # mutation trampolines. uv installs the project as editable by default,
       # which puts the original source dir on sys.path via a .pth file and
@@ -83,6 +139,16 @@ jobs:
         run: |
           uv pip uninstall pytest-retry || true
 
+      # mutmut reads tests_dir only from pyproject.toml (no CLI/env override),
+      # so scope it to this leg's suite before running. The legacy and
+      # behavior suites cannot share a pytest session — see the script
+      # docstring and the [tool.mutmut] comment in pyproject.toml.
+      - name: Scope mutmut tests_dir to the ${{ matrix.suite }} suite
+        env:
+          MUTMUT_TESTS_DIR: ${{ matrix.tests-dir }}
+        run: |
+          uv run --no-sync python scripts/scope_mutmut_tests_dir.py "${MUTMUT_TESTS_DIR}"
+
       - name: Run mutmut
         env:
           # Make the mutants/ sandbox win over site-packages on sys.path so the
@@ -100,6 +166,8 @@ jobs:
       # prompt template (arXiv 2501.12862).
       - name: Generate detailed mutation report
         if: always()
+        env:
+          SUITE: ${{ matrix.suite }}
         run: |
           set +e
           uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
@@ -109,6 +177,8 @@ jobs:
           # summary cuts off at 1 MB. Append the head of the report (summary
           # + survivor list) and link out to the artifact for the full body.
           {
+            echo "## Mutation report — \`${SUITE}\` suite"
+            echo ""
             head -c 900000 mutation-report.md
             echo ""
             echo ""
@@ -119,7 +189,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: mutmut-${{ github.run_id }}-${{ github.run_attempt }}
+          name: mutmut-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             mutation-report.md
             mutmut-results.txt
