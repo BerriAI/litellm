@@ -7,6 +7,7 @@ Uses the base test class to ensure consistent behavior across providers.
 
 import os
 import sys
+from typing import Tuple
 
 import pytest
 
@@ -20,9 +21,11 @@ class TestXAIRealtime(BaseRealtimeTest):
     E2E tests for xAI Realtime API.
 
     xAI's Grok Voice Agent API is OpenAI-compatible:
-    - Initial event: "session.created" (matches OpenAI)
-    - Different endpoint: wss://api.x.ai/v1/realtime
+    - Endpoint: wss://api.x.ai/v1/realtime
     - Model: grok-4-1-fast-non-reasoning
+    - Initial event: historically "conversation.created"; xAI has since shipped
+      "session.created" (matching OpenAI). Accept either to avoid spurious
+      failures whenever xAI flips the wire format.
     """
 
     def get_model(self) -> str:
@@ -31,5 +34,5 @@ class TestXAIRealtime(BaseRealtimeTest):
     def get_api_key_env_var(self) -> str:
         return "XAI_API_KEY"
 
-    def get_initial_event_type(self) -> str:
-        return "session.created"
+    def get_initial_event_type(self) -> Tuple[str, ...]:
+        return ("conversation.created", "session.created")

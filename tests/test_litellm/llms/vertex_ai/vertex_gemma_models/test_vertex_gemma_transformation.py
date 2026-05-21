@@ -122,17 +122,19 @@ class TestVertexGemmaCompletion:
         # Mock the async HTTP handler and Vertex authentication
         with (
             patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-            ) as mock_http_handler,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+            ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
+            mock_client = Mock()
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.json.return_value = mock_vertex_response
-            mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
 
             # Call litellm.acompletion()
             response = await litellm.acompletion(
@@ -145,7 +147,7 @@ class TestVertexGemmaCompletion:
             )
 
             # Verify the request sent to Vertex
-            call_args = mock_http_handler.return_value.post.call_args
+            call_args = mock_client.post.call_args
             assert call_args is not None, "HTTP handler was not called"
 
             request_data = call_args.kwargs["json"]
@@ -210,17 +212,19 @@ class TestVertexGemmaCompletion:
 
         with (
             patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-            ) as mock_http_handler,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+            ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "test-project"),
             ),
         ):
+            mock_client = Mock()
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.json.return_value = invalid_response
-            mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
 
             # Should raise exception (wrapped as APIConnectionError by LiteLLM)
             with pytest.raises(APIConnectionError) as exc_info:
@@ -286,7 +290,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
@@ -388,7 +392,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
