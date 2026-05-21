@@ -179,6 +179,14 @@ def _normalize_tool_choice(selected_params: Dict) -> None:
                     "expected one of 'FUNCTION', 'AUTO', 'NONE', 'REQUIRED'"
                 ),
             )
+        return
+    raise OCIError(
+        status_code=400,
+        message=(
+            f"Invalid tool_choice for OCI: expected str or dict, got "
+            f"{type(tc).__name__}"
+        ),
+    )
 
 
 def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> None:
@@ -420,33 +428,23 @@ class OCIChatConfig(BaseConfig):
         )
 
         # ``map_openai_params`` runs before ``transform_request`` (and thus
-        # before this helper), so by the time we see ``optional_params`` both
-        # ``max_tokens`` and ``max_completion_tokens`` have already been
-        # collapsed onto the OCI alias (``maxTokens`` or ``maxCompletionTokens``).
-        # Conflict resolution between the two OpenAI keys happens there; we
-        # only need to translate whatever alias is now present.
-        for openai_key, oci_key in param_map.items():
-            if oci_key and openai_key in optional_params:
-                target = max_tokens_key if oci_key == "maxTokens" else oci_key
-                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
-
-        for oci_value in param_map.values():
-            if oci_value == "maxTokens":
-                # Handled below via max_tokens_key — covers the case where
-                # map_openai_params already pre-translated "max_tokens" to the
-                # alias "maxTokens" in optional_params.
-                if (
-                    "maxTokens" in optional_params
-                    and max_tokens_key not in selected_params
-                ):
-                    selected_params[max_tokens_key] = optional_params["maxTokens"]
+        # before this helper), so by the time we see ``optional_params`` the
+        # OpenAI keys have already been translated to their OCI aliases.
+        # We still accept the original OpenAI key as a fallback for callers
+        # that build ``optional_params`` directly, with OpenAI keys winning
+        # over OCI aliases when both happen to be present. The first OpenAI
+        # key reaching a given OCI target wins, so ``max_tokens`` /
+        # ``max_completion_tokens`` (both → ``maxTokens``) don't double-write.
+        for openai_key, oci_alias in param_map.items():
+            if not oci_alias:
                 continue
-            if (
-                oci_value
-                and oci_value in optional_params
-                and oci_value not in selected_params
-            ):
-                selected_params[oci_value] = optional_params[oci_value]  # type: ignore[index]
+            target = max_tokens_key if oci_alias == "maxTokens" else oci_alias
+            if target in selected_params:
+                continue
+            if openai_key in optional_params:
+                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
+            elif oci_alias in optional_params:
+                selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
 
         # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
         # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".
