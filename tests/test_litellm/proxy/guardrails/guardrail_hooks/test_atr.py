@@ -466,3 +466,95 @@ def test_scan_unknown_severity_treated_conservatively(fake_pyatr, tmp_path):
     matches = guard._scan("some content", event_type="llm_input")
     assert len(matches) == 1
     assert matches[0].rule_id == "ATR-601"
+
+
+@pytest.mark.asyncio
+async def test_post_call_streaming_blocks_on_match(fake_pyatr, tmp_path):
+    """Streaming hook returns SSE error frame when aggregated response matches."""
+    import json as _json
+
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    engine.evaluate.return_value = [
+        MagicMock(rule_id="ATR-700", title="Stream leak", severity="critical")
+    ]
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="high",
+        guardrail_name="atr-test",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+    result = await guard.async_post_call_streaming_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response="here is your API key: sk-abc123",
+    )
+
+    assert isinstance(result, str)
+    assert result.startswith("data: ")
+    payload = _json.loads(result[len("data: ") :].strip())
+    assert payload["error"]["error"] == "Streamed response blocked by ATR guardrail"
+    assert payload["error"]["matched_rules"][0]["rule_id"] == "ATR-700"
+
+
+@pytest.mark.asyncio
+async def test_post_call_streaming_passes_when_no_match(fake_pyatr, tmp_path):
+    """Streaming hook returns the response unchanged when no rules fire."""
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    engine.evaluate.return_value = []
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="high",
+        guardrail_name="atr-test",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+    aggregated = "Sure, here is the summary you asked for."
+    result = await guard.async_post_call_streaming_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=aggregated,
+    )
+
+    assert result == aggregated
+
+
+@pytest.mark.asyncio
+async def test_post_call_streaming_passes_empty_response(fake_pyatr, tmp_path):
+    """Streaming hook is a no-op when the aggregated response is empty."""
+    _, engine = fake_pyatr
+    ATRGuardrail, _, _ = _import_guardrail()
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    guard = ATRGuardrail(
+        rules_path=str(rules_dir),
+        severity_threshold="high",
+        guardrail_name="atr-test",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+    result = await guard.async_post_call_streaming_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response="",
+    )
+
+    assert result == ""
+    engine.evaluate.assert_not_called()

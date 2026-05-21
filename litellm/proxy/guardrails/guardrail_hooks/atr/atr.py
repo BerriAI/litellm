@@ -220,6 +220,42 @@ class ATRGuardrail(CustomGuardrail):
             )
         return response
 
+    @log_guardrail_information
+    async def async_post_call_streaming_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: str,
+    ) -> Any:
+        """
+        Scan the aggregated streamed response after stream completion.
+
+        ATR rules match against complete content (a regex over a full
+        response). Per-chunk scanning would emit false negatives (the
+        attack pattern split across two chunks never appears in either)
+        and inconsistent false positives. LiteLLM aggregates the streamed
+        response before this hook fires, so we get a uniform policy
+        whether the caller opts into streaming or not.
+
+        Known limitation (documented for honesty rather than fixed): an
+        attacker who streams a long-running response specifically to
+        inject content that is acted on mid-stream is out of scope. That
+        requires per-chunk inspection with a stateful aggregator and a
+        semantic gate, not a regex catalog.
+        """
+        if response is None or len(response) == 0:
+            return response
+
+        matches = self._scan(response, event_type="llm_output")
+        if matches:
+            import json
+
+            error_detail = {
+                "error": "Streamed response blocked by ATR guardrail",
+                "matched_rules": [self._summarize_match(m) for m in matches],
+            }
+            return f"data: {json.dumps({'error': error_detail})}\n\n"
+        return response
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
