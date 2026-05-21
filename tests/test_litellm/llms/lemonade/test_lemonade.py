@@ -71,6 +71,44 @@ def test_get_openai_compatible_provider_info_with_api_key_env(monkeypatch):
     assert key == "test-key"
 
 
+def test_get_openai_compatible_provider_info_skips_env_key_for_custom_base(
+    monkeypatch,
+):
+    """Test that caller-supplied bases do not receive server-side Lemonade keys."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    config = LemonadeChatConfig()
+
+    api_base, key = config._get_openai_compatible_provider_info(
+        api_base="https://attacker.example/v1", api_key=None
+    )
+
+    assert api_base == "https://attacker.example/v1"
+    assert key == "lemonade"
+    assert config._get_auth_headers(key) == {}
+
+
+def test_get_openai_compatible_provider_info_uses_explicit_key_for_custom_base(
+    monkeypatch,
+):
+    """Test that explicitly supplied Lemonade keys are sent to supplied bases."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    config = LemonadeChatConfig()
+
+    api_base, key = config._get_openai_compatible_provider_info(
+        api_base="https://lemonade.example/v1", api_key="explicit-lemonade-key"
+    )
+
+    assert api_base == "https://lemonade.example/v1"
+    assert key == "explicit-lemonade-key"
+    assert config._get_auth_headers(key) == {
+        "Authorization": "Bearer explicit-lemonade-key"
+    }
+
+
 def test_get_openai_compatible_provider_info_ignores_global_api_key(monkeypatch):
     """Test that Lemonade discovery does not send unrelated global API keys."""
     monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
@@ -85,6 +123,25 @@ def test_get_openai_compatible_provider_info_ignores_global_api_key(monkeypatch)
     assert api_base == "http://lemonade.test/v1"
     assert key == "lemonade"
     assert config._get_auth_headers(key) == {}
+
+
+def test_get_models_does_not_leak_lemonade_key_to_custom_base(monkeypatch):
+    """Test Lemonade discovery does not send server-side keys to supplied bases."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+    config = LemonadeChatConfig()
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"data": []}
+
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
+        models = config.get_models(api_base="https://attacker.example/v1")
+
+    assert models == []
+    assert mock_get.call_args.kwargs["headers"] == {}
 
 
 def test_get_model_info_uses_loaded_context_size():
@@ -170,9 +227,33 @@ def test_get_model_info_reads_context_from_provider_specific_entry():
     }
 
 
-def test_get_model_info_sends_lemonade_api_key(monkeypatch):
-    """Test that Lemonade model info uses auth for authenticated servers."""
+def test_get_model_info_sends_lemonade_api_key_for_configured_base(monkeypatch):
+    """Test that Lemonade model info uses auth for configured servers."""
     monkeypatch.setenv("LEMONADE_API_KEY", "test-key")
+    monkeypatch.setenv("LEMONADE_API_BASE", "http://lemonade.test/v1")
+    monkeypatch.setattr(litellm, "lemonade_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    config = LemonadeChatConfig()
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "recipe_options": {"ctx_size": 65536},
+    }
+
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
+        config.get_model_info(
+            model="lemonade/Qwen3.6-35B-A3B-GGUF",
+        )
+
+    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+
+
+def test_get_model_info_sends_explicit_lemonade_api_key_for_custom_base(monkeypatch):
+    """Test that Lemonade model info sends explicitly supplied auth to supplied bases."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-key")
     monkeypatch.setattr(litellm, "lemonade_key", None)
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
@@ -189,9 +270,43 @@ def test_get_model_info_sends_lemonade_api_key(monkeypatch):
         config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
+            api_key="explicit-test-key",
         )
 
-    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+    assert mock_get.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer explicit-test-key"
+    }
+
+
+def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
+    monkeypatch,
+):
+    """Test top-level model info does not send server-side keys to supplied bases."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "max_input_tokens": 65536,
+        "max_context_window": 262144,
+    }
+
+    litellm.get_model_info.cache_clear()
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
+        try:
+            model_info = litellm.get_model_info(
+                model="lemonade/Qwen3.6-35B-A3B-GGUF",
+                api_base="https://attacker.example/v1",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+    assert model_info["max_input_tokens"] == 65536
+    assert mock_get.call_args.kwargs["headers"] == {}
 
 
 def test_litellm_get_model_info_uses_lemonade_api_base():
