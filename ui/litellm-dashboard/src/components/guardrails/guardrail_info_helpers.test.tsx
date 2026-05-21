@@ -20,9 +20,7 @@ describe("guardrail_info_helpers", () => {
   // Reset mutable module state between tests
   beforeEach(() => {
     // Clear DynamicGuardrailProviders by repopulating with empty
-    Object.keys(DynamicGuardrailProviders).forEach(
-      (key) => delete DynamicGuardrailProviders[key]
-    );
+    Object.keys(DynamicGuardrailProviders).forEach((key) => delete DynamicGuardrailProviders[key]);
     // Remove any dynamically added keys from guardrail_provider_map
     const staticKeys = new Set([
       "PresidioPII",
@@ -31,6 +29,11 @@ describe("guardrail_info_helpers", () => {
       "LitellmContentFilter",
       "ToolPermission",
       "BlockCodeExecution",
+      "Promptguard",
+      "LlmAsAJudge",
+      "Xecguard",
+      "QostodianNexus",
+      "Silmaril",
     ]);
     Object.keys(guardrail_provider_map).forEach((key) => {
       if (!staticKeys.has(key)) delete guardrail_provider_map[key];
@@ -123,15 +126,11 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderContentFilterConfigSettings("LitellmContentFilter")
-      ).toBe(true);
+      expect(shouldRenderContentFilterConfigSettings("LitellmContentFilter")).toBe(true);
     });
 
     it("should return false for unrelated providers", () => {
-      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(
-        false
-      );
+      expect(shouldRenderContentFilterConfigSettings("PresidioPII")).toBe(false);
     });
 
     it("should return false for null", () => {
@@ -147,9 +146,7 @@ describe("guardrail_info_helpers", () => {
         },
       });
 
-      expect(
-        shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")
-      ).toBe(true);
+      expect(shouldRenderAzureTextModerationConfigSettings("AzureContentSafety")).toBe(true);
     });
 
     it("should return false for null", () => {
@@ -163,6 +160,13 @@ describe("guardrail_info_helpers", () => {
 
       expect(result.displayName).toBe("Presidio PII");
       expect(result.logo).toContain("microsoft_azure.svg");
+    });
+
+    it("should return correct logo and display name for Silmaril", () => {
+      const result = getGuardrailLogoAndName("silmaril");
+
+      expect(result.displayName).toBe("Silmaril Firewall");
+      expect(result.logo).toContain("silmaril.png");
     });
 
     it("should return the raw value as displayName when provider is unknown", () => {

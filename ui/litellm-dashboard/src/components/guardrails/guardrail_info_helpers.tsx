@@ -3,6 +3,7 @@ export enum GuardrailProviders {
   PresidioPII = "Presidio PII",
   Bedrock = "Bedrock Guardrail",
   Lakera = "Lakera",
+  Silmaril = "Silmaril Firewall",
 }
 
 // Dynamic guardrail providers object - populated from API response
@@ -17,6 +18,7 @@ export const populateGuardrailProviders = (providerParamsResponse: Record<string
   providers.Bedrock = "Bedrock Guardrail";
   providers.Lakera = "Lakera";
   providers.LlmAsAJudge = "LiteLLM LLM as a Judge";
+  providers.Silmaril = "Silmaril Firewall";
 
   // Add dynamic providers from API response
   Object.entries(providerParamsResponse).forEach(([key, value]) => {
@@ -53,6 +55,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
   QostodianNexus: "qostodian_nexus",
+  Silmaril: "silmaril",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -138,8 +141,9 @@ export const guardrailLogoMap: Record<string, string> = {
   XecGuard: `${asset_logos_folder}xecguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
-  "Akto": `${asset_logos_folder}akto.svg`,
+  Akto: `${asset_logos_folder}akto.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "Silmaril Firewall": `${asset_logos_folder}silmaril.png`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
