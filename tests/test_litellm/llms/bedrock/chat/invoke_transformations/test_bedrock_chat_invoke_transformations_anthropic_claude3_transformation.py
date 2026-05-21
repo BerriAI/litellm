@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -427,6 +428,31 @@ def test_output_config_forwarded_for_bedrock_chat_invoke_request():
 
     assert result.get("output_config") == {"effort": "high"}
     assert result["max_tokens"] == 100
+
+
+def test_bedrock_chat_invoke_checks_output_config_support_with_bedrock_provider():
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {"max_tokens": 100, "output_config": {"effort": "high"}}
+
+    with patch(
+        "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ) as mock_supports_factory:
+        result = config.transform_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    mock_supports_factory.assert_called_once_with(
+        model="us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        key="supports_output_config",
+    )
+    assert result["output_config"] == {"effort": "high"}
 
 
 def test_output_format_removed_from_bedrock_invoke_request():
