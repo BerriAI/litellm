@@ -498,7 +498,9 @@ class OCIChatConfig(BaseConfig):
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
                 message=_extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard(messages),
+                chatHistory=adapt_messages_to_cohere_standard(
+                    [m for m in messages if m.get("role") != "system"]
+                ),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )

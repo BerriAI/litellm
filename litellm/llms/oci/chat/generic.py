@@ -331,12 +331,16 @@ def handle_generic_response(
     message = model_response.choices[0].message  # type: ignore
     response_message = response_choice.message
     if response_message is not None:
-        if (
-            response_message.content
-            and len(response_message.content) > 0
-            and response_message.content[0].type == "TEXT"
-        ):
-            message.content = response_message.content[0].text
+        if response_message.content:
+            # Concatenate all text parts — matches the streaming handler, which
+            # iterates the full content array. Skips non-text parts (e.g. image
+            # parts) so a leading non-text part doesn't suppress trailing text.
+            text: Optional[str] = None
+            for item in response_message.content:
+                if isinstance(item, OCITextContentPart):
+                    text = (text or "") + item.text
+            if text is not None:
+                message.content = text
         if response_message.toolCalls:
             message.tool_calls = adapt_tools_to_openai_standard(
                 response_message.toolCalls
