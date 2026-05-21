@@ -23,6 +23,13 @@ CONTAINER_OBJECT_PURPOSE = "container"
 _NEGATIVE_OWNER_SENTINEL = "__litellm_container_no_owner__"
 _CONTAINER_OWNER_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 
+# Caches the stored ``unified_object_id`` (the encoded container ID
+# captured at create time) so ``get_container_forwarding_params`` can
+# recover the deployment ``model_id`` for native upstream IDs without
+# re-hitting Prisma on every retrieve/delete.
+_NEGATIVE_STORED_ID_SENTINEL = "__litellm_container_no_stored_id__"
+_CONTAINER_STORED_ID_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
+
 # Per-caller-scope cache for ``GET /v1/containers`` list filtering. Without
 # this, every list call issues a fresh ``find_many`` against
 # ``litellm_managedobjecttable``. The cache key is the sorted owner-scope
@@ -56,7 +63,7 @@ def decode_container_id_for_ownership(
     return original_container_id, custom_llm_provider
 
 
-def get_container_forwarding_params(
+async def get_container_forwarding_params(
     container_id: str, original_container_id: str, custom_llm_provider: str
 ) -> Dict[str, str]:
     params = {
@@ -65,6 +72,20 @@ def get_container_forwarding_params(
     }
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     model_id = decoded.get("model_id")
+    if not (isinstance(model_id, str) and model_id):
+        # Native upstream IDs (e.g. Azure ``cntr_<hex>``) carry no LiteLLM
+        # routing payload, so decoding the user-supplied id yields no
+        # ``model_id``. Recover it from the encoded ``unified_object_id``
+        # captured on the ownership row at create time — when the router
+        # selected a specific deployment that ID embeds the model_id.
+        stored_id = await _get_stored_container_id(
+            original_container_id, custom_llm_provider
+        )
+        if stored_id and stored_id != container_id:
+            stored_decoded = ResponsesAPIRequestUtils._decode_container_id(stored_id)
+            stored_model_id = stored_decoded.get("model_id")
+            if isinstance(stored_model_id, str) and stored_model_id:
+                model_id = stored_model_id
     if isinstance(model_id, str) and model_id:
         params["model_id"] = model_id
     return params
@@ -168,6 +189,7 @@ async def record_container_owner(
         )
 
     _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner)
+    _CONTAINER_STORED_ID_CACHE.set_cache(model_object_id, container_id)
     # Drop the caller's own list-cache entry so the just-created container
     # shows up on their next ``GET /v1/containers``. Other callers with
     # disjoint scope tuples have their own entries; intersecting-scope
@@ -207,7 +229,58 @@ async def _get_container_owner(
     _CONTAINER_OWNER_CACHE.set_cache(
         model_object_id, owner if owner is not None else _NEGATIVE_OWNER_SENTINEL
     )
+    stored_id = getattr(row, "unified_object_id", None) if row is not None else None
+    _CONTAINER_STORED_ID_CACHE.set_cache(
+        model_object_id,
+        (
+            stored_id
+            if isinstance(stored_id, str) and stored_id
+            else _NEGATIVE_STORED_ID_SENTINEL
+        ),
+    )
     return owner
+
+
+async def _get_stored_container_id(
+    original_container_id: str, custom_llm_provider: str
+) -> Optional[str]:
+    """Return the ``unified_object_id`` stored at create time, if any.
+
+    Used by :func:`get_container_forwarding_params` to recover the
+    deployment ``model_id`` for native upstream container IDs: the stored
+    value is the encoded form produced by ``encode_container_id_in_response``
+    when the router selected a specific deployment.
+    """
+    model_object_id = _container_model_object_id(
+        original_container_id, custom_llm_provider
+    )
+
+    cached = _CONTAINER_STORED_ID_CACHE.get_cache(model_object_id)
+    if cached == _NEGATIVE_STORED_ID_SENTINEL:
+        return None
+    if isinstance(cached, str) and cached:
+        return cached
+
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return None
+
+    row = await prisma_client.db.litellm_managedobjecttable.find_first(
+        where={
+            "model_object_id": model_object_id,
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+    stored_id = getattr(row, "unified_object_id", None) if row is not None else None
+    _CONTAINER_STORED_ID_CACHE.set_cache(
+        model_object_id,
+        (
+            stored_id
+            if isinstance(stored_id, str) and stored_id
+            else _NEGATIVE_STORED_ID_SENTINEL
+        ),
+    )
+    return stored_id if isinstance(stored_id, str) and stored_id else None
 
 
 async def assert_user_can_access_container(

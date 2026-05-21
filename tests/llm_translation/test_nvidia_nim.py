@@ -262,3 +262,44 @@ class TestNvidiaNim(BaseLLMRerankTest):
     def get_expected_cost(self) -> float:
         """Nvidia NIM rerank models are free (cost = 0.0)"""
         return 0.0
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    async def test_basic_rerank(self, sync_mode, monkeypatch):
+        """
+        Override the base live rerank test with a mocked HTTP layer.
+
+        NVIDIA reached end-of-life for the hosted
+        nvidia/llama-3.2-nv-rerankqa-1b-v2 rerank API on 2026-05-18 and
+        published no replacement model, so a live call now returns HTTP 410
+        ("Gone"). NVIDIA's hosted catalog rotates on a schedule, so pointing
+        at another live model would only defer the same failure. Mock the
+        transport instead (same pattern as
+        test_nvidia_nim_rerank_ranking_endpoint above) so the request/response
+        transformation and cost calculation stay covered offline.
+        """
+        monkeypatch.setenv("NVIDIA_NIM_API_KEY", "fake-api-key")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.text = ""
+        mock_response.json.return_value = {
+            "rankings": [
+                {"index": 0, "logit": 0.95},
+                {"index": 1, "logit": 0.75},
+            ],
+            "usage": {"total_tokens": 7},
+        }
+
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                return_value=mock_response,
+            ),
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                return_value=mock_response,
+            ),
+        ):
+            await super().test_basic_rerank(sync_mode=sync_mode)
