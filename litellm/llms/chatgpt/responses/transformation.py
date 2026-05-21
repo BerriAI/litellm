@@ -167,8 +167,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             parsed_chunk = self._parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue
-            if parsed_chunk == STREAM_SSE_DONE_STRING:
-                break
 
             event_type = parsed_chunk.get("type")
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
@@ -209,7 +207,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return completed_response, error_message
 
-    def _parse_sse_json_chunk(self, chunk: str) -> Optional[Any]:
+    def _parse_sse_json_chunk(self, chunk: str) -> Optional[Dict[str, Any]]:
         # Strip outer whitespace before removing the SSE `data:` prefix.
         # `_strip_sse_data_from_chunk` only matches the prefix at position 0,
         # so chunks with leading whitespace (e.g. `  data: {...}`) would
@@ -218,10 +216,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not stripped_chunk:
             return None
         stripped_chunk = stripped_chunk.strip()
-        if not stripped_chunk:
+        if not stripped_chunk or stripped_chunk == STREAM_SSE_DONE_STRING:
             return None
-        if stripped_chunk == STREAM_SSE_DONE_STRING:
-            return STREAM_SSE_DONE_STRING
         try:
             parsed_chunk = json.loads(stripped_chunk)
         except json.JSONDecodeError:

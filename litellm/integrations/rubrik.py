@@ -34,7 +34,7 @@ if TYPE_CHECKING:
         Logging as LiteLLMLoggingObj,
     )
 
-_ENDPOINT_ANTHROPIC_MESSAGES = "/messages"
+_ENDPOINT_ANTHROPIC_MESSAGES = "/v1/messages"
 _WEBHOOK_PATH_TOOL_BLOCKING = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_LOGGING_BATCH = "/v1/litellm/batch"
 
