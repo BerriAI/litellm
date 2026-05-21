@@ -109,6 +109,10 @@ def test_get_model_info_uses_loaded_context_size():
     assert model_info["key"] == "lemonade/Qwen3.6-35B-A3B-GGUF"
     assert model_info["litellm_provider"] == "lemonade"
     assert model_info["max_input_tokens"] == 65536
+    assert model_info["provider_specific_entry"] == {
+        "recipe_options": {"ctx_size": 65536},
+        "max_context_window": 262144,
+    }
     assert "supports_function_calling" not in model_info
     assert "supports_response_schema" not in model_info
     assert "supports_tool_choice" not in model_info
@@ -138,6 +142,32 @@ def test_get_model_info_falls_back_when_server_unavailable():
     assert "supports_function_calling" not in model_info
     assert "supports_response_schema" not in model_info
     assert "supports_tool_choice" not in model_info
+
+
+def test_get_model_info_reads_context_from_provider_specific_entry():
+    """Test that Lemonade model info uses provider-specific runtime metadata."""
+    config = LemonadeChatConfig()
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "provider_specific_entry": {
+            "recipe_options": {"ctx_size": "32768"},
+            "max_context_window": 262144,
+        },
+    }
+
+    with patch.object(litellm.module_level_client, "get", return_value=response):
+        model_info = config.get_model_info(
+            model="lemonade/Qwen3.6-35B-A3B-GGUF",
+            api_base="http://lemonade.test/v1",
+        )
+
+    assert model_info["max_input_tokens"] == 32768
+    assert model_info["provider_specific_entry"] == {
+        "recipe_options": {"ctx_size": "32768"},
+        "max_context_window": 262144,
+    }
 
 
 def test_get_model_info_sends_lemonade_api_key(monkeypatch):

@@ -121,16 +121,31 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 return parsed
         return None
 
+    @staticmethod
+    def _get_provider_specific_entry(model_info: dict) -> dict:
+        provider_specific_entry = model_info.get("provider_specific_entry")
+        if not isinstance(provider_specific_entry, dict):
+            provider_specific_entry = {}
+        else:
+            provider_specific_entry = provider_specific_entry.copy()
+
+        for key in ("recipe_options", "context_window", "max_context_window"):
+            if key in model_info:
+                provider_specific_entry[key] = model_info[key]
+
+        return provider_specific_entry
+
     def _get_context_window(self, model_info: dict) -> Optional[int]:
-        recipe_options = model_info.get("recipe_options")
+        provider_specific_entry = self._get_provider_specific_entry(model_info)
+        recipe_options = provider_specific_entry.get("recipe_options")
         if not isinstance(recipe_options, dict):
             recipe_options = {}
 
         for value in (
             recipe_options.get("ctx_size"),
             model_info.get("max_input_tokens"),
-            model_info.get("context_window"),
-            model_info.get("max_context_window"),
+            provider_specific_entry.get("context_window"),
+            provider_specific_entry.get("max_context_window"),
         ):
             parsed = self._get_positive_int(value)
             if parsed is not None:
@@ -172,6 +187,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         max_input_tokens = self._get_context_window(model_info)
         max_output_tokens = self._get_positive_int(model_info.get("max_output_tokens"))
         max_tokens = self._get_positive_int(model_info.get("max_tokens"))
+        provider_specific_entry = self._get_provider_specific_entry(model_info)
 
         model_info_response = self._get_default_model_info(model)
         model_info_response.update(
@@ -181,6 +197,8 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 "max_output_tokens": max_output_tokens,
             }
         )
+        if provider_specific_entry:
+            model_info_response["provider_specific_entry"] = provider_specific_entry
         return model_info_response
 
     def _get_openai_compatible_provider_info(
