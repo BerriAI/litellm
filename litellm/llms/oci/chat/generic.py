@@ -359,6 +359,10 @@ def handle_generic_response(
         # downstream consumers switching on ``finish_reason`` keep working —
         # matches the streaming handler.
         model_response.choices[0].finish_reason = "stop"  # type: ignore[union-attr]
+    else:
+        # Explicitly clear the default so a missing OCI ``finishReason`` doesn't
+        # masquerade as ``"stop"`` — matches the other three OCI handlers.
+        model_response.choices[0].finish_reason = None  # type: ignore[union-attr]
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None

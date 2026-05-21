@@ -27,7 +27,6 @@ from litellm.types.llms.oci import (
     CohereMessage,
     CohereParameterDefinition,
     CohereStreamChunk,
-    CohereSystemMessage,
     CohereTool,
     CohereToolCall,
     CohereToolMessage,
@@ -69,9 +68,9 @@ def adapt_messages_to_cohere_standard(
       trailing tool results (the standard agentic continuation pattern) still
       appear in ``chatHistory`` and reach the model.
     - If no user message exists, every message is included (no slice).
-    - System messages are emitted as SYSTEM-role entries. Callers that route
-      system content into ``preambleOverride`` separately should filter them
-      from ``messages`` before calling this function to avoid duplication.
+    - System messages must be filtered out by the caller (they are routed into
+      ``preambleOverride`` separately) — they are not represented in
+      ``chatHistory``.
     - Tool results are expressed as OCI ``CohereToolMessage.toolResults`` entries,
       with the originating call's name and parameters resolved from the preceding
       assistant message via a ``tool_call_id`` lookup.
@@ -136,8 +135,6 @@ def adapt_messages_to_cohere_standard(
 
         if role == "user":
             chat_history.append(CohereMessage(role="USER", message=content))
-        elif role == "system":
-            chat_history.append(CohereSystemMessage(message=content))
         elif role == "assistant":
             chat_history.append(
                 CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls)
