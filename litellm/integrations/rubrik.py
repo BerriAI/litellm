@@ -143,6 +143,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     async def aclose(self):
         """Close the dedicated HTTP clients used by this logger."""
+        # Cancel the periodic flush task before closing the HTTP clients so
+        # the loop doesn't wake up and try to POST via a closed client.
+        if self._flush_task is not None and not self._flush_task.done():
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._flush_task = None
         await self.tool_blocking_client.close()
         await self.async_httpx_client.close()
 
