@@ -50,8 +50,9 @@ class MCPUpstreamAuthError(Exception):
                 "Bearer resource_metadata="
                 f'"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"'
             )
+        detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
-            detail="Unauthorized",
+            detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
