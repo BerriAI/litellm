@@ -287,6 +287,12 @@ paths_to_mutate = [
 ]
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
+    # PR1 (key Tier-1) behavior-pinning suite. Manual mutmut runs
+    # (.github/workflows/mutation-test.yml) include this directory so the
+    # behavior matrix contributes to mutation-score signal alongside the
+    # legacy mock suite. See tests/proxy_behavior/management/README.md
+    # for the G5 triage protocol.
+    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
