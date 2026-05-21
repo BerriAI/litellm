@@ -4225,5 +4225,9 @@ def test_gemini_google_maps_tool_simple():
         assert response.choices[0].message.content is not None
     except litellm.RateLimitError:
         pass
+    except litellm.InternalServerError:
+        pytest.skip(
+            "Google Maps Platform returned a transient 500 (upstream flake); skipping."
+        )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
