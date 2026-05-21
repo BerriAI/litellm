@@ -41,6 +41,16 @@ _MAX_QUEUE_SIZE = 10_000
 _DROP_WARNING_INTERVAL_SECONDS = 60.0
 
 
+class _MalformedToolBlockingResponseError(Exception):
+    """Raised when the tool blocking service returns a structurally invalid
+    response (e.g. empty ``choices``).
+
+    Distinct from transient network/HTTP errors so callers can surface a
+    louder, misconfiguration-style log instead of treating it as a routine
+    fail-open.
+    """
+
+
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def __init__(
         self,
@@ -192,6 +202,20 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
         except ModifyResponseException:
             raise
+        except _MalformedToolBlockingResponseError as e:
+            # Distinct from transient errors: the service responded but the
+            # payload was structurally invalid, which usually indicates a
+            # misconfigured webhook or a breaking change in its response
+            # format. Log loudly so operators notice their tool-blocking
+            # policy is not actually being enforced.
+            verbose_logger.critical(
+                "Tool blocking service returned a malformed response: %s. "
+                "Tool calls are NOT being checked -- verify the webhook "
+                "configuration. Returning original response unchanged.",
+                e,
+                exc_info=True,
+            )
+            return inputs
         except Exception as e:
             verbose_logger.error(
                 f"Tool blocking hook failed: {e}. "
@@ -554,7 +578,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """
         choices = service_response.get("choices", [])
         if not choices:
-            raise Exception("Tool blocking service returned empty response")
+            raise _MalformedToolBlockingResponseError(
+                "Tool blocking service returned empty response"
+            )
 
         message = choices[0].get("message", {})
         returned_tool_calls = message.get("tool_calls") or []
