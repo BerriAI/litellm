@@ -270,6 +270,7 @@ from litellm.proxy.auth.model_checks import (
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
+    user_api_key_auth_from_request,
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
@@ -407,10 +408,10 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm.proxy.middleware.in_flight_requests_middleware import (
-    InFlightRequestsMiddleware,
+from litellm.proxy.middleware.prometheus_middleware_registry import (
+    load_litellm_settings_from_env,
+    maybe_register_prometheus_middlewares,
 )
-from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
@@ -1599,8 +1600,10 @@ app.add_middleware(
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
-app.add_middleware(PrometheusAuthMiddleware)
-app.add_middleware(InFlightRequestsMiddleware)
+maybe_register_prometheus_middlewares(
+    app=app,
+    litellm_settings=load_litellm_settings_from_env(),
+)
 
 
 def mount_swagger_ui():
@@ -8283,22 +8286,18 @@ async def model_info(
 
 @router.post(
     "/v1/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
 )
 @router.post(
     "/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
 )
 @router.post(
     "/engines/{model:path}/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
 )
 @router.post(
     "/openai/deployments/{model:path}/chat/completions",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
     responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
@@ -8306,7 +8305,6 @@ async def chat_completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
 
@@ -8333,6 +8331,7 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    user_api_key_dict = await user_api_key_auth_from_request(request=request)
     data = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):

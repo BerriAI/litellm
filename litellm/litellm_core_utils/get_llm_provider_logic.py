@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import litellm
@@ -134,13 +134,88 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def _parse_model_provider_prefix(model: str) -> Tuple[str, Optional[str], bool]:
+    """Return (prefix, remainder, has_slash) for a model string."""
+    slash_idx = model.find("/")
+    if slash_idx == -1:
+        return model, None, False
+    return model[:slash_idx], model[slash_idx + 1 :], True
+
+
+def _get_provider_list_set() -> set:
+    provider_list_set = getattr(litellm, "provider_list_set", None)
+    if provider_list_set is None:
+        provider_list_set = set(litellm.provider_list)
+    return provider_list_set
+
+
+def _validate_api_base_and_dynamic_api_key(
+    api_base: Optional[str], dynamic_api_key: Optional[str]
+) -> None:
+    if api_base is not None and not isinstance(api_base, str):
+        raise Exception("api base needs to be a string. api_base={}".format(api_base))
+    if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
+        raise Exception(
+            "dynamic_api_key needs to be a string. Got type={}".format(
+                type(dynamic_api_key).__name__
+            )
+        )
+
+
+_KNOWN_PROVIDER_PREFIXES = (
+    "bytez/",
+    "lemonade/",
+    "heroku/",
+    "cometapi/",
+    "oci/",
+    "compactifai/",
+    "ovhcloud/",
+    "clarifai/",
+    "amazon_nova",
+    "sap/",
+)
+
+
+def _can_skip_model_provider_set_scan(
+    model: str,
+    has_model_prefix: bool,
+    model_prefix: str,
+    provider_list_set: set,
+) -> bool:
+    """
+    True when ``model`` cannot plausibly resolve via the model-set / prefix chain.
+
+    Used for best-effort lookups (``raise_on_failure=False``) to avoid scanning
+    every provider set for router deployment aliases like ``fake-openai-endpoint``.
+    """
+    if model in litellm.model_list_set:
+        return False
+    if (
+        "ft:gpt-3.5-turbo" in model
+        or "ft:gpt-4" in model
+        or model.startswith("gpt-image")
+        or model == "*"
+        or (":" in model and len(model) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH)
+    ):
+        return False
+    if any(model.startswith(prefix) for prefix in _KNOWN_PROVIDER_PREFIXES):
+        return False
+    if has_model_prefix:
+        if model_prefix in provider_list_set or JSONProviderRegistry.exists(
+            model_prefix
+        ):
+            return False
+    return True
+
+
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     litellm_params: Optional[LiteLLM_Params] = None,
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+    raise_on_failure: bool = True,
+) -> Union[Tuple[str, str, Optional[str], Optional[str]], None]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
 
@@ -174,10 +249,12 @@ def get_llm_provider(  # noqa: PLR0915
             api_key = litellm_params.api_key
 
         dynamic_api_key = None
+        model_prefix, _, _ = _parse_model_provider_prefix(model)
+
         # check if llm provider provided
         # AZURE AI-Studio Logic - Azure AI Studio supports AZURE/Cohere
         # If User passes azure/command-r-plus -> we should send it to cohere_chat/command-r-plus
-        if model.split("/", 1)[0] == "azure":
+        if model_prefix == "azure":
             if _is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
@@ -191,8 +268,9 @@ def get_llm_provider(  # noqa: PLR0915
             model, custom_llm_provider
         )
 
+        model_prefix, _, _ = _parse_model_provider_prefix(model)
         if custom_llm_provider and (
-            model.split("/")[0] != custom_llm_provider
+            model_prefix != custom_llm_provider
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
@@ -207,9 +285,21 @@ def get_llm_provider(  # noqa: PLR0915
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
+        model_prefix, model_remainder, has_model_prefix = _parse_model_provider_prefix(
+            model
+        )
+        provider_list_set = _get_provider_list_set()
+
+        # Router/proxy paths already know the provider — skip full model detection.
+        if custom_llm_provider:
+            provider_prefix = f"{custom_llm_provider}/"
+            if model.startswith(provider_prefix):
+                model = model[len(provider_prefix) :]
+            _validate_api_base_and_dynamic_api_key(api_base, dynamic_api_key)
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         # Check JSON-configured providers FIRST (before enum-based provider_list)
-        provider_prefix = model.split("/", 1)[0]
-        if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
+        if has_model_prefix and JSONProviderRegistry.exists(model_prefix):
             return _get_openai_compatible_provider_info(
                 model=model,
                 api_base=api_base,
@@ -220,10 +310,9 @@ def get_llm_provider(  # noqa: PLR0915
         # check if llm provider part of model name
 
         if (
-            model.split("/", 1)[0] in litellm.provider_list
-            and model.split("/", 1)[0] not in litellm.model_list_set
-            and len(model.split("/"))
-            > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
+            model_prefix in provider_list_set
+            and model_prefix not in litellm.model_list_set
+            and has_model_prefix  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
             return _get_openai_compatible_provider_info(
                 model=model,
@@ -231,19 +320,10 @@ def get_llm_provider(  # noqa: PLR0915
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
             )
-        elif model.split("/", 1)[0] in litellm.provider_list:
-            custom_llm_provider = model.split("/", 1)[0]
-            model = model.split("/", 1)[1]
-            if api_base is not None and not isinstance(api_base, str):
-                raise Exception(
-                    "api base needs to be a string. api_base={}".format(api_base)
-                )
-            if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
-                raise Exception(
-                    "dynamic_api_key needs to be a string. Got type={}".format(
-                        type(dynamic_api_key).__name__
-                    )
-                )
+        elif model_prefix in provider_list_set and has_model_prefix:
+            custom_llm_provider = model_prefix
+            model = model_remainder or ""
+            _validate_api_base_and_dynamic_api_key(api_base, dynamic_api_key)
             return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
@@ -379,6 +459,14 @@ def get_llm_provider(  # noqa: PLR0915
                         )
                     return model, custom_llm_provider, dynamic_api_key, api_base  # type: ignore
 
+        if not raise_on_failure and _can_skip_model_provider_set_scan(
+            model=model,
+            has_model_prefix=has_model_prefix,
+            model_prefix=model_prefix,
+            provider_list_set=provider_list_set,
+        ):
+            return None
+
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
         ## openai - chatcompletion + text completion
         if (
@@ -499,6 +587,8 @@ def get_llm_provider(  # noqa: PLR0915
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
         if not custom_llm_provider:
+            if not raise_on_failure:
+                return None
             if litellm.suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
@@ -527,16 +617,14 @@ def get_llm_provider(  # noqa: PLR0915
     except Exception as e:
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
-        else:
-            error_str = (
-                f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}"
-            )
-            raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
-                model=model,
-                response=None,
-                llm_provider="",
-            )
+        if not raise_on_failure:
+            return None
+        raise litellm.exceptions.BadRequestError(  # type: ignore
+            message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
+            model=model,
+            response=None,
+            llm_provider="",
+        )
 
 
 def _get_openai_compatible_provider_info(  # noqa: PLR0915

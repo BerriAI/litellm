@@ -2163,7 +2163,17 @@ def __getattr__(name: str) -> Any:
             from litellm.types.utils import LlmProviders
 
             _globals["provider_list"] = list(LlmProviders)
+            _globals["provider_list_set"] = set(_globals["provider_list"])
         return _globals["provider_list"]
+
+    # Lazy load provider_list_set
+    if name == "provider_list_set":
+        from ._lazy_imports import _get_litellm_globals
+
+        _globals = _get_litellm_globals()
+        if "provider_list_set" not in _globals:
+            _globals["provider_list_set"] = set(__getattr__("provider_list"))
+        return _globals["provider_list_set"]
 
     # Lazy load priority_reservation_settings instance
     if name == "priority_reservation_settings":

@@ -26,6 +26,7 @@ sys.path.insert(
 from typing import Literal
 
 import pytest
+from unittest.mock import AsyncMock, patch
 from fastapi import Request, Response
 from starlette.datastructures import URL
 
@@ -160,16 +161,21 @@ async def test_chat_completion_request_with_redaction(route, body):
 
     try:
         if route == "/v1/chat/completions":
-            response = await chat_completion(
-                request=request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345",
-                    token="hashed_sk-12345",
-                    rpm_limit=0,
-                    request_route=route,
-                ),
-                fastapi_response=Response(),
+            mock_user_api_key_dict = UserAPIKeyAuth(
+                api_key="sk-12345",
+                token="hashed_sk-12345",
+                rpm_limit=0,
+                request_route=route,
             )
+            with patch(
+                "litellm.proxy.proxy_server.user_api_key_auth_from_request",
+                new_callable=AsyncMock,
+                return_value=mock_user_api_key_dict,
+            ):
+                response = await chat_completion(
+                    request=request,
+                    fastapi_response=Response(),
+                )
         elif route == "/v1/completions":
             response = await completion(
                 request=request,

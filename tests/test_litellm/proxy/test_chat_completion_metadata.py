@@ -21,21 +21,25 @@ async def test_chat_completion_metadata_population():
 
         fastapi_response = MagicMock(spec=Response)
 
-        # Mock ProxyBaseLLMRequestProcessing
         with patch(
-            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing"
-        ) as MockProcessor:
-            mock_instance = MockProcessor.return_value
-            mock_instance.base_process_llm_request = AsyncMock(
-                return_value={"choices": []}
-            )
+            "litellm.proxy.proxy_server.user_api_key_auth_from_request",
+            new_callable=AsyncMock,
+            return_value=user_api_key_dict,
+        ):
+            # Mock ProxyBaseLLMRequestProcessing
+            with patch(
+                "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing"
+            ) as MockProcessor:
+                mock_instance = MockProcessor.return_value
+                mock_instance.base_process_llm_request = AsyncMock(
+                    return_value={"choices": []}
+                )
 
-            # Execute
-            await chat_completion(
-                request=request,
-                fastapi_response=fastapi_response,
-                user_api_key_dict=user_api_key_dict,
-            )
+                # Execute
+                await chat_completion(
+                    request=request,
+                    fastapi_response=fastapi_response,
+                )
 
             # Verify
             # Check if ProxyBaseLLMRequestProcessing was initialized with data containing metadata

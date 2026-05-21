@@ -104,6 +104,8 @@ from litellm.types.utils import (
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
+    ModelInfo,
+    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -126,7 +128,13 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import (
+    _cached_get_model_info_helper,
+    _get_base_model_from_metadata,
+    executor,
+    get_provider_info,
+    print_verbose,
+)
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -1793,6 +1801,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self, init_response_obj: Any, start_time: Any, end_time: Any
     ) -> Any:
         """Build StandardLoggingPayload and accumulate its construction time."""
+        existing_payload = self.model_call_details.get("standard_logging_object")
+        if existing_payload is not None:
+            return existing_payload
+
         _start = time.time()
         payload = get_standard_logging_object_payload(
             kwargs=self.model_call_details,
@@ -4965,14 +4977,32 @@ class StandardLoggingPayloadSetup:
             )
         else:
             try:
-                _model_cost_information = litellm.get_model_info(
+                _model_info = _cached_get_model_info_helper(
                     model=model_cost_name,
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
                 )
+                provider_info = get_provider_info(
+                    model=model_cost_name, custom_llm_provider=custom_llm_provider
+                )
+                if provider_info:
+                    _model_info = cast(
+                        ModelInfoBase,
+                        {
+                            **_model_info,
+                            **{
+                                key: value
+                                for key, value in provider_info.items()
+                                if value is not None
+                            },
+                        },
+                    )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
-                    model_map_value=_model_cost_information,
+                    model_map_value=ModelInfo(
+                        **_model_info,
+                        supported_openai_params=[],
+                    ),
                 )
             except Exception:
                 verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
@@ -5486,6 +5516,25 @@ def get_standard_logging_object_payload(
         raw_response_cost = kwargs.get("response_cost")
         response_cost: float = raw_response_cost or 0.0
 
+        cached_model_cost_information = getattr(
+            logging_obj, "_cached_standard_logging_model_cost_info", None
+        )
+        if cached_model_cost_information is not None:
+            model_cost_information = cached_model_cost_information
+        else:
+            model_cost_information = (
+                StandardLoggingPayloadSetup.get_model_cost_information(
+                    base_model=base_model,
+                    custom_pricing=custom_pricing,
+                    custom_llm_provider=kwargs.get("custom_llm_provider"),
+                    init_response_obj=init_response_obj,
+                    api_base=litellm_params.get("api_base"),
+                )
+            )
+            logging_obj._cached_standard_logging_model_cost_info = (
+                model_cost_information
+            )
+
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
@@ -5495,14 +5544,6 @@ def get_standard_logging_object_payload(
             and raw_response_cost is not None
         ):
             clean_hidden_params["response_cost"] = response_cost
-
-        model_cost_information = StandardLoggingPayloadSetup.get_model_cost_information(
-            base_model=base_model,
-            custom_pricing=custom_pricing,
-            custom_llm_provider=kwargs.get("custom_llm_provider"),
-            init_response_obj=init_response_obj,
-            api_base=litellm_params.get("api_base"),
-        )
 
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,

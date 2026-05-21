@@ -2225,6 +2225,35 @@ async def user_api_key_auth(
     return user_api_key_auth_obj
 
 
+async def user_api_key_auth_from_request(request: Request) -> UserAPIKeyAuth:
+    """
+    Authenticate using API keys from the incoming request headers.
+
+    Used by endpoints that call auth inline instead of FastAPI ``Depends()``.
+    """
+    return await user_api_key_auth(
+        request=request,
+        api_key=request.headers.get(SpecialHeaders.openai_authorization.value) or "",
+        azure_api_key_header=request.headers.get(
+            SpecialHeaders.azure_authorization.value
+        )
+        or "",
+        anthropic_api_key_header=request.headers.get(
+            SpecialHeaders.anthropic_authorization.value
+        ),
+        google_ai_studio_api_key_header=request.headers.get(
+            SpecialHeaders.google_ai_studio_authorization.value
+        ),
+        azure_apim_header=request.headers.get(
+            SpecialHeaders.azure_apim_authorization.value
+        )
+        or "",
+        custom_litellm_key_header=request.headers.get(
+            SpecialHeaders.custom_litellm_api_key.value
+        ),
+    )
+
+
 async def _return_user_api_key_auth_obj(
     user_obj: Optional[LiteLLM_UserTable],
     api_key: str,

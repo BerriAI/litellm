@@ -136,3 +136,55 @@ class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
 
         assert provider == "groq"
         assert dynamic_api_key == "server-real-groq-key"
+
+
+class TestGetLlmProviderEarlyExit:
+    def test_should_early_exit_when_custom_llm_provider_set(self):
+        model, provider, dynamic_api_key, api_base = get_llm_provider(
+            model="openai/gpt-4",
+            custom_llm_provider="openai",
+        )
+        assert model == "gpt-4"
+        assert provider == "openai"
+        assert dynamic_api_key is None
+        assert api_base is None
+
+    def test_should_early_exit_for_router_deployment_alias(self):
+        model, provider, _, _ = get_llm_provider(
+            model="my-router-alias",
+            custom_llm_provider="openai",
+        )
+        assert model == "my-router-alias"
+        assert provider == "openai"
+
+    def test_provider_list_set_is_used_for_prefix_detection(self):
+        import litellm
+
+        provider_list_set = litellm.provider_list_set
+        assert isinstance(provider_list_set, set)
+        assert "anthropic" in provider_list_set
+
+        model, provider, _, _ = get_llm_provider(model="anthropic/claude-3-5-sonnet")
+        assert provider == "anthropic"
+        assert model == "claude-3-5-sonnet"
+
+    def test_raise_on_failure_false_returns_none_for_router_alias(self):
+        result = get_llm_provider(
+            model="fake-openai-endpoint",
+            raise_on_failure=False,
+        )
+        assert result is None
+
+    def test_raise_on_failure_false_still_resolves_known_models(self):
+        model, provider, _, _ = get_llm_provider(
+            model="gpt-4",
+            raise_on_failure=False,
+        )
+        assert model == "gpt-4"
+        assert provider == "openai"
+
+    def test_raise_on_failure_true_raises_for_unknown_model(self):
+        import litellm
+
+        with pytest.raises(litellm.exceptions.BadRequestError):
+            get_llm_provider(model="fake-openai-endpoint")

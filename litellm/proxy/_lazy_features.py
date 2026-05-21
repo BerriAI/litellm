@@ -10,7 +10,7 @@ import asyncio
 import importlib
 import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Tuple
 
 from starlette.types import Receive, Scope, Send
 
@@ -249,6 +249,64 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
 )
 
 
+@dataclass
+class _PrefixTrieNode:
+    children: Dict[str, "_PrefixTrieNode"] = field(default_factory=dict)
+    features: List[LazyFeature] = field(default_factory=list)
+
+
+def _build_prefix_trie(features: Tuple[LazyFeature, ...]) -> _PrefixTrieNode:
+    root = _PrefixTrieNode()
+    for feat in features:
+        for prefix in feat.path_prefixes:
+            node = root
+            for ch in prefix:
+                node = node.children.setdefault(ch, _PrefixTrieNode())
+            if feat not in node.features:
+                node.features.append(feat)
+    return root
+
+
+def _build_suffix_rules(
+    features: Tuple[LazyFeature, ...],
+) -> Tuple[Tuple[str, LazyFeature], ...]:
+    return tuple((suffix, feat) for feat in features for suffix in feat.path_suffixes)
+
+
+def _find_unloaded_features_for_path(
+    path: str,
+    prefix_trie_root: _PrefixTrieNode,
+    suffix_rules: Tuple[Tuple[str, LazyFeature], ...],
+    loaded: set,
+) -> List[LazyFeature]:
+    """Return unloaded features matching ``path`` in O(len(path) + suffix_rules)."""
+    matches: List[LazyFeature] = []
+    seen_modules: set = set()
+
+    def _maybe_add(feat: LazyFeature) -> None:
+        if feat.module_path in loaded or feat.module_path in seen_modules:
+            return
+        seen_modules.add(feat.module_path)
+        matches.append(feat)
+
+    node = prefix_trie_root
+    for feat in node.features:
+        _maybe_add(feat)
+    for ch in path:
+        child = node.children.get(ch)
+        if child is None:
+            break
+        node = child
+        for feat in node.features:
+            _maybe_add(feat)
+
+    for suffix, feat in suffix_rules:
+        if path.endswith(suffix):
+            _maybe_add(feat)
+
+    return matches
+
+
 class LazyFeatureMiddleware:
     """ASGI middleware that imports + registers a feature router on first
     matching request. Idempotent; once loaded, subsequent requests skip."""
@@ -269,6 +327,8 @@ class LazyFeatureMiddleware:
         from litellm.proxy.utils import get_server_root_path
 
         self._root_path = get_server_root_path().rstrip("/")
+        self._prefix_trie_root = _build_prefix_trie(features)
+        self._suffix_rules = _build_suffix_rules(features)
         # Loaded set / per-feature locks live on app.state so the warm endpoint
         # and the middleware share them — preventing duplicate registrations
         # when both paths fire for the same feature.
@@ -295,13 +355,13 @@ class LazyFeatureMiddleware:
             # (e.g. a reverse proxy already stripped it), we leave it alone.
             if self._root_path and path.startswith(self._root_path + "/"):
                 path = path[len(self._root_path) :]
-            for feat in self._features:
-                if feat.module_path in self._loaded:
-                    continue
-                if any(path.startswith(p) for p in feat.path_prefixes) or any(
-                    path.endswith(s) for s in feat.path_suffixes
-                ):
-                    await _force_load(self._fastapi_app, feat)
+            for feat in _find_unloaded_features_for_path(
+                path=path,
+                prefix_trie_root=self._prefix_trie_root,
+                suffix_rules=self._suffix_rules,
+                loaded=self._loaded,
+            ):
+                await _force_load(self._fastapi_app, feat)
         await self.app(scope, receive, send)
 
 

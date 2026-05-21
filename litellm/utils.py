@@ -448,6 +448,9 @@ lunaryLogger = None
 aispendLogger = None
 supabaseClient = None
 callback_list: Optional[List[str]] = []
+_custom_provider_map_fingerprint: Optional[Tuple[str, ...]] = None
+_global_callbacks_registered: bool = False
+_callback_migration_counts: Optional[Tuple[int, int, int]] = None
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
@@ -495,16 +498,193 @@ def print_verbose(
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
+def _get_custom_provider_map_fingerprint() -> Tuple[str, ...]:
+    return tuple(custom_llm["provider"] for custom_llm in litellm.custom_provider_map)
+
+
+def _add_provider_to_provider_list_set(provider: str) -> None:
+    """Keep provider_list_set in sync when provider_list is mutated."""
+    from litellm._lazy_imports import _get_litellm_globals
+
+    _globals = _get_litellm_globals()
+    if "provider_list_set" in _globals:
+        _globals["provider_list_set"].add(provider)
+
+
 def custom_llm_setup():
     """
     Add custom_llm provider to provider list
     """
-    for custom_llm in litellm.custom_provider_map:
-        if custom_llm["provider"] not in litellm.provider_list:
-            litellm.provider_list.append(custom_llm["provider"])
+    global _custom_provider_map_fingerprint
 
-        if custom_llm["provider"] not in litellm._custom_providers:
-            litellm._custom_providers.append(custom_llm["provider"])
+    current_fingerprint = _get_custom_provider_map_fingerprint()
+    if (
+        _custom_provider_map_fingerprint is not None
+        and _custom_provider_map_fingerprint == current_fingerprint
+    ):
+        return
+
+    for custom_llm in litellm.custom_provider_map:
+        provider = custom_llm["provider"]
+        if provider not in litellm.provider_list:
+            litellm.provider_list.append(provider)
+            _add_provider_to_provider_list_set(provider)
+
+        if provider not in litellm._custom_providers:
+            litellm._custom_providers.append(provider)
+
+    _custom_provider_map_fingerprint = current_fingerprint
+
+
+def _get_callback_list_counts() -> Tuple[int, int, int]:
+    return (
+        len(litellm.input_callback),
+        len(litellm.success_callback),
+        len(litellm.failure_callback),
+    )
+
+
+def _needs_litellm_callback_setup(
+    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
+) -> bool:
+    if dynamic_callbacks:
+        return True
+    if not _global_callbacks_registered:
+        return True
+    current_counts = _get_callback_list_counts()
+    return (
+        _callback_migration_counts is None
+        or _callback_migration_counts != current_counts
+    )
+
+
+def _migrate_async_callbacks(coroutine_checker) -> None:
+    """Move async callbacks from sync lists to async callback lists."""
+    if len(litellm.input_callback) > 0:
+        removed_async_items = []
+        for index, callback in enumerate(litellm.input_callback):  # type: ignore
+            if coroutine_checker.is_async_callable(callback):
+                litellm._async_input_callback.append(callback)
+                removed_async_items.append(index)
+
+        for index in reversed(removed_async_items):
+            litellm.input_callback.pop(index)
+
+    if len(litellm.success_callback) > 0:
+        removed_async_items = []
+        for index, callback in enumerate(litellm.success_callback):  # type: ignore
+            if coroutine_checker.is_async_callable(callback):
+                litellm.logging_callback_manager.add_litellm_async_success_callback(
+                    callback
+                )
+                removed_async_items.append(index)
+            elif callback == "dynamodb" or callback == "openmeter":
+                litellm.logging_callback_manager.add_litellm_async_success_callback(
+                    callback
+                )
+                removed_async_items.append(index)
+            elif (
+                callback in litellm._known_custom_logger_compatible_callbacks
+                and isinstance(callback, str)
+            ):
+                _add_custom_logger_callback_to_specific_event(callback, "success")
+
+        for index in reversed(removed_async_items):
+            litellm.success_callback.pop(index)
+
+    if len(litellm.failure_callback) > 0:
+        removed_async_items = []
+        for index, callback in enumerate(litellm.failure_callback):  # type: ignore
+            if coroutine_checker.is_async_callable(callback):
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                    callback
+                )
+                removed_async_items.append(index)
+            elif (
+                callback in litellm._known_custom_logger_compatible_callbacks
+                and isinstance(callback, str)
+            ):
+                _add_custom_logger_callback_to_specific_event(callback, "failure")
+
+        for index in reversed(removed_async_items):
+            litellm.failure_callback.pop(index)
+
+
+def _setup_litellm_callbacks(
+    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
+    function_id: Optional[str],
+    coroutine_checker,
+) -> None:
+    """
+    Register global callbacks and migrate async handlers.
+
+    Global callback registration runs once; re-runs only when per-request
+    `callbacks=` are passed or callbacks are appended directly to global lists.
+    """
+    global callback_list, _global_callbacks_registered, _callback_migration_counts
+
+    current_counts = _get_callback_list_counts()
+    has_per_request_callbacks = bool(dynamic_callbacks)
+    needs_migration = (
+        _callback_migration_counts is None
+        or _callback_migration_counts != current_counts
+    )
+
+    if (
+        _global_callbacks_registered
+        and not has_per_request_callbacks
+        and not needs_migration
+    ):
+        return
+
+    if not _global_callbacks_registered or has_per_request_callbacks:
+        all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+        if len(all_callbacks) > 0:
+            for callback in all_callbacks:
+                if isinstance(callback, str):
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    )
+                    if callback is None or any(
+                        isinstance(cb, type(callback))
+                        for cb in litellm._async_success_callback
+                    ):
+                        continue
+                if callback not in litellm.input_callback:
+                    litellm.input_callback.append(callback)  # type: ignore
+                if callback not in litellm.success_callback:
+                    litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
+                if callback not in litellm.failure_callback:
+                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
+                if callback not in litellm._async_success_callback:
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
+                if callback not in litellm._async_failure_callback:
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
+            print_verbose(
+                f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
+            )
+
+        _global_callbacks_registered = True
+
+    if (
+        len(litellm.input_callback) > 0
+        or len(litellm.success_callback) > 0
+        or len(litellm.failure_callback) > 0
+    ) and len(callback_list) == 0:  # type: ignore
+        callback_list = list(
+            set(
+                litellm.input_callback  # type: ignore
+                + litellm.success_callback
+                + litellm.failure_callback
+            )
+        )
+        get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
+        get_set_callbacks()(callback_list=callback_list, function_id=function_id)
+
+    if needs_migration:
+        _migrate_async_callbacks(coroutine_checker)
+        _callback_migration_counts = _get_callback_list_counts()
 
 
 def _add_custom_logger_callback_to_specific_event(
@@ -762,7 +942,7 @@ def _remove_thought_signatures_from_messages(
 
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
-):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+):
     ### NOTICES ###
     if litellm.set_verbose is True:
         verbose_logger.warning(
@@ -780,113 +960,19 @@ def function_setup(  # noqa: PLR0915
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
-        ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker_fn = getattr(
-            sys.modules[__name__], "get_coroutine_checker"
-        )
-        coroutine_checker = get_coroutine_checker_fn()
-
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
             kwargs.pop("callbacks", None)
         )
-        all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
-        if len(all_callbacks) > 0:
-            for callback in all_callbacks:
-                # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
-                    )
-                    if callback is None or any(
-                        isinstance(cb, type(callback))
-                        for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)  # type: ignore
-                if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
-                if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-                if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-                if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
-            print_verbose(
-                f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
+        if _needs_litellm_callback_setup(dynamic_callbacks):
+            get_coroutine_checker_fn = getattr(
+                sys.modules[__name__], "get_coroutine_checker"
             )
-
-        if (
-            len(litellm.input_callback) > 0
-            or len(litellm.success_callback) > 0
-            or len(litellm.failure_callback) > 0
-        ) and len(
-            callback_list  # type: ignore
-        ) == 0:  # type: ignore
-            callback_list = list(
-                set(
-                    litellm.input_callback  # type: ignore
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
+            _setup_litellm_callbacks(
+                dynamic_callbacks=dynamic_callbacks,
+                function_id=function_id,
+                coroutine_checker=get_coroutine_checker_fn(),
             )
-            get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
-            get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
-        if len(litellm.input_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
-                    litellm._async_input_callback.append(callback)
-                    removed_async_items.append(index)
-
-            # Pop the async items from input_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.input_callback.pop(index)
-        if len(litellm.success_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(
-                        callback
-                    )
-                    removed_async_items.append(index)
-                elif callback == "dynamodb" or callback == "openmeter":
-                    # dynamo is an async callback, it's used for the proxy and needs to be async
-                    # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(
-                        callback
-                    )
-                    removed_async_items.append(index)
-                elif (
-                    callback in litellm._known_custom_logger_compatible_callbacks
-                    and isinstance(callback, str)
-                ):
-                    _add_custom_logger_callback_to_specific_event(callback, "success")
-
-            # Pop the async items from success_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.success_callback.pop(index)
-
-        if len(litellm.failure_callback) > 0:
-            removed_async_items = []
-            for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(
-                        callback
-                    )
-                    removed_async_items.append(index)
-                elif (
-                    callback in litellm._known_custom_logger_compatible_callbacks
-                    and isinstance(callback, str)
-                ):
-                    _add_custom_logger_callback_to_specific_event(callback, "failure")
-
-            # Pop the async items from failure_callback in reverse order to avoid index issues
-            for index in reversed(removed_async_items):
-                litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: Optional[
             List[Union[str, Callable, "CustomLogger"]]
@@ -903,6 +989,10 @@ def function_setup(  # noqa: PLR0915
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
         ):
+            get_coroutine_checker_fn = getattr(
+                sys.modules[__name__], "get_coroutine_checker"
+            )
+            coroutine_checker = get_coroutine_checker_fn()
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
@@ -994,17 +1084,22 @@ def function_setup(  # noqa: PLR0915
 
                     # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
+                    if not custom_llm_provider:
+                        _litellm_params = kwargs.get("litellm_params")
+                        if isinstance(_litellm_params, dict):
+                            custom_llm_provider = _litellm_params.get(
+                                "custom_llm_provider"
+                            )
 
                     # If custom_llm_provider not in kwargs, try to determine it from the model
                     if not custom_llm_provider and model:
-                        try:
-                            _, custom_llm_provider, _, _ = get_llm_provider(
-                                model=model,
-                                custom_llm_provider=custom_llm_provider,
-                            )
-                        except Exception:
-                            # If we can't determine the provider, skip this processing
-                            pass
+                        provider_result = get_llm_provider(
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            raise_on_failure=False,
+                        )
+                        if provider_result is not None:
+                            _, custom_llm_provider, _, _ = provider_result
 
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):

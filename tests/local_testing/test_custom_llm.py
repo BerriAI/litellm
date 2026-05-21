@@ -644,3 +644,46 @@ async def test_simple_aembedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
+
+def test_custom_llm_setup_should_rerun_when_provider_map_changes():
+    import litellm.utils as utils
+    from litellm.utils import custom_llm_setup
+
+    utils._custom_provider_map_fingerprint = None
+
+    handler = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_a", "custom_handler": handler}
+    ]
+    custom_llm_setup()
+    assert "custom_provider_a" in litellm._custom_providers
+
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_a", "custom_handler": handler},
+        {"provider": "custom_provider_b", "custom_handler": handler},
+    ]
+    custom_llm_setup()
+    assert "custom_provider_b" in litellm._custom_providers
+
+
+def test_custom_llm_setup_should_sync_provider_list_set():
+    import litellm.utils as utils
+    from litellm.utils import custom_llm_setup
+
+    _ = litellm.provider_list_set
+    assert "custom_provider_sync_test" not in litellm.provider_list_set
+
+    utils._custom_provider_map_fingerprint = None
+    handler = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_sync_test", "custom_handler": handler}
+    ]
+    custom_llm_setup()
+
+    assert "custom_provider_sync_test" in litellm.provider_list_set
+    model, provider, _, _ = get_llm_provider(
+        model="custom_provider_sync_test/my-fake-model"
+    )
+    assert provider == "custom_provider_sync_test"
+    assert model == "my-fake-model"

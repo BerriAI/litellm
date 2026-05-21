@@ -1543,30 +1543,37 @@ async def test_add_callback_via_key(prisma_client):
 
         request._body = json_bytes
 
-        with patch.object(
-            litellm.litellm_core_utils.litellm_logging,
-            "LangFuseLogger",
-            new=MagicMock(),
-        ) as mock_client:
+        mock_user_api_key_dict = UserAPIKeyAuth(
+            metadata={
+                "allow_client_mock_response": True,
+                "logging": [
+                    {
+                        "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
+                        "callback_type": "success",  # set, if required by integration - future improvement, have logging tools work for success + failure by default
+                        "callback_vars": {
+                            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                            "langfuse_host": "https://us.cloud.langfuse.com",
+                        },
+                    }
+                ],
+            }
+        )
+        with (
+            patch.object(
+                litellm.litellm_core_utils.litellm_logging,
+                "LangFuseLogger",
+                new=MagicMock(),
+            ) as mock_client,
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_auth_from_request",
+                new_callable=AsyncMock,
+                return_value=mock_user_api_key_dict,
+            ),
+        ):
             resp = await chat_completion(
                 request=request,
                 fastapi_response=Response(),
-                user_api_key_dict=UserAPIKeyAuth(
-                    metadata={
-                        "allow_client_mock_response": True,
-                        "logging": [
-                            {
-                                "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
-                                "callback_type": "success",  # set, if required by integration - future improvement, have logging tools work for success + failure by default
-                                "callback_vars": {
-                                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
-                                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
-                                    "langfuse_host": "https://us.cloud.langfuse.com",
-                                },
-                            }
-                        ],
-                    }
-                ),
             )
             print(resp)
             mock_client.assert_called()

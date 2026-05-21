@@ -1223,14 +1223,20 @@ async def test_end_user_jwt_auth(monkeypatch):
         ),
     )
 
-    with patch(
-        "litellm.acompletion", new=AsyncMock(return_value=mock_response)
-    ) as mock_completion:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_auth_from_request",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch(
+            "litellm.acompletion", new=AsyncMock(return_value=mock_response)
+        ) as mock_completion,
+    ):
         resp = await chat_completion(
             request=request,
             fastapi_response=temp_response,
             model="gpt-4o",
-            user_api_key_dict=result,
         )
 
         assert resp is not None

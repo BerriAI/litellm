@@ -2732,3 +2732,137 @@ class TestFirstApiCallStartTimeSetOnce:
         assert obj.model_call_details["api_call_start_time"] > first
         assert obj.model_call_details["first_api_call_start_time"] == first
         assert user_meta == {}
+
+
+def test_build_standard_logging_payload_should_return_cached_payload():
+    from datetime import datetime
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    cached_payload = {"id": "cached-payload"}
+    logging_obj.model_call_details = {"standard_logging_object": cached_payload}
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
+    ) as mock_get_payload:
+        result = logging_obj._build_standard_logging_payload(
+            init_response_obj={"id": "resp"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    assert result is cached_payload
+    mock_get_payload.assert_not_called()
+
+
+def test_get_model_cost_information_should_use_cached_model_info_helper():
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import ModelInfoBase
+
+    model_info = ModelInfoBase(
+        key="gpt-4",
+        max_tokens=8192,
+        max_input_tokens=None,
+        max_output_tokens=None,
+        input_cost_per_token=0.00003,
+        output_cost_per_token=0.00006,
+        litellm_provider="openai",
+        mode="chat",
+        supports_system_messages=None,
+        supports_response_schema=None,
+        supports_function_calling=None,
+        supports_tool_choice=None,
+        supports_assistant_prefill=None,
+        supports_prompt_caching=None,
+        supports_computer_use=None,
+        supports_pdf_input=None,
+    )
+
+    with (
+        patch(
+            "litellm.litellm_core_utils.litellm_logging._cached_get_model_info_helper",
+            return_value=model_info,
+        ) as mock_cached_helper,
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.get_provider_info",
+            return_value=None,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging._select_model_name_for_cost_calc",
+            return_value="gpt-4",
+        ),
+    ):
+        result = StandardLoggingPayloadSetup.get_model_cost_information(
+            base_model="gpt-4",
+            custom_pricing=False,
+            custom_llm_provider="openai",
+            init_response_obj={"model": "gpt-4"},
+            api_base=None,
+        )
+
+    mock_cached_helper.assert_called_once()
+    assert result["model_map_key"] == "gpt-4"
+    assert result["model_map_value"]["litellm_provider"] == "openai"
+
+
+def test_get_model_cost_information_should_not_mutate_cached_model_info():
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import ModelInfoBase
+
+    model_info = ModelInfoBase(
+        key="gpt-4",
+        max_tokens=8192,
+        max_input_tokens=None,
+        max_output_tokens=None,
+        input_cost_per_token=0.00003,
+        output_cost_per_token=0.00006,
+        litellm_provider="openai",
+        mode="chat",
+        supports_system_messages=None,
+        supports_response_schema=None,
+        supports_function_calling=None,
+        supports_tool_choice=None,
+        supports_assistant_prefill=None,
+        supports_prompt_caching=None,
+        supports_computer_use=None,
+        supports_pdf_input=None,
+    )
+
+    with (
+        patch(
+            "litellm.litellm_core_utils.litellm_logging._cached_get_model_info_helper",
+            return_value=model_info,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.get_provider_info",
+            return_value={"supports_response_schema": True},
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging._select_model_name_for_cost_calc",
+            return_value="gpt-4",
+        ),
+    ):
+        result = StandardLoggingPayloadSetup.get_model_cost_information(
+            base_model="gpt-4",
+            custom_pricing=False,
+            custom_llm_provider="openai",
+            init_response_obj={"model": "gpt-4"},
+            api_base=None,
+        )
+
+    assert result["model_map_value"]["supports_response_schema"] is True
+    assert model_info.get("supports_response_schema") is None

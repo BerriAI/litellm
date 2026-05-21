@@ -45,6 +45,13 @@ class TestCoroutineChecker:
             self.checker.is_async_callable(obj) is expected
         ), f"Failed for {description}: {obj}"
 
+    def test_is_async_callable_string_callbacks_are_fast(self):
+        """String callback names should short-circuit without inspect."""
+        with patch("inspect.iscoroutinefunction") as mock_iscoroutinefunction:
+            assert self.checker.is_async_callable("langfuse") is False
+            assert self.checker.is_async_callable("datadog") is False
+            mock_iscoroutinefunction.assert_not_called()
+
     def test_is_async_callable_async_and_sync_callables(self):
         """Test is_async_callable with various async and sync callable types."""
 
