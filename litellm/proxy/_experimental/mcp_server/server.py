@@ -160,6 +160,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _should_strip_caller_authorization,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -1175,48 +1176,21 @@ if MCP_AVAILABLE:
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
 
-            has_explicit_litellm_admission_header = (
-                normalized_raw_headers.get("x-litellm-api-key") is not None
-            )
-            # Admission consumed ``Authorization`` as a LiteLLM key only when
-            # auth produced a validated ``api_key`` AND the caller did not
-            # supply ``x-litellm-api-key``. When admission was anonymous
-            # (e.g. pass-through cold-start return per RFC 9728), the bearer
-            # in ``Authorization`` is the upstream OAuth token and must be
-            # forwarded — not stripped — for the delegated flow to work.
-            admission_consumed_authorization_as_litellm_key = (
-                user_api_key_auth is not None
-                and bool(getattr(user_api_key_auth, "api_key", None))
-                and not has_explicit_litellm_admission_header
+            # Centralized strip decision shared with
+            # ``MCPServerManager._call_regular_mcp_tool`` so the two
+            # code paths cannot drift on this security-sensitive choice.
+            # See ``_should_strip_caller_authorization`` for the rules.
+            strip_caller_authorization = _should_strip_caller_authorization(
+                mcp_server=server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if header.lower() == "authorization":
-                    # M2M servers fetch their own upstream token via the
-                    # client_credentials flow — never forward the caller's
-                    # Authorization header.
-                    if server.has_client_credentials:
-                        continue
-                    # Transparent OAuth pass-through: forward the caller's
-                    # Authorization header only when LiteLLM admission used
-                    # a different header (`x-litellm-api-key`) or when
-                    # admission was anonymous (delegated to upstream).
-                    # Without that signal `Authorization` may itself be the
-                    # LiteLLM key — strip it to avoid leaking the gateway
-                    # credential upstream. The legacy ``user_api_key_auth
-                    # is None`` callers keep the conservative pre-PR
-                    # behavior of stripping when no explicit admission
-                    # header was supplied.
-                    if server.is_oauth_passthrough and (
-                        admission_consumed_authorization_as_litellm_key
-                        or (
-                            user_api_key_auth is None
-                            and not has_explicit_litellm_admission_header
-                        )
-                    ):
-                        continue
+                if header.lower() == "authorization" and strip_caller_authorization:
+                    continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
                     continue
