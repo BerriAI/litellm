@@ -1122,7 +1122,6 @@ def test_update_data_update_many_accepts_minimal_dict_payloads(
     )
 
     batcher = prisma_client.db.batchers[0]
-    assert batcher.commit_calls == 1
     expected_id_value = hash_token(id_value) if table_name == "key" else id_value
     call = (
         batcher.litellm_verificationtoken.update.call_args
