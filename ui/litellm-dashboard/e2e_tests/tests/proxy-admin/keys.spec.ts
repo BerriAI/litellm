@@ -126,4 +126,84 @@ test.describe("Proxy Admin - Keys", () => {
 
     await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS)).toBeVisible({ timeout: 10_000 });
   });
+
+  test("Create a key with All Proxy Models (no team)", async ({ page }) => {
+    await navigateToPage(page, Page.ApiKeys);
+    await dismissFeedbackPopup(page);
+
+    await page.getByRole("button", { name: /Create New Key/i }).click();
+
+    await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
+
+    const keyName = `e2e-admin-allproxy-${Date.now()}`;
+    await page.getByTestId("base-input").fill(keyName);
+
+    // No team selection — leave team dropdown empty so the key is owned by the admin user
+
+    // Select models — open the multi-select and pick the all-models meta-option.
+    // The Create Key modal labels this "All Team Models" even when no team is selected
+    // (see src/components/organisms/create_key_button.tsx:944), unlike the team/user
+    // settings screens which use "All Proxy Models".
+    await page.locator(".ant-select-selection-overflow").click();
+    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Create Key", exact: true }).click();
+
+    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    await page.keyboard.press("Escape");
+
+    await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("Create a key with a specific proxy model (no team)", async ({ page }) => {
+    await navigateToPage(page, Page.ApiKeys);
+    await dismissFeedbackPopup(page);
+
+    await page.getByRole("button", { name: /Create New Key/i }).click();
+
+    await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
+
+    const keyName = `e2e-admin-specific-${Date.now()}`;
+    await page.getByTestId("base-input").fill(keyName);
+
+    // Open the model multi-select and pick a single specific model. Use
+    // getByRole("option", ...) to avoid the strict-mode collision between
+    // the option container and its inner text node.
+    const modelName = "fake-openai-gpt-4";
+    await page.locator(".ant-select-selection-overflow").click();
+    const option = page.locator(".ant-select-dropdown:visible").getByRole("option", { name: modelName, exact: true });
+    await option.waitFor({ state: "attached" });
+    // Dispatch the click via the DOM — antd's dropdown can render the option
+    // off-viewport during the open animation, which trips Playwright's
+    // visibility/stability checks. The click handler fires regardless.
+    await option.evaluate((el: HTMLElement) => el.click());
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Create Key", exact: true }).click();
+
+    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+
+    // Grab the new key from the success modal (rendered inside a <pre>) and
+    // verify it can call /chat/completions for the model it was scoped to.
+    // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
+    // a fixed "This is a mock response." body.
+    const apiKey = (await page.locator(".ant-modal:visible pre").innerText()).trim();
+    expect(apiKey).toMatch(/^sk-/);
+
+    const response = await page.request.post("/chat/completions", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      data: {
+        model: modelName,
+        messages: [{ role: "user", content: "ping" }],
+      },
+    });
+    expect(response.status()).toBe(200);
+    const body = await response.json();
+    expect(body.choices?.[0]?.message?.content).toBe("This is a mock response.");
+
+    await page.keyboard.press("Escape");
+
+    await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
+  });
 });

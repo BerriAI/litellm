@@ -1611,11 +1611,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     "masked_entity_count", safe_dumps(masked_entity_count)
                 )
 
-            self.safe_set_attribute(
-                span=guardrail_span,
-                key="guardrail_response",
-                value=guardrail_information.get("guardrail_response"),
-            )
+            guardrail_response = guardrail_information.get("guardrail_response")
+            if guardrail_response is not None:
+                guardrail_span.set_attribute(
+                    "guardrail_response", safe_dumps(guardrail_response)
+                )
 
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
