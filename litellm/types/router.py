@@ -247,6 +247,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     quality_router_config: Optional[Dict] = None
     quality_router_default_model: Optional[str] = None
 
+    # latent-factor-router params
+    latent_factor_artefacts_path: Optional[str] = None
+    latent_factor_yaml_path: Optional[str] = None
+    latent_factor_fallback_model: Optional[str] = None
+    latent_factor_top_k: Optional[int] = None
+
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
     s3_encryption_key_id: Optional[str] = None

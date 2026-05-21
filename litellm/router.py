@@ -480,6 +480,7 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.latent_factor_routers: Dict[str, "LatentFactorRouterLiteLLM"] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -7379,6 +7380,8 @@ class Router:
             return False  # This is handled by adaptive_router
         if litellm_params.model.startswith("auto_router/quality_router"):
             return False  # This is handled by quality_router
+        if litellm_params.model.startswith("auto_router/latent_factor_router"):
+            return False  # This is handled by latent_factor_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
@@ -7484,6 +7487,58 @@ class Router:
                 f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.complexity_routers[deployment.model_name] = complexity_router
+
+    def _is_latent_factor_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """
+        Check if the deployment is a latent-factor-router deployment.
+
+        Returns True if the litellm_params model starts with "auto_router/latent_factor_router"
+        """
+        if litellm_params.model.startswith("auto_router/latent_factor_router"):
+            return True
+        return False
+
+    def init_latent_factor_router_deployment(self, deployment: Deployment):
+        """
+        Initialize the latent-factor-router deployment.
+
+        This will initialize the LatentFactorRouterLiteLLM and add it to the
+        latent_factor_routers dictionary.
+        """
+        from litellm.router_strategy.latent_factor_router import (
+            LatentFactorRouterConfig,
+            LatentFactorRouterLiteLLM,
+        )
+
+        lp = deployment.litellm_params
+        artefacts_path: str = getattr(lp, "latent_factor_artefacts_path", "") or ""
+        yaml_path: str = getattr(lp, "latent_factor_yaml_path", "") or ""
+        fallback_model: Optional[str] = getattr(lp, "latent_factor_fallback_model", None)
+        top_k: int = getattr(lp, "latent_factor_top_k", None) or 1
+
+        if not artefacts_path or not yaml_path:
+            raise ValueError(
+                f"LatentFactorRouter deployment '{deployment.model_name}' requires "
+                "'latent_factor_artefacts_path' and 'latent_factor_yaml_path' in litellm_params."
+            )
+
+        config = LatentFactorRouterConfig(
+            artefacts_path=artefacts_path,
+            yaml_path=yaml_path,
+            fallback_model=fallback_model,
+            top_k=top_k,
+        )
+        latent_factor_router = LatentFactorRouterLiteLLM(
+            model_name=deployment.model_name,
+            litellm_router_instance=self,
+            config=config,
+        )
+        if deployment.model_name in self.latent_factor_routers:
+            raise ValueError(
+                f"LatentFactorRouter deployment '{deployment.model_name}' already exists. "
+                "Please use a different model name."
+            )
+        self.latent_factor_routers[deployment.model_name] = latent_factor_router
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -7726,6 +7781,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self.latent_factor_routers = {}
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -7913,6 +7969,12 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        #########################################################
+        # Check if this is a latent-factor-router deployment
+        #########################################################
+        if self._is_latent_factor_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_latent_factor_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -10653,6 +10715,18 @@ class Router:
         #########################################################
         if model in self.complexity_routers:
             return await self.complexity_routers[model].async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        #########################################################
+        # Check if any latent-factor-router should be used
+        #########################################################
+        if model in self.latent_factor_routers:
+            return await self.latent_factor_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
