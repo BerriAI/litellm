@@ -93,11 +93,9 @@ def test_validate_environment_sets_auth_and_attribution():
 
 
 def test_validate_environment_raises_without_api_key(monkeypatch):
-    """API key must be resolved from explicit arg, litellm globals, or env;
-    if all four sources are empty, raise instead of sending Bearer None."""
+    """If neither the explicit api_key arg nor the ORCAROUTER_API_KEY env var
+    is set, raise instead of sending `Authorization: Bearer None` to upstream."""
     monkeypatch.delenv("ORCAROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(litellm, "api_key", None, raising=False)
-    monkeypatch.setattr(litellm, "orcarouter_key", None, raising=False)
 
     with pytest.raises(ValueError, match="OrcaRouter API key is required"):
         OrcaRouterEmbeddingConfig().validate_environment(
