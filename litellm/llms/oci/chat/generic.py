@@ -283,7 +283,8 @@ def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> st
     re-emissions while differing across truly distinct calls.
     """
     digest = hashlib.sha256(
-        f"{position}|{name}|{arguments}".encode("utf-8")
+        f"{position}|{name}|{arguments}".encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()[:24]
     return f"call_{digest}"
 
