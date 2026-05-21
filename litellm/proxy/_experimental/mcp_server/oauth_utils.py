@@ -430,19 +430,62 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             if _matches_trusted_origin_entry(redirect_netloc, entry):
                 return
 
+    redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
+    proxy_parsed = urlparse(proxy_base) if proxy_base else None
+    proxy_netloc_norm = (
+        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
+        if proxy_parsed and proxy_parsed.netloc
+        else ""
+    )
+    proxy_origin = (
+        _origin_label(proxy_parsed.scheme, proxy_netloc_norm)
+        if proxy_parsed
+        else "(could not determine proxy origin)"
+    )
+
+    mismatch_parts: List[str] = []
+    if proxy_parsed and proxy_parsed.netloc:
+        if parsed.scheme != proxy_parsed.scheme:
+            mismatch_parts.append(
+                f"scheme: browser/redirect_uri uses {parsed.scheme!r}, "
+                f"proxy computed {proxy_parsed.scheme!r} "
+                "(TLS often terminates at ingress — set PROXY_BASE_URL to https://… "
+                "or trust X-Forwarded-Proto from your ingress)"
+            )
+        if redirect_netloc != proxy_netloc_norm:
+            mismatch_parts.append(
+                f"host/port: redirect_uri {redirect_netloc!r} vs proxy {proxy_netloc_norm!r}"
+            )
+
+    if mismatch_parts:
+        description = (
+            f"redirect_uri origin ({redirect_origin}) does not match the proxy origin "
+            f"({proxy_origin}). " + "; ".join(mismatch_parts)
+        )
+    else:
+        description = (
+            f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
+            f"proxy ({proxy_origin}), not loopback, and not listed in "
+            f"{_TRUSTED_REDIRECT_ORIGINS_ENV}."
+        )
+
+    hint = (
+        "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
+        "HTTPS origin (e.g. https://litellm.example.com), or enable "
+        "general_settings.use_x_forwarded_for with mcp_trusted_proxy_ranges for your "
+        "ingress. Verify: curl https://<host>/.well-known/oauth-authorization-server "
+        "| jq .issuer — issuer must match window.location.origin in the UI."
+    )
+
     verbose_logger.warning(
-        "MCP OAuth: rejecting redirect_uri %r as invalid_request. "
+        "MCP OAuth: rejecting redirect_uri %r. %s "
         "Computed proxy base=%r (PROXY_BASE_URL=%r). "
         "Inbound headers: X-Forwarded-Proto=%r X-Forwarded-Host=%r "
         "X-Forwarded-Port=%r Host=%r. "
         "Trusted-redirect-origins env=%r. "
-        "Trusted-native-redirect-uris env=%r. "
-        "If this should be accepted, either align ingress X-Forwarded-* "
-        "with the browser URL, set PROXY_BASE_URL to your public origin, "
-        "add the redirect_uri host to MCP_TRUSTED_REDIRECT_ORIGINS, or "
-        "for native MCP clients (cursor://, etc.) add the full redirect_uri "
-        "to MCP_TRUSTED_NATIVE_REDIRECT_URIS.",
+        "Trusted-native-redirect-uris env=%r.",
         redirect_uri,
+        description,
         proxy_base,
         os.environ.get("PROXY_BASE_URL"),
         request.headers.get("X-Forwarded-Proto"),
@@ -452,4 +495,15 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
         os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV),
         os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV),
     )
-    raise HTTPException(status_code=400, detail="invalid_request")
+
+    extra: Dict[str, Any] = {
+        "redirect_uri": redirect_uri,
+        "redirect_uri_origin": redirect_origin,
+        "proxy_origin": proxy_origin,
+    }
+    if proxy_base:
+        extra["proxy_base_url"] = proxy_base
+    if os.environ.get("PROXY_BASE_URL"):
+        extra["PROXY_BASE_URL"] = os.environ.get("PROXY_BASE_URL")
+
+    _oauth_invalid_request(description, hint=hint, **extra)
