@@ -910,6 +910,9 @@ class TestMCPPassthroughColdStartAdmission:
             patch(
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr,
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._is_mcp_passthrough_cold_start"
+            ) as mock_cold_start,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
@@ -918,13 +921,10 @@ class TestMCPPassthroughColdStartAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            # Cold-start lookup (signaled by the ``client_ip`` kwarg) must not
-            # fire for the aggregate ``/mcp`` route — only path-targeted
-            # routes are eligible for OAuth discovery admission.
-            assert not any(
-                "client_ip" in c.kwargs
-                for c in mock_mgr.get_mcp_server_by_name.call_args_list
-            )
+            # Cold-start admission must not fire for the aggregate ``/mcp``
+            # route — only path-targeted routes are eligible for OAuth
+            # discovery admission.
+            mock_cold_start.assert_not_called()
 
     async def test_cold_start_rejects_server_specific_authorization_header(self):
         from fastapi import HTTPException
