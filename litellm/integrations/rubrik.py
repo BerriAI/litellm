@@ -261,7 +261,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 )
             else:
                 raise TypeError(
-                    f"Cannot normalize tool_call of type {type(tc).__name__}: {tc!r}"
+                    f"Cannot normalize tool_call of type {type(tc).__name__}"
                 )
         return result
 
