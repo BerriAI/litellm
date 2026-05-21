@@ -50,6 +50,11 @@ def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
     m = re.match(r"^/([^/,?#]+)/mcp", path)
     if m:
         return [m.group(1)]
+    verbose_logger.debug(
+        "MCP cold-start: path %r does not match /mcp/{name} or /{name}/mcp; "
+        "passthrough 401 bypass will not activate",
+        path,
+    )
     return None
 
 

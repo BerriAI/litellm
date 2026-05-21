@@ -794,14 +794,29 @@ async def fetch_upstream_oauth_protected_resource(
                     candidate,
                     headers={"Accept": "application/json"},
                 )
-            except Exception as exc:  # network / connect errors
+            except Exception as exc:
                 if is_network_error(exc):
                     network_errors.append(exc)
+                else:
+                    verbose_logger.warning(
+                        "MCP OAuth metadata fetch for %s raised non-transport "
+                        "%s: %s — treating as no metadata for this candidate",
+                        candidate,
+                        type(exc).__name__,
+                        exc,
+                    )
                 continue
             if response.status_code == 200:
                 try:
                     payload = response.json()
-                except Exception:
+                except Exception as exc:
+                    verbose_logger.warning(
+                        "MCP OAuth metadata at %s returned 200 but JSON "
+                        "decode failed (%s: %s) — treating as no metadata",
+                        candidate,
+                        type(exc).__name__,
+                        exc,
+                    )
                     continue
                 if isinstance(payload, dict):
                     now = time.time()
