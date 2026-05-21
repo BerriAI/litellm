@@ -15,6 +15,7 @@ const MCPToolsViewer = ({
   serverId,
   accessToken,
   auth_type,
+  tokenUrl,
   userRole,
   userID,
   serverAlias,
@@ -29,8 +30,14 @@ const MCPToolsViewer = ({
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // OAuth session token (sessionStorage-backed, cleared on tab/browser close)
-  const isOAuth = auth_type === "oauth2";
+  // OAuth session token (sessionStorage-backed, cleared on tab/browser close).
+  // Only the interactive (authorization_code/PKCE) flow needs a user-facing
+  // auth gate. M2M (client_credentials) servers are also `auth_type === "oauth2"`,
+  // but the backend fetches their token internally — gating tool listing on
+  // them would force users through a non-existent authorization endpoint.
+  // We detect M2M via the presence of `tokenUrl`, matching the heuristic in
+  // `mcp_server_edit.tsx`.
+  const isOAuth = auth_type === "oauth2" && !tokenUrl;
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
     isOAuth && isTokenValid(serverId, userID)
       ? (getToken(serverId, userID)?.access_token ?? null)
