@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -178,7 +179,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             )
             or AnthropicConfig._model_supports_effort_param(model)
         ):
-            anthropic_request.pop("output_config", None)
+            if anthropic_request.pop("output_config", None) is not None:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripping unsupported `output_config` for "
+                    "model=%s — neither `supports_output_config` nor any "
+                    "`supports_*_reasoning_effort` flag is set in "
+                    "model_prices_and_context_window.json. Add the capability "
+                    "flag to the model JSON entry if this model accepts "
+                    "`output_config`.",
+                    model,
+                )
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 

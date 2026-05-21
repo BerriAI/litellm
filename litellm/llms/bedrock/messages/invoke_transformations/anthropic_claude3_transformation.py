@@ -569,7 +569,16 @@ class AmazonAnthropicClaudeMessagesConfig(
             )
             or AnthropicConfig._model_supports_effort_param(model)
         ):
-            anthropic_messages_request.pop("output_config", None)
+            if anthropic_messages_request.pop("output_config", None) is not None:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripping unsupported `output_config` for "
+                    "model=%s — neither `supports_output_config` nor any "
+                    "`supports_*_reasoning_effort` flag is set in "
+                    "model_prices_and_context_window.json. Add the capability "
+                    "flag to the model JSON entry if this model accepts "
+                    "`output_config`.",
+                    model,
+                )
 
         # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
