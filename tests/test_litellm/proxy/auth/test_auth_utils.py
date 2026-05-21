@@ -8,6 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.llms.base_llm.managed_resources.utils import (
+    encode_unified_id,
+    generate_unified_id_string,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
@@ -22,6 +26,18 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+
+
+def _make_unified_vector_store_id(model_id: str = "internal-model") -> str:
+    return encode_unified_id(
+        generate_unified_id_string(
+            resource_type="vector_store",
+            unified_uuid="vs-unified-1",
+            target_model_names=[model_id],
+            provider_resource_id="vs-provider-1",
+            model_id=model_id,
+        )
+    )
 
 
 class TestGetKeyModelRpmLimit:
@@ -341,6 +357,31 @@ def test_get_model_from_request_extracts_unified_file_id_models():
         request_data={"file_id": encoded_unified_file_id},
         route="/v1/files/{file_id}",
     ) == ["model-a", "model-b"]
+
+
+def test_get_model_from_request_does_not_extract_model_from_vector_store_id():
+    vector_store_id = _make_unified_vector_store_id()
+
+    assert (
+        get_model_from_request(
+            request_data={
+                "vector_store_id": vector_store_id,
+                "vector_store_ids": [vector_store_id],
+            },
+            route=f"/v1/vector_stores/{vector_store_id}/files",
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_still_checks_vector_store_target_model_names():
+    assert (
+        get_model_from_request(
+            request_data={"target_model_names": ["allowed-model"]},
+            route="/v1/vector_stores",
+        )
+        == "allowed-model"
+    )
 
 
 def test_get_model_from_request_extracts_eval_completion_model():
