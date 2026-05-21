@@ -1258,10 +1258,18 @@ async def otel_request_validation_exception_handler(
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    verbose_proxy_logger.exception(
+        "Unhandled exception in request: %s", type(exc).__name__
+    )
     _close_dangling_otel_server_span(request, 500)
     return JSONResponse(
         status_code=500,
-        content={"error": {"message": str(exc), "type": type(exc).__name__}},
+        content={
+            "error": {
+                "message": "Internal server error",
+                "type": "internal_server_error",
+            }
+        },
     )
 
 
