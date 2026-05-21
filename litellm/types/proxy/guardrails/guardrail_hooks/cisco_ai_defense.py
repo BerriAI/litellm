@@ -4,7 +4,7 @@ Cisco AI Defense Guardrail Config Model
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .base import GuardrailConfigModel
 
@@ -49,6 +49,8 @@ class CiscoAIDefenseRule(BaseModel):
 class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
     """Optional parameters for the Cisco AI Defense guardrail."""
 
+    model_config = ConfigDict(extra="allow")
+
     inspection_type: CISCO_AI_DEFENSE_INSPECTION_TYPE = Field(
         default="chat",
         description=(
@@ -91,7 +93,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
         default=None,
         description="Integration type to apply (advanced).",
     )
-    on_flagged_action: Optional[Literal["block", "monitor"]] = Field(
+    on_flagged_action: Optional[str] = Field(
         default="block",
         description=(
             "Action to take when Cisco AI Defense flags content. 'block' raises "

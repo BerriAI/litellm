@@ -446,6 +446,21 @@ class TestCiscoAIDefenseFlattenedConfig:
         assert cb.fallback_on_error == "block"
         assert cb.timeout == 10.0
 
+    def test_grayswan_optional_params_survive_cisco_mro(self):
+        from litellm.types.guardrails import LitellmParams
+
+        params = LitellmParams(
+            guardrail="grayswan",
+            mode="pre_call",
+            optional_params={
+                "on_flagged_action": "passthrough",
+                "violation_threshold": 0.7,
+            },
+        )
+
+        assert params.optional_params.on_flagged_action == "passthrough"
+        assert params.optional_params.violation_threshold == 0.7
+
 
 class TestCiscoAIDefenseGuardrailInit:
     def setup_method(self):
