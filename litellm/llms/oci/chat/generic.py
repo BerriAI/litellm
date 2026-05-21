@@ -432,7 +432,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     return ModelResponseStream(
         choices=[
             StreamingChoices(
-                index=typed_chunk.index if typed_chunk.index else 0,
+                index=typed_chunk.index,
                 delta=Delta(
                     content=text,
                     tool_calls=(

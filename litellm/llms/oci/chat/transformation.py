@@ -565,7 +565,7 @@ class OCIChatConfig(BaseConfig):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
-        signed_json_body: bytes = b"",
+        signed_json_body: Optional[bytes] = None,
     ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
@@ -576,7 +576,11 @@ class OCIChatConfig(BaseConfig):
             response = client.post(
                 api_base,
                 headers=headers,
-                data=signed_json_body or json.dumps(data),
+                data=(
+                    signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data)
+                ),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -606,7 +610,7 @@ class OCIChatConfig(BaseConfig):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
-        signed_json_body: bytes = b"",
+        signed_json_body: Optional[bytes] = None,
     ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
@@ -617,7 +621,11 @@ class OCIChatConfig(BaseConfig):
             response = await client.post(
                 api_base,
                 headers=headers,
-                data=signed_json_body or json.dumps(data),
+                data=(
+                    signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data)
+                ),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,

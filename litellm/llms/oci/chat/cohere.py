@@ -214,7 +214,7 @@ def handle_cohere_response(
         finish_reason = "stop"
     elif oci_finish_reason == "MAX_TOKENS":
         finish_reason = "length"
-    elif oci_finish_reason == "TOOL_CALL":
+    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
         finish_reason = "tool_calls"
     elif oci_finish_reason is not None:
         # OCI Cohere can emit error/cancel finish reasons (e.g. ``ERROR``,
@@ -291,7 +291,9 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     is_terminal_consolidation = (
         typed_chunk.chatHistory is not None and typed_chunk.finishReason is not None
     )
-    text = "" if is_terminal_consolidation else (typed_chunk.text or "")
+    text: Optional[str] = (
+        None if is_terminal_consolidation else (typed_chunk.text or "")
+    )
 
     # Tool calls on the terminal consolidation chunk (whether from
     # `typed_chunk.toolCalls` or from `chatHistory`) restate what was already
@@ -326,7 +328,7 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
         finish_reason = "stop"
     elif finish_reason == "MAX_TOKENS":
         finish_reason = "length"
-    elif finish_reason == "TOOL_CALL":
+    elif finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
         finish_reason = "tool_calls"
     elif finish_reason is not None:
         # OCI Cohere can emit error/cancel finish reasons (e.g. ``ERROR``,
@@ -338,7 +340,7 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     return ModelResponseStream(
         choices=[
             StreamingChoices(
-                index=typed_chunk.index if typed_chunk.index else 0,
+                index=typed_chunk.index,
                 delta=Delta(
                     content=text,
                     tool_calls=tool_calls,

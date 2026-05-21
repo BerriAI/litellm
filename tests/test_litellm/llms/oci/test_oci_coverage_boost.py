@@ -614,7 +614,7 @@ def test_handle_cohere_stream_chunk_complete():
     }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "stop"
-    assert result.choices[0].delta.content == ""
+    assert result.choices[0].delta.content is None
 
 
 def test_handle_cohere_stream_chunk_max_tokens():
@@ -626,7 +626,7 @@ def test_handle_cohere_stream_chunk_max_tokens():
     }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "length"
-    assert result.choices[0].delta.content == ""
+    assert result.choices[0].delta.content is None
 
 
 def test_handle_cohere_stream_chunk_tool_call():
@@ -638,7 +638,7 @@ def test_handle_cohere_stream_chunk_tool_call():
     }
     result = handle_cohere_stream_chunk(chunk)
     assert result.choices[0].finish_reason == "tool_calls"
-    assert result.choices[0].delta.content == ""
+    assert result.choices[0].delta.content is None
 
 
 def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
@@ -658,7 +658,7 @@ def test_handle_cohere_stream_chunk_terminal_drops_full_response_text():
         ],
     }
     result = handle_cohere_stream_chunk(chunk)
-    assert result.choices[0].delta.content == ""
+    assert result.choices[0].delta.content is None
 
 
 def test_handle_cohere_stream_chunk_incremental_passes_text_through():
