@@ -305,6 +305,53 @@ def test_gcp_iam_credential_provider_cache_shared_across_instances():
     mock_gen.assert_called_once()
 
 
+def test_credential_provider_in_cluster_kwargs():
+    """
+    credential_provider must be in the cluster allowlist. RedisCluster.__init__
+    is **kwargs-only, so any kwarg missing from the allowlist gets silently
+    dropped before reaching the client.
+    """
+    kwargs = _get_redis_cluster_kwargs()
+    assert (
+        "credential_provider" in kwargs
+    ), "credential_provider must be allowed through to RedisCluster"
+
+
+def test_get_redis_client_gcp_cluster_uses_credential_provider():
+    """
+    When startup_nodes + gcp_service_account are provided, the sync cluster client
+    must be constructed with a GCPIAMCredentialProvider, not a redis_connect_func.
+
+    redis_connect_func is a no-op for RedisCluster bootstrap (CLUSTER SLOTS runs
+    before the hook fires), so without credential_provider the cluster cannot
+    authenticate against Memorystore Valkey or any IAM-only Redis cluster.
+    Regression test for https://github.com/BerriAI/litellm/issues/28379.
+    """
+    startup_nodes = [{"host": "redis-node-1", "port": 6379}]
+    service_account = "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
+
+    with patch("litellm._redis.redis.RedisCluster") as mock_cluster:
+        get_redis_client(
+            startup_nodes=startup_nodes,
+            gcp_service_account=service_account,
+        )
+
+    assert mock_cluster.called
+    cluster_call_kwargs = mock_cluster.call_args[1]
+
+    # Must use credential_provider (honored by bootstrap), not redis_connect_func
+    # (silently ignored by NodesManager.initialize()).
+    assert (
+        "credential_provider" in cluster_call_kwargs
+    ), "sync GCP cluster must use credential_provider so bootstrap can authenticate"
+    assert isinstance(
+        cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider
+    )
+    assert (
+        "redis_connect_func" not in cluster_call_kwargs
+    ), "redis_connect_func is a no-op for cluster bootstrap and must be dropped"
+
+
 def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     """
     When startup_nodes + gcp_service_account are provided, the async cluster client

@@ -85,6 +85,10 @@ def _get_redis_cluster_kwargs(client=None):
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
     available_args = {x for x in arg_spec.args if x not in exclude_args}
+    # ``redis.RedisCluster.__init__`` is defined as ``def __init__(self, **kwargs)``,
+    # so ``arg_spec.args`` is effectively empty. The only kwargs that survive the
+    # allowlist below are the ones added here explicitly; forgetting to list a kwarg
+    # silently drops it before it reaches ``redis.RedisCluster(...)``.
     available_args |= {
         "password",
         "username",
@@ -93,6 +97,7 @@ def _get_redis_cluster_kwargs(client=None):
         "ssl_check_hostname",
         "ssl_ca_certs",
         "redis_connect_func",  # Needed for sync clusters and IAM detection
+        "credential_provider",  # Honored by RedisCluster bootstrap, unlike redis_connect_func
         "gcp_service_account",
         "gcp_ssl_ca_certs",
         "azure_redis_ad_token",
@@ -471,6 +476,18 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     for arg in redis_kwargs:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
+
+    # Handle GCP IAM authentication for sync clusters. ``RedisCluster``'s bootstrap
+    # (``NodesManager.initialize()``) issues ``CLUSTER SLOTS`` before any
+    # ``redis_connect_func`` hook fires, so the hook never authenticates the
+    # bootstrap connection and the server rejects it with "Authentication required".
+    # ``credential_provider`` is honored by every connection (including bootstrap),
+    # so swap to it whenever the GCP IAM marker is present. Mirrors the async path.
+    redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
+    if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
+        cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+            redis_connect_func._gcp_service_account
+        )
 
     new_startup_nodes: List[ClusterNode] = []
 
