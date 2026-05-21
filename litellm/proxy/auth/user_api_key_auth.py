@@ -714,6 +714,23 @@ async def _resolve_jwt_to_virtual_key(
         verbose_proxy_logger.debug(
             f"JWT Key Mapping: Claim field '{virtual_key_claim_field}' not found in JWT claims."
         )
+        # A missing claim is an unmapped client — apply the no-match policy
+        # rather than returning early. Otherwise a caller can bypass REJECT
+        # simply by presenting a JWT that omits the configured field. For
+        # AUTO_REGISTER there is no stable identity to map without a claim
+        # value, so we deny rather than create a sentinel-keyed record.
+        behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
+        if behavior in (
+            UnregisteredJWTClientBehavior.REJECT,
+            UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"JWT Key Mapping: Required claim '{virtual_key_claim_field}' "
+                    "is missing from the JWT. Access denied."
+                ),
+            )
         return None
 
     cache_key = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}"

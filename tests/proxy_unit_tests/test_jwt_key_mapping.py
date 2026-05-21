@@ -827,6 +827,95 @@ async def test_reject_behavior_enforced_when_prisma_client_is_none():
 
 
 @pytest.mark.asyncio
+async def test_reject_raises_403_when_claim_field_missing_from_jwt():
+    """
+    Security: a JWT that omits the configured virtual_key_claim_field must NOT
+    bypass the REJECT policy. Previously the early `if claim_value is None:
+    return None` branch ran before the policy check, letting a caller who knows
+    the configured claim-field name silently fall through to team-based auth.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+    )
+    # JWT does NOT contain "sub"
+    jwt_claims = {"email": "user@example.com"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=MagicMock(),
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "'sub'" in exc_info.value.detail
+    assert "missing from the JWT" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_auto_register_raises_403_when_claim_field_missing_from_jwt():
+    """
+    AUTO_REGISTER cannot create a mapping without a stable identity. When the
+    configured claim field is missing from the JWT, return 403 rather than
+    silently falling through (which would bypass the unregistered-client policy)
+    or creating a sentinel-keyed record.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"email": "user@example.com"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=MagicMock(),
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "missing from the JWT" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_fallback_team_mapping_returns_none_when_claim_field_missing_from_jwt():
+    """
+    Under FALLBACK_TEAM_MAPPING (the default, backward-compatible mode), a JWT
+    without the configured claim field must still fall through to team-based
+    JWT auth — not raise. This preserves the pre-existing contract.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+    )
+    jwt_claims = {"email": "user@example.com"}
+
+    result = await _resolve_jwt_to_virtual_key(
+        jwt_claims=jwt_claims,
+        jwt_handler=jwt_handler,
+        prisma_client=MagicMock(),
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_fallback_team_mapping_returns_none_when_prisma_client_is_none():
     """
     When prisma_client is None and behavior is FALLBACK_TEAM_MAPPING, the
