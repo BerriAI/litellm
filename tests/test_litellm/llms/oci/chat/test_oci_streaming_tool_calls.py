@@ -210,6 +210,39 @@ class TestOCIStreamingToolCalls:
             == '{"expression": "2+2"}'
         )
 
+    def test_stream_chunk_missing_id_is_deterministic_across_chunks(self):
+        """
+        Two chunks emitting the same logical tool call (same name + arguments
+        at the same position) must receive the *same* synthesized id so the
+        downstream stream-merger does not treat them as distinct calls.
+        Random uuid4 per chunk would regress this — see bug ffdef760.
+        """
+        same_chunk_payload = lambda: {
+            "index": 0,
+            "finishReason": None,
+            "message": {
+                "role": "ASSISTANT",
+                "content": None,
+                "toolCalls": [
+                    {
+                        "type": "FUNCTION",
+                        "name": "get_weather",
+                        "arguments": '{"location": "San Francisco"}',
+                    }
+                ],
+            },
+        }
+
+        first = handle_generic_stream_chunk(same_chunk_payload())
+        second = handle_generic_stream_chunk(same_chunk_payload())
+
+        assert first.choices[0].delta.tool_calls is not None
+        assert second.choices[0].delta.tool_calls is not None
+        first_id = first.choices[0].delta.tool_calls[0]["id"]
+        second_id = second.choices[0].delta.tool_calls[0]["id"]
+        assert first_id == second_id
+        assert first_id.startswith("call_")
+
     def test_stream_chunk_without_tool_calls(self):
         """Plain text chunks (no tool calls) pass through correctly."""
         chunk_data = {

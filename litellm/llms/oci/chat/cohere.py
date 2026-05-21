@@ -8,9 +8,9 @@ response parsing, and streaming chunk parsing for models served with
 
 import datetime
 import json
-import uuid
 from typing import Any, Dict, List, Optional
 
+from litellm.llms.oci.chat.generic import _synthesize_oci_tool_call_id
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
     OCIError,
@@ -230,14 +230,16 @@ def handle_cohere_response(
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
-                "id": f"call_{uuid.uuid4().hex[:24]}",
+                "id": _synthesize_oci_tool_call_id(
+                    i, tc.name, json.dumps(tc.parameters, sort_keys=True)
+                ),
                 "type": "function",
                 "function": {
                     "name": tc.name,
                     "arguments": json.dumps(tc.parameters),
                 },
             }
-            for tc in cohere_response.chatResponse.toolCalls
+            for i, tc in enumerate(cohere_response.chatResponse.toolCalls)
         ]
 
     content: Optional[str] = response_text if response_text else None
@@ -303,14 +305,20 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     if cohere_tool_calls:
         tool_calls = [
             {
-                "id": f"call_{uuid.uuid4().hex[:24]}",
+                # Cohere protocol has no tool-call id, so we synthesize one
+                # deterministically from the call's content/position. A random
+                # uuid4 per chunk would cause downstream stream-mergers to
+                # treat each chunk as a distinct tool call.
+                "id": _synthesize_oci_tool_call_id(
+                    i, tc.name, json.dumps(tc.parameters, sort_keys=True)
+                ),
                 "type": "function",
                 "function": {
                     "name": tc.name,
                     "arguments": json.dumps(tc.parameters),
                 },
             }
-            for tc in cohere_tool_calls
+            for i, tc in enumerate(cohere_tool_calls)
         ]
 
     finish_reason = typed_chunk.finishReason

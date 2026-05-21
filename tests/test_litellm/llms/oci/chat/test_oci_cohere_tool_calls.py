@@ -558,6 +558,50 @@ class TestOCICohereToolCalls:
         assert len(result.choices[0].message.tool_calls) == 1
         assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
 
+    def test_cohere_response_unknown_finish_reason_degrades_to_stop(self):
+        """A future/unknown finishReason in non-streaming responses must
+        degrade to ``stop`` via ``handle_cohere_response``'s fallback
+        rather than crash Pydantic validation. Mirrors the streaming
+        handler's behavior. See bug caf74429.
+        """
+        config = OCIChatConfig()
+
+        mock_cohere_response = {
+            "modelId": "cohere.command-latest",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "hello",
+                "finishReason": "FUTURE_REASON_NOT_YET_KNOWN",
+                "usage": {
+                    "promptTokens": 1,
+                    "completionTokens": 1,
+                    "totalTokens": 2,
+                },
+            },
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_cohere_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        result = config.transform_response(
+            model="cohere.command-latest",
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].finish_reason == "stop"
+
     def test_cohere_vendor_detection(self):
         """Test that Cohere models are correctly identified"""
         assert get_vendor_from_model("cohere.command-latest") == OCIVendors.COHERE

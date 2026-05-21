@@ -389,15 +389,12 @@ class CohereChatResponse(BaseModel):
     # Required fields
     text: str
     apiFormat: Literal["COHERE"] = "COHERE"
-    finishReason: Literal[
-        "COMPLETE",
-        "ERROR_TOXIC",
-        "ERROR_LIMIT",
-        "ERROR",
-        "USER_CANCEL",
-        "MAX_TOKENS",
-        "TOOL_CALL",
-    ]
+    # Accept any string (with ``None`` for absent) so unknown finish reasons
+    # — e.g. a value OCI adds in a future API revision — degrade gracefully
+    # via ``handle_cohere_response``'s ``elif oci_finish_reason is not None``
+    # fallback instead of crashing Pydantic validation. Mirrors
+    # ``CohereStreamChunk.finishReason`` which has always been ``Optional[str]``.
+    finishReason: Optional[str] = None
 
     # Optional fields
     chatHistory: Optional[List[CohereMessage]] = None

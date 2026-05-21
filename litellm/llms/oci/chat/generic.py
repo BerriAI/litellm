@@ -7,7 +7,7 @@ parsing, and streaming chunk parsing for models served with
 """
 
 import datetime
-import uuid
+import hashlib
 from typing import Dict, List, Optional, Union
 
 import httpx
@@ -270,17 +270,34 @@ def adapt_tool_definition_to_oci_standard(
     return new_tools
 
 
+def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> str:
+    """Deterministic synthetic tool-call id derived from chunk content.
+
+    Used as a fallback when OCI omits ``id`` (always the case for the OCI
+    Cohere protocol, occasionally the case for OCI GENERIC streaming chunks).
+    A random ``uuid4`` per chunk would cause downstream stream-merging
+    consumers — which key off the tool-call ``id`` — to treat re-emissions of
+    the same logical call (e.g. terminal consolidation chunks, retries) as
+    distinct calls. A content-derived digest stays stable across identical
+    re-emissions while differing across truly distinct calls.
+    """
+    digest = hashlib.sha256(
+        f"{position}|{name}|{arguments}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"call_{digest}"
+
+
 def adapt_tools_to_openai_standard(
     tools: List[OCIToolCall],
 ) -> List[ChatCompletionMessageToolCall]:
     """Convert OCI tool-call objects in a response to the OpenAI format."""
     return [
         ChatCompletionMessageToolCall(
-            id=tool.id or f"call_{uuid.uuid4().hex[:24]}",
+            id=tool.id or _synthesize_oci_tool_call_id(i, tool.name, tool.arguments),
             type="function",
             function={"name": tool.name, "arguments": tool.arguments},
         )
-        for tool in tools
+        for i, tool in enumerate(tools)
     ]
 
 
