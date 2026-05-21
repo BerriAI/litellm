@@ -155,15 +155,25 @@ def _normalize_tool_choice(selected_params: Dict) -> None:
     if isinstance(tc, dict):
         raw_type = tc.get("type")
         if not isinstance(raw_type, str):
-            return
+            raise ValueError(
+                f"Invalid tool_choice for OCI: missing or non-string 'type' in {tc!r}"
+            )
         upper = raw_type.upper()
         if upper == "FUNCTION":
             fn = tc.get("function")
             name = fn.get("name") if isinstance(fn, dict) else tc.get("name")
-            if isinstance(name, str) and name:
-                selected_params["toolChoice"] = {"type": "FUNCTION", "name": name}
+            if not (isinstance(name, str) and name):
+                raise ValueError(
+                    "Invalid tool_choice for OCI: 'FUNCTION' type requires a non-empty function name"
+                )
+            selected_params["toolChoice"] = {"type": "FUNCTION", "name": name}
         elif upper in {"AUTO", "NONE", "REQUIRED"}:
             selected_params["toolChoice"] = {"type": upper}
+        else:
+            raise ValueError(
+                f"Invalid tool_choice for OCI: unsupported type {raw_type!r}; "
+                "expected one of 'FUNCTION', 'AUTO', 'NONE', 'REQUIRED'"
+            )
 
 
 def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> None:
