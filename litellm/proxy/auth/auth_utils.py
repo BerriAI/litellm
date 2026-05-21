@@ -10,6 +10,7 @@ import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
@@ -1008,9 +1009,44 @@ def _get_customer_id_from_standard_headers(
     for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
         for header_name, header_value in request_headers.items():
             if header_name.lower() == standard_header.lower():
-                user_id_str = str(header_value) if header_value is not None else ""
-                if user_id_str.strip():
+                user_id_str = _coerce_user_id_to_str(header_value)
+                if user_id_str:
                     return user_id_str
+    return None
+
+
+def _coerce_user_id_to_str(value: Any) -> Optional[str]:
+    """Return a usable end-user identifier string, or None if the value isn't one.
+
+    Always drops non-string structured values (dict/list/tuple/set) because
+    stringifying them produces garbage spend-log rows like
+    ``"{'device_id': ...}"``. Strings that *decode* to a structured payload
+    are only rejected when ``litellm.validate_end_user_id_in_db`` is enabled
+    — operators who currently pass JSON-encoded identifiers keep their
+    existing behavior until they opt in. See
+    auth_utils.py:get_end_user_id_from_request_body for the extraction chain.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # bool is an int subclass; handle explicitly to avoid "True"/"False".
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        # Reject strings that decode to a structured payload (JSON object/array)
+        # only when the operator has opted into end-user validation. Gating
+        # behind the flag preserves backwards compatibility for deployments
+        # that intentionally pass JSON-encoded user identifiers.
+        if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
+            parsed = safe_json_loads(stripped)
+            if isinstance(parsed, (dict, list)):
+                return None
+        return stripped
+    # dict, list, tuple, set, arbitrary objects -> drop.
     return None
 
 
@@ -1052,23 +1088,22 @@ def get_end_user_id_from_request_body(
         if isinstance(custom_header_name_to_check, list):
             headers_lower = {k.lower(): v for k, v in request_headers.items()}
             for expected_header in custom_header_name_to_check:
-                header_value = headers_lower.get(expected_header)
-                if header_value is not None:
-                    user_id_str = str(header_value)
-                    if user_id_str.strip():
-                        return user_id_str
+                user_id_str = _coerce_user_id_to_str(headers_lower.get(expected_header))
+                if user_id_str:
+                    return user_id_str
 
         elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_str = str(header_value) if header_value is not None else ""
-                    if user_id_str.strip():
+                    user_id_str = _coerce_user_id_to_str(header_value)
+                    if user_id_str:
                         return user_id_str
 
     # Check 3: 'user' field in request_body (commonly OpenAI)
-    if "user" in request_body and request_body["user"] is not None:
-        user_from_body_user_field = request_body["user"]
-        return str(user_from_body_user_field)
+    if "user" in request_body:
+        user_id_str = _coerce_user_id_to_str(request_body["user"])
+        if user_id_str:
+            return user_id_str
 
     def _as_dict(value: Any) -> dict:
         # metadata / litellm_metadata can arrive as JSON strings from
@@ -1077,32 +1112,30 @@ def get_end_user_id_from_request_body(
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
-            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-
             parsed = safe_json_loads(value)
             return parsed if isinstance(parsed, dict) else {}
         return {}
 
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
     litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
-    user_from_litellm_metadata = litellm_metadata.get("user")
-    if user_from_litellm_metadata is not None:
-        return str(user_from_litellm_metadata)
+    user_id_str = _coerce_user_id_to_str(litellm_metadata.get("user"))
+    if user_id_str:
+        return user_id_str
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
     metadata_dict = _as_dict(request_body.get("metadata"))
-    user_id_from_metadata_field = metadata_dict.get("user_id")
-    if user_id_from_metadata_field is not None:
-        return str(user_id_from_metadata_field)
+    user_id_str = _coerce_user_id_to_str(metadata_dict.get("user_id"))
+    if user_id_str:
+        return user_id_str
 
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
     # Only use this for end-user identification in trusted environments where you control
     # the calling application. For untrusted callers, prefer using headers or server-side
     # middleware to set the end_user_id to prevent impersonation.
-    if request_body.get("safety_identifier") is not None:
-        user_from_body_user_field = request_body["safety_identifier"]
-        return str(user_from_body_user_field)
+    user_id_str = _coerce_user_id_to_str(request_body.get("safety_identifier"))
+    if user_id_str:
+        return user_id_str
 
     return None
 
