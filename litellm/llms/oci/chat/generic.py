@@ -11,6 +11,7 @@ import hashlib
 from typing import Dict, List, Optional, Union
 
 import httpx
+from pydantic import ValidationError
 
 from litellm.llms.oci.common_utils import (
     OCIError,
@@ -315,7 +316,7 @@ def handle_generic_response(
     """Parse a non-streaming GENERIC OCI response into a LiteLLM ModelResponse."""
     try:
         completion_response = OCICompletionResponse(**json_data)
-    except TypeError as e:
+    except (TypeError, ValidationError) as e:
         raise OCIError(
             message=f"Response cannot be casted to OCICompletionResponse: {str(e)}",
             status_code=raw_response.status_code,
@@ -383,7 +384,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
 
     try:
         typed_chunk = OCIStreamChunk(**dict_chunk)
-    except TypeError as e:
+    except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
             message=f"Chunk cannot be parsed as OCIStreamChunk: {str(e)}",

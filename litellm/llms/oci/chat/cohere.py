@@ -10,6 +10,8 @@ import datetime
 import json
 from typing import Any, Dict, List, Optional
 
+from pydantic import ValidationError
+
 from litellm.llms.oci.chat.generic import _synthesize_oci_tool_call_id
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
@@ -273,7 +275,7 @@ def handle_cohere_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     """Parse a single Cohere SSE chunk into a LiteLLM ModelResponseStream."""
     try:
         typed_chunk = CohereStreamChunk(**dict_chunk)
-    except TypeError as e:
+    except (TypeError, ValidationError) as e:
         raise OCIError(
             status_code=500,
             message=f"Chunk cannot be parsed as CohereStreamChunk: {str(e)}",
