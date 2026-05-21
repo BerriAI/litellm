@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -53,6 +54,124 @@ def _request_body() -> dict:
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_cancelled_redis_increment_invalidates_spend_counter():
+    import litellm.proxy.proxy_server as ps
+
+    class RedisCache:
+        async def async_increment(self, key, value, refresh_ttl):
+            raise asyncio.CancelledError()
+
+        async def async_delete_cache(self, key):
+            deleted_keys.append(key)
+
+    deleted_keys = []
+    counter_cache = DualCache()
+    counter_cache.redis_cache = RedisCache()
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:team:cancelled-increment",
+        value=10.0,
+    )
+
+    original_counter_cache = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await ps._increment_spend_counter_cache(
+                counter_key="spend:team:cancelled-increment",
+                increment=-5.0,
+            )
+    finally:
+        ps.spend_counter_cache = original_counter_cache
+
+    assert deleted_keys == ["spend:team:cancelled-increment"]
+    assert (
+        counter_cache.in_memory_cache.get_cache(key="spend:team:cancelled-increment")
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reservation_reconciliation_invalidates_reserved_counters():
+    import litellm.proxy.proxy_server as ps
+
+    budget_reservation = {
+        "reserved_cost": 1.0,
+        "entries": [{"counter_key": "spend:team:cancelled-reconcile"}],
+        "finalized": False,
+    }
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new=AsyncMock(),
+        ) as mock_invalidate,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await ps._reconcile_budget_reservation_for_counter_update(
+                budget_reservation=budget_reservation,
+                response_cost=0.25,
+            )
+
+    mock_invalidate.assert_awaited_once_with(
+        budget_reservation=budget_reservation,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_pre_call_reservation_releases_only_applied_entries():
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    valid_token = UserAPIKeyAuth(
+        token="key-cancelled-reservation",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-cancelled-reservation",
+        team_alias="cancelled reservation",
+        spend=0.0,
+        max_budget=10.0,
+        models=[],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=1.0,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._reserve_counter",
+            new=AsyncMock(side_effect=[1.0, asyncio.CancelledError()]),
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._release_applied_entries_best_effort",
+            new=AsyncMock(),
+        ) as mock_release,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    mock_release.assert_awaited_once()
+    released_entries = mock_release.await_args.kwargs["entries"]
+    assert [entry["counter_key"] for entry in released_entries] == [
+        "spend:key:key-cancelled-reservation"
+    ]
 
 
 def test_should_not_serialize_budget_reservation_on_user_api_key_auth():

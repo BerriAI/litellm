@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -114,6 +115,9 @@ async def reserve_budget_for_request(
                     counter=counter,
                     reservation_cost=reservation_cost,
                 )
+            except asyncio.CancelledError:
+                applied_entries.remove(entry)
+                raise
             except _CounterReservationUnavailable as exc:
                 if exc.touched_counter and not exc.counter_invalidated:
                     await _release_applied_entries_best_effort(
@@ -152,6 +156,14 @@ async def reserve_budget_for_request(
                         f"Max budget: {counter.max_budget}"
                     ),
                 )
+    except asyncio.CancelledError:
+        await asyncio.shield(
+            _release_applied_entries_best_effort(
+                entries=applied_entries,
+                default_reserved_cost=reservation_cost,
+            )
+        )
+        raise
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,

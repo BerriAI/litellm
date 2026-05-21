@@ -2122,6 +2122,22 @@ async def _reconcile_budget_reservation_for_counter_update(
             actual_cost=response_cost or 0.0,
             finalize=False,
         )
+    except asyncio.CancelledError:
+        verbose_proxy_logger.warning(
+            "Budget reservation reconciliation was cancelled after persisted spend; invalidating reserved counters",
+            exc_info=True,
+        )
+        try:
+            await asyncio.shield(
+                invalidate_budget_reservation_counters(
+                    budget_reservation=budget_reservation
+                )
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to invalidate reserved counters after reservation reconciliation was cancelled"
+            )
+        raise
     except Exception:
         verbose_proxy_logger.warning(
             "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and continuing",
@@ -2351,6 +2367,9 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
                 value=increment,
                 refresh_ttl=True,
             )
+        except asyncio.CancelledError:
+            await asyncio.shield(_invalidate_spend_counter(counter_key=counter_key))
+            raise
         except Exception:
             await _invalidate_spend_counter(counter_key=counter_key)
             raise
