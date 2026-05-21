@@ -140,6 +140,20 @@ def test_to_http_exception_fabricates_resource_metadata_when_upstream_omits_head
     }
 
 
+def test_to_http_exception_fabricates_absolute_resource_metadata_with_base_url():
+    err = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate=None,
+        server_name="sample_docs",
+    )
+
+    http_exc = err.to_http_exception(base_url="https://gateway.example.com/")
+    assert http_exc.status_code == 401
+    assert http_exc.headers == {
+        "www-authenticate": 'Bearer resource_metadata="https://gateway.example.com/.well-known/oauth-protected-resource/mcp/sample_docs"'
+    }
+
+
 def test_to_http_exception_skips_challenge_for_non_401_status():
     err = MCPUpstreamAuthError(
         status_code=403,

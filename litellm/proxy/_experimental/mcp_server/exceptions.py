@@ -28,7 +28,7 @@ class MCPUpstreamAuthError(Exception):
         self.server_name = server_name
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
-    def to_http_exception(self) -> HTTPException:
+    def to_http_exception(self, base_url: Optional[str] = None) -> HTTPException:
         """Convert this upstream-auth error into an ``HTTPException`` that
         preserves the upstream status code and any ``WWW-Authenticate``
         challenge, so standards-compliant MCP clients can trigger the
@@ -38,13 +38,17 @@ class MCPUpstreamAuthError(Exception):
         RFC 7235 §3.1) we fabricate a ``Bearer resource_metadata=`` challenge
         that points at the gateway's standard-pattern well-known endpoint for
         this server, so MCP clients can still initiate RFC 9728 discovery
-        against the upstream IdP via the gateway's proxied metadata.
+        against the upstream IdP via the gateway's proxied metadata. Callers
+        should pass ``base_url`` (the gateway origin, no trailing slash) so
+        the fabricated URI is absolute as RFC 9728 §3.2 requires; strict
+        clients reject relative URIs in the Bearer challenge.
         """
         challenge: Optional[str] = self.www_authenticate
         if challenge is None and self.status_code == 401:
+            prefix = base_url.rstrip("/") if base_url else ""
             challenge = (
                 "Bearer resource_metadata="
-                f'"/.well-known/oauth-protected-resource/mcp/{self.server_name}"'
+                f'"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"'
             )
         return HTTPException(
             status_code=self.status_code,

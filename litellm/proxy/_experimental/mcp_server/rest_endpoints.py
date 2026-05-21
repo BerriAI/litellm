@@ -47,6 +47,9 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        get_request_base_url,
+    )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
         MCPServer,
@@ -437,6 +440,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
         raw_headers_from_request: dict,
         user_api_key_dict: "UserAPIKeyAuth",
+        request: Request,
     ) -> dict:
         """
         Resolve and fetch tools for a single specified MCP server.
@@ -511,7 +515,7 @@ if MCP_AVAILABLE:
         except MCPUpstreamAuthError as e:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise e.to_http_exception()
+            raise e.to_http_exception(base_url=get_request_base_url(request))
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -536,6 +540,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
         raw_headers_from_request: dict,
         user_api_key_dict: UserAPIKeyAuth,
+        request: Request,
     ) -> dict:
         """Handle tool listing for a single server_id request."""
         # Resolve a server name to its UUID if needed
@@ -604,7 +609,7 @@ if MCP_AVAILABLE:
         except MCPUpstreamAuthError as e:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise e.to_http_exception()
+            raise e.to_http_exception(base_url=get_request_base_url(request))
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -692,6 +697,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=mcp_auth_header,
                     raw_headers_from_request=raw_headers_from_request,
                     user_api_key_dict=user_api_key_dict,
+                    request=request,
                 )
             else:
                 if not allowed_server_ids:
