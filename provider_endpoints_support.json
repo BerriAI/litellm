@@ -1538,6 +1538,24 @@
         "interactions": true
       }
     },
+    "nearai": {
+      "display_name": "NEAR AI Cloud (`nearai`)",
+      "url": "https://cloud.near.ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "nlp_cloud": {
       "display_name": "NLP Cloud (`nlp_cloud`)",
       "url": "https://docs.litellm.ai/docs/providers/nlp_cloud",

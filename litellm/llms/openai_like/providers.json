@@ -114,5 +114,12 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "nearai": {
+    "base_url": "https://cloud-api.near.ai/v1",
+    "api_key_env": "NEARAI_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
