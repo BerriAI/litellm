@@ -3087,12 +3087,11 @@ if MCP_AVAILABLE:
             # Authorization in extra_headers). Gateway-managed OAuth2 servers
             # must not receive the ``resource_metadata=`` challenge emitted
             # below — they require ``authorization_uri=`` pointing at the
-            # gateway AS metadata.
+            # gateway AS metadata. ``is_oauth_passthrough`` already requires
+            # ``auth_type in (None, MCPAuth.none)``, which is mutually
+            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
+            # so M2M servers are implicitly excluded here.
             if srv.is_oauth_passthrough
-            # Exclude M2M servers: _prepare_mcp_server_headers skips caller
-            # Authorization when has_client_credentials is set, so probing
-            # those with the caller's token would send the wrong credential.
-            and not srv.has_client_credentials
         ]
         if not passthrough_servers:
             return
