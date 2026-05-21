@@ -255,6 +255,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
+    SPEND_LOGS_V2 = "/spend/logs/v2"
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -548,6 +549,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
+        KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
@@ -599,6 +601,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
         "/cost/estimate",
