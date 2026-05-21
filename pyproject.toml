@@ -77,6 +77,7 @@ extra_proxy = [
     "resend==2.23.0",
     "redisvl==0.4.1; python_version < '3.14'",
     "a2a-sdk==0.3.24",
+    "sqlmodel>=0.0.22,<1.0",
 ]
 utils = [
     # Not in Docker or PyPI proxy extra.
