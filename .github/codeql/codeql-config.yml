@@ -14,23 +14,6 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
-  # py/weak-sensitive-data-hashing (CWE-328): fires on the OCI signing call at
-  # litellm/llms/oci/common_utils.py, which hashes the HTTP request body to
-  # produce the x-content-sha256 header required by the OCI HTTP signing spec —
-  # a content-integrity hash, not a password or secret hash. SHA-256 is mandated
-  # by Oracle for this header; see
-  # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-  #
-  # The `usedforsecurity=False` flag on the hashlib.sha256 call already declares
-  # non-security intent, but CodeQL's taint flow still re-fires when callers
-  # further up the stack are modified. CodeQL has no native per-file query
-  # filter and GitHub Code Scanning ignores `# lgtm[...]` / `# codeql[...]`
-  # inline comments, so excluding the query globally is the narrowest available
-  # suppression that still keeps every other CodeQL query active on
-  # common_utils.py. py/weak-cryptographic-algorithm continues to catch
-  # genuinely weak hashes (MD5/SHA-1) elsewhere in the codebase.
-  - exclude:
-      id: py/weak-sensitive-data-hashing        # CWE-328
 
 paths-ignore:
   - tests
