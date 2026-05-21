@@ -123,25 +123,22 @@ class TestOCIEmbeddingConfig:
         assert "litellm" in result["user-agent"]
 
     def test_validate_environment_missing_credentials(self):
-        """test validate_environment sets headers even with incomplete credentials.
+        """test validate_environment raises OCIError when required credentials are missing."""
+        from litellm.llms.oci.common_utils import OCIError
 
-        Credential validation is deferred to signing time — validate_environment only
-        populates common HTTP headers (content-type, user-agent).
-        """
         config = OCIEmbeddingConfig()
         incomplete_params = {
             "oci_user": "ocid1.user.oc1..xxx",
             # Missing oci_fingerprint, oci_tenancy, oci_key/oci_key_file, oci_compartment_id
         }
-        result = config.validate_environment(
-            headers={},
-            model=TEST_MODEL,
-            messages=[],
-            optional_params=incomplete_params,
-            litellm_params={},
-        )
-        assert result["content-type"] == "application/json"
-        assert "litellm" in result["user-agent"]
+        with pytest.raises(OCIError, match="Missing required parameters"):
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params=incomplete_params,
+                litellm_params={},
+            )
 
     def test_validate_environment_with_signer(self):
         """test validate_environment passes when oci_signer is provided."""
