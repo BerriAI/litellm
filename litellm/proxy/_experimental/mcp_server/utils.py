@@ -3,7 +3,7 @@ MCP Server Utilities
 """
 
 import re
-from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple, Union
 
 import hashlib
 import importlib
@@ -133,11 +133,11 @@ def sanitize_mcp_alias_for_header(alias: str) -> str:
 
 
 def lookup_mcp_server_auth_in_headers(
-    mcp_server_auth_headers: Dict[str, Dict[str, str]],
+    mcp_server_auth_headers: Mapping[str, Union[str, Dict[str, str]]],
     *,
     alias: Optional[str] = None,
     server_name: Optional[str] = None,
-) -> Optional[Dict[str, str]]:
+) -> Optional[Union[str, Dict[str, str]]]:
     """
     Resolve server-specific auth headers with case-insensitive matching.
 

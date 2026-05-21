@@ -1212,7 +1212,7 @@ class MCPServerManager:
                 return []
 
             # Get server-specific auth header if available
-            server_auth_header = None
+            server_auth_header: Optional[Union[str, Dict[str, str]]] = None
             if mcp_server_auth_headers:
                 from litellm.proxy._experimental.mcp_server.utils import (
                     lookup_mcp_server_auth_in_headers,
