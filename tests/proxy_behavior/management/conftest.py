@@ -4,7 +4,7 @@ import os
 import tempfile
 import uuid
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Dict, Optional
 
 import httpx
 import pytest_asyncio
@@ -44,10 +44,11 @@ async def proxy_app():
 
     # proxy_startup_event re-reads master_key from LITELLM_MASTER_KEY and
     # unconditionally overwrites the global, even when initialize() already
-    # set it from the config YAML. Without these env vars, the entire auth
-    # stack degrades to user_id=None / non-PROXY_ADMIN for every token.
-    os.environ.setdefault("LITELLM_MASTER_KEY", MASTER_KEY)
-    os.environ.setdefault("CONFIG_FILE_PATH", config_path)
+    # set it from the config YAML. Force (not setdefault) both vars: an
+    # ambient LITELLM_MASTER_KEY with a different value would make the proxy
+    # authenticate on that key while the tests still send MASTER_KEY.
+    os.environ["LITELLM_MASTER_KEY"] = MASTER_KEY
+    os.environ["CONFIG_FILE_PATH"] = config_path
 
     await initialize(config=config_path)
 
@@ -94,6 +95,33 @@ class Scratch:
 
     def tag(self, suffix: str = "") -> str:
         return f"{self.prefix}-{suffix}" if suffix else self.prefix
+
+
+async def create_scratch_key(
+    proxy_client,
+    seeder_cleartext: str,
+    scratch_prefix: str,
+    *,
+    user_id: str,
+    team_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> str:
+    """Seed a scratch-tagged key via /key/generate; returns its cleartext.
+
+    Shared by the write-scenario matrices (key update/regenerate/delete).
+    """
+    body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
+    if team_id is not None:
+        body["team_id"] = team_id
+    if organization_id is not None:
+        body["organization_id"] = organization_id
+    resp = await proxy_client.post(
+        "/key/generate",
+        headers={"Authorization": f"Bearer {seeder_cleartext}"},
+        json=body,
+    )
+    assert resp.status_code == 200, f"setup failed: {resp.text}"
+    return resp.json()["key"]
 
 
 @pytest_asyncio.fixture

@@ -1,10 +1,9 @@
-from typing import Any, Dict, Optional
-
 import pytest
 
 from litellm.proxy.utils import hash_token
 
 from .actors import TEAM_ALPHA, TEAM_BETA, Actor
+from .conftest import create_scratch_key
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -36,26 +35,6 @@ _SCENARIOS = [
 ]
 
 
-async def _create_scratch_key(
-    proxy_client,
-    seeder_cleartext: str,
-    scratch_prefix: str,
-    *,
-    user_id: str,
-    team_id: Optional[str] = None,
-) -> str:
-    body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
-    if team_id is not None:
-        body["team_id"] = team_id
-    resp = await proxy_client.post(
-        "/key/generate",
-        headers={"Authorization": f"Bearer {seeder_cleartext}"},
-        json=body,
-    )
-    assert resp.status_code == 200, f"setup failed: {resp.text}"
-    return resp.json()["key"]
-
-
 @pytest.mark.parametrize(
     "actor,target_shape,expected_status",
     [(a, t, s) for (_id, a, t, s) in _SCENARIOS],
@@ -74,11 +53,11 @@ async def test_key_delete_authz_matrix(
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext
 
     if target_shape == "self":
-        target_cleartext = await _create_scratch_key(
+        target_cleartext = await create_scratch_key(
             proxy_client, seeder, scratch.prefix, user_id=caller.user_id
         )
     elif target_shape == "owner":
-        target_cleartext = await _create_scratch_key(
+        target_cleartext = await create_scratch_key(
             proxy_client,
             seeder,
             scratch.prefix,
@@ -86,7 +65,7 @@ async def test_key_delete_authz_matrix(
             team_id=TEAM_ALPHA,
         )
     elif target_shape == "cross_org":
-        target_cleartext = await _create_scratch_key(
+        target_cleartext = await create_scratch_key(
             proxy_client,
             seeder,
             scratch.prefix,

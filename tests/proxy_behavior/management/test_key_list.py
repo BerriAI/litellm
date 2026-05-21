@@ -21,6 +21,27 @@ _VISIBILITY = {
 }
 
 
+async def _all_visible_hashes(proxy_client, caller_cleartext) -> set:
+    """Walk every /key/list page — size is capped at 100 by the endpoint, so a
+    single request can truncate PROXY_ADMIN's view on a non-fresh DB."""
+    hashes: set = set()
+    page = 1
+    while True:
+        resp = await proxy_client.get(
+            f"/key/list?page={page}&size=100",
+            headers={"Authorization": f"Bearer {caller_cleartext}"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        for entry in body.get("keys", []):
+            tok = entry.get("token") if isinstance(entry, dict) else entry
+            if tok:
+                hashes.add(tok)
+        if page >= (body.get("total_pages") or 1):
+            return hashes
+        page += 1
+
+
 @pytest.mark.parametrize(
     "actor,expected_visible",
     list(_VISIBILITY.items()),
@@ -32,16 +53,7 @@ async def test_key_list_visibility(
     caller = world.keys[actor]
     hashed_to_actor = {world.keys[a].hashed: a for a in Actor}
 
-    resp = await proxy_client.get(
-        "/key/list?size=100",
-        headers={"Authorization": f"Bearer {caller.cleartext}"},
-    )
-    assert resp.status_code == 200, f"{actor.value}: {resp.text}"
-
-    returned_hashes = {
-        (entry.get("token") if isinstance(entry, dict) else entry)
-        for entry in resp.json().get("keys", [])
-    }
+    returned_hashes = await _all_visible_hashes(proxy_client, caller.cleartext)
     visible_seeded = {
         hashed_to_actor[h] for h in returned_hashes if h in hashed_to_actor
     }
