@@ -267,6 +267,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
+      // If the user is currently viewing the detail page of the server they
+      // just deleted, return them to the All Servers list. Otherwise the
+      // detail view would stay mounted, fall back to an empty stub server,
+      // and show a phantom "Unnamed Server" page.
+      if (selectedServerId === serverIdToDelete) {
+        setEditServer(false);
+        setSelectedServerId(null);
+      }
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
