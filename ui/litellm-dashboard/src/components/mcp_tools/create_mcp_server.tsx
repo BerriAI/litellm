@@ -12,8 +12,18 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./mock/EnvVarsSection";
+import {
+  setEnvVarDefinitions,
+  notifyEnvVarsChanged,
+  EnvVarDefinition,
+} from "./mock/mockMcpEnvVars";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import {
+  validateMCPServerUrl,
+  validateMCPServerName,
+  guessLogoFromUrl,
+} from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -252,6 +262,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       transport: transport,
     };
 
+    // Curated discovery entries carry their own icon — use it as the default
+    // logo so the user doesn't have to re-pick one from the grid.
+    if (prefillData.icon_url) {
+      setLogoUrl(prefillData.icon_url);
+    }
+
     if (transport === "stdio") {
       const stdioObj: Record<string, any> = {};
       if (prefillData.command) stdioObj.command = prefillData.command;
@@ -286,8 +302,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         token_validation_json: rawTokenValidationJson,
+        mock_env_vars: mockEnvVarsRaw,
         ...restValues
       } = values;
+
+      // PROTOTYPE: persist the env-var definitions to localStorage keyed by
+      // the server alias. Replaced once the backend stores these properly.
+      const cleanedEnvVars: EnvVarDefinition[] = Array.isArray(mockEnvVarsRaw)
+        ? mockEnvVarsRaw
+            .filter((row: any) => row && row.name && String(row.name).trim() !== "")
+            .map((row: any) => ({
+              name: String(row.name).trim(),
+              value: row.scope === "per_user" ? "" : (row.value ?? ""),
+              scope: row.scope === "per_user" ? "per_user" : "global",
+            }))
+        : [];
+      const aliasForEnvVars =
+        (restValues.alias && String(restValues.alias).trim()) ||
+        (restValues.server_name && String(restValues.server_name).trim()) ||
+        "";
+      if (aliasForEnvVars && cleanedEnvVars.length > 0) {
+        setEnvVarDefinitions(aliasForEnvVars, cleanedEnvVars);
+        notifyEnvVarsChanged();
+      }
 
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
@@ -496,6 +533,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setFormValues((prev) => ({ ...prev, alias: normalized }));
     }
   }, [formValues.server_name]);
+
+  // Suggest a logo from the URL host when the admin hasn't picked one yet.
+  // Driven by an explicit host allow-list (see WELL_KNOWN_LOGOS in utils),
+  // not slug arithmetic on the server name — so renaming the server later
+  // can't change the icon. Only fires when `logoUrl` is unset, so it never
+  // clobbers a manually selected logo or a discovery prefill.
+  React.useEffect(() => {
+    if (logoUrl) return;
+    const suggested = guessLogoFromUrl(formValues.url);
+    if (suggested) setLogoUrl(suggested);
+  }, [formValues.url, logoUrl]);
 
   // Clear formValues when modal closes to reset child components
   React.useEffect(() => {
@@ -987,6 +1035,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
+
+          {/* PROTOTYPE: Environment variables (global vs per-user) */}
+          <div className="mt-8">
+            <EnvVarsSection />
           </div>
 
           {/* Permission Management / Access Control Section */}

@@ -11,6 +11,7 @@ import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -21,6 +22,7 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  onDelete?: (serverId: string) => void;
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -32,11 +34,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  onDelete,
 }) => {
   const [editing, setEditing] = useState(isEditing);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  // When the caller opens this view directly into edit mode, jump to the
+  // Settings tab (index 2) so the edit form and the Danger zone are visible
+  // without an extra click. Non-admins don't see the Settings tab, so they
+  // stay on Overview.
+  const [selectedTabIndex, setSelectedTabIndex] = useState(
+    isEditing && isProxyAdmin ? 2 : 0,
+  );
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -77,40 +86,53 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
           Back to All Servers
         </Button>
-        <div className="flex items-center gap-2">
-          <Title className="text-2xl">{mcpServer.server_name || mcpServer.alias || "Unnamed Server"}</Title>
-          <AntdButton
-            type="text"
-            size="small"
-            icon={copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            onClick={() => copyToClipboard(mcpServer.server_name || mcpServer.alias, "mcp-server_name")}
-            className={`transition-all duration-200 ${copiedStates["mcp-server_name"]
-              ? "text-green-600 bg-green-50 border-green-200"
-              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-              }`}
-          />
-          {mcpServer.alias && mcpServer.server_name && mcpServer.alias !== mcpServer.server_name && (
-            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-mono">
-              {mcpServer.alias}
-            </span>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <Title className="text-2xl">{mcpServer.server_name || mcpServer.alias || "Unnamed Server"}</Title>
+              <AntdButton
+                type="text"
+                size="small"
+                icon={copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(mcpServer.server_name || mcpServer.alias, "mcp-server_name")}
+                className={`transition-all duration-200 ${copiedStates["mcp-server_name"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                  }`}
+              />
+              {mcpServer.alias && mcpServer.server_name && mcpServer.alias !== mcpServer.server_name && (
+                <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-mono">
+                  {mcpServer.alias}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 mt-1">
+              <Text className="text-gray-400 font-mono text-xs">{mcpServer.server_id}</Text>
+              <AntdButton
+                type="text"
+                size="small"
+                icon={copiedStates["mcp-server-id"] ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
+                onClick={() => copyToClipboard(mcpServer.server_id, "mcp-server-id")}
+                className={`transition-all duration-200 ${copiedStates["mcp-server-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-300 hover:text-gray-500 hover:bg-gray-50"
+                  }`}
+              />
+            </div>
+            {mcpServer.description && (
+              <Text className="text-gray-500 mt-2">{mcpServer.description}</Text>
+            )}
+          </div>
+          {isProxyAdmin && onDelete && (
+            <AntdButton
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => onDelete(mcpServer.server_id)}
+            >
+              Delete Server
+            </AntdButton>
           )}
         </div>
-        <div className="flex items-center gap-1.5 mt-1">
-          <Text className="text-gray-400 font-mono text-xs">{mcpServer.server_id}</Text>
-          <AntdButton
-            type="text"
-            size="small"
-            icon={copiedStates["mcp-server-id"] ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
-            onClick={() => copyToClipboard(mcpServer.server_id, "mcp-server-id")}
-            className={`transition-all duration-200 ${copiedStates["mcp-server-id"]
-              ? "text-green-600 bg-green-50 border-green-200"
-              : "text-gray-300 hover:text-gray-500 hover:bg-gray-50"
-              }`}
-          />
-        </div>
-        {mcpServer.description && (
-          <Text className="text-gray-500 mt-2">{mcpServer.description}</Text>
-        )}
       </div>
 
       {/* TODO: magic number for index */}

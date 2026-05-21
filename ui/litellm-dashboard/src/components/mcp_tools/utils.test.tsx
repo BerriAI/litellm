@@ -5,6 +5,7 @@ import {
   getMaskedAndFullUrl,
   validateMCPServerUrl,
   validateMCPServerName,
+  guessLogoFromUrl,
 } from "./utils";
 
 describe("extractMCPToken", () => {
@@ -71,5 +72,58 @@ describe("validateMCPServerName", () => {
 
   it("should reject names containing spaces", async () => {
     await expect(validateMCPServerName("my server")).rejects.toBeDefined();
+  });
+});
+
+describe("guessLogoFromUrl", () => {
+  it("should match an exact host against the registry", () => {
+    expect(guessLogoFromUrl("https://github.com/org/repo")).toBe(
+      "/ui/assets/logos/github.svg",
+    );
+    expect(guessLogoFromUrl("https://figma.com")).toBe(
+      "/ui/assets/logos/figma.svg",
+    );
+  });
+
+  it("should match wildcard subdomains", () => {
+    expect(guessLogoFromUrl("https://api.github.com/user")).toBe(
+      "/ui/assets/logos/github.svg",
+    );
+    expect(guessLogoFromUrl("https://acme.atlassian.net/jira/api")).toBe(
+      "/ui/assets/logos/jira.svg",
+    );
+    expect(guessLogoFromUrl("https://api.linear.app/graphql")).toBe(
+      "/ui/assets/logos/linear.svg",
+    );
+    expect(guessLogoFromUrl("https://shop.myshopify.com")).toBe(
+      "/ui/assets/logos/shopify.svg",
+    );
+  });
+
+  it("should be case-insensitive on the host", () => {
+    expect(guessLogoFromUrl("https://API.GitHub.com")).toBe(
+      "/ui/assets/logos/github.svg",
+    );
+  });
+
+  it("should return undefined for unknown hosts", () => {
+    expect(
+      guessLogoFromUrl("https://internal-tools.example.com"),
+    ).toBeUndefined();
+    expect(guessLogoFromUrl("https://localhost:4000/mcp")).toBeUndefined();
+  });
+
+  it("should return undefined for unparseable URLs and empty input", () => {
+    expect(guessLogoFromUrl(undefined)).toBeUndefined();
+    expect(guessLogoFromUrl(null)).toBeUndefined();
+    expect(guessLogoFromUrl("")).toBeUndefined();
+    expect(guessLogoFromUrl("not a url")).toBeUndefined();
+  });
+
+  it("should not match a wildcard pattern against an unrelated host", () => {
+    // `*.github.com` must not match `github.com.evil.example`.
+    expect(
+      guessLogoFromUrl("https://github.com.evil.example/path"),
+    ).toBeUndefined();
   });
 });

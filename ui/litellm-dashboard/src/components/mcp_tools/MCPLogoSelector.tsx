@@ -1,31 +1,7 @@
 import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
-
-const logos = "/ui/assets/logos/";
-
-const WELL_KNOWN_LOGOS: { name: string; url: string }[] = [
-  { name: "GitHub", url: `${logos}github.svg` },
-  { name: "Slack", url: `${logos}slack.svg` },
-  { name: "Notion", url: `${logos}notion.svg` },
-  { name: "Linear", url: `${logos}linear.svg` },
-  { name: "Jira", url: `${logos}jira.svg` },
-  { name: "Figma", url: `${logos}figma.svg` },
-  { name: "Gmail", url: `${logos}gmail.svg` },
-  { name: "Google Drive", url: `${logos}google_drive.svg` },
-  { name: "Stripe", url: `${logos}stripe.svg` },
-  { name: "Shopify", url: `${logos}shopify.svg` },
-  { name: "Salesforce", url: `${logos}salesforce.svg` },
-  { name: "HubSpot", url: `${logos}hubspot.svg` },
-  { name: "Twilio", url: `${logos}twilio.svg` },
-  { name: "Cloudflare", url: `${logos}cloudflare.svg` },
-  { name: "Sentry", url: `${logos}sentry.svg` },
-  { name: "PostgreSQL", url: `${logos}postgresql.svg` },
-  { name: "Snowflake", url: `${logos}snowflake.svg` },
-  { name: "Zapier", url: `${logos}zapier.svg` },
-  { name: "Google", url: `${logos}google.svg` },
-  { name: "GitLab", url: `${logos}gitlab.svg` },
-];
+import { WELL_KNOWN_LOGOS } from "./utils";
 
 interface MCPLogoSelectorProps {
   value?: string;
@@ -51,28 +27,6 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
           <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
         </Tooltip>
       </div>
-
-      {/* Preview */}
-      {value && (
-        <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <img
-            src={value}
-            alt="Selected logo"
-            className="w-10 h-10 object-contain rounded"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-gray-500 truncate">{value}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onChange?.(undefined)}
-            className="text-xs text-gray-400 hover:text-red-500 cursor-pointer bg-transparent border-none"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* Well-known logo grid */}
       <div className="grid grid-cols-10 gap-1.5 mb-3">
