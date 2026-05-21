@@ -448,7 +448,7 @@ lunaryLogger = None
 aispendLogger = None
 supabaseClient = None
 callback_list: Optional[List[str]] = []
-_custom_llm_setup_done: bool = False
+_custom_provider_map_fingerprint: Optional[Tuple[str, ...]] = None
 _global_callbacks_registered: bool = False
 _callback_migration_counts: Optional[Tuple[int, int, int]] = None
 user_logger_fn = None
@@ -498,12 +498,21 @@ def print_verbose(
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
+def _get_custom_provider_map_fingerprint() -> Tuple[str, ...]:
+    return tuple(custom_llm["provider"] for custom_llm in litellm.custom_provider_map)
+
+
 def custom_llm_setup():
     """
     Add custom_llm provider to provider list
     """
-    global _custom_llm_setup_done
-    if _custom_llm_setup_done:
+    global _custom_provider_map_fingerprint
+
+    current_fingerprint = _get_custom_provider_map_fingerprint()
+    if (
+        _custom_provider_map_fingerprint is not None
+        and _custom_provider_map_fingerprint == current_fingerprint
+    ):
         return
 
     for custom_llm in litellm.custom_provider_map:
@@ -513,7 +522,7 @@ def custom_llm_setup():
         if custom_llm["provider"] not in litellm._custom_providers:
             litellm._custom_providers.append(custom_llm["provider"])
 
-    _custom_llm_setup_done = True
+    _custom_provider_map_fingerprint = current_fingerprint
 
 
 def _get_callback_list_counts() -> Tuple[int, int, int]:

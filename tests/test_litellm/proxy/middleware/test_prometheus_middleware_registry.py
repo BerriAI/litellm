@@ -1,5 +1,7 @@
 """Tests for conditional Prometheus middleware registration."""
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from starlette.middleware import Middleware
@@ -76,3 +78,41 @@ def test_maybe_register_is_idempotent():
     assert registry.maybe_register_prometheus_middlewares(app, settings) is True
     assert registry.maybe_register_prometheus_middlewares(app, settings) is False
     assert len(app.user_middleware) == 2
+
+
+def test_load_litellm_settings_from_env_config_file_path(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "litellm_settings:\n  callbacks:\n    - prometheus\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("WORKER_CONFIG", raising=False)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+
+    settings = registry.load_litellm_settings_from_env()
+
+    assert settings == {"callbacks": ["prometheus"]}
+
+
+def test_load_litellm_settings_from_env_worker_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "litellm_settings:\n  success_callback:\n    - prometheus\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+    monkeypatch.setenv(
+        "WORKER_CONFIG",
+        json.dumps({"config": str(config_path)}),
+    )
+
+    settings = registry.load_litellm_settings_from_env()
+
+    assert settings == {"success_callback": ["prometheus"]}
+
+
+def test_load_litellm_settings_from_env_returns_none_without_config(monkeypatch):
+    monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+    monkeypatch.delenv("WORKER_CONFIG", raising=False)
+
+    assert registry.load_litellm_settings_from_env() is None

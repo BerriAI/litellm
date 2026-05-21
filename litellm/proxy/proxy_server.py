@@ -409,6 +409,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_middleware_registry import (
+    load_litellm_settings_from_env,
     maybe_register_prometheus_middlewares,
 )
 from litellm.proxy.middleware.request_size_limit_middleware import (
@@ -1597,6 +1598,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
+)
+
+maybe_register_prometheus_middlewares(
+    app=app,
+    litellm_settings=load_litellm_settings_from_env(),
 )
 
 
@@ -4500,11 +4506,6 @@ class ProxyConfig:
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
         await self._init_non_llm_configs(
             config=config, config_file_path=config_file_path
-        )
-
-        maybe_register_prometheus_middlewares(
-            app=app,
-            litellm_settings=litellm_settings,
         )
 
         return router, router.get_model_list(), general_settings

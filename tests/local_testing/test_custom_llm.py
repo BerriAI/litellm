@@ -644,3 +644,24 @@ async def test_simple_aembedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
+
+def test_custom_llm_setup_should_rerun_when_provider_map_changes():
+    import litellm.utils as utils
+    from litellm.utils import custom_llm_setup
+
+    utils._custom_provider_map_fingerprint = None
+
+    handler = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_a", "custom_handler": handler}
+    ]
+    custom_llm_setup()
+    assert "custom_provider_a" in litellm._custom_providers
+
+    litellm.custom_provider_map = [
+        {"provider": "custom_provider_a", "custom_handler": handler},
+        {"provider": "custom_provider_b", "custom_handler": handler},
+    ]
+    custom_llm_setup()
+    assert "custom_provider_b" in litellm._custom_providers

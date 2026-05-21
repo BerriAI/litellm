@@ -105,6 +105,7 @@ from litellm.types.utils import (
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
     ModelInfo,
+    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
@@ -4985,9 +4986,17 @@ class StandardLoggingPayloadSetup:
                     model=model_cost_name, custom_llm_provider=custom_llm_provider
                 )
                 if provider_info:
-                    for key, value in provider_info.items():
-                        if value is not None:
-                            _model_info[key] = value  # type: ignore
+                    _model_info = cast(
+                        ModelInfoBase,
+                        {
+                            **_model_info,
+                            **{
+                                key: value
+                                for key, value in provider_info.items()
+                                if value is not None
+                            },
+                        },
+                    )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
                     model_map_value=ModelInfo(
