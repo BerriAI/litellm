@@ -89,6 +89,33 @@ def _assert_not_private_url(url: str) -> None:
             )
 
 
+def _assert_not_private_ip_literal(url: str) -> None:
+    """Raise ValueError if the url host is a private/reserved IP address literal.
+
+    aiohttp's TCPConnector skips _SSRFGuardResolver when the host is already an
+    IP address (no DNS lookup needed), so the resolver cannot block such URLs.
+    This function fills that gap with a fast, non-blocking check (no DNS I/O).
+    Hostname-based URLs are handled by _SSRFGuardResolver at connect time.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable this check.
+    """
+    if litellm.allow_requests_to_internal_ips:
+        return
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        return  # Not an IP literal — resolver will validate at connect time
+    if _is_blocked_address(addr):
+        raise ValueError(
+            f"api_base '{url}' contains a private/reserved IP address "
+            f"({hostname}) which is not allowed (SSRF protection)"
+        )
+
+
 class _SSRFGuardResolver(AbstractResolver):
     """Custom aiohttp resolver that validates IPs at TCP-connection time.
 
@@ -290,11 +317,12 @@ class BaseLLMAIOHTTPHandler:
             dynamic_client_session=async_client_session
         )
 
-        # SSRF validation on the async path is handled at TCP-connect time by
-        # _SSRFGuardResolver (attached to the TCPConnector).  A synchronous
-        # socket.getaddrinfo() preflight would block the event loop, so it is
-        # intentionally omitted here.  The sync path retains _assert_not_private_url
-        # because httpx has no equivalent connection-time resolver hook.
+        # IP-literal URLs bypass _SSRFGuardResolver because aiohttp's TCPConnector
+        # skips DNS resolution for hosts that are already IP addresses.  Check them
+        # here with a fast, non-blocking parse (no socket I/O).  Hostname-based URLs
+        # are handled by _SSRFGuardResolver at TCP-connect time, which also covers
+        # redirect targets, eliminating the DNS-rebinding TOCTOU window.
+        _assert_not_private_ip_literal(api_base)
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:

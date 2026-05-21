@@ -6,6 +6,7 @@ from unittest.mock import patch
 import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import (
     _SSRFGuardResolver,
+    _assert_not_private_ip_literal,
     _assert_not_private_url,
     _is_blocked_address,
 )
@@ -158,14 +159,52 @@ class TestAllowInternalIpsOptOut:
         await run()
 
 
+class TestAssertNotPrivateIpLiteral:
+    """Tests for the IP-literal bypass guard on the async path."""
+
+    def test_aws_metadata_ip_literal_blocked(self):
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_ip_literal("http://169.254.169.254/latest/meta-data/")
+
+    def test_localhost_ip_literal_blocked(self):
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_ip_literal("http://127.0.0.1/admin")
+
+    def test_private_10_network_ip_literal_blocked(self):
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_ip_literal("http://10.0.0.1/internal")
+
+    def test_hostname_not_blocked(self):
+        # Hostnames are not IP literals — resolver handles them
+        _assert_not_private_ip_literal("https://api.openai.com/v1/chat/completions")
+
+    def test_public_ip_literal_allowed(self):
+        _assert_not_private_ip_literal("https://104.18.7.8/v1/chat/completions")
+
+    def test_ipv6_loopback_literal_blocked(self):
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_ip_literal("http://[::1]/admin")
+
+    def test_ipv4_mapped_ipv6_private_literal_blocked(self):
+        with pytest.raises(ValueError, match="private/reserved"):
+            _assert_not_private_ip_literal("http://[::ffff:10.0.0.1]/internal")
+
+    def test_flag_disables_check(self):
+        litellm.allow_requests_to_internal_ips = True
+        try:
+            _assert_not_private_ip_literal("http://169.254.169.254/latest/meta-data/")
+        finally:
+            litellm.allow_requests_to_internal_ips = False
+
+
 class TestSSRFGuardOnRequestMethods:
     """Verify SSRF protection is enforced on both sync and async request paths."""
 
     @pytest.mark.asyncio
-    async def test_make_common_async_call_does_not_block_event_loop(self):
-        """Async path delegates SSRF to _SSRFGuardResolver (connection-time),
-        not a sync preflight — so a mock session with a private api_base must
-        NOT raise at preflight; it proceeds until the actual TCP connect."""
+    async def test_make_common_async_call_blocks_ip_literal_without_dns(self):
+        """Async path blocks IP-literal api_base at preflight (no DNS I/O needed).
+        This closes the TCPConnector bypass where aiohttp skips the custom resolver
+        when the host is already an IP address."""
         from unittest.mock import AsyncMock, Mock
 
         from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -173,18 +212,9 @@ class TestSSRFGuardOnRequestMethods:
         handler = BaseLLMAIOHTTPHandler()
         mock_config = Mock()
         mock_config.max_retry_on_unprocessable_entity_error = 1
-        # Mock session that raises aiohttp.ClientError on connect (simulating resolver block)
         mock_session = AsyncMock()
-        mock_response = AsyncMock()
-        mock_response.ok = True
-        mock_session.post.return_value.__aenter__ = AsyncMock(
-            return_value=mock_response
-        )
-        mock_session.post.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        # Should NOT raise ValueError at preflight — sync DNS check was removed
-        # to avoid blocking the event loop. Protection is via _SSRFGuardResolver.
-        try:
+        with pytest.raises(ValueError, match="private/reserved"):
             await handler._make_common_async_call(
                 async_client_session=mock_session,
                 provider_config=mock_config,
@@ -194,8 +224,39 @@ class TestSSRFGuardOnRequestMethods:
                 timeout=30,
                 litellm_params={},
             )
+
+    @pytest.mark.asyncio
+    async def test_make_common_async_call_hostname_defers_to_resolver(self):
+        """Async path does NOT do a blocking DNS preflight for hostname-based URLs.
+        SSRF protection for those is handled by _SSRFGuardResolver at TCP-connect time."""
+        from unittest.mock import AsyncMock, Mock
+
+        from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+        handler = BaseLLMAIOHTTPHandler()
+        mock_config = Mock()
+        mock_config.max_retry_on_unprocessable_entity_error = 1
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.ok = True
+        mock_session.post.return_value.__aenter__ = AsyncMock(
+            return_value=mock_response
+        )
+        mock_session.post.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        # Hostname-based private URL must NOT raise at preflight — resolver handles it
+        try:
+            await handler._make_common_async_call(
+                async_client_session=mock_session,
+                provider_config=mock_config,
+                api_base="http://internal.corp/api",
+                headers={},
+                data={},
+                timeout=30,
+                litellm_params={},
+            )
         except ValueError as e:
-            pytest.fail(f"Async path must not do a blocking preflight DNS check: {e}")
+            pytest.fail(f"Async path must not do a blocking DNS preflight: {e}")
         except Exception:
             pass  # Other errors (e.g. from mock) are fine
 
