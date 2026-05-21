@@ -2871,16 +2871,12 @@ async def test_get_public_key_tries_next_jwks_url_when_kid_missing(monkeypatch):
 
     first_jwks_url = "https://first.example.com/keys"
     second_jwks_url = "https://second.example.com/keys"
-    monkeypatch.setenv(
-        "JWT_PUBLIC_KEY_URL", f"{first_jwks_url}, {second_jwks_url},,"
-    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", f"{first_jwks_url}, {second_jwks_url},,")
     _, first_jwk = _get_rsa_key_and_jwk(kid="first-key")
     _, second_jwk = _get_rsa_key_and_jwk(kid="second-key")
     cache = DualCache()
     cache.set_cache(key=f"litellm_jwt_auth_keys_{first_jwks_url}", value=[first_jwk])
-    cache.set_cache(
-        key=f"litellm_jwt_auth_keys_{second_jwks_url}", value=[second_jwk]
-    )
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{second_jwks_url}", value=[second_jwk])
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(
         prisma_client=None,
@@ -2902,8 +2898,7 @@ def test_get_jwks_url_for_issuer_falls_back_to_discovery_document():
     jwks_url = jwt_handler._get_jwks_url_for_issuer(issuer_config=issuer_config)
 
     assert (
-        jwks_url
-        == "https://issuer.example.com/tenant/.well-known/openid-configuration"
+        jwks_url == "https://issuer.example.com/tenant/.well-known/openid-configuration"
     )
 
 
@@ -3002,7 +2997,13 @@ async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_multi_issuer_jwt_rejects_unknown_issuer(monkeypatch):
+async def test_multi_issuer_jwt_unknown_issuer_falls_back_to_global_jwks(monkeypatch):
+    """Tokens whose ``iss`` is not in the configured issuers list fall through
+    to the legacy ``JWT_PUBLIC_KEY_URL`` path so operators can add the new
+    ``issuers`` list to a live deployment without breaking existing tokens
+    minted by non-configured IdPs. With no global JWKS configured, the legacy
+    path surfaces a ``Missing JWT Public Key URL from environment.`` error.
+    """
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
 
@@ -3028,7 +3029,7 @@ async def test_multi_issuer_jwt_rejects_unknown_issuer(monkeypatch):
     with pytest.raises(Exception) as exc:
         await jwt_handler.auth_jwt(token=token)
 
-    assert "Unsupported JWT issuer" in str(exc.value)
+    assert "Missing JWT Public Key URL from environment." in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -3106,7 +3107,15 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_multi_issuer_jwt_missing_mapped_claim_fails_closed(monkeypatch):
+async def test_multi_issuer_jwt_missing_mapped_claim_leaves_user_id_unset(
+    monkeypatch,
+):
+    """Mapped issuer claims behave like the global ``litellm_jwtauth`` path —
+    present claims override the normalised value, missing ones simply leave
+    the corresponding LiteLLM-internal claim absent (rather than failing the
+    JWT outright). This keeps multi-issuer auth tolerant of tokens that omit
+    optional fields like email or org id.
+    """
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
 
@@ -3131,11 +3140,10 @@ async def test_multi_issuer_jwt_missing_mapped_claim_fails_closed(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
-        await jwt_handler.auth_jwt(token=token)
+    claims = await jwt_handler.auth_jwt(token=token)
 
-    assert "missing required mapped claim: email" in str(exc.value)
-    assert "Validation fails" not in str(exc.value)
+    assert claims[jwt_handler.LITELLM_JWT_ISSUER_CLAIM] == issuer
+    assert jwt_handler.LITELLM_USER_ID_CLAIM not in claims
 
 
 @pytest.mark.asyncio

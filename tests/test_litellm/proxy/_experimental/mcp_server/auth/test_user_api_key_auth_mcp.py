@@ -918,12 +918,13 @@ class TestMCPPassthroughColdStartAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
             assert exc_info.value.status_code == 401
-            # Cold-start lookup (signaled by the ``client_ip`` kwarg) must not
-            # fire for the aggregate ``/mcp`` route — only path-targeted
-            # routes are eligible for OAuth discovery admission.
-            assert not any(
-                "client_ip" in c.kwargs
-                for c in mock_mgr.get_mcp_server_by_name.call_args_list
+            # The delegate-auth-to-upstream check looks up the header-supplied
+            # server name once. Cold-start admission must NOT then fire for
+            # the aggregate ``/mcp`` route — only path-targeted routes are
+            # eligible for OAuth discovery admission — so the lookup must
+            # be called exactly once (by the delegate check).
+            mock_mgr.get_mcp_server_by_name.assert_called_once_with(
+                "passthrough_server", client_ip=""
             )
 
     async def test_cold_start_rejects_server_specific_authorization_header(self):
