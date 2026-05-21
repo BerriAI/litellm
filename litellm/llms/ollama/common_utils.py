@@ -65,7 +65,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
         from litellm.secret_managers.main import get_secret_str
 
         return (
-            os.environ.get("OLLAMA_API_KEY")
+            api_key
+            or os.environ.get("OLLAMA_API_KEY")
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("OLLAMA_API_KEY")
@@ -98,8 +99,13 @@ class OllamaModelInfo(BaseLLMModelInfo):
         List all models available on the Ollama server via /api/tags endpoint.
         """
 
+        passed_api_base = api_base
         base = self.get_server_api_base(api_base)
-        api_key = self.get_api_key()
+        api_key = (
+            self.get_api_key(api_key)
+            if api_key is not None or passed_api_base is None
+            else None
+        )
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         names: set[str] = set()
@@ -176,13 +182,21 @@ class OllamaModelInfo(BaseLLMModelInfo):
         return None
 
     def get_runtime_model_info(
-        self, model: str, api_base: Optional[str] = None
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> dict[str, Any]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
+        passed_api_base = api_base
         api_base = self.get_server_api_base(api_base)
-        api_key = self.get_api_key()
+        api_key = (
+            self.get_api_key(api_key)
+            if api_key is not None or passed_api_base is None
+            else None
+        )
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
@@ -220,11 +234,16 @@ class OllamaModelInfo(BaseLLMModelInfo):
         }
 
     def get_model_info(
-        self, model: str, api_base: Optional[str] = None
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         if self._is_static_ollama_model(model):
             return None
-        return self.get_runtime_model_info(model=model, api_base=api_base)
+        return self.get_runtime_model_info(
+            model=model, api_base=api_base, api_key=api_key
+        )
 
     def validate_environment(
         self,

@@ -221,13 +221,20 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_KEY")
         )
 
-    def get_model_info(self, model: str, api_base: Optional[str] = None) -> Any:
+    def get_model_info(
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Any:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
         }'
         """
-        return OllamaModelInfo().get_runtime_model_info(model=model, api_base=api_base)
+        return OllamaModelInfo().get_runtime_model_info(
+            model=model, api_base=api_base, api_key=api_key
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
