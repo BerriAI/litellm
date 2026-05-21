@@ -2762,6 +2762,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2828,14 +2829,29 @@ class MCPServerManager:
             normalized_raw_headers = {
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
+            has_explicit_litellm_admission_header = (
+                normalized_raw_headers.get("x-litellm-api-key") is not None
+            )
+            admission_consumed_authorization_as_litellm_key = (
+                user_api_key_auth is not None
+                and bool(getattr(user_api_key_auth, "api_key", None))
+                and not has_explicit_litellm_admission_header
+            )
+
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if (
-                    mcp_server.has_client_credentials
-                    and header.lower() == "authorization"
-                ):
-                    continue
+                if header.lower() == "authorization":
+                    if mcp_server.has_client_credentials:
+                        continue
+                    if mcp_server.is_oauth_passthrough and (
+                        admission_consumed_authorization_as_litellm_key
+                        or (
+                            user_api_key_auth is None
+                            and not has_explicit_litellm_admission_header
+                        )
+                    ):
+                        continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
                     continue
@@ -3126,6 +3142,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
