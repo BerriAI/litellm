@@ -146,6 +146,35 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         ]
         self.assertNotIn("guardrail_response", attribute_keys)
 
+    def test_create_guardrail_span_with_list_mode_is_hashable(self):
+        """Regression: when ``guardrail_mode`` is configured as a list
+        (e.g. ``mode: ["pre_call", "post_call"]``), ``_emit_once`` builds
+        a dedupe-key tuple containing the mode; using the list directly
+        raised ``TypeError: unhashable type: 'list'`` and produced an
+        HTTP/500 for every guardrailed request. The mode must be
+        normalized to a hashable form before lookup.
+        """
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        guardrail_info = {
+            "guardrail_name": "custom-guardrail",
+            "guardrail_mode": ["pre_call", "post_call"],
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
+
+        # Must not raise ``TypeError: unhashable type: 'list'``.
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        otel.tracer.start_span.assert_called_once()
+        mock_span.set_attribute.assert_any_call("guardrail_name", "custom-guardrail")
+
 
 class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
     """team_id / team_alias must land on every child span of a
