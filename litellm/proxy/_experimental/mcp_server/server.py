@@ -3142,7 +3142,7 @@ if MCP_AVAILABLE:
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",
-                    headers={"WWW-Authenticate": www_authenticate},
+                    headers={"www-authenticate": www_authenticate},
                 )
             if probe_status == 403:
                 # Token is valid but the caller lacks permission — do not hint
@@ -3311,10 +3311,29 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
             )
+
+            # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
+            scope["headers"] = [
+                (k, v)
+                for k, v in scope.get("headers", [])
+                if k.lower() != b"x-mcp-toolset-id"
+            ]
+
+            # Apply toolset scope if set server-side via ContextVar so the
+            # downstream probe list matches the fully-authorized server set
+            # (mirrors the streamable HTTP handler).
+            active_toolset_id = _mcp_active_toolset_id.get()
+            if active_toolset_id and user_api_key_auth is not None:
+                user_api_key_auth = await _apply_toolset_scope(
+                    user_api_key_auth, active_toolset_id
+                )
+
             # Pre-flight auth check for pass-through servers: surface upstream
             # 401/403 as a proper challenge before the SSE session commits 200
             # headers, so clients can refresh their OAuth token instead of
-            # being stuck with a silently empty tool list.
+            # being stuck with a silently empty tool list. Must run after
+            # toolset scoping so the probe list is derived from the fully-
+            # authorized server set, not the raw user-supplied names.
             await _check_passthrough_upstream_auth(
                 scope, user_api_key_auth, mcp_servers, _sse_client_ip
             )
