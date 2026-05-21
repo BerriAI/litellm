@@ -134,9 +134,20 @@ class OrcaRouterConfig(OpenAIGPTConfig):
         models = non_default_params.pop("models", None)
         route = non_default_params.pop("route", None)
 
+        # Pop reasoning fields before super() so OpenAIGPTConfig doesn't drop
+        # them based on its OpenAI-only model whitelist. _normalize_reasoning_params
+        # below applies the correct per-vendor dispatch for OrcaRouter models.
+        reasoning_effort = non_default_params.pop("reasoning_effort", None)
+        thinking = non_default_params.pop("thinking", None)
+
         mapped_openai_params = super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
+
+        if reasoning_effort is not None:
+            mapped_openai_params["reasoning_effort"] = reasoning_effort
+        if thinking is not None:
+            mapped_openai_params["thinking"] = thinking
 
         extra_body: Dict[str, Any] = {}
         if models is not None:
@@ -331,8 +342,12 @@ class OrcaRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
 
             new_choices = []
             for choice in chunk["choices"]:
-                choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
-                new_choices.append(choice)
+                original_delta = choice["delta"]
+                new_delta = {
+                    **original_delta,
+                    "reasoning_content": original_delta.get("reasoning"),
+                }
+                new_choices.append({**choice, "delta": new_delta})
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
