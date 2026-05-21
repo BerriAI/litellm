@@ -83,5 +83,7 @@ general_settings:
         path: "oauth2"
 ```
 
-For full `routing_overrides` behavior and list-based selectors, see [`/proxy/token_auth`](./token_auth.md#route-jwt-shaped-machine-tokens-to-oauth2).
+Selectors support shell-style wildcards (`*`, `?`, case-sensitive) and accept either a single string or a list of strings.
+
+For full `routing_overrides` behavior — supported selectors, wildcard and list semantics, and matching rules — see [`/proxy/token_auth`](./token_auth.md#route-jwt-shaped-machine-tokens-to-oauth2).
 

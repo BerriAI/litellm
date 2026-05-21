@@ -814,10 +814,26 @@ general_settings:
 
 ### Matching behavior
 
-- A rule matches when all configured selectors match token claims
-- Supported selectors: `iss` (required), `client_id` (optional), `aud` (optional)
-- Selector values support both string and list forms
-- If no rule matches, LiteLLM continues with standard JWT validation
+- A rule matches when **all** configured selectors match the corresponding token claims (AND semantics).
+- Supported selectors: `iss` (required), `client_id` (optional), `scope` (optional), `aud` (optional).
+- Selector values can be a single string or a list of strings (the claim must match at least one entry, using the rules below).
+- **Wildcards:** selectors may use shell-style `*` and `?`. Matching is **case-sensitive**—use the same casing your IdP emits in JWT claims.
+- **`scope` claim as a space-delimited string:** OAuth/OIDC often sends `scope` as one string (e.g. `openid profile App:LiteLLM`). LiteLLM splits that string **only when matching the `scope` selector**, so a configured value like `App:LiteLLM` can match. **`iss`, `aud`, and `client_id` are never split on spaces**; the full claim string is used (routing uses unverified claims only for path selection; final auth still validates the token).
+- If no rule matches, LiteLLM continues with standard JWT validation.
+
+### Example: `scope` and wildcard `client_id`
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: false
+  litellm_jwtauth:
+    routing_overrides:
+      - iss: "machine-issuer.example.com"
+        scope: "App:LiteLLM"
+        client_id: "*MID_LITELLM"
+        path: "oauth2"
+```
 
 ### List-based override example
 
