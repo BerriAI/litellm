@@ -1,8 +1,15 @@
 /* ── Page shell ───────────────────────────────────────────────────────── */
 .page {
+  width: 100%;
   max-width: 860px;
   margin: 0 auto;
   padding: 0 2rem;
+  /* Required: as a flex item of .main-wrapper, default min-width: auto
+     would let the marquee's intrinsic content size push the page wider
+     than the viewport. */
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
@@ -257,6 +264,77 @@
 
 .pageLink:hover {
   color: #0ea5e9;
+}
+
+/* ── Mobile (≤640px) ──────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .page {
+    padding: 0 1.25rem;
+  }
+
+  .hero {
+    padding: 2rem 0 0;
+  }
+
+  .heroTitle {
+    font-size: 2rem;
+  }
+
+  .heroSub {
+    font-size: 0.9rem;
+  }
+
+  .hiringBtn {
+    padding: 0.6rem 1rem;
+    font-size: 0.85rem;
+  }
+
+  .marqueeWrap {
+    margin: 2rem 0 0;
+    padding: 1rem 0;
+  }
+
+  .fadeLeft,
+  .fadeRight {
+    width: 2.5rem;
+  }
+
+  .marqueeItem {
+    padding: 0 0.9rem;
+    font-size: 0.78rem;
+  }
+
+  .marqueeSep {
+    margin-left: 0.8rem;
+  }
+
+  .post {
+    padding: 1.5rem 0;
+  }
+
+  .title {
+    font-size: 1.2rem;
+  }
+
+  .desc {
+    font-size: 0.85rem;
+  }
+
+  .pagination {
+    padding: 1rem 0 3rem;
+    gap: 1rem;
+  }
+
+  .pageLink {
+    font-size: 0.8rem;
+  }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .marqueeTrack {
+    animation: none;
+  }
 }
 
 /* ── Dark mode ────────────────────────────────────────────────────────── */
