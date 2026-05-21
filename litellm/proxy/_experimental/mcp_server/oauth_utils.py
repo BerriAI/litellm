@@ -3,8 +3,8 @@
 
 import os
 from ipaddress import ip_address
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urlunparse
+from typing import Any, Dict, List, NoReturn, Optional
+from urllib.parse import ParseResult, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 
@@ -48,7 +48,7 @@ def _oauth_invalid_request(
     *,
     hint: Optional[str] = None,
     **extra: Any,
-) -> None:
+) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
 
     FastAPI serializes ``detail`` as JSON. Callers still see ``error``:
@@ -145,17 +145,15 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     ``"127.0.0.1"`` alone would miss ``127.0.0.2`` and the full-form
     IPv6 loopback ``0:0:0:0:0:0:0:1``.
     """
-    try:
-        parsed = urlparse(redirect_uri)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid_request")
+    parsed = _parse_redirect_uri_for_validation(redirect_uri)
     if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="invalid_request")
-    # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2)
-    # — rejecting them prevents a ``http://127.0.0.1/cb#frag?code=...``
-    # from silently eating the authorization code.
+        _oauth_invalid_request(
+            f"redirect_uri scheme {parsed.scheme!r} is not allowed; use http or https.",
+        )
     if parsed.fragment:
-        raise HTTPException(status_code=400, detail="invalid_request")
+        _oauth_invalid_request(
+            "redirect_uri must not contain a URL fragment (#...).",
+        )
     host = (parsed.hostname or "").lower()
     if host == "localhost":
         return
@@ -166,7 +164,10 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
         # Unparseable host (malformed IPv6, etc.) — treat as invalid,
         # don't let it bubble up as a 500.
         pass
-    raise HTTPException(status_code=400, detail="invalid_request")
+    _oauth_invalid_request(
+        "redirect_uri must use a loopback host (localhost or 127.0.0.0/8).",
+        hint="Native MCP clients should register a callback on http://127.0.0.1:<port>/...",
+    )
 
 
 def _strip_default_port(scheme: str, netloc: str) -> str:
@@ -320,39 +321,21 @@ def _matches_trusted_native_redirect_uri(parsed) -> bool:
     return False
 
 
-def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
-    """Accept ``redirect_uri`` when it is (a) same-origin with the
-    proxy's own request origin, (b) loopback, (c) listed in the
-    ``MCP_TRUSTED_REDIRECT_ORIGINS`` ops allowlist, or (d) a built-in /
-    env-configured native MCP client callback (e.g. ``cursor://``).
-
-    Same-origin is VERIA-57's threat-model-safe equivalent of loopback:
-    an attacker who can host content on the proxy's own HTTPS origin
-    has already compromised the proxy, so the open-redirect + code-
-    theft primitive that motivated the loopback-only rule does not
-    apply. The same reasoning extends to ops-trusted first-party
-    hosts (e.g. an internal web app registering as an OAuth client of
-    the proxy on a sister domain).
-
-    Allowlisted non-loopback hosts are accepted only when the
-    redirect_uri scheme is ``https`` — an attacker on the network
-    cannot elevate to https without controlling the host's TLS key.
-
-    Use this in the discoverable OAuth proxy endpoints that serve both
-    native clients and the proxy's UI / cross-origin web clients. The
-    BYOK endpoints, which only serve native MCP clients, retain
-    :func:`validate_loopback_redirect_uri`.
-    """
+def _parse_redirect_uri_for_validation(redirect_uri: str) -> ParseResult:
     try:
-        parsed = urlparse(redirect_uri)
+        return urlparse(redirect_uri)
     except ValueError:
         _oauth_invalid_request(
             "redirect_uri is not a valid URL.",
             hint="Use a full absolute URL for redirect_uri (e.g. https://your-host/ui/mcp/oauth/callback).",
         )
+
+
+def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
+    """Return True when ``parsed`` is an allowlisted native callback (caller may return)."""
     if parsed.scheme not in ("http", "https"):
         if _matches_trusted_native_redirect_uri(parsed):
-            return
+            return True
         _oauth_invalid_request(
             f"redirect_uri scheme {parsed.scheme!r} is not allowed; use http/https "
             "or a registered native callback (e.g. cursor://).",
@@ -366,45 +349,34 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
         _oauth_invalid_request(
             "redirect_uri must include a host and must not contain userinfo (user:pass@host).",
         )
-    # Reject userinfo (``user:pass@host``) outright: OAuth redirect_uris
-    # have no legitimate reason to carry credentials, and allowing them
-    # opens a host-confusion attack where the netloc *looks* allowlisted
-    # (``app.example.com:443@attacker.example``) but the browser navigates
-    # to the post-``@`` host and hands the authorization code to the
-    # attacker. We compare against ``hostname`` after this, but defense in
-    # depth keeps malformed netloc strings from reaching the wildcard
-    # splitter.
     if parsed.username is not None or parsed.password is not None:
         _oauth_invalid_request(
             "redirect_uri must not contain userinfo (user:pass@host).",
         )
-    # Reject backslash in netloc: urlparse keeps ``\`` as part of netloc,
-    # but browsers normalize ``\`` to ``/`` for http(s) URLs and treat it
-    # as the start of the path. An attacker can exploit that split by
-    # crafting ``https://attacker.net\app.example.com/cb`` — urlparse sees
-    # ``attacker.net\app.example.com`` (matches ``*.example.com``) while
-    # the browser navigates to ``attacker.net`` with the auth code.
     if "\\" in parsed.netloc:
         _oauth_invalid_request(
             "redirect_uri host must not contain backslashes.",
         )
+    return False
 
-    redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
 
-    # (a) Same-origin. Swallow ``get_request_base_url`` failures so the
-    # loopback + allowlist paths remain reachable when the origin can't
-    # be determined (e.g. request came from an untrusted proxy and
-    # ``get_request_base_url`` raised).
-    proxy_base: Optional[str] = None
+def _resolve_proxy_base_for_redirect(request: Request) -> Optional[str]:
     try:
-        proxy_base = get_request_base_url(request)
+        return get_request_base_url(request)
     except Exception as exc:
         verbose_logger.warning(
             "validate_trusted_redirect_uri: could not determine proxy origin, "
             "falling back to loopback + allowlist. error=%s",
             exc,
         )
-        proxy_base = None
+        return None
+
+
+def _trusted_redirect_uri_is_allowed(
+    parsed: ParseResult,
+    redirect_netloc: str,
+    proxy_base: Optional[str],
+) -> bool:
     if proxy_base:
         proxy_parsed = urlparse(proxy_base)
         if (
@@ -412,24 +384,30 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             and redirect_netloc
             == _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
         ):
-            return
+            return True
 
-    # (b) Loopback — same rule as validate_loopback_redirect_uri.
     host = (parsed.hostname or "").lower()
     if host == "localhost":
-        return
+        return True
     try:
         if ip_address(host).is_loopback:
-            return
+            return True
     except ValueError:
         pass
 
-    # (c) Ops allowlist. https only.
     if parsed.scheme == "https":
         for entry in _parse_trusted_redirect_origins():
             if _matches_trusted_origin_entry(redirect_netloc, entry):
-                return
+                return True
+    return False
 
+
+def _build_trusted_redirect_rejection_message(
+    redirect_uri: str,
+    parsed: ParseResult,
+    redirect_netloc: str,
+    proxy_base: Optional[str],
+) -> str:
     redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
     proxy_parsed = urlparse(proxy_base) if proxy_base else None
     proxy_netloc_norm = (
@@ -458,16 +436,39 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             )
 
     if mismatch_parts:
-        description = (
+        return (
             f"redirect_uri origin ({redirect_origin}) does not match the proxy origin "
             f"({proxy_origin}). " + "; ".join(mismatch_parts)
         )
-    else:
-        description = (
-            f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
-            f"proxy ({proxy_origin}), not loopback, and not listed in "
-            f"{_TRUSTED_REDIRECT_ORIGINS_ENV}."
-        )
+    return (
+        f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
+        f"proxy ({proxy_origin}), not loopback, and not listed in "
+        f"{_TRUSTED_REDIRECT_ORIGINS_ENV}."
+    )
+
+
+def _raise_trusted_redirect_uri_rejected(
+    request: Request,
+    redirect_uri: str,
+    parsed: ParseResult,
+    redirect_netloc: str,
+    proxy_base: Optional[str],
+) -> NoReturn:
+    description = _build_trusted_redirect_rejection_message(
+        redirect_uri, parsed, redirect_netloc, proxy_base
+    )
+    redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
+    proxy_parsed = urlparse(proxy_base) if proxy_base else None
+    proxy_netloc_norm = (
+        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
+        if proxy_parsed and proxy_parsed.netloc
+        else ""
+    )
+    proxy_origin = (
+        _origin_label(proxy_parsed.scheme, proxy_netloc_norm)
+        if proxy_parsed
+        else "(could not determine proxy origin)"
+    )
 
     hint = (
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
@@ -496,14 +497,45 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
         os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV),
     )
 
-    extra: Dict[str, Any] = {
-        "redirect_uri": redirect_uri,
-        "redirect_uri_origin": redirect_origin,
-        "proxy_origin": proxy_origin,
-    }
-    if proxy_base:
-        extra["proxy_base_url"] = proxy_base
-    if os.environ.get("PROXY_BASE_URL"):
-        extra["PROXY_BASE_URL"] = os.environ.get("PROXY_BASE_URL")
+    _oauth_invalid_request(
+        description,
+        hint=hint,
+        redirect_uri=redirect_uri,
+        redirect_uri_origin=redirect_origin,
+        proxy_origin=proxy_origin,
+    )
 
-    _oauth_invalid_request(description, hint=hint, **extra)
+
+def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
+    """Accept ``redirect_uri`` when it is (a) same-origin with the
+    proxy's own request origin, (b) loopback, (c) listed in the
+    ``MCP_TRUSTED_REDIRECT_ORIGINS`` ops allowlist, or (d) a built-in /
+    env-configured native MCP client callback (e.g. ``cursor://``).
+
+    Same-origin is VERIA-57's threat-model-safe equivalent of loopback:
+    an attacker who can host content on the proxy's own HTTPS origin
+    has already compromised the proxy, so the open-redirect + code-
+    theft primitive that motivated the loopback-only rule does not
+    apply. The same reasoning extends to ops-trusted first-party
+    hosts (e.g. an internal web app registering as an OAuth client of
+    the proxy on a sister domain).
+
+    Allowlisted non-loopback hosts are accepted only when the
+    redirect_uri scheme is ``https`` — an attacker on the network
+    cannot elevate to https without controlling the host's TLS key.
+
+    Use this in the discoverable OAuth proxy endpoints that serve both
+    native clients and the proxy's UI / cross-origin web clients. The
+    BYOK endpoints, which only serve native MCP clients, retain
+    :func:`validate_loopback_redirect_uri`.
+    """
+    parsed = _parse_redirect_uri_for_validation(redirect_uri)
+    if _validate_trusted_http_redirect_shape(parsed):
+        return
+    redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
+    proxy_base = _resolve_proxy_base_for_redirect(request)
+    if _trusted_redirect_uri_is_allowed(parsed, redirect_netloc, proxy_base):
+        return
+    _raise_trusted_redirect_uri_rejected(
+        request, redirect_uri, parsed, redirect_netloc, proxy_base
+    )
