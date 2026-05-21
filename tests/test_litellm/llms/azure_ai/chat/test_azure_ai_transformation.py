@@ -103,6 +103,28 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
     assert headers["Content-Type"] == "application/json"
 
 
+def test_azure_ai_unknown_model_supports_tool_choice():
+    """
+    Test that unknown Azure AI models (not in model cost map) still support tool_choice.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25332.
+    Previously, AzureAIStudioConfig called `supports_tool_choice()` which returns
+    False when the model entry is missing the `supports_tool_choice` key. This
+    caused custom Azure AI deployments and newly-added models to lose tool_choice,
+    contradicting the comment "azure ai supports this by default". The fix uses
+    `_is_explicitly_disabled_factory` so only models with supports_tool_choice=false
+    explicitly set get tool_choice removed.
+    """
+    config = AzureAIStudioConfig()
+
+    # A custom Azure AI deployment name that is NOT in the model cost map.
+    # Before the fix, tool_choice would be incorrectly stripped.
+    supported = config.get_supported_openai_params("my-custom-deployment")
+    assert "tool_choice" in supported, (
+        "Unknown Azure AI deployments must default to supporting tool_choice"
+    )
+
+
 def test_azure_ai_grok_stop_parameter_handling():
     """
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.

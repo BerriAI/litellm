@@ -27,6 +27,25 @@ def test_azure_gpt5_allows_tool_choice_for_deployment_names():
     assert "temperature" in supported_params
 
 
+def test_azure_gpt5_unknown_deployment_supports_tool_choice(
+    config: AzureOpenAIGPT5Config,
+):
+    """Test that unknown Azure GPT-5 deployment names still support tool_choice.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25332.
+    Custom Azure deployment names are not in the OpenAI model registry, so the
+    base GPT-5 config used to drop tool_choice. A local workaround in this file
+    re-added it. Now that the base config defaults to supporting tool_choice
+    for unknown models (via `_is_explicitly_disabled_factory`), the workaround
+    is no longer needed and this test verifies the direct path still works.
+    """
+    # Custom deployment name not in the model cost map
+    supported_params = config.get_supported_openai_params(
+        model="my-custom-gpt5-deployment"
+    )
+    assert "tool_choice" in supported_params
+
+
 def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 5},
