@@ -1,0 +1,38 @@
+# Cursor setup: litellm + litellm-docs
+
+Use both repositories when asking questions so answers match **code** and **published docs**.
+
+## Desktop (local)
+
+1. Clone both repos as **siblings** (same parent directory), e.g.:
+   - `~/Documents/litellm`
+   - `~/Documents/litellm-docs`
+2. Open the multi-root workspace: **File → Open Workspace from File…** → choose [`litellm-full.code-workspace`](../litellm-full.code-workspace) from this repo.
+3. Adjust the `litellm-docs` path in that file if your clone is not at `../litellm-docs`.
+4. Wait for indexing; run **Reindex** from the command palette if search is stale.
+
+Project rule [rules/docs-repo.mdc](rules/docs-repo.mdc) is always applied in this repo.
+
+## Cloud agents
+
+The **Repos** picker (“Run Cursor anywhere”) selects one default repo per session. For **both** repos on Cloud:
+
+1. Open [Cloud Agents → Environments](https://cursor.com/dashboard/cloud-agents#environments).
+2. Create or edit an environment and select **both** `BerriAI/litellm` and `BerriAI/litellm-docs`.
+3. Use that environment for Cloud / background agent runs.
+
+See [AGENTS.md](../AGENTS.md) → **Cursor Cloud specific instructions** for install and test commands.
+
+Add root `AGENTS.md` in **litellm-docs** using the template in [contrib/litellm-docs-AGENTS.md](../contrib/litellm-docs-AGENTS.md) (separate PR to BerriAI/litellm-docs).
+
+## Published docs (@Docs)
+
+In **Cursor Settings → Docs**, add `https://docs.litellm.ai`. Use `@Docs` in chat for published-site wording. This complements the `litellm-docs` git repo; it does not replace it.
+
+## Verify dual-repo context
+
+Ask in **Ask** mode:
+
+> Where is the proxy health endpoint documented, and where is it implemented?
+
+Expect citations from `litellm/proxy/health_endpoints/` and `litellm-docs/docs/proxy/health.md`.

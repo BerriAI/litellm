@@ -1,0 +1,21 @@
+{
+  "folders": [
+    {
+      "name": "litellm",
+      "path": "."
+    },
+    {
+      "name": "litellm-docs",
+      "path": "../litellm-docs"
+    }
+  ],
+  "settings": {
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/.venv": true,
+      "**/dist": true,
+      "**/build": true,
+      "**/.next": true
+    }
+  }
+}
