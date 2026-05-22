@@ -496,20 +496,23 @@ class CredentialScrubberFilter(logging.Filter):
         if record.msg and isinstance(record.msg, str):
             record.msg = _scrub_secrets(record.msg)
         if record.args:
-            if isinstance(record.args, dict):
-                record.args = {
-                    k: (
-                        _REDACTED
-                        if isinstance(k, str) and _SECRET_KEY_NAME_RE.match(k)
-                        else _scrub_arg(v)
-                    )
-                    for k, v in record.args.items()
-                }
-            elif isinstance(record.args, tuple):
-                record.args = tuple(_scrub_arg(a) for a in record.args)
-            else:
-                # Single non-tuple arg (e.g. verbose_logger.error("msg", exc_obj))
-                record.args = (_scrub_arg(record.args),)
+            try:
+                if isinstance(record.args, dict):
+                    record.args = {
+                        k: (
+                            _REDACTED
+                            if isinstance(k, str) and _SECRET_KEY_NAME_RE.match(k)
+                            else _scrub_arg(v)
+                        )
+                        for k, v in record.args.items()
+                    }
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(_scrub_arg(a) for a in record.args)
+                else:
+                    # Single non-tuple arg (e.g. verbose_logger.error("msg", exc_obj))
+                    record.args = (_scrub_arg(record.args),)
+            except Exception:
+                pass  # Never crash logging; leave args unmodified on error
         if record.exc_info and record.exc_info[1] is not None:
             try:
                 record.exc_text = _scrub_secrets(

@@ -140,6 +140,18 @@ class TestCredentialScrubberFilter:
         f.filter(record)
         assert "sk-bareexception12345" not in str(record.args)
 
+    def test_broken_str_arg_does_not_crash_logging(self):
+        # If __str__ on an arg raises, filter must leave args unchanged and not propagate.
+        class BadStr:
+            def __str__(self):
+                raise RuntimeError("broken __str__")
+
+        f = CredentialScrubberFilter()
+        original_args = (BadStr(),)
+        record = self._make_record("msg %s", original_args)
+        f.filter(record)  # must not raise
+        assert record.args is original_args  # left untouched
+
     def test_no_args_no_crash(self):
         f = CredentialScrubberFilter()
         record = self._make_record("plain message with no args")
