@@ -12,10 +12,15 @@ Auth: OAuth2 Bearer token (not an API key).
 """
 
 import json
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.types.llms.gemini import (
+    BidiGenerateContentRealtimeInputConfig,
+    BidiGenerateContentSetup,
+)
+from litellm.types.llms.openai import OpenAIRealtimeTurnDetection
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -140,6 +145,14 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     # Request translation
     # ------------------------------------------------------------------
 
+    def _vertex_model_path(self, model: str) -> str:
+        """Return the fully-qualified Vertex AI model resource path."""
+        return (
+            f"projects/{self._project}"
+            f"/locations/{self._location}"
+            f"/publishers/google/models/{model}"
+        )
+
     def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
         """Build Vertex AI setup configuration with proper model path and defaults."""
         setup_config = self.map_openai_params(
@@ -147,24 +160,26 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         )
 
         # Use full Vertex AI model path
-        setup_config["model"] = (
-            f"projects/{self._project}"
-            f"/locations/{self._location}"
-            f"/publishers/google/models/{model}"
-        )
+        setup_config["model"] = self._vertex_model_path(model)
 
         # Add Vertex AI specific defaults if not provided
         generation_config = setup_config.setdefault("generationConfig", {})
         generation_config.setdefault("responseModalities", ["AUDIO"])
-        setup_config.setdefault(
-            "realtimeInputConfig",
-            {
-                "automaticActivityDetection": {
-                    "disabled": False,
-                    "silenceDurationMs": 800,
-                }
-            },
+
+        # Ensure Vertex defaults for realtimeInputConfig apply even when
+        # the client provided a partial ``turn_detection`` (e.g. only
+        # ``silence_duration_ms``). ``map_openai_params`` defaults
+        # ``disabled=True`` when ``create_response`` is absent, which would
+        # otherwise silently disable VAD here.
+        realtime_input_config = setup_config.setdefault("realtimeInputConfig", {})
+        automatic_detection = realtime_input_config.setdefault(
+            "automaticActivityDetection", {}
         )
+        client_turn_detection = self._extract_turn_detection(session_params) or {}
+        if "create_response" not in client_turn_detection:
+            automatic_detection["disabled"] = False
+        automatic_detection.setdefault("silenceDurationMs", 800)
+
         setup_config.setdefault("inputAudioTranscription", {})
         setup_config.setdefault("outputAudioTranscription", {})
 
@@ -197,12 +212,33 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "Vertex AI Realtime: Sending initial setup with tools to backend"
                 )
                 return [gemini_setup_msg]
-            else:
-                # Subsequent session.update - ignore
-                verbose_logger.debug(
-                    "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+
+            # Subsequent session.update: forward turn_detection-only updates
+            # (e.g. guardrail-injected disable of VAD auto-response) as a
+            # follow-up setup. Other fields are dropped because Vertex AI
+            # doesn't support dynamic updates.
+            session_payload = json_message.get("session") or {}
+            turn_detection = self._extract_turn_detection(session_payload)
+            if turn_detection is not None:
+                transformed_audio_activity_config = self.map_automatic_turn_detection(
+                    cast(OpenAIRealtimeTurnDetection, turn_detection)
                 )
-                return []
+                if len(transformed_audio_activity_config) > 0:
+                    follow_up_setup: BidiGenerateContentSetup = {
+                        "model": self._vertex_model_path(model),
+                        "realtimeInputConfig": BidiGenerateContentRealtimeInputConfig(
+                            automaticActivityDetection=transformed_audio_activity_config
+                        ),
+                    }
+                    verbose_logger.debug(
+                        "Vertex AI Realtime: Forwarding turn_detection-only session.update as setup"
+                    )
+                    return [json.dumps({"setup": follow_up_setup})]
+
+            verbose_logger.debug(
+                "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+            )
+            return []
 
         # For other message types, use parent's logic
         return super().transform_realtime_request(

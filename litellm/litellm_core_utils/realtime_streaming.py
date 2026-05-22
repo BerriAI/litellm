@@ -272,10 +272,14 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
-                # Cache setup immediately once we send it so concurrent client
-                # session.update messages don't emit duplicate setup packets.
-                self._cache_session_configuration_request(msg)
+                # Send first; only cache the setup payload once the backend
+                # has actually accepted it. Caching before send would leave
+                # ``session_configuration_request`` populated after a failed
+                # send, causing subsequent client session.update messages to
+                # be treated as "subsequent" and dropped even though the
+                # backend never received the original setup.
                 await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
+                self._cache_session_configuration_request(msg)
                 sent = True
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
@@ -924,8 +928,8 @@ class RealTimeStreaming:
                     )
 
                     for msg in message:
-                        self._cache_session_configuration_request(msg)
                         await self.backend_ws.send(msg)  # type: ignore[union-attr]
+                        self._cache_session_configuration_request(msg)
                 else:
                     await self.backend_ws.send(message)  # type: ignore[union-attr]
 
