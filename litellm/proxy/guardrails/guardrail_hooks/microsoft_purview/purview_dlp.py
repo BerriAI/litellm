@@ -533,13 +533,24 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         # Log prompt (uploadText)
         try:
             prompt_text: Optional[str] = None
-            messages = kwargs.get("messages")
-            if messages:
-                prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
+            if call_type in ("responses", "aresponses"):
+                # Responses API: route to the responses-specific extractor
+                # before the generic ``messages`` branch.  litellm's logging
+                # pipeline stores the raw responses ``input`` (a string or a
+                # list of input items) under ``model_call_details["messages"]``
+                # via ``function_setup``, which is NOT the chat message format
+                # ``get_prompt_text_for_dlp`` expects.  Use the original
+                # ``input`` / ``instructions`` keys that ``pre_call`` and
+                # ``update_environment_variables`` persist on the call details.
+                prompt_text = self._responses_api_input_to_str(kwargs)
             elif call_type in ("text_completion", "atext_completion"):
                 prompt_text = self.completion_prompt_to_str(kwargs.get("prompt"))
-            elif call_type in ("responses", "aresponses"):
-                prompt_text = self._responses_api_input_to_str(kwargs)
+            else:
+                messages = kwargs.get("messages")
+                if messages:
+                    prompt_text = self.get_prompt_text_for_dlp(
+                        cast(List[Any], messages)
+                    )
 
             if prompt_text:
                 await self._check_content(

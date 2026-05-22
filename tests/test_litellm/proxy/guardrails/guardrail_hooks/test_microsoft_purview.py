@@ -772,6 +772,65 @@ class TestResponsesAPIHooks:
             assert any("prompt body" in t for t in texts)
             assert any("response body" in t for t in texts)
 
+    @pytest.mark.asyncio
+    async def test_logging_hook_responses_api_with_messages_key_set(self):
+        """Responses-API prompt audit must fire even when ``kwargs["messages"]`` is
+        also set to the raw responses input.
+
+        litellm's logging pipeline (``function_setup`` +
+        ``update_environment_variables``) stores the raw responses ``input``
+        under ``model_call_details["messages"]``.  The audit must still extract
+        the prompt via the responses-specific path, not silently fall through
+        the generic ``messages`` branch with the wrong format.
+        """
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        result_response = ResponsesAPIResponse(
+            id="resp-msgkey",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-3",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "response body"}],
+                }
+            ],
+        )
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_logging_hook(
+                kwargs={
+                    "input": "prompt body",
+                    "instructions": "system instructions",
+                    # Simulate litellm's logging path which mirrors the raw
+                    # responses input under "messages".
+                    "messages": "prompt body",
+                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                },
+                result=result_response,
+                call_type="aresponses",
+            )
+
+            assert mock_check.call_count == 2
+            activities = {c.kwargs["activity"] for c in mock_check.call_args_list}
+            assert activities == {"uploadText", "downloadText"}
+            upload_calls = [
+                c
+                for c in mock_check.call_args_list
+                if c.kwargs["activity"] == "uploadText"
+            ]
+            assert len(upload_calls) == 1
+            upload_text = upload_calls[0].kwargs["text"]
+            assert "prompt body" in upload_text
+            assert "system instructions" in upload_text
+
 
 # ---------------------------------------------------------------
 # Logging hook user resolution
