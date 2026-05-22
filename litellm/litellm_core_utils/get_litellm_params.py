@@ -1,6 +1,6 @@
 from typing import Optional
 
-from litellm.litellm_core_utils.data_residency import infer_openai_data_residency
+from litellm.llms.openai.data_residency import infer_openai_data_residency
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls

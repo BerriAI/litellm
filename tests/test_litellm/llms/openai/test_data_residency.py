@@ -2,7 +2,7 @@
 
 import pytest
 
-from litellm.litellm_core_utils.data_residency import infer_openai_data_residency
+from litellm.llms.openai.data_residency import infer_openai_data_residency
 
 
 @pytest.mark.parametrize(
