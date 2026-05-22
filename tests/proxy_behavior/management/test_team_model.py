@@ -6,6 +6,7 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 _MARKER_MODEL = "behavior-pin-team-model-marker"
+_ROUTE_URL = {"add": "/team/model/add", "delete": "/team/model/delete"}
 
 
 # POST /team/model/add + /team/model/delete. The handler gate is PROXY_ADMIN
@@ -48,7 +49,7 @@ async def test_team_model_authz_matrix(
     caller = world.keys[actor]
 
     resp = await proxy_client.post(
-        f"/team/model/{route}",
+        _ROUTE_URL[route],
         headers={"Authorization": f"Bearer {caller.cleartext}"},
         json={"team_id": scratch.prefix, "models": [_MARKER_MODEL]},
     )
@@ -70,7 +71,7 @@ async def test_team_model_authz_matrix(
 async def test_team_model_missing_team_is_404(route: str, proxy_client, world):
     """A team_id absent from the DB is 404 — the existence check precedes authz."""
     resp = await proxy_client.post(
-        f"/team/model/{route}",
+        _ROUTE_URL[route],
         headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
         json={"team_id": "behavior-pin-no-such-team", "models": [_MARKER_MODEL]},
     )
