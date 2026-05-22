@@ -8,7 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from pydantic import ValidationError
@@ -435,9 +435,26 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
                     message=f"Unsupported content type in OCI streaming response: {item.type}",
                 )
 
-    tool_calls = None
+    # Build plain tool-call dicts inline (matching the shape produced by
+    # ``handle_cohere_stream_chunk``) rather than calling
+    # ``adapt_tools_to_openai_standard`` and ``model_dump``-ing the typed
+    # objects. Both code paths feed ``Delta.tool_calls``, so emitting the
+    # same minimal ``{"id", "type", "function": {"name", "arguments"}}``
+    # shape keeps downstream stream-mergers behaving identically across
+    # GENERIC and Cohere chunks.
+    tool_calls: Optional[List[Dict[str, Any]]] = None
     if typed_chunk.message and typed_chunk.message.toolCalls:
-        tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
+        tool_calls = [
+            {
+                "id": tc.id or _synthesize_oci_tool_call_id(i, tc.name, tc.arguments),
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                },
+            }
+            for i, tc in enumerate(typed_chunk.message.toolCalls)
+        ]
 
     finish_reason: Optional[str] = _normalize_oci_finish_reason(
         typed_chunk.finishReason
@@ -449,11 +466,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
                 index=typed_chunk.index,
                 delta=Delta(
                     content=text,
-                    tool_calls=(
-                        [tool.model_dump() for tool in tool_calls]
-                        if tool_calls
-                        else None
-                    ),
+                    tool_calls=tool_calls,
                     provider_specific_fields=None,
                     thinking_blocks=None,
                     reasoning_content=None,

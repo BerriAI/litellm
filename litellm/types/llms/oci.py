@@ -332,7 +332,10 @@ class CohereChatRequest(BaseModel):
     stopSequences: Optional[List[str]] = None
     seed: Optional[int] = None
     tools: Optional[List[CohereTool]] = None
-    toolChoice: Optional[Union[str, Dict[str, Any]]] = None
+    # NOTE: OCI's Cohere chat endpoint does not accept ``toolChoice`` — see
+    # ``OCIChatConfig.openai_to_oci_cohere_param_map`` which marks
+    # ``tool_choice`` as unsupported. The field is intentionally absent here
+    # so it isn't silently dropped or surfaced as a supported feature.
     responseFormat: Optional[
         Union[
             CohereResponseTextFormat,
