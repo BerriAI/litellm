@@ -450,6 +450,23 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
         else:
             model_id = model
+            # Strip LiteLLM routing prefixes (e.g. "bedrock/", "invoke/",
+            # "bedrock/invoke/", "bedrock/converse/") that are not part of the
+            # actual Bedrock model ID.  The converse path already does this; the
+            # invoke path must do the same so that ARN models such as
+            #   bedrock/arn:aws:bedrock:…:inference-profile/global.anthropic.…
+            # are not forwarded verbatim to the Bedrock API, which would produce
+            # a malformed URL and cause botocore's EventStreamBuffer to receive
+            # a JSON error body instead of a binary event-stream — surfaced as a
+            # misleading ChecksumMismatch (0x223a7b22 == ':{"').
+            # Use strip_bedrock_routing_prefix (no break) so compound prefixes
+            # like "bedrock/invoke/arn:..." are fully stripped in one call.
+            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+            model_id = strip_bedrock_routing_prefix(model_id)
+            # URL-encode ARNs so colons and slashes are safe in the URL path.
+            if model_id.startswith("arn:"):
+                model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
+                return model_id
 
         model_id = model_id.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in model_id:

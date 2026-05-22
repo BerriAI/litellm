@@ -2112,3 +2112,97 @@ def test_is_already_running_as_role_ssl_verify_passed():
                 mock_boto3_client.assert_called_once_with(
                     "sts", verify="/path/to/ca-bundle.crt"
                 )
+
+
+# ---------------------------------------------------------------------------
+# LIT-3274: get_bedrock_model_id must strip "bedrock/" prefix and URL-encode
+# ARNs for the invoke path (invoke-with-response-stream).  Without this fix
+# the Bedrock API receives a malformed URL, returns a JSON error body, and
+# botocore's EventStreamBuffer raises ChecksumMismatch instead of the real
+# error.  0x223a7b22 == ':{\"' — the start of a JSON object.
+# ---------------------------------------------------------------------------
+
+class TestGetBedrockModelIdArnHandling:
+    """Unit tests for get_bedrock_model_id with inference-profile ARNs."""
+
+    ARN = "arn:aws:bedrock:us-east-1:086734376398:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    def _call(self, model: str, optional_params: dict | None = None) -> str:
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        return BaseAWSLLM.get_bedrock_model_id(
+            model=model,
+            provider=provider,
+            optional_params=optional_params or {},
+        )
+
+    def test_arn_with_bedrock_prefix_is_stripped_and_encoded(self):
+        """bedrock/arn:... must not appear verbatim in the model_id."""
+        model_id = self._call(f"bedrock/{self.ARN}")
+        assert "bedrock/arn" not in model_id, (
+            f"'bedrock/' prefix not stripped; got: {model_id}"
+        )
+        # Must be URL-encoded (colons → %3A)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(self):
+        """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
+
+        The old fix used ``break`` after the first matched prefix, so
+        ``bedrock/invoke/arn:...`` would only strip ``bedrock/``, leaving
+        ``invoke/arn:...``.  The subsequent ``.replace('invoke/', '')`` call
+        then returned the bare unencoded ARN, reproducing the same
+        malformed-URL bug the fix aimed to prevent.
+
+        strip_bedrock_routing_prefix() has no break and handles this correctly.
+        """
+        model_id = self._call(f"bedrock/invoke/{self.ARN}")
+        assert "invoke/" not in model_id, (
+            f"'invoke/' prefix not stripped; got: {model_id}"
+        )
+        assert "bedrock/" not in model_id, (
+            f"'bedrock/' prefix not stripped; got: {model_id}"
+        )
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_bare_arn_is_encoded(self):
+        """Direct ARN without routing prefix must also be URL-encoded."""
+        model_id = self._call(self.ARN)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_url_matches_expected(self):
+        """Full URL built from messages config must match expected encoded form."""
+        import urllib.parse
+        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeMessagesConfig,
+        )
+
+        config = AmazonAnthropicClaudeMessagesConfig()
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=f"bedrock/{self.ARN}",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+            stream=True,
+        )
+        encoded_arn = urllib.parse.quote(self.ARN, safe="")
+        expected = (
+            f"https://bedrock-runtime.us-east-1.amazonaws.com"
+            f"/model/{encoded_arn}/invoke-with-response-stream"
+        )
+        assert url == expected, f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+
+    def test_regular_model_id_unaffected(self):
+        """Non-ARN model IDs must continue to work as before."""
+        model_id = self._call("anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    def test_invoke_prefixed_model_unaffected(self):
+        """invoke/ prefix stripping still works after the fix."""
+        model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
