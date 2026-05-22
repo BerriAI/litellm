@@ -576,14 +576,15 @@ class OCIChatConfig(BaseConfig):
     ) -> ModelResponse:
         response_json = raw_response.json()
 
-        if response_json.get("error") is not None:
-            raise OCIError(
-                message=str(response_json["error"]),
-                status_code=raw_response.status_code,
-            )
         if not isinstance(response_json, dict):
             raise OCIError(
                 message="Invalid response format from OCI",
+                status_code=raw_response.status_code,
+            )
+
+        if response_json.get("error") is not None:
+            raise OCIError(
+                message=str(response_json["error"]),
                 status_code=raw_response.status_code,
             )
 
@@ -713,7 +714,13 @@ class OCIStreamWrapper(CustomStreamWrapper):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
-        dict_chunk = json.loads(chunk[5:])
+        try:
+            dict_chunk = json.loads(chunk[5:])
+        except json.JSONDecodeError as e:
+            raise OCIError(
+                status_code=500,
+                message=f"Chunk cannot be parsed as JSON: {str(e)}",
+            )
 
         if dict_chunk.get("apiFormat") == "COHERE":
             result = handle_cohere_stream_chunk(

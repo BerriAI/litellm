@@ -931,10 +931,12 @@ class TestOCICohereStreaming:
 
     def test_cohere_streaming_non_json_chunk(self):
         """Test error handling for non-JSON chunk"""
+        from litellm.llms.oci.common_utils import OCIError
+
         stream_wrapper = self._create_stream_wrapper()
 
         # Test non-JSON chunk
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
             stream_wrapper.chunk_creator("data: invalid json")
 
     def test_cohere_streaming_generic_chunk_fallback(self):
