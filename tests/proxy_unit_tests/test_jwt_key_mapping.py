@@ -27,7 +27,6 @@ from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
 from litellm.caching.caching import DualCache
 from fastapi import HTTPException
 
-
 # ──────────────────────────────────────────────
 # Tests: _resolve_jwt_to_virtual_key
 # ──────────────────────────────────────────────
@@ -1172,6 +1171,51 @@ async def test_auto_register_raises_503_when_winner_mapping_vanishes():
 
     assert exc_info.value.status_code == 503
     assert "concurrently removed" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_sentinel_skips_db_lookup_on_cache_hit():
+    """
+    When the cache holds the proxy-admin sentinel (written after a prior
+    request's is_proxy_admin early-return), _resolve_jwt_to_virtual_key must
+    return None *without* hitting the DB. Caller proceeds to auth_builder.
+
+    Without this, every subsequent proxy-admin request under AUTO_REGISTER
+    would re-query get_jwt_key_mapping_object — a cache-miss regression
+    introduced by the deferred-auto-register refactor.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"sub": "admin-user"}
+
+    prisma_client = MagicMock()
+    # Will fail the test if accessed — proves the sentinel short-circuits DB
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
+        side_effect=AssertionError("DB must not be hit when sentinel is cached")
+    )
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        "jwt_key_mapping:sub:admin-user", "__JWT_PROXY_ADMIN__"
+    )
+
+    result = await _resolve_jwt_to_virtual_key(
+        jwt_claims=jwt_claims,
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+    assert result is None
+    prisma_client.db.litellm_jwtkeymapping.find_first.assert_not_called()
 
 
 # ──────────────────────────────────────────────

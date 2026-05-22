@@ -602,6 +602,15 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     return api_key
 
 
+# Cache sentinel written when a JWT under AUTO_REGISTER resolved to a proxy
+# admin via auth_builder. Proxy admins don't need a mapped virtual key (they
+# have full access via auth_builder anyway), but without a cache entry every
+# subsequent request from the same JWT identity would re-query the DB for a
+# non-existent mapping. Sentinel tells _resolve_jwt_to_virtual_key to skip
+# the lookup and return None (caller proceeds to auth_builder).
+_JWT_PROXY_ADMIN_SENTINEL = "__JWT_PROXY_ADMIN__"
+
+
 class _PendingAutoRegister(NamedTuple):
     """
     Signal returned by ``_resolve_jwt_to_virtual_key`` when the JWT's claim is
@@ -807,6 +816,12 @@ async def _resolve_jwt_to_virtual_key(
 
     cache_key = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}"
     cached_mapping = await user_api_key_cache.async_get_cache(cache_key)
+
+    if cached_mapping == _JWT_PROXY_ADMIN_SENTINEL:
+        # Previously resolved to a proxy admin via auth_builder; skip the
+        # mapping lookup and let the caller re-run auth_builder. Avoids a
+        # repeated DB hit on every proxy-admin request under AUTO_REGISTER.
+        return None
 
     if cached_mapping == "__NO_MAPPING__":
         behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
@@ -1159,6 +1174,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     jwt_claims = result.get("jwt_claims", None)
 
                     if is_proxy_admin:
+                        # Proxy admins authenticate via auth_builder (full
+                        # access), not via a mapped virtual key. If
+                        # AUTO_REGISTER was pending, cache a sentinel so
+                        # future requests from this JWT identity skip the
+                        # DB mapping lookup in _resolve_jwt_to_virtual_key.
+                        # Without this, every proxy-admin request under
+                        # AUTO_REGISTER re-hits get_jwt_key_mapping_object.
+                        if pending_auto_register is not None:
+                            await user_api_key_cache.async_set_cache(
+                                key=pending_auto_register.cache_key,
+                                value=_JWT_PROXY_ADMIN_SENTINEL,
+                                ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+                            )
                         return UserAPIKeyAuth(
                             api_key=None,
                             user_role=LitellmUserRoles.PROXY_ADMIN,
