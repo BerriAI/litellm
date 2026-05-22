@@ -1,46 +1,19 @@
 // @ts-check
 // Note: type annotations allow type checking and IDEs autocompletion
 
+require('dotenv').config();
+
 // @ts-ignore
 const lightCodeTheme = require('prism-react-renderer/themes/vsLight');
 // @ts-ignore
 const darkCodeTheme = require('prism-react-renderer/themes/nightOwl');
 
-const inkeepConfig = {
-  baseSettings: {
-    apiKey: "0cb9c9916ec71bfe0e53c9d7f83ff046daee3fa9ef318f6a",
-    organizationDisplayName: 'liteLLM',
-    primaryBrandColor: '#4965f5',
-    theme: {
-      styles: [
-        {
-          key: "custom-theme",
-          type: "style",
-          value: `
-            .ikp-chat-button__button {
-              margin-right: 80px !important;
-            }
-          `,
-        },
-      ],
-      syntaxHighlighter: {
-        lightTheme: lightCodeTheme,
-        darkTheme: darkCodeTheme,
-      },
-    },
-  },
-  searchSettings: {
-    searchBarPlaceholder: 'Search docs...',
-  },
-  aiChatSettings: {
-    quickQuestions: [
-      'How do I use the proxy?',
-      'How do I cache responses?',
-      'How do I stream responses?',
-    ],
-    aiAssistantAvatar: '/img/favicon.ico',
-  },
-};
+const algoliaAppId = process.env.ALGOLIA_APP_ID;
+const algoliaApiKey = process.env.ALGOLIA_API_KEY;
+const algoliaIndexName = process.env.ALGOLIA_INDEX_NAME;
+// conditional check, docs should work if these keys are missing.
+const hasAlgoliaSearch =
+  Boolean(algoliaAppId) && Boolean(algoliaApiKey) && Boolean(algoliaIndexName);
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -65,17 +38,6 @@ const config = {
     locales: ['en'],
   },
   plugins: [
-    [
-      '@inkeep/cxkit-docusaurus',
-      {
-        SearchBar: {
-          ...inkeepConfig,
-        },
-        ChatButton: {
-          ...inkeepConfig,
-        },
-      },
-    ],
     [
       '@docusaurus/plugin-ideal-image',
       {
@@ -242,6 +204,7 @@ const config = {
     ],
   ],
 
+  // Algolia search comes from preset-classic when themeConfig.algolia is set.
   themes: ['@docusaurus/theme-mermaid'],
   markdown: {
     mermaid: true,
@@ -253,7 +216,7 @@ const config = {
       src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
       'data-fr-id': 'GQwepB0f0L-x_ZH63kR_V',
       'data-fr-theme': 'dynamic',
-    }
+    },
   ],
 
   themeConfig:
@@ -285,10 +248,10 @@ const config = {
           {
             position: 'left',
             label: 'Enterprise',
-            to: "docs/enterprise"
+            to: 'docs/enterprise',
           },
-          { to: '/release_notes', label: 'Changelog', position: 'left' },
-          { to: '/blog', label: 'Blog', position: 'left' },
+          {to: '/release_notes', label: 'Changelog', position: 'left'},
+          {to: '/blog', label: 'Blog', position: 'left'},
           {
             href: 'https://docs.litellm-agent-platform.ai/',
             label: 'LiteLLM Agent Platform',
@@ -306,12 +269,23 @@ const config = {
             className: 'header-discord-link',
             'aria-label': 'Discord / Slack community',
           },
-          {
-            type: 'search',
-            position: 'right',
-          },
+          // Shown on mobile; hidden on desktop via custom.css (sidebar has search).
+          ...(hasAlgoliaSearch
+            ? [{type: 'search', position: 'right'}]
+            : []),
         ],
       },
+      ...(hasAlgoliaSearch
+        ? {
+            algolia: {
+              appId: algoliaAppId,
+              apiKey: algoliaApiKey,
+              indexName: algoliaIndexName,
+              contextualSearch: true,
+              searchPagePath: 'search',
+            },
+          }
+        : {}),
       footer: {
         style: 'dark',
         links: [

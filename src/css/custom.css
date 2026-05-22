@@ -683,23 +683,13 @@ video {
 }
 
 /* =========================================
-   SEARCH BAR — hide from navbar (it lives in sidebar)
+   SEARCH BAR — navbar on mobile, sidebar on desktop
    ========================================= */
-[class^='navbarSearchContainer'],
-[class*='navbarSearchContainer'] {
-  display: none !important;
-}
-
-/* =========================================
-   INKEEP AI CHAT BUTTON — minimal floating style
-   ========================================= */
-.ikp-chat-button__button {
-  width: 42px !important;
-  height: 42px !important;
-  border-radius: 50% !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18) !important;
-  margin-right: 1rem !important;
-  margin-bottom: 1rem !important;
+@media (min-width: 997px) {
+  [class^='navbarSearchContainer'],
+  [class*='navbarSearchContainer'] {
+    display: none !important;
+  }
 }
 
 /* =========================================
