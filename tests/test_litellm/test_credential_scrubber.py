@@ -216,3 +216,24 @@ class TestCredentialScrubberFilter:
         f.filter(record)
         assert getattr(record, "api_key") == "[REDACTED]"
         assert "sk-embeddedsecret12345" not in getattr(record, "debug_info", "")
+
+    def test_exc_format_error_is_silently_ignored(self):
+        # Branch: lines 493-494 — except Exception: pass
+        # When formatException() itself raises, filter must not propagate the error.
+        import sys
+        from unittest.mock import patch
+
+        from litellm._logging import CredentialScrubberFilter
+
+        try:
+            raise ValueError("api_key=sk-secretinexception12345")
+        except ValueError:
+            ei = sys.exc_info()
+        f = CredentialScrubberFilter()
+        record = self._make_record("error occurred")
+        record.exc_info = ei
+        with patch(
+            "logging.Formatter.formatException", side_effect=RuntimeError("fmt failed")
+        ):
+            f.filter(record)  # must not raise
+        assert record.exc_text is None  # no text set when formatter failed
