@@ -930,3 +930,146 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
+
+
+def test_function_setup_merges_litellm_metadata_into_metadata_when_both_present():
+    """
+    Regression test for LIT-3293.
+
+    When a request comes in to /v1/messages with a body-level `metadata` field
+    (Anthropic's API field, e.g. {user_id: "client-123"}) AND the proxy has
+    injected proxy auth fields into `litellm_metadata` (e.g. user_api_key_alias,
+    team_id), function_setup() must merge the litellm_metadata fields into
+    litellm_params["metadata"] so that callbacks like Langfuse can see them.
+
+    Previously the condition `if not litellm_params.get("metadata")` caused
+    litellm_metadata to be ignored when metadata was already populated from the
+    request body.
+    """
+    import litellm
+    from litellm.utils import function_setup
+
+    # Simulate a /v1/messages request where:
+    # - "metadata" comes from the Anthropic request body (user identification)
+    # - "litellm_metadata" is injected by the proxy auth middleware
+    kwargs = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "litellm_call_id": "test-call-id-123",
+        # Anthropic body metadata (provider-level field)
+        "metadata": {"user_id": "client-user-123"},
+        # Proxy auth metadata injected by add_user_api_key_auth_to_request_metadata
+        "litellm_metadata": {
+            "user_api_key_alias": "my-test-key",
+            "user_api_key_team_id": "team-abc",
+            "user_api_key_user_id": "user-xyz",
+            "user_api_key": "hashed-key",
+        },
+    }
+
+    import datetime
+
+    mock_rules = MagicMock()
+    mock_rules.has_pre_call_rules.return_value = False
+
+    logging_obj, updated_kwargs = function_setup(
+        original_function="anthropic_messages",
+        rules_obj=mock_rules,
+        start_time=datetime.datetime.now(),
+        **kwargs,
+    )
+
+    litellm_params = logging_obj.litellm_params
+
+    # The proxy auth fields from litellm_metadata MUST be merged into metadata
+    assert (
+        litellm_params.get("metadata", {}).get("user_api_key_alias") == "my-test-key"
+    ), "user_api_key_alias from litellm_metadata should be merged into litellm_params['metadata']"
+    assert (
+        litellm_params.get("metadata", {}).get("user_api_key_team_id") == "team-abc"
+    ), "user_api_key_team_id from litellm_metadata should be merged into litellm_params['metadata']"
+    assert (
+        litellm_params.get("metadata", {}).get("user_api_key_user_id") == "user-xyz"
+    ), "user_api_key_user_id from litellm_metadata should be merged into litellm_params['metadata']"
+
+    # The original request body metadata must NOT be overwritten
+    assert (
+        litellm_params.get("metadata", {}).get("user_id") == "client-user-123"
+    ), "user_id from original request body metadata must not be overwritten"
+
+    # litellm_metadata must also be stored separately
+    assert (
+        litellm_params.get("litellm_metadata", {}).get("user_api_key_alias")
+        == "my-test-key"
+    )
+
+
+def test_function_setup_metadata_only_no_litellm_metadata():
+    """
+    Ensure that when only metadata (no litellm_metadata) is provided,
+    the existing behaviour is unchanged.
+    """
+    from litellm.utils import function_setup
+    import datetime
+
+    kwargs = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "litellm_call_id": "test-call-id-456",
+        "metadata": {"session_id": "sess-abc"},
+    }
+
+    mock_rules = MagicMock()
+    mock_rules.has_pre_call_rules.return_value = False
+
+    logging_obj, _ = function_setup(
+        original_function="acompletion",
+        rules_obj=mock_rules,
+        start_time=datetime.datetime.now(),
+        **kwargs,
+    )
+
+    litellm_params = logging_obj.litellm_params
+    assert litellm_params.get("metadata", {}).get("session_id") == "sess-abc"
+    # litellm_metadata is not set from kwargs (only metadata was provided)
+    assert not litellm_params.get("litellm_metadata")
+
+
+def test_function_setup_litellm_metadata_only_no_metadata():
+    """
+    Ensure that when only litellm_metadata (no body metadata) is provided,
+    it is still copied into litellm_params["metadata"] as before.
+    """
+    from litellm.utils import function_setup
+    import datetime
+
+    kwargs = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "litellm_call_id": "test-call-id-789",
+        # No "metadata" key — simulates /v1/messages with no body metadata
+        "litellm_metadata": {
+            "user_api_key_alias": "proxy-key",
+            "user_api_key_team_id": "team-123",
+        },
+    }
+
+    mock_rules = MagicMock()
+    mock_rules.has_pre_call_rules.return_value = False
+
+    logging_obj, _ = function_setup(
+        original_function="anthropic_messages",
+        rules_obj=mock_rules,
+        start_time=datetime.datetime.now(),
+        **kwargs,
+    )
+
+    litellm_params = logging_obj.litellm_params
+    # litellm_metadata fields should be in metadata
+    assert litellm_params.get("metadata", {}).get("user_api_key_alias") == "proxy-key"
+    assert litellm_params.get("metadata", {}).get("user_api_key_team_id") == "team-123"
+    # And also in litellm_metadata
+    assert (
+        litellm_params.get("litellm_metadata", {}).get("user_api_key_alias")
+        == "proxy-key"
+    )

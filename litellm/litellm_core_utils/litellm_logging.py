@@ -617,6 +617,14 @@ class Logging(LiteLLMLoggingBaseClass):
             base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
             if "metadata" not in base_litellm_params:
                 base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+            else:
+                # Both metadata (from request body) and litellm_metadata (proxy auth) exist.
+                # Merge litellm_metadata into metadata without overwriting existing keys so
+                # proxy auth fields (user_api_key_alias, team_id, etc.) are visible to
+                # callbacks like Langfuse even when the request body also has a metadata field.
+                for k, v in kwargs["litellm_metadata"].items():
+                    if k not in base_litellm_params["metadata"]:
+                        base_litellm_params["metadata"][k] = v
 
         if litellm_params:
             # Merge metadata carefully — don't overwrite the merged metadata

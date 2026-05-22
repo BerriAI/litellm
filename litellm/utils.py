@@ -1160,6 +1160,15 @@ def function_setup(  # noqa: PLR0915
             # read API key info from litellm_params["metadata"] see the fields.
             if not litellm_params.get("metadata"):
                 litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+            else:
+                # Both metadata (from request body) and litellm_metadata (proxy auth) exist.
+                # Merge litellm_metadata into metadata without overwriting existing keys so
+                # proxy auth fields (user_api_key_alias, team_id, etc.) are visible to
+                # callbacks like Langfuse even when the request body also has a metadata field
+                # (e.g. Anthropic /v1/messages with a metadata: {user_id: ...} payload).
+                for k, v in kwargs["litellm_metadata"].items():
+                    if k not in litellm_params["metadata"]:
+                        litellm_params["metadata"][k] = v
 
         logging_obj.update_environment_variables(
             model=model,
