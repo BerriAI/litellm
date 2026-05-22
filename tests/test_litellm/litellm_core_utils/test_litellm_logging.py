@@ -2968,3 +2968,22 @@ class TestHandleAnthropicMessagesResponseLoggingResponsesBridge:
 
         assert isinstance(result, ResponsesAPIResponse)
         assert result.id == "resp_abc123"
+
+    def test_handle_anthropic_messages_response_logging_response_failed_event_returns_responses_api_response(
+        self,
+    ):
+        from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
+
+        logging_obj = self._make_logging_obj(stream=True)
+        inner_response = self._make_responses_api_response()
+        failed_event = ResponseFailedEvent(
+            type="response.failed",
+            response=inner_response,
+        )
+
+        result = logging_obj._handle_anthropic_messages_response_logging(
+            result=failed_event
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert result.id == "resp_abc123"
