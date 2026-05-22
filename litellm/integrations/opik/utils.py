@@ -105,7 +105,7 @@ def _remove_nulls(x: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_traces_and_spans_from_payload(
-    payload: List[Dict[str, Any]]
+    payload: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Separate traces and spans from payload.
