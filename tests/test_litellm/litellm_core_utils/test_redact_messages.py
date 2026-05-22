@@ -349,3 +349,201 @@ class TestPerformRedaction:
 
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
+
+    def test_redacts_proxy_server_request_body_messages(self):
+        """perform_redaction must scrub the proxy's body snapshot, not just
+        the top-level messages / prompt / input on model_call_details."""
+        details = {
+            "messages": [{"role": "user", "content": "sensitive input"}],
+            "litellm_params": {
+                "proxy_server_request": {
+                    "url": "http://localhost/v1/chat/completions",
+                    "method": "POST",
+                    "body": {
+                        "model": "gpt-4o-mini",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "CANARY_INPUT_should_be_redacted",
+                            }
+                        ],
+                        "prompt": "fallback prompt",
+                        "input": "fallback input",
+                    },
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+        assert body["prompt"] == ""
+        assert body["input"] == ""
+
+    def test_redact_proxy_server_request_body_is_safe_when_missing(self):
+        """No KeyError / TypeError when litellm_params / proxy_server_request /
+        body are absent, None, or not dicts."""
+        # litellm_params missing
+        perform_redaction({}, None)
+        # litellm_params present, proxy_server_request missing
+        perform_redaction({"litellm_params": {}}, None)
+        # proxy_server_request present, body is None
+        perform_redaction(
+            {"litellm_params": {"proxy_server_request": {"body": None}}}, None
+        )
+        # proxy_server_request is not a dict
+        perform_redaction(
+            {"litellm_params": {"proxy_server_request": "not-a-dict"}}, None
+        )
+
+    def test_redacts_provider_specific_fields_on_object_choices(self):
+        """Anthropic reasoning content lives in both message.thinking_blocks
+        AND message.provider_specific_fields.thinking_blocks. The flat field
+        is scrubbed; ensure the duplicate is too (plus the signature blob)."""
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        reasoning_content="message reasoning",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "CHAIN_OF_THOUGHT"}
+                        ],
+                        provider_specific_fields={
+                            "reasoning_content": "psf reasoning",
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "CHAIN_OF_THOUGHT",
+                                    "signature": "RAW_SIGNATURE_BLOB",
+                                }
+                            ],
+                        },
+                    )
+                )
+            ]
+        )
+
+        redacted = perform_redaction({}, result)
+
+        psf = redacted.choices[0].message.provider_specific_fields
+        assert psf["reasoning_content"] == "redacted-by-litellm"
+        assert psf["thinking_blocks"] is None
+
+    def test_redacts_provider_specific_fields_bedrock_reasoning_content_blocks(self):
+        """Bedrock converse populates provider_specific_fields.reasoningContentBlocks.
+        Covered by code symmetry — assert it via the dict path."""
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "answer",
+                                "reasoning_content": "flat reasoning",
+                                "provider_specific_fields": {
+                                    "reasoningContentBlocks": [
+                                        {
+                                            "reasoningText": {
+                                                "text": "BEDROCK_THOUGHT",
+                                                "signature": "sig",
+                                            }
+                                        }
+                                    ],
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        choice = details["standard_logging_object"]["response"]["choices"][0]
+        psf = choice["message"]["provider_specific_fields"]
+        assert psf["reasoningContentBlocks"] is None
+
+    def test_redacts_provider_specific_fields_on_dict_delta(self):
+        """Streaming-style dict path: choice['delta']['provider_specific_fields']."""
+        result = {
+            "choices": [
+                {
+                    "delta": {
+                        "content": "delta content",
+                        "reasoning_content": "delta reasoning",
+                        "thinking_blocks": ["delta thinking"],
+                        "provider_specific_fields": {
+                            "thinking_blocks": [
+                                {"type": "thinking", "thinking": "STREAMED_THOUGHT"}
+                            ],
+                            "reasoning_content": "psf streamed reasoning",
+                        },
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        psf = redacted["choices"][0]["delta"]["provider_specific_fields"]
+        assert psf["thinking_blocks"] is None
+        assert psf["reasoning_content"] == "redacted-by-litellm"
+
+    def test_redact_provider_specific_fields_is_safe_when_absent(self):
+        """Messages without provider_specific_fields (the common case) must
+        not raise."""
+        result = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(message=litellm.Message(content="hi", role="assistant"))
+            ]
+        )
+        redacted = perform_redaction({}, result)
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redacts_additional_args_complete_input_dict_messages(self):
+        """perform_redaction must scrub the provider-native request payload
+        stashed on additional_args.complete_input_dict. Anthropic-shape
+        content blocks (list of dicts) and the OpenAI prompt / input keys
+        must all be wiped."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "claude-3-7-sonnet",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "CANARY_INPUT_should_be_redacted",
+                                }
+                            ],
+                        }
+                    ],
+                    "prompt": "fallback prompt",
+                    "input": "fallback input",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+        assert cid["prompt"] == ""
+        assert cid["input"] == ""
+
+    def test_redact_additional_args_complete_input_dict_is_safe_when_missing(self):
+        """No KeyError / TypeError when additional_args / complete_input_dict
+        are absent, None, or not dicts."""
+        # additional_args missing
+        perform_redaction({}, None)
+        # additional_args present, complete_input_dict missing
+        perform_redaction({"additional_args": {}}, None)
+        # complete_input_dict is None
+        perform_redaction({"additional_args": {"complete_input_dict": None}}, None)
+        # additional_args is not a dict
+        perform_redaction({"additional_args": "not-a-dict"}, None)

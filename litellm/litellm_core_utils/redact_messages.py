@@ -49,12 +49,42 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _redact_provider_specific_fields(
+            getattr(choice.message, "provider_specific_fields", None)
+        )
     elif isinstance(choice, litellm.utils.StreamingChoices):
         choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
             choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _redact_provider_specific_fields(
+            getattr(choice.delta, "provider_specific_fields", None)
+        )
+
+
+# Keys inside Message.provider_specific_fields that duplicate reasoning
+# content already covered by the flat-field scrub. Anthropic populates
+# "thinking_blocks" / "reasoning_content" (the latter also carries the
+# raw "signature" blob); Bedrock converse populates "reasoningContentBlocks".
+_PROVIDER_SPECIFIC_REASONING_KEYS = (
+    "reasoning_content",
+    "thinking_blocks",
+    "reasoningContentBlocks",
+)
+
+
+def _redact_provider_specific_fields(psf, redacted_str: str = "redacted-by-litellm"):
+    """Scrub reasoning-content duplicates inside Message.provider_specific_fields."""
+    if not isinstance(psf, dict):
+        return
+    for key in _PROVIDER_SPECIFIC_REASONING_KEYS:
+        if key not in psf:
+            continue
+        if key == "reasoning_content":
+            psf[key] = redacted_str
+        else:
+            psf[key] = None
 
 
 def _redact_responses_api_output(output_items):
@@ -130,6 +160,61 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
+def _redact_proxy_server_request_body(model_call_details: dict):
+    """Redact the input-bearing keys inside the proxy's body snapshot.
+
+    ``litellm_params["proxy_server_request"]["body"]`` is a separate copy of
+    the request payload built during proxy pre-call (see
+    ``litellm_pre_call_utils.add_litellm_data_to_request``). The flat-field
+    overwrite in ``perform_redaction`` does not reach it, so custom-logger
+    callbacks that inspect this path see the unredacted prompt.
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+    proxy_server_request = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    body = proxy_server_request.get("body")
+    if not isinstance(body, dict):
+        return
+
+    if "messages" in body:
+        body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    if "prompt" in body:
+        body["prompt"] = ""
+    if "input" in body:
+        body["input"] = ""
+
+
+def _redact_additional_args_complete_input_dict(model_call_details: dict):
+    """Redact the input-bearing keys inside additional_args.complete_input_dict.
+
+    Provider handlers (see ``litellm/llms/<provider>/.../handler.py`` and
+    ``litellm/interactions/http_handler.py``) record the provider-native
+    request payload at ``additional_args["complete_input_dict"]`` so that
+    pre-call logs and OTel spans can show the wire-format request. The
+    flat-field overwrite in ``perform_redaction`` does not reach it, so
+    custom-logger callbacks (and the OTel exporter) see the unredacted
+    prompt even when message logging is disabled.
+    """
+    additional_args = model_call_details.get("additional_args")
+    if not isinstance(additional_args, dict):
+        return
+    complete_input_dict = additional_args.get("complete_input_dict")
+    if not isinstance(complete_input_dict, dict):
+        return
+
+    if "messages" in complete_input_dict:
+        complete_input_dict["messages"] = [
+            {"role": "user", "content": "redacted-by-litellm"}
+        ]
+    if "prompt" in complete_input_dict:
+        complete_input_dict["prompt"] = ""
+    if "input" in complete_input_dict:
+        complete_input_dict["input"] = ""
+
+
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
@@ -141,6 +226,9 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                _redact_provider_specific_fields(
+                    choice["message"].get("provider_specific_fields"), redacted_str
+                )
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
                 if "reasoning_content" in choice["delta"]:
@@ -149,6 +237,9 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                _redact_provider_specific_fields(
+                    choice["delta"].get("provider_specific_fields"), redacted_str
+                )
         else:
             _redact_choice_content(choice)
 
@@ -164,6 +255,8 @@ def perform_redaction(model_call_details: dict, result):
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
+    _redact_proxy_server_request_body(model_call_details)
+    _redact_additional_args_complete_input_dict(model_call_details)
 
     # Redact streaming response
     if (
