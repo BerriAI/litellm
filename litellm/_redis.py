@@ -477,16 +477,21 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
 
-    # Handle GCP IAM authentication for sync clusters. ``RedisCluster``'s bootstrap
+    # Handle IAM / AD authentication for sync clusters. ``RedisCluster``'s bootstrap
     # (``NodesManager.initialize()``) issues ``CLUSTER SLOTS`` before any
     # ``redis_connect_func`` hook fires, so the hook never authenticates the
     # bootstrap connection and the server rejects it with "Authentication required".
     # ``credential_provider`` is honored by every connection (including bootstrap),
-    # so swap to it whenever the GCP IAM marker is present. Mirrors the async path.
+    # so swap to it whenever an IAM/AD marker is present. Mirrors the async path.
     redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
     if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
         cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
             redis_connect_func._gcp_service_account
+        )
+    elif redis_connect_func and hasattr(redis_connect_func, "_azure_credential"):
+        cluster_kwargs["credential_provider"] = AzureADCredentialProvider(
+            redis_connect_func._azure_credential,
+            username=os.environ.get("REDIS_USERNAME") or None,
         )
 
     new_startup_nodes: List[ClusterNode] = []

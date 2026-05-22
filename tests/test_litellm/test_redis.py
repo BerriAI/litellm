@@ -13,6 +13,7 @@ from litellm._redis import (
     get_redis_url_from_environment,
 )
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
@@ -346,6 +347,47 @@ def test_get_redis_client_gcp_cluster_uses_credential_provider():
     ), "sync GCP cluster must use credential_provider so bootstrap can authenticate"
     assert isinstance(
         cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider
+    )
+    assert (
+        "redis_connect_func" not in cluster_call_kwargs
+    ), "redis_connect_func is a no-op for cluster bootstrap and must be dropped"
+
+
+def test_get_redis_client_azure_cluster_uses_credential_provider():
+    """
+    When startup_nodes is provided with an Azure AD redis_connect_func, the sync
+    cluster client must be constructed with an AzureADCredentialProvider, not a
+    redis_connect_func. Mirrors the GCP regression above; without this the sync
+    cluster bootstrap (CLUSTER SLOTS) cannot authenticate against Azure AD Redis.
+    """
+    startup_nodes = [{"host": "redis-node-1", "port": 6379}]
+
+    mock_connect_func = MagicMock()
+    # _azure_credential is the marker the sync cluster path keys on; mirrors the
+    # attribute attached by create_azure_ad_redis_connect_func.
+    mock_connect_func._azure_credential = MagicMock()
+    # Make sure the GCP-marker branch is not picked.
+    del mock_connect_func._gcp_service_account
+
+    redis_kwargs = {
+        "startup_nodes": startup_nodes,
+        "redis_connect_func": mock_connect_func,
+    }
+
+    with (
+        patch("litellm._redis.redis.RedisCluster") as mock_cluster,
+        patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
+    ):
+        get_redis_client()
+
+    assert mock_cluster.called
+    cluster_call_kwargs = mock_cluster.call_args[1]
+
+    assert (
+        "credential_provider" in cluster_call_kwargs
+    ), "sync Azure AD cluster must use credential_provider so bootstrap can authenticate"
+    assert isinstance(
+        cluster_call_kwargs["credential_provider"], AzureADCredentialProvider
     )
     assert (
         "redis_connect_func" not in cluster_call_kwargs
