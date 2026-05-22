@@ -16,7 +16,12 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypeAlias, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
+
+try:
+    from typing import TypeAlias
+except ImportError:  # Python 3.8/3.9
+    TypeAlias = Any
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger

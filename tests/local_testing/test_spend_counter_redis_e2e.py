@@ -1,16 +1,19 @@
 """
 Live Redis E2E tests for spend-counter read amplification (LIT-3263).
 
+Lives under tests/local_testing/ (not tests/test_litellm/) because these open
+real TCP connections to Redis. tests/test_litellm/ must stay mock-only.
+
 Two layers:
 1. **Hypothesis** — raw RedisCache sequential vs batched MGET (passes on any branch).
 2. **Auth fix** — real ``get_current_spend`` / ``prefetch_spend_counters`` path:
-   fails when the fix is not applied (shows amplification), passes after ``git stash pop``.
+   fails when the fix is not applied (shows amplification), passes with the fix.
 
 Default target: litellm_redis from docker compose (localhost:6379).
 
 Run locally:
   docker compose up -d redis
-  uv run pytest tests/test_litellm/proxy/test_spend_counter_redis_e2e.py -vv
+  uv run pytest tests/local_testing/test_spend_counter_redis_e2e.py -vv
 """
 
 from __future__ import annotations
@@ -19,12 +22,15 @@ import asyncio
 import importlib
 import os
 import socket
+import sys
 import uuid
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
 import redis.asyncio as aioredis
+
+sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache
@@ -247,7 +253,7 @@ async def test_auth_prefetch_fix_reduces_read_amplification():
                 f"Read amplification confirmed: pre-fix auth path issued "
                 f"{before_commands} Redis commands for {NUM_SPEND_COUNTERS} spend "
                 f"counters (expected ~{NUM_SPEND_COUNTERS} sequential reads). "
-                f"Apply the LIT-3263 prefetch fix (`git stash pop`) to batch into ~1 MGET."
+                f"Apply the LIT-3263 prefetch fix to batch into ~1 MGET."
             )
 
         assert prefetch_spend_counters is not None
@@ -340,7 +346,7 @@ async def test_auth_prefetch_fix_reduces_concurrent_read_amplification():
                 f"Concurrent read amplification confirmed: pre-fix auth path issued "
                 f"{before_commands} Redis commands for {CONCURRENT_AUTH_REQUESTS} "
                 f"requests × {NUM_SPEND_COUNTERS} counters (expected "
-                f"~{expected_before}). Apply the LIT-3263 prefetch fix (`git stash pop`)."
+                f"~{expected_before}). Apply the LIT-3263 prefetch fix."
             )
 
         after_commands = await _run_phase(after_workload)
