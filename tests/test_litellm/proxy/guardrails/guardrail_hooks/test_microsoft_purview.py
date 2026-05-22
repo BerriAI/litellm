@@ -4,6 +4,7 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -1015,6 +1016,90 @@ class TestTokenCaching:
 
             # Should have called token endpoint twice
             assert mock_post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_token_http_error_propagates(self):
+        """OAuth2 4xx/5xx responses must surface as HTTPStatusError, not KeyError."""
+        guardrail = _make_guardrail()
+
+        error_resp = Mock()
+        error_resp.json.return_value = {
+            "error": "invalid_client",
+            "error_description": "client secret is wrong",
+        }
+        error_resp.raise_for_status = Mock(
+            side_effect=httpx.HTTPStatusError(
+                "401 Unauthorized",
+                request=httpx.Request("POST", "https://login.microsoftonline.com/"),
+                response=httpx.Response(401),
+            )
+        )
+
+        with patch.object(guardrail.async_handler, "post", return_value=error_resp):
+            with pytest.raises(httpx.HTTPStatusError):
+                await guardrail._get_access_token()
+
+            # Failure must not poison the cache.
+            assert guardrail._token_cache is None
+
+
+# ---------------------------------------------------------------
+# Graph POST HTTP error propagation
+# ---------------------------------------------------------------
+
+
+class TestGraphPostHttpError:
+    @pytest.mark.asyncio
+    async def test_graph_post_http_error_propagates(self):
+        """Non-2xx Graph API responses must raise rather than return error JSON."""
+        guardrail = _make_guardrail()
+
+        error_resp = Mock()
+        error_resp.json.return_value = {
+            "error": {"code": "Forbidden", "message": "no access"}
+        }
+        error_resp.headers = {}
+        error_resp.raise_for_status = Mock(
+            side_effect=httpx.HTTPStatusError(
+                "403 Forbidden",
+                request=httpx.Request("POST", "https://graph.microsoft.com/"),
+                response=httpx.Response(403),
+            )
+        )
+
+        with (
+            patch.object(
+                guardrail, "_get_access_token", new_callable=AsyncMock
+            ) as mock_token,
+            patch.object(guardrail.async_handler, "post", return_value=error_resp),
+        ):
+            mock_token.return_value = "mock-token"
+
+            with pytest.raises(httpx.HTTPStatusError):
+                await guardrail._graph_post(
+                    "https://graph.microsoft.com/v1.0/users/u/example",
+                    {"foo": "bar"},
+                )
+
+    @pytest.mark.asyncio
+    async def test_compute_protection_scopes_http_error_propagates(self):
+        """A Graph error on protectionScopes/compute must not be cached as success."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_graph_post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.side_effect = httpx.HTTPStatusError(
+                "429 Too Many Requests",
+                request=httpx.Request("POST", "https://graph.microsoft.com/"),
+                response=httpx.Response(429),
+            )
+
+            with pytest.raises(httpx.HTTPStatusError):
+                await guardrail._compute_protection_scopes("user-err")
+
+            # The failed compute must not populate the scope cache.
+            assert "user-err" not in guardrail._scope_cache
 
 
 # ---------------------------------------------------------------
