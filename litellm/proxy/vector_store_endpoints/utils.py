@@ -5,7 +5,6 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -331,6 +330,9 @@ def is_allowed_to_call_vector_store_endpoint(
         provider_config.get_vector_store_endpoints_by_type()
     )
 
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
     request_route = get_request_route(request)
 
     # Determine the permission type based on the request
@@ -394,6 +396,9 @@ def is_allowed_to_call_vector_store_files_endpoint(
     provider_vector_store_endpoints = (
         provider_config.get_vector_store_file_endpoints_by_type()
     )
+
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     request_route = get_request_route(request)
 

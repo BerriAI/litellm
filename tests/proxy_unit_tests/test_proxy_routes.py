@@ -270,6 +270,13 @@ def _vector_store_id_in_path(req):
 # (label, scope_path, host_suffix_template, predicate, expected) — host_suffix_template
 # receives the host_header via %s substitution. The predicate is invoked on a Request
 # whose scope["path"] is scope_path and whose Host header is the formatted suffix.
+#
+# The MCP entries (well_known_mcp_bypass, pkce_token_suffix) call
+# get_request_route directly rather than the surrounding production handler
+# (MCPRequestHandler.process_mcp_request / _mcp_oauth_user_api_key_auth) —
+# those handlers require an ASGI scope plus MCP state to invoke, and the call
+# sites do nothing with the path except feed it to this helper. The helper-
+# level assertion is the relevant signal.
 _CALL_SITES = [
     ("assistants_classification", "/key/generate", "%s/thread", _is_assistants, False),
     (

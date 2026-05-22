@@ -52,7 +52,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -1568,6 +1567,9 @@ if MCP_AVAILABLE:
         if not api_key:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
             )
 
             server_id = request.path_params.get("server_id", "")
