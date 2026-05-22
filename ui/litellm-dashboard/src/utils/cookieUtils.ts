@@ -2,6 +2,8 @@
  * Utility functions for managing cookies
  */
 
+import { clearAllMcpTokens } from "./mcpTokenStore";
+
 /**
  * Returns the cookie path for the UI.
  * Derives the path from window.location.pathname so it works when
@@ -67,6 +69,7 @@ export function clearTokenCookies() {
     // sessionStorage may be unavailable
   }
 
+  clearAllMcpTokens();
 }
 
 /**

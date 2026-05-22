@@ -1114,10 +1114,16 @@ if MCP_AVAILABLE:
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
         """Build auth and extra headers for a server."""
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and server.alias is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.alias)
-        elif mcp_server_auth_headers and server.server_name is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.server_name)
+        if mcp_server_auth_headers:
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
+
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=server.alias,
+                server_name=server.server_name,
+            )
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:

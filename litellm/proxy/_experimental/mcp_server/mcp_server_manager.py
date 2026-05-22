@@ -1212,11 +1212,17 @@ class MCPServerManager:
                 return []
 
             # Get server-specific auth header if available
-            server_auth_header = None
-            if mcp_server_auth_headers and server.alias:
-                server_auth_header = mcp_server_auth_headers.get(server.alias)
-            elif mcp_server_auth_headers and server.server_name:
-                server_auth_header = mcp_server_auth_headers.get(server.server_name)
+            server_auth_header: Optional[Union[str, Dict[str, str]]] = None
+            if mcp_server_auth_headers:
+                from litellm.proxy._experimental.mcp_server.utils import (
+                    lookup_mcp_server_auth_in_headers,
+                )
+
+                server_auth_header = lookup_mcp_server_auth_in_headers(
+                    mcp_server_auth_headers,
+                    alias=server.alias,
+                    server_name=server.server_name,
+                )
 
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
@@ -2707,16 +2713,15 @@ class MCPServerManager:
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers:
             # Normalize keys for case-insensitive lookup
-            normalized_headers = {
-                k.lower(): v for k, v in mcp_server_auth_headers.items()
-            }
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
 
-            if mcp_server.alias:
-                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
-            if server_auth_header is None and mcp_server.server_name:
-                server_auth_header = normalized_headers.get(
-                    mcp_server.server_name.lower()
-                )
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=mcp_server.alias,
+                server_name=mcp_server.server_name,
+            )
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:
