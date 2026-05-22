@@ -1191,20 +1191,23 @@ def run_server(  # noqa: PLR0915
             )
             return
 
-        running_uvicorn = run_gunicorn is False and run_hypercorn is False
-        uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
-            host=host,
-            port=port,
-            log_config=log_config,
-            keepalive_timeout=keepalive_timeout,
-            timeout_worker_healthcheck=(
-                timeout_worker_healthcheck if running_uvicorn else None
-            ),
+        running_uvicorn = (
+            run_gunicorn is False and run_hypercorn is False and run_granian is False
         )
-        # Optional: recycle uvicorn workers after N requests
-        if max_requests_before_restart is not None:
-            uvicorn_args["limit_max_requests"] = max_requests_before_restart
-        if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+        if running_uvicorn:
+            # Only build uvicorn args (which imports uvicorn) when actually
+            # running uvicorn — Granian/Hypercorn/Gunicorn users may not have
+            # uvicorn installed.
+            uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                host=host,
+                port=port,
+                log_config=log_config,
+                keepalive_timeout=keepalive_timeout,
+                timeout_worker_healthcheck=timeout_worker_healthcheck,
+            )
+            # Optional: recycle uvicorn workers after N requests
+            if max_requests_before_restart is not None:
+                uvicorn_args["limit_max_requests"] = max_requests_before_restart
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa

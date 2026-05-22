@@ -38,7 +38,6 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-
 litellm.num_retries = 3
 litellm.cache = None
 user_message = "Write a short poem about the sky"
@@ -1104,9 +1103,7 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
             {
                 "content": {
                     "role": "model",
-                    "parts": [
-                        {
-                            "text": """{
+                    "parts": [{"text": """{
                             "recipes": [
                                 {"recipe_name": "Chocolate Chip Cookies"},
                                 {"recipe_name": "Oatmeal Raisin Cookies"},
@@ -1114,9 +1111,7 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
                                 {"recipe_name": "Sugar Cookies"},
                                 {"recipe_name": "Snickerdoodles"}
                             ]
-                            }"""
-                        }
-                    ],
+                            }"""}],
                 },
                 "finishReason": "STOP",
                 "safetyRatings": [
@@ -4223,11 +4218,11 @@ def test_gemini_google_maps_tool_simple():
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
-    except (litellm.RateLimitError, litellm.InternalServerError):
-        # Transient Vertex-side failures (rate limiting, 500 INTERNAL from the
-        # Google Maps grounding backend) are not LiteLLM bugs — don't fail CI.
+    except litellm.RateLimitError:
         pass
     except litellm.InternalServerError:
+        # Transient 500 INTERNAL from the Google Maps grounding backend is not a
+        # LiteLLM bug — skip (rather than pass) so CI still surfaces upstream flakes.
         pytest.skip(
             "Google Maps Platform returned a transient 500 (upstream flake); skipping."
         )
