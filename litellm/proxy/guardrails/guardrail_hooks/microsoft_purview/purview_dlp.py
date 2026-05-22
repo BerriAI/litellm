@@ -244,7 +244,15 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 exc_info=True,
             )
             if raise_on_failure:
-                raise
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            "Microsoft Purview DLP: Responses API input could "
+                            "not be transformed for DLP scanning in blocking mode"
+                        ),
+                    },
+                )
             return None
 
     # ------------------------------------------------------------------
