@@ -6530,6 +6530,57 @@ async def _apply_user_models_filter(
     )
 
 
+async def apply_user_models_filter_to_deployments(
+    deployments: List[Dict[str, Any]],
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: Optional["Router"],
+    prisma_client: Optional["PrismaClient"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+    user_api_key_cache: Optional["DualCache"],
+) -> List[Dict[str, Any]]:
+    """
+    Apply the `LiteLLM_UserTable.models` (Personal Models) filter to a
+    deployment-shaped list (`List[Dict]` with `model_name` keys), reusing
+    `_apply_user_models_filter` so the model-name-level semantics
+    (no-default-models / all-proxy-models / access groups / wildcards)
+    stay identical with /v1/models.
+
+    Used by /v1/model/info and /v2/model/info to close the
+    discovery-vs-inference gap described in BerriAI/litellm#26420 —
+    same fix as get_available_models_for_user() but operating on
+    deployment dicts (which carry api_base, model_info.id, etc.)
+    instead of bare model names.
+
+    Order of `deployments` is preserved; duplicates with the same
+    `model_name` are kept (multiple deployments can share a name).
+    """
+    if not deployments:
+        return deployments
+
+    if llm_router is None:
+        proxy_model_list: List[str] = []
+        model_access_groups: Dict[str, List[str]] = {}
+    else:
+        proxy_model_list = llm_router.get_model_names()
+        model_access_groups = llm_router.get_model_access_groups()
+
+    distinct_model_names = list(
+        {d.get("model_name", "") for d in deployments if d.get("model_name")}
+    )
+    allowed_model_names = await _apply_user_models_filter(
+        all_models=distinct_model_names,
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    allowed_set = set(allowed_model_names)
+    return [d for d in deployments if d.get("model_name") in allowed_set]
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,

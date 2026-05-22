@@ -12654,6 +12654,25 @@ async def model_info_v2(
             llm_router=llm_router,
         )
 
+    # Defense-in-depth: bound the result by LiteLLM_UserTable.models
+    # (Personal Models) so this endpoint stays consistent with
+    # /v1/models and inference-time can_user_call_model regardless of
+    # which flag combination the caller passed. Without this, a bare
+    # `GET /v2/model/info` (neither user_models_only nor
+    # include_team_models set) returns the full router model_list
+    # — leaking every deployment's litellm_params to anyone
+    # holding a virtual key. See BerriAI/litellm#26420.
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    all_models = await apply_user_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
+
     # Apply teamId filter if provided
     if teamId is not None and teamId.strip():
         all_models = await _filter_models_by_team_id(
@@ -13441,6 +13460,24 @@ async def model_info_v1(
     all_models = _filter_v1_model_info_deployments(
         all_models=all_models,
         allowed_model_names=allowed_model_names,
+    )
+
+    # Defense-in-depth: bound the result by LiteLLM_UserTable.models
+    # (Personal Models) so /v1/model/info honors the same filter as
+    # /v1/models and inference-time can_user_call_model. Upstream's
+    # _get_v1_model_info_allowed_model_names only intersects key/team
+    # models — user.models is applied as a second-step deployment
+    # filter, matching the /v2/model/info pattern above.
+    # See BerriAI/litellm#26420.
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    all_models = await apply_user_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Team BYOK deployments carry an internal routing key and other teams'
