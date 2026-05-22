@@ -102,8 +102,10 @@ def test_gemini_realtime_transformation_content_delta():
     assert config is not None
 
     session_configuration_request = {
-        "model": "gemini-1.5-flash",
-        "generationConfig": {"responseModalities": ["TEXT"]},
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["TEXT"]},
+        }
     }
     session_configuration_request_str = json.dumps(session_configuration_request)
     session_created_message = {
@@ -195,8 +197,10 @@ def test_gemini_realtime_transformation_audio_delta():
     assert config is not None
 
     session_configuration_request = {
-        "model": "gemini-1.5-flash",
-        "generationConfig": {"responseModalities": ["AUDIO"]},
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }
     }
     session_configuration_request_str = json.dumps(session_configuration_request)
 
@@ -244,8 +248,10 @@ def test_gemini_realtime_transformation_generation_complete():
     assert config is not None
 
     session_configuration_request = {
-        "model": "gemini-1.5-flash",
-        "generationConfig": {"responseModalities": ["AUDIO"]},
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }
     }
     session_configuration_request_str = json.dumps(session_configuration_request)
 
