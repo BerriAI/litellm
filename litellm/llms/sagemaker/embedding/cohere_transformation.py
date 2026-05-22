@@ -47,10 +47,13 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return BedrockCohereEmbeddingConfig().map_openai_params(
+        optional_params = BedrockCohereEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
+        if "input_type" in non_default_params:
+            optional_params["input_type"] = non_default_params["input_type"]
+        return optional_params
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]

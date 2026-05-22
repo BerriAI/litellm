@@ -118,6 +118,35 @@ class TestSagemakerCohereEmbeddingConfig:
         assert params["output_dimension"] == 512
         assert params["embedding_types"] == ["float"]
 
+    def test_map_openai_params_input_type_from_non_default_params(self):
+        params = self.config.map_openai_params(
+            non_default_params={"input_type": "search_query"},
+            optional_params={},
+            model=self.MODEL,
+            drop_params=False,
+        )
+        assert params["input_type"] == "search_query"
+
+    def test_get_optional_params_embeddings_preserves_input_type(self):
+        """Exercises get_optional_params_embeddings, not transform in isolation."""
+        from litellm.utils import get_optional_params_embeddings
+
+        optional_params = get_optional_params_embeddings(
+            model=self.MODEL,
+            custom_llm_provider="sagemaker",
+            input_type="search_query",
+        )
+        assert optional_params.get("input_type") == "search_query"
+
+        body = self.config.transform_embedding_request(
+            model=self.MODEL,
+            input=["hello"],
+            optional_params=optional_params,
+            headers={},
+        )
+        assert body["texts"] == ["hello"]
+        assert body["input_type"] == "search_query"
+
     def test_transform_response_parses_cohere_payload(self):
         cohere_response = {
             "embeddings": [[0.1, 0.2, 0.3]],

@@ -3343,6 +3343,17 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+        # Provider-specific params (e.g. Cohere input_type) are not in
+        # OPENAI_EMBEDDING_PARAMS, so they are not in non_default_params after
+        # embedding_pre_process. Restore them from passed_params when supported.
+        if supported_params:
+            for param in supported_params:
+                if (
+                    param in passed_params
+                    and passed_params[param] is not None
+                    and param not in optional_params
+                ):
+                    optional_params[param] = passed_params[param]
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
