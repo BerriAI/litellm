@@ -345,6 +345,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     # Post-call hook — DLP on responses
     # ------------------------------------------------------------------
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
