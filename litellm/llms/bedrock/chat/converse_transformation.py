@@ -1815,6 +1815,24 @@ class AmazonConverseConfig(BaseConfig):
 
         return None
 
+    def _parse_tool_call_tag_text_tool_call(
+        self, content: str
+    ) -> Tuple[Optional[str], dict[str, Any]]:
+        tool_call_match = re.search(
+            r"<tool_call>(.*?)</tool_call>", content, re.DOTALL | re.IGNORECASE
+        )
+        if tool_call_match is None:
+            return None, {}
+
+        tool_call = self._parse_tool_call_json_arguments(tool_call_match.group(1).strip())
+        tool_name = tool_call.get("name")
+        arguments = tool_call.get("arguments", {})
+        if not isinstance(tool_name, str):
+            return None, {}
+        if not isinstance(arguments, dict):
+            return None, {}
+        return tool_name, arguments
+
     def _parse_function_text_tool_call(
         self, content: str
     ) -> Tuple[Optional[str], dict[str, Any]]:
@@ -1895,6 +1913,7 @@ class AmazonConverseConfig(BaseConfig):
             return None
 
         parsers = (
+            self._parse_tool_call_tag_text_tool_call,
             self._parse_function_text_tool_call,
             self._parse_tool_use_text_tool_call,
             self._parse_bare_text_tool_call,

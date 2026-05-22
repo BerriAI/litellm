@@ -305,6 +305,26 @@ def test_apply_tool_call_transformation_parses_bare_tool_name_json_text():
     _assert_read_file_tool_call(transformed_message, finish_reason)
 
 
+def test_apply_tool_call_transformation_parses_tool_call_json_tag_text():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    message = Message(
+        role="assistant",
+        content=(
+            "I'll call the read_file tool immediately as instructed.\n\n"
+            '<tool_call>\n{"name": "read_file", "arguments": {"path": "C:\\\\Projects\\\\redaigo\\\\scripts\\\\run_etf_v13.py", "offset": 0, "length": 3000}}\n</tool_call>\n\n'
+            "<tool_response>"
+        ),
+    )
+
+    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
+        message, _read_file_tool(), initial_finish_reason="stop"
+    )
+
+    _assert_read_file_tool_call(transformed_message, finish_reason)
+
+
 def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
     from litellm.types.utils import Message
 
