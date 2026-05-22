@@ -394,8 +394,10 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
-    def test_assistant_thinking_block_becomes_output_text(self):
-        """Assistant thinking block text is included as output_text."""
+    def test_assistant_thinking_block_without_signature_dropped(self):
+        """Assistant thinking block without our packed signature is dropped
+        silently. Downgrading to output_text causes OpenAI 400
+        "unexpected output_text in assistant input"."""
         messages = [
             {
                 "role": "assistant",
@@ -405,12 +407,49 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Let me reason step by step."}
+        # No signature -> no reasoning item, no assistant message emitted at all.
+        assert result == []
+
+    def test_assistant_thinking_block_with_packed_signature_becomes_reasoning(self):
+        """Assistant thinking block carrying a packed signature is emitted as
+        a top-level reasoning item immediately before the assistant message."""
+        import base64
+        import json as _json
+
+        packed = (
+            "lllm-rsenc-v1:"
+            + base64.b64encode(
+                _json.dumps({"id": "rs_abc", "ec": "ENC"}).encode()
+            ).decode()
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Let me reason step by step.",
+                        "signature": packed,
+                    },
+                    {"type": "text", "text": "Hello"},
+                ],
+            }
         ]
+        result = _translate_messages(messages)
+        # reasoning item first, then assistant message.
+        assert len(result) == 2
+        assert result[0]["type"] == "reasoning"
+        assert result[0]["id"] == "rs_abc"
+        assert result[0]["encrypted_content"] == "ENC"
+        assert result[0]["summary"] == [
+            {"type": "summary_text", "text": "Let me reason step by step."}
+        ]
+        assert result[1]["type"] == "message"
+        assert result[1]["role"] == "assistant"
+        assert result[1]["content"] == [{"type": "output_text", "text": "Hello"}]
 
     def test_assistant_empty_thinking_block_skipped(self):
-        """Assistant thinking block with empty thinking text is skipped."""
+        """Assistant thinking block with empty thinking text and no signature is skipped."""
         messages = [
             {
                 "role": "assistant",

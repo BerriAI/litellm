@@ -544,3 +544,127 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+class TestStripForeignSignatures:
+    """When the conversation history carries thinking blocks whose signature
+    is one of our packed `lllm-rsenc-v1:` blobs (from a previous gpt/chatgpt
+    turn) and the user switches to a native Anthropic model mid-conversation,
+    Anthropic rejects the request with `Invalid signature in thinking block`.
+    The handler strips those blocks before forwarding to anthropic. It does
+    NOT strip them when routing to chatgpt (the responses adapter unpacks
+    them into reasoning input items)."""
+
+    @staticmethod
+    def _packed_sig() -> str:
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+            _pack_signature,
+        )
+
+        packed = _pack_signature("rs_test123", "encrypted-blob-bytes")
+        assert packed is not None
+        return packed
+
+    @pytest.mark.asyncio
+    async def test_packed_signature_stripped_when_provider_anthropic(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        packed = self._packed_sig()
+        messages = [
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": packed},
+                    {"type": "text", "text": "answer"},
+                ],
+            },
+            {"role": "user", "content": "next"},
+        ]
+        captured = {}
+
+        def fake_handler(**kw):
+            captured.update(kw)
+            return "ok"
+
+        with patch.object(
+            handler, "anthropic_messages_handler", side_effect=fake_handler
+        ):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="anthropic/claude-opus-4-7",
+                custom_llm_provider="anthropic",
+            )
+        forwarded = captured["messages"][1]["content"]
+        # Thinking block with packed signature must be gone; text preserved.
+        assert all(c.get("type") != "thinking" for c in forwarded)
+        assert any(c.get("type") == "text" for c in forwarded)
+
+    @pytest.mark.asyncio
+    async def test_real_anthropic_signature_preserved(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        messages = [
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I was thinking...",
+                        "signature": "ErcBCkgIBxABGAIiQHabc+real+anthropic+sig",
+                    }
+                ],
+            },
+        ]
+        captured = {}
+
+        def fake_handler(**kw):
+            captured.update(kw)
+            return "ok"
+
+        with patch.object(
+            handler, "anthropic_messages_handler", side_effect=fake_handler
+        ):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="anthropic/claude-opus-4-7",
+                custom_llm_provider="anthropic",
+            )
+        forwarded = captured["messages"][1]["content"]
+        assert len(forwarded) == 1
+        assert forwarded[0]["type"] == "thinking"
+
+    @pytest.mark.asyncio
+    async def test_packed_signature_preserved_when_provider_chatgpt(self):
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        packed = self._packed_sig()
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": packed}],
+            },
+        ]
+        captured = {}
+
+        def fake_handler(**kw):
+            captured.update(kw)
+            return "ok"
+
+        with patch.object(
+            handler, "anthropic_messages_handler", side_effect=fake_handler
+        ):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="chatgpt/gpt-5.5",
+                custom_llm_provider="chatgpt",
+            )
+        forwarded = captured["messages"][0]["content"]
+        # On the chatgpt leg the thinking block must survive — the responses
+        # adapter will unpack the signature into a top-level reasoning item.
+        assert len(forwarded) == 1
+        assert forwarded[0]["signature"] == packed
