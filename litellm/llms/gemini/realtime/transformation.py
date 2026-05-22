@@ -417,9 +417,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else {"result": parsed_output}
         )
 
-        # Look up the function name from stored mapping and remove the
-        # entry to prevent unbounded growth in long-running sessions.
-        function_name = self._tool_call_id_to_name.pop(call_id, None)
+        # Look up the function name from stored mapping. Keep the entry so a
+        # client SDK that retries function_call_output (or sends it twice for
+        # the same tool call) still produces a Gemini toolResponse with the
+        # required ``name`` field.
+        function_name = self._tool_call_id_to_name.get(call_id)
         if not function_name:
             verbose_logger.warning(
                 f"Gemini Realtime: Function name not found for call_id={call_id}. "

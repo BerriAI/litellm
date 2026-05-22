@@ -534,6 +534,20 @@ def test_gemini_realtime_function_call_output_transformation():
     assert func_response["response"]["temperature"] == 72
     assert func_response["response"]["conditions"] == "sunny"
 
+    # A retry of the same function_call_output (e.g. a client SDK that
+    # re-sends the result) must still produce a functionResponses payload
+    # carrying ``name`` — the call_id → name mapping must not be evicted
+    # after the first lookup.
+    retry_messages = config.transform_realtime_request(
+        json.dumps(function_output),
+        "gemini-2.5-flash",
+        session_configuration_request="existing",
+    )
+    retry_response = json.loads(retry_messages[0])["toolResponse"]["functionResponses"][
+        0
+    ]
+    assert retry_response["name"] == "get_weather"
+
 
 def test_gemini_realtime_user_text_transformation():
     """Test transformation of OpenAI user message to Gemini clientContent format."""
