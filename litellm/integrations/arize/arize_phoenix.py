@@ -17,9 +17,6 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry as _OpenTelemetry
     from litellm.integrations.opentelemetry import (
-        LITELLM_TRACER_NAME as _LITELLM_TRACER_NAME,
-    )
-    from litellm.integrations.opentelemetry import (
         OpenTelemetryConfig as _OpenTelemetryConfig,
     )
     from litellm.types.integrations.arize import Protocol as _Protocol
@@ -28,7 +25,7 @@ if TYPE_CHECKING:
     OpenTelemetryConfig = _OpenTelemetryConfig
     Span = Union[_Span, Any]
     OpenTelemetry = _OpenTelemetry
-    LITELLM_TRACER_NAME: str = _LITELLM_TRACER_NAME
+    LITELLM_TRACER_NAME: str
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
