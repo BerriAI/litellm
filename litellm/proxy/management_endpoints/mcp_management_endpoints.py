@@ -52,6 +52,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -1584,7 +1585,7 @@ if MCP_AVAILABLE:
                 ):
                     # For /token, require PKCE authorization_code; refresh_token
                     # grants must NOT bypass auth (see comment above).
-                    path_lower = (request.url.path or "").rstrip("/").lower()
+                    path_lower = get_request_route(request).rstrip("/").lower()
                     if path_lower.endswith("/token"):
                         body_data = await _read_request_body(request=request)
                         grant_type = (body_data or {}).get("grant_type", "")
