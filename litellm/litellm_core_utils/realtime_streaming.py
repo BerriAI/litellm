@@ -911,6 +911,42 @@ class RealTimeStreaming:
                                 "Injected turn_detection into first session.update for audio transcription guardrails"
                             )
 
+                    ## GUARDRAIL: Force ``create_response`` to False in any
+                    # client-provided ``turn_detection`` so a later
+                    # ``session.update`` cannot re-enable VAD auto-response
+                    # and bypass the transcription guardrail after the
+                    # initial disable. Covers both the flat beta key and the
+                    # nested GA ``audio.input.turn_detection`` shape, since
+                    # the GA remap below also accepts either form.
+                    if (
+                        msg_type == "session.update"
+                        and self._has_audio_transcription_guardrails()
+                    ):
+                        session = msg_obj.get("session")
+                        if isinstance(session, dict):
+                            td_overridden = False
+                            flat_td = session.get("turn_detection")
+                            if (
+                                isinstance(flat_td, dict)
+                                and flat_td.get("create_response") is not False
+                            ):
+                                flat_td["create_response"] = False
+                                td_overridden = True
+                            audio = session.get("audio")
+                            if isinstance(audio, dict):
+                                audio_input = audio.get("input")
+                                if isinstance(audio_input, dict):
+                                    nested_td = audio_input.get("turn_detection")
+                                    if (
+                                        isinstance(nested_td, dict)
+                                        and nested_td.get("create_response")
+                                        is not False
+                                    ):
+                                        nested_td["create_response"] = False
+                                        td_overridden = True
+                            if td_overridden:
+                                message = json.dumps(msg_obj)
+
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
