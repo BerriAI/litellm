@@ -179,8 +179,11 @@ class TestCredentialScrubberFilter:
         assert "REDACTED" in str(record.args)
 
     def test_exc_traceback_secret_redacted(self):
+        # Use a key-name-only secret (no recognised value shape) so the test
+        # exercises the gap where SecretRedactionFilter would otherwise overwrite
+        # exc_text using only _redact_string and miss the key-name match.
         try:
-            raise ValueError("api_key=sk-secretinexception12345")
+            raise ValueError("encryption_key=hunter2secret99")
         except ValueError:
             ei = sys.exc_info()
         f = CredentialScrubberFilter()
@@ -188,7 +191,7 @@ class TestCredentialScrubberFilter:
         record.exc_info = ei
         f.filter(record)
         assert record.exc_text is not None
-        assert "sk-secretinexception12345" not in record.exc_text
+        assert "hunter2secret99" not in record.exc_text
 
     def test_extra_fields_secret_redacted(self):
         f = CredentialScrubberFilter()

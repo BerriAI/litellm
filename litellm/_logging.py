@@ -62,10 +62,11 @@ class SecretRedactionFilter(logging.Filter):
             if isinstance(record.msg, str):
                 record.msg = _redact_string(record.msg)
 
-        # Redact exception tracebacks
+        # Redact exception tracebacks — use _scrub_secrets so key-name patterns
+        # (e.g. encryption_key=...) are covered in addition to value-shape ones.
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(
+                record.exc_text = _scrub_secrets(
                     self._formatter.formatException(record.exc_info)
                 )
             except Exception:
