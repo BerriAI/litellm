@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -43,14 +43,13 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         Messages with non-text content (e.g. image_url for vision models)
         are kept as lists so the parent class can normalize them properly.
         """
+        messages = [cast(AllMessageValues, {**m}) for m in messages]
         for message in messages:
             if _has_non_text_content(message):
                 continue
             content = message.get("content")
             if isinstance(content, list):
-                message["content"] = "".join(
-                    item.get("text") or "" for item in content
-                )
+                message["content"] = "".join(item.get("text") or "" for item in content)
 
         if is_async:
             return super()._transform_messages(
@@ -65,9 +64,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
-            api_base
-            or get_secret_str("MODELSCOPE_API_BASE")
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key

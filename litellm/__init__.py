@@ -63,6 +63,7 @@ from litellm.constants import (
     replicate_models,
     clarifai_models,
     huggingface_models,
+    modelscope_models,
     empower_models,
     together_ai_models,
     baseten_models,
@@ -625,7 +626,6 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
-modelscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 v0_models: Set = set()
